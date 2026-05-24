@@ -74,24 +74,38 @@ signature verification. This is a known shape of ATX v1.0 and is documented
 here so reviewers do not have to discover it from the code. JCS-canonical
 JSON signing (RFC 8785) is a candidate hardening for v2.
 
-### Hybrid signing: spec mandate at v1, reference implementation status
+### Hybrid signing: production status, and a verifier-side gap
 
-ATX v1.0 mandates hybrid Ed25519 + ML-DSA-65 signing at the wire format. The
-reference issuance call site in `opena2a-registry/internal/infrastructure/atc/atc_issuer.go`
-emits Ed25519 signatures only today; the hybrid wrapper at
-`aim-cloud/apps/backend/internal/crypto/pqc/hybrid.go` is implemented and
-tested but is not yet invoked from `RealATCIssuer.Issue()`. The
-production-side offline verifier in `pkg/atcverify` also skips ML-DSA-65
-signatures silently. Closing the call-site flip is tracked separately.
+ATX v1.0 mandates hybrid Ed25519 + ML-DSA-65 signing at the wire format.
+The registry-side issuance path (`opena2a-registry/internal/application/atc_service.go` `IssueATC()`)
+emits hybrid signatures in production: threshold Ed25519 signatures from
+the multi-key signing set, plus one ML-DSA-65 signature from the hybrid
+keypair wired in at `cmd/server/main.go:682-685`. Issued ATX credentials
+in production today therefore carry both algorithms, matching the
+`baseline-valid-hybrid.json` fixture in this repository.
 
-The Go reference verifier in this repository
-([`verifiers/go`](./verifiers/go)) DOES verify ML-DSA-65 signatures per
-the spec mandate. The Python reference verifier
-([`verifiers/python`](./verifiers/python)) treats ML-DSA-65 as present but
-out-of-scope (the post-quantum Python library landscape is fragmented; no
-stdlib support). The hybrid fixture is annotated to be ACCEPTed on the
-Ed25519 path alone in Python, with a banner. For full hybrid verification
-end to end, run the Go verifier.
+The verifier-side gap is on the offline-verify path: the standalone
+verifier package (`opena2a-registry/pkg/atcverify`) verifies only the
+Ed25519 signature(s) and silently ignores any ML-DSA-65 signature in the
+credential. The hybrid wrapper at `agent-identity-management/apps/backend/internal/crypto/pqc/hybrid.go`
+implements full hybrid verification but is invoked from the request-auth
+middleware, not from offline verify. Extending `pkg/atcverify` to verify
+the ML-DSA-65 signature when present is a separate hardening item.
+
+A separate AIM-side credential format (`RealATCIssuer.Issue()` in
+`agent-identity-management/apps/backend/internal/infrastructure/atc/atc_issuer.go`)
+produces CBOR-encoded credentials and signs Ed25519 only. That issuer has
+no active callers in the AIM backend today; whether it ships as a future
+artifact or gets removed is tracked separately. It is not the credential
+this conformance suite tests.
+
+The Go reference verifier in this repository ([`verifiers/go`](./verifiers/go))
+DOES verify ML-DSA-65 signatures per the spec mandate. The Python reference
+verifier ([`verifiers/python`](./verifiers/python)) treats ML-DSA-65 as
+present but out-of-scope (the post-quantum Python library landscape is
+fragmented; no stdlib support). The hybrid fixture is annotated to be
+ACCEPTed on the Ed25519 path alone in Python, with a banner. For full
+hybrid verification end to end, run the Go verifier.
 
 ### Trusted-issuer DID drift between this suite and the production verifier
 
