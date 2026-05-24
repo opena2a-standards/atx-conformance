@@ -1,0 +1,449 @@
+// Package main is the Go reference verifier for the ATX v1.0 conformance
+// fixture set. It depends only on the Go standard library plus
+// github.com/cloudflare/circl (for ML-DSA-65 verification per FIPS 204).
+//
+// It does NOT import any opena2a-* SDK or registry package. The goal is to
+// validate that the conformance fixtures are byte-stable and that an
+// independent verifier with only the spec and the public keypair vectors can
+// reproduce ACCEPT / REJECT.
+//
+// Spec it implements:
+//   - ATX v1.0 §1.1 schema (https://github.com/opena2a-org/atx-spec/blob/main/core.md)
+//   - AIP §3 Hybrid Ed25519 + ML-DSA-65 (mandate at v1)
+//   - Canonicalization: pipe-delimited 11-field string matching
+//     opena2a-registry/pkg/atcverify/verify.go canonicalPayload() VERBATIM
+//
+// Usage:
+//
+//	go run . ../../fixtures/baseline-valid.json
+//	go run . ../../fixtures/*.json
+//	go run . ../../fixtures              (directory; walks *.json)
+//	go run . ../..                       (repo root; walks fixtures/*.json)
+//
+// Exit 0 iff every fixture's observed result matches expected.verifyResult.
+package main
+
+import (
+	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
+)
+
+// ---------------------------------------------------------------------------
+// fixture shape (mirror of generator)
+// ---------------------------------------------------------------------------
+
+type fixture struct {
+	Name          string          `json:"name"`
+	Description   string          `json:"description"`
+	KeypairRefs   []keypairRef    `json:"keypairRefs"`
+	VerifierState verifierState   `json:"verifierState"`
+	Expected      expectedOutcome `json:"expected"`
+	ATX           json.RawMessage `json:"atx"`
+}
+
+type keypairRef struct {
+	Role         string `json:"role"`
+	Path         string `json:"path"`
+	Algorithm    string `json:"algorithm"`
+	PublicKeyHex string `json:"publicKeyHex"`
+	KeyID        string `json:"keyId"`
+}
+
+type verifierState struct {
+	ClockRFC3339   string       `json:"clockRfc3339"`
+	TrustedIssuers []string     `json:"trustedIssuers"`
+	PublicKeys     []keypairRef `json:"publicKeys"`
+	CRL            *crl         `json:"crl,omitempty"`
+}
+
+type crl struct {
+	Version    int        `json:"version"`
+	IssuedAt   time.Time  `json:"issuedAt"`
+	NextUpdate time.Time  `json:"nextUpdate"`
+	Entries    []crlEntry `json:"entries"`
+	Signature  string     `json:"signature"`
+}
+
+type crlEntry struct {
+	AgentID   string    `json:"agentId"`
+	RevokedAt time.Time `json:"revokedAt"`
+	Reason    string    `json:"reason"`
+}
+
+type expectedOutcome struct {
+	VerifyResult   string `json:"verifyResult"`
+	RejectCategory string `json:"rejectCategory,omitempty"`
+	ReasonContains string `json:"reasonContains,omitempty"`
+}
+
+type signature struct {
+	KeyID     string `json:"keyId"`
+	Algorithm string `json:"algorithm"`
+	Value     string `json:"value"`
+}
+
+// atx is the credential as parsed by this verifier. Only the fields the
+// canonicalization or verification touches are typed; the rest are tolerated
+// via json.RawMessage on the fixture level.
+type atx struct {
+	ID                   string          `json:"id"`
+	ATCVersion           string          `json:"atcVersion"`
+	AgentID              string          `json:"agentId"`
+	AgentDID             string          `json:"agentDid"`
+	Publisher            string          `json:"publisher"`
+	PublisherDID         string          `json:"publisherDid,omitempty"`
+	Version              string          `json:"version"`
+	ContentHash          string          `json:"contentHash"`
+	BuildAttestation     string          `json:"buildAttestation,omitempty"`
+	TransparencyLogIndex int64           `json:"transparencyLogIndex"`
+	Capabilities         []string        `json:"capabilities"`
+	ScanSummary          json.RawMessage `json:"scanSummary"`
+	TrustScore           float64         `json:"trustScore"`
+	TrustLevel           int             `json:"trustLevel"`
+	IssuedAt             time.Time       `json:"issuedAt"`
+	ExpiresAt            time.Time       `json:"expiresAt"`
+	IssuerDID            string          `json:"issuerDid"`
+	IssuerChain          []string        `json:"issuerChain"`
+	Signatures           []signature     `json:"signatures"`
+	Revoked              bool            `json:"revoked"`
+}
+
+// canonicalPayload mirrors opena2a-registry/pkg/atcverify/verify.go:314-329
+// VERBATIM. It is duplicated here so the conformance verifier has zero
+// dependency on the production codebase.
+//
+// The signature covers exactly 11 fields. capabilities, scanSummary,
+// publisher, publisherDid, transparencyLogIndex, behavioralProfile,
+// revoked-related fields, and createdAt are NOT signed. See README
+// §"Signed vs unsigned fields."
+func canonicalPayload(a *atx) []byte {
+	return []byte(fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d|%.6f|%s|%s|%s",
+		a.AgentID,
+		a.AgentDID,
+		a.Version,
+		a.ContentHash,
+		a.BuildAttestation,
+		a.IssuerDID,
+		a.TrustLevel,
+		a.TrustScore,
+		a.IssuedAt.UTC().Format(time.RFC3339),
+		a.ExpiresAt.UTC().Format(time.RFC3339),
+		"1.0",
+	))
+}
+
+// ---------------------------------------------------------------------------
+// verification result
+// ---------------------------------------------------------------------------
+
+type result struct {
+	Accepted       bool
+	RejectCategory string
+	Reason         string
+	// Per-signature outcomes for diagnostics.
+	Ed25519Valid bool
+	MLDSA65Valid bool
+	SigsExpected int
+	SigsValid    int
+}
+
+func (r result) String() string {
+	if r.Accepted {
+		return "ACCEPT"
+	}
+	return fmt.Sprintf("REJECT[%s: %s]", r.RejectCategory, r.Reason)
+}
+
+// verify implements the 8-step ATX v1.0 verification algorithm with hybrid
+// signing enforcement per AIP §3.
+func verify(f fixture) result {
+	var a atx
+	if err := json.Unmarshal(f.ATX, &a); err != nil {
+		return result{RejectCategory: "PARSE_ERROR", Reason: err.Error()}
+	}
+
+	now, err := time.Parse(time.RFC3339, f.VerifierState.ClockRFC3339)
+	if err != nil {
+		return result{RejectCategory: "VERIFIER_CONFIG_ERROR", Reason: "bad clockRfc3339: " + err.Error()}
+	}
+	now = now.UTC()
+
+	// Step 1: schema version
+	if a.ATCVersion != "1.0" {
+		return result{
+			RejectCategory: "UNSUPPORTED_VERSION",
+			Reason:         fmt.Sprintf("unsupported atcVersion %q (this verifier supports 1.0)", a.ATCVersion),
+		}
+	}
+
+	// Step 2: expiry
+	if now.After(a.ExpiresAt) {
+		return result{
+			RejectCategory: "EXPIRED",
+			Reason:         fmt.Sprintf("expired at %s, verifier clock is %s", a.ExpiresAt.UTC().Format(time.RFC3339), now.Format(time.RFC3339)),
+		}
+	}
+
+	// Step 3: revocation (Revoked flag, then CRL).
+	if a.Revoked {
+		return result{RejectCategory: "REVOKED", Reason: "credential revoked field is true"}
+	}
+	if f.VerifierState.CRL != nil {
+		for _, e := range f.VerifierState.CRL.Entries {
+			if e.AgentID == a.AgentID {
+				return result{RejectCategory: "REVOKED", Reason: "agent appears on CRL: " + e.Reason}
+			}
+		}
+	}
+
+	// Step 4: issuer DID trust.
+	trusted := false
+	for _, did := range f.VerifierState.TrustedIssuers {
+		if did == a.IssuerDID {
+			trusted = true
+			break
+		}
+	}
+	if !trusted {
+		return result{
+			RejectCategory: "UNTRUSTED_ISSUER",
+			Reason:         "issuer DID " + a.IssuerDID + " is not in the verifier's trusted set (untrusted issuer)",
+		}
+	}
+
+	// Step 5: signature verification.
+	// Spec mandate: every declared signature MUST verify. The conformance
+	// verifier does not silently skip ML-DSA-65 signatures even though the
+	// current pkg/atcverify production verifier does.
+	payload := canonicalPayload(&a)
+	res := result{SigsExpected: len(a.Signatures)}
+
+	// Index public keys by algorithm for lookup.
+	edKeys, pqKeys := indexPublicKeys(f.VerifierState.PublicKeys)
+
+	for _, sig := range a.Signatures {
+		sigBytes, err := base64.StdEncoding.DecodeString(sig.Value)
+		if err != nil {
+			return result{
+				RejectCategory: "SIGNATURE_INVALID",
+				Reason:         fmt.Sprintf("signature %s has invalid base64: %v", sig.KeyID, err),
+			}
+		}
+		switch sig.Algorithm {
+		case "Ed25519":
+			ok := false
+			for _, pk := range edKeys {
+				if ed25519.Verify(pk, payload, sigBytes) {
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				return result{
+					RejectCategory: "SIGNATURE_INVALID",
+					Reason:         fmt.Sprintf("Ed25519 signature %s did not verify against any configured public key", sig.KeyID),
+				}
+			}
+			res.Ed25519Valid = true
+			res.SigsValid++
+		case "ML-DSA-65":
+			ok := false
+			for _, pk := range pqKeys {
+				if mldsa65.Verify(pk, payload, nil, sigBytes) {
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				return result{
+					RejectCategory: "SIGNATURE_INVALID",
+					Reason:         fmt.Sprintf("ML-DSA-65 signature %s did not verify against any configured public key", sig.KeyID),
+				}
+			}
+			res.MLDSA65Valid = true
+			res.SigsValid++
+		default:
+			return result{
+				RejectCategory: "SIGNATURE_INVALID",
+				Reason:         "unsupported signature algorithm " + sig.Algorithm,
+			}
+		}
+	}
+
+	if res.SigsValid == 0 {
+		return result{RejectCategory: "SIGNATURE_INVALID", Reason: "no valid signatures"}
+	}
+
+	// Step 6: content hash. Content not supplied to this verifier; skipped.
+
+	// Step 7: issuer chain depth for trust level 3+.
+	if a.TrustLevel >= 3 && len(a.IssuerChain) < 2 {
+		return result{
+			RejectCategory: "CHAIN_TOO_SHORT",
+			Reason:         fmt.Sprintf("trust level %d requires 2+ authorities in issuer chain (got %d)", a.TrustLevel, len(a.IssuerChain)),
+		}
+	}
+
+	// Step 8: all checks passed.
+	res.Accepted = true
+	return res
+}
+
+// indexPublicKeys splits the verifier's configured public keys by algorithm,
+// decoding from hex.
+func indexPublicKeys(refs []keypairRef) (eds []ed25519.PublicKey, pqs []*mldsa65.PublicKey) {
+	for _, r := range refs {
+		switch r.Algorithm {
+		case "Ed25519":
+			raw, err := hex.DecodeString(r.PublicKeyHex)
+			if err != nil || len(raw) != ed25519.PublicKeySize {
+				continue
+			}
+			eds = append(eds, ed25519.PublicKey(raw))
+		case "ML-DSA-65":
+			raw, err := hex.DecodeString(r.PublicKeyHex)
+			if err != nil {
+				continue
+			}
+			pk := new(mldsa65.PublicKey)
+			if err := pk.UnmarshalBinary(raw); err != nil {
+				continue
+			}
+			pqs = append(pqs, pk)
+		}
+	}
+	return
+}
+
+// ---------------------------------------------------------------------------
+// driver
+// ---------------------------------------------------------------------------
+
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: verify <fixture.json|dir>...")
+		os.Exit(2)
+	}
+
+	paths, err := expandFixturePaths(os.Args[1:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(2)
+	}
+	if len(paths) == 0 {
+		fmt.Fprintln(os.Stderr, "no fixture *.json files found in supplied args")
+		os.Exit(2)
+	}
+
+	totalPass, totalFail := 0, 0
+	for _, p := range paths {
+		f, err := loadFixture(p)
+		if err != nil {
+			fmt.Printf("FAIL  %s  (load error: %v)\n", relPath(p), err)
+			totalFail++
+			continue
+		}
+		got := verify(f)
+		wantAccept := strings.EqualFold(f.Expected.VerifyResult, "ACCEPT")
+
+		ok := (wantAccept && got.Accepted) || (!wantAccept && !got.Accepted)
+		// For REJECT fixtures, also verify the category matches if declared.
+		if ok && !wantAccept && f.Expected.RejectCategory != "" {
+			if got.RejectCategory != f.Expected.RejectCategory {
+				ok = false
+			}
+		}
+		if ok && !wantAccept && f.Expected.ReasonContains != "" {
+			if !strings.Contains(strings.ToLower(got.Reason), strings.ToLower(f.Expected.ReasonContains)) {
+				ok = false
+			}
+		}
+
+		status := "PASS"
+		if !ok {
+			status = "FAIL"
+			totalFail++
+		} else {
+			totalPass++
+		}
+		fmt.Printf("%s  %s\n", status, relPath(p))
+		fmt.Printf("       expected: %s", f.Expected.VerifyResult)
+		if f.Expected.RejectCategory != "" {
+			fmt.Printf(" [%s]", f.Expected.RejectCategory)
+		}
+		fmt.Println()
+		fmt.Printf("       observed: %s\n", got)
+		if got.SigsExpected > 0 {
+			fmt.Printf("       signatures: %d/%d valid (ed25519=%t mldsa65=%t)\n",
+				got.SigsValid, got.SigsExpected, got.Ed25519Valid, got.MLDSA65Valid)
+		}
+	}
+
+	fmt.Println()
+	fmt.Printf("summary: %d pass, %d fail (%d fixtures)\n", totalPass, totalFail, totalPass+totalFail)
+	if totalFail > 0 {
+		os.Exit(1)
+	}
+}
+
+func loadFixture(path string) (fixture, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return fixture{}, err
+	}
+	var f fixture
+	if err := json.Unmarshal(b, &f); err != nil {
+		return fixture{}, err
+	}
+	return f, nil
+}
+
+func expandFixturePaths(args []string) ([]string, error) {
+	var out []string
+	for _, a := range args {
+		info, err := os.Stat(a)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case info.IsDir():
+			fixDir := a
+			// Allow passing the repo root: look in $arg/fixtures if it exists.
+			if _, err := os.Stat(filepath.Join(a, "fixtures")); err == nil {
+				fixDir = filepath.Join(a, "fixtures")
+			}
+			entries, err := os.ReadDir(fixDir)
+			if err != nil {
+				return nil, err
+			}
+			for _, e := range entries {
+				if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
+					out = append(out, filepath.Join(fixDir, e.Name()))
+				}
+			}
+		default:
+			out = append(out, a)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func relPath(p string) string {
+	if wd, err := os.Getwd(); err == nil {
+		if rel, err := filepath.Rel(wd, p); err == nil {
+			return rel
+		}
+	}
+	return p
+}

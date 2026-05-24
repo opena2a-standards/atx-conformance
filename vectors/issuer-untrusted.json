@@ -1,0 +1,14 @@
+{
+  "$comment": "Untrusted-issuer keypair for the wrong-issuer fixture. Signs a syntactically valid ATX with an issuerDid that is not in the verifier's trusted set. TEST-ONLY keypair.",
+  "role": "issuer-untrusted",
+  "algorithm": "Ed25519",
+  "provenance": {
+    "source": "RFC 8032 §7.3 Abbreviated Test 1024 (first 32 bytes)",
+    "ref": "https://datatracker.ietf.org/doc/html/rfc8032#section-7.1",
+    "purpose": "deterministic, reproducible reference vector for the untrusted-issuer case"
+  },
+  "seedHex": "f5e5767cf153319517630f226876b86c8160cc583bc013744c6bf255f5cc0ee5",
+  "publicKeyHex": "278117fc144c72340f67d0f2316e8386ceffbf2b2428c9c51fef7c597f1d426e",
+  "issuerDid": "did:opena2a:authority:attacker.example",
+  "keyId": "did:opena2a:authority:attacker.example#key-1"
+}

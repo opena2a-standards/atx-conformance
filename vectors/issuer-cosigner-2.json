@@ -1,0 +1,14 @@
+{
+  "$comment": "Cosigner #2 for the 2-of-3 threshold cosignature fixture. Seed and public key are RFC 8032 §7.1 Test 3. TEST-ONLY keypair.",
+  "role": "issuer-cosigner-2",
+  "algorithm": "Ed25519",
+  "provenance": {
+    "source": "RFC 8032 §7.1 Test 3",
+    "ref": "https://datatracker.ietf.org/doc/html/rfc8032#section-7.1",
+    "purpose": "deterministic, reproducible reference vector"
+  },
+  "seedHex": "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7",
+  "publicKeyHex": "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025",
+  "issuerDid": "did:opena2a:authority:opena2a.org",
+  "keyId": "did:opena2a:authority:opena2a.org#key-3"
+}

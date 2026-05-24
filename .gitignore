@@ -1,0 +1,15 @@
+# Compiled Go binaries (verifiers and generator are `go run`-only).
+verifiers/go/go
+verifiers/go/verify
+scripts/generate-fixtures/generate-fixtures
+scripts/generate-fixtures/main
+
+# Python bytecode and venvs.
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS noise.
+.DS_Store
+Thumbs.db

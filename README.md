@@ -1,0 +1,286 @@
+# atx-conformance
+
+Conformance fixtures and reference verifiers for the
+[ATX v1.0 credential schema](https://github.com/opena2a-org/atx-spec).
+
+Each fixture is a byte-stable JSON file that bundles an Agent Trust Credential
+with verifier configuration and an expected outcome (ACCEPT or REJECT). Two
+SDK-independent reference verifiers (Go and Python) walk the fixture set and
+report PASS or FAIL per vector. Fixture bytes are pinned in
+[`MANIFEST.sha256`](./MANIFEST.sha256).
+
+This suite mirrors the pattern set by
+[`a2a-idf-conformance/fixtures/composition/aim-did-rfc9421/`](https://github.com/opena2a-org/a2a-idf-conformance/tree/main/fixtures/composition/aim-did-rfc9421)
+(APS interop conformance for A2A-IDF wire signatures). It closes criterion (c)
+on the OpenA2A maturity bar tracked in [a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876):
+"peer-cosigned conformance fixtures comparable to APS's `aim-did-rfc9421/*`
+set."
+
+License: Apache 2.0. All keypairs, seeds, and credential identifiers in this
+repository are TEST-ONLY.
+
+## Scope
+
+What this suite verifies:
+
+| Item | Covered by |
+|---|---|
+| ATX v1.0 schema-version gate | `fixtures/malformed-schema.json` |
+| Expiry gate against a pinned verifier clock | `fixtures/expired.json` |
+| Revocation via credential `revoked` flag AND CRL membership | `fixtures/revoked.json` |
+| Trusted-issuer DID set | `fixtures/wrong-issuer.json` |
+| Ed25519 signature verification over the canonical payload | every fixture |
+| Hybrid Ed25519 + ML-DSA-65 signature verification (FIPS 204) | `fixtures/baseline-valid-hybrid.json` |
+| Threshold 2-of-3 cosignature path | `fixtures/threshold-2of3-cosignature.json` |
+| Tampered-signature rejection | `fixtures/tampered-signature.json` |
+| Issuer-chain depth requirement for trust level 3 and above | implicit in every ACCEPT fixture (all use trust level 4 with a 2-link chain) |
+
+What this suite does NOT verify:
+
+- Content hash matching the agent binary. The `contentHash` field is in every
+  fixture for byte-stability, but no agent binary is shipped; verifiers stop
+  at step 5 (signature) without consulting content.
+- Transparency log inclusion proofs. The `transparencyLogIndex` is populated
+  for byte-stability; the conformance verifiers do not consult a log.
+- Build attestation predicate verification. `buildAttestation` is a string
+  field in ATX v1.0 (not a structured SLSA v1 predicate inline); verifiers
+  do not parse it.
+- Behavioral profile validation. Field is omitted from these fixtures.
+
+## Honest scope notes
+
+This is the section that future reviewers, second-implementation authors, and
+A2A coordination-map readers should read before forming judgments.
+
+### Canonicalization: 11 signed fields, not the full JSON
+
+ATX v1.0 signs a pipe-delimited canonical string, not the JSON body. The
+signature covers exactly 11 fields, defined verbatim in
+[`opena2a-registry/pkg/atcverify/verify.go`](https://github.com/opena2a-org/opena2a-registry/blob/main/pkg/atcverify/verify.go)
+`canonicalPayload()`:
+
+```
+agentId | agentDid | version | contentHash | buildAttestation | issuerDid |
+trustLevel | trustScore (%.6f) | issuedAt (RFC 3339) | expiresAt (RFC 3339) |
+atcVersion (hardcoded "1.0")
+```
+
+Fields NOT covered by the signature include `capabilities`, `scanSummary`,
+`behavioralProfile`, `publisher`, `publisherDid`, `transparencyLogIndex`,
+`signatures`, `revoked`, `revokedAt`, `revocationReason`, `createdAt`, `id`,
+`issuerChain`. A consequence is that an attacker who can write to a stored
+credential could modify `capabilities` or `scanSummary` without breaking
+signature verification. This is a known shape of ATX v1.0 and is documented
+here so reviewers do not have to discover it from the code. JCS-canonical
+JSON signing (RFC 8785) is a candidate hardening for v2.
+
+### Hybrid signing: spec mandate at v1, reference implementation status
+
+ATX v1.0 mandates hybrid Ed25519 + ML-DSA-65 signing at the wire format. The
+reference issuance call site in `opena2a-registry/internal/infrastructure/atc/atc_issuer.go`
+emits Ed25519 signatures only today; the hybrid wrapper at
+`aim-cloud/apps/backend/internal/crypto/pqc/hybrid.go` is implemented and
+tested but is not yet invoked from `RealATCIssuer.Issue()`. The
+production-side offline verifier in `pkg/atcverify` also skips ML-DSA-65
+signatures silently. Closing the call-site flip is tracked separately.
+
+The Go reference verifier in this repository
+([`verifiers/go`](./verifiers/go)) DOES verify ML-DSA-65 signatures per
+the spec mandate. The Python reference verifier
+([`verifiers/python`](./verifiers/python)) treats ML-DSA-65 as present but
+out-of-scope (the post-quantum Python library landscape is fragmented; no
+stdlib support). The hybrid fixture is annotated to be ACCEPTed on the
+Ed25519 path alone in Python, with a banner. For full hybrid verification
+end to end, run the Go verifier.
+
+### Trusted-issuer DID drift between this suite and the production verifier
+
+This suite uses the canonical post-consolidation DID method
+`did:opena2a:<type>:<id>` with type prefix `authority` for issuers, matching
+the 2026-05-23 unification across AIP-SPEC and ATX-SPEC. The production
+offline verifier in `opena2a-registry/pkg/atcverify/verify.go` still
+hardcodes `did:opena2a:registry:opena2a.org` (note the `registry` type
+prefix) and a legacy `did:atp:registry:opena2a`. The conformance verifiers
+configure trusted issuers from the fixture, so they do not rely on the
+production verifier's hardcoded list. The drift is a separate reconciliation
+item against the ATC to ATX code rename.
+
+### Trust scoring: 9-factor reference
+
+The `trustScore` field in each fixture (87.5 on the baseline) is composite
+output from the 9-factor algorithm specified in AIP-SPEC §6.1 with the
+audited weights:
+
+| Factor | Weight |
+|---|---|
+| Verification status | 25 |
+| Uptime and availability | 15 |
+| Action success rate | 15 |
+| Security alerts | 15 |
+| Compliance | 10 |
+| Execution isolation | 10 |
+| Age and history | 5 |
+| Drift detection | 3 |
+| User feedback | 2 |
+| Total | 100 |
+
+The fixture value is illustrative; this suite does not verify the
+trust-score computation itself.
+
+## Fixtures
+
+All fixtures use:
+
+- Trusted issuer DID: `did:opena2a:authority:opena2a.org`
+- Test agent: `agent_conformance_test_001` (DID `did:opena2a:agent:agent_conformance_test_001`)
+- Pinned verifier clock: `2026-05-24T00:00:00Z`
+- Ed25519 keypair source: [RFC 8032 §7.1 Test 1](https://datatracker.ietf.org/doc/html/rfc8032#section-7.1) (primary) and Tests 2 / 3 (cosigners)
+- ML-DSA-65 keypair source: fixed test seed (incrementing bytes `00..1f`), public key pinned in [`vectors/mldsa65-seed.json`](./vectors/mldsa65-seed.json)
+
+| Fixture | Expected | Exercises |
+|---|---|---|
+| `fixtures/baseline-valid.json` | ACCEPT | Single Ed25519 signature from primary issuer, trust level 4 with 2-link chain. The minimum viable accepted credential. |
+| `fixtures/baseline-valid-hybrid.json` | ACCEPT | Ed25519 plus ML-DSA-65 signatures from the same primary issuer over the same canonical payload. Go verifier validates both; Python validates Ed25519 only and reports ML-DSA-65 as out of scope. |
+| `fixtures/revoked.json` | REJECT (REVOKED) | Credential `revoked: true` AND CRL entry for the agent. Both rejection paths exercised. |
+| `fixtures/threshold-2of3-cosignature.json` | ACCEPT | Three Ed25519 signatures from three distinct keys (primary plus two cosigners). All three verify. |
+| `fixtures/expired.json` | REJECT (EXPIRED) | `expiresAt: 2025-01-01T00:00:00Z`, earlier than the pinned clock. Otherwise valid. |
+| `fixtures/wrong-issuer.json` | REJECT (UNTRUSTED_ISSUER) | Real Ed25519 signature from an untrusted-issuer keypair (RFC 8032 §7.1 Test 1024 first 32 bytes), `issuerDid: did:opena2a:authority:attacker.example`. Signature is mathematically valid; issuer is not in trusted set. |
+| `fixtures/tampered-signature.json` | REJECT (SIGNATURE_INVALID) | One bit of the signature value flipped after signing. All other fields unchanged. |
+| `fixtures/malformed-schema.json` | REJECT (UNSUPPORTED_VERSION) | `atcVersion: "2.0"`. Verifier rejects at step 1 before any signature check. |
+
+## Running the verifiers
+
+Both verifiers walk every `*.json` file in the directory you point them at
+(or you may pass individual fixture files). Exit code is 0 if every
+fixture's observed result matches the expected result and the rejection
+category matches (when declared).
+
+### Go (full hybrid Ed25519 plus ML-DSA-65)
+
+```bash
+cd verifiers/go
+go run . ../../fixtures
+```
+
+Depends on:
+
+- Go 1.22 or later
+- `github.com/cloudflare/circl v1.6.2` (resolved by `go mod tidy`)
+
+### Python (Ed25519, ML-DSA-65 out of scope)
+
+```bash
+cd verifiers/python
+pip install -r requirements.txt
+python verify.py ../../fixtures
+```
+
+Depends on:
+
+- Python 3.11 or later
+- `cryptography >= 42.0.0`
+
+For full hybrid verification end to end, use the Go verifier.
+
+### Expected output
+
+Both verifiers report `summary: 8 pass, 0 fail (8 fixtures)` against the
+shipped fixture set. Any divergence on bytes (the fixture file was modified)
+or on verifier semantics (the verifier has drifted from the spec) shows up
+as one or more FAIL lines.
+
+## Reproducing the fixtures
+
+The fixtures in this repository are deterministic. To regenerate them from
+the keypair vectors in [`vectors/`](./vectors):
+
+```bash
+cd scripts/generate-fixtures
+go run .
+```
+
+The generator:
+
+1. Loads each Ed25519 keypair vector. Verifies that the seed-derived public
+   key matches the vector's `publicKeyHex`. Panics on drift.
+2. Resolves the ML-DSA-65 public key from the seed (using CIRCL's
+   `mldsa65.NewKeyFromSeed`). Pins the resolved public key into
+   `vectors/mldsa65-seed.json` on first run; on subsequent runs, verifies
+   that the pinned value still matches.
+3. Builds each ATX credential from a shared template (`newBaselineATX`),
+   then per-fixture mutates exactly the fields needed to exercise that
+   fixture's path (revoke, expire, swap issuer, tamper signature, change
+   schema version, add cosigners or ML-DSA-65 sig).
+4. Computes the pipe-delimited canonical payload (the same 11-field
+   function the production verifier in `pkg/atcverify` uses, duplicated
+   verbatim in the generator and in each reference verifier).
+5. Ed25519-signs (and ML-DSA-65-signs where applicable) the canonical
+   payload.
+6. Marshals each fixture to byte-stable JSON (`encoding/json` with 2-space
+   indent, fields in struct-declaration order).
+7. Writes the fixture file. Recomputes its SHA-256. Updates
+   `MANIFEST.sha256` in path-sorted order.
+
+Re-running the generator MUST produce byte-identical fixtures. If the bytes
+change, either (a) the generator changed, (b) the canonicalization shifted,
+or (c) the CIRCL ML-DSA-65 implementation changed. Any of those is a
+breaking change for downstream verifiers.
+
+## Version pinning
+
+| Component | Version | Source |
+|---|---|---|
+| ATX schema | v1.0 | [`opena2a-org/atx-spec/core.md`](https://github.com/opena2a-org/atx-spec/blob/main/core.md) |
+| AIP spec | v1.0 (in flight on PR 1496) | [`opena2a-org/agent-identity-protocol`](https://github.com/opena2a-org/agent-identity-protocol) |
+| Ed25519 test vector source | RFC 8032 §7.1 Tests 1, 2, 3, 1024 | [datatracker.ietf.org/doc/html/rfc8032](https://datatracker.ietf.org/doc/html/rfc8032) |
+| ML-DSA-65 | FIPS 204 final | [csrc.nist.gov/pubs/fips/204/final](https://csrc.nist.gov/pubs/fips/204/final) |
+| CIRCL (ML-DSA-65 implementation) | v1.6.2 | [github.com/cloudflare/circl](https://github.com/cloudflare/circl) |
+| cryptography (Python Ed25519) | >= 42.0.0 | [pyca/cryptography](https://github.com/pyca/cryptography) |
+| Conformance fixture format | v1 (this repo) | [`fixtures/baseline-valid.json#$schema`](./fixtures/baseline-valid.json) |
+
+## Implementations that validate against this suite
+
+| Implementation | Verifier | Status |
+|---|---|---|
+| `opena2a-org/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65 | 8 / 8 PASS |
+| `opena2a-org/atx-conformance/verifiers/python` (this repo) | Python, Ed25519, ML-DSA-65 out of scope | 8 / 8 PASS |
+
+Independent second-party implementations are tracked on the sibling issue
+[a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876).
+
+## Repository layout
+
+```
+LICENSE                          Apache 2.0
+README.md                        this file
+MANIFEST.sha256                  per-fixture SHA-256 (path-sorted)
+fixtures/                        the 8 conformance fixtures (byte-stable JSON)
+vectors/                         test keypair vectors (TEST-ONLY)
+verifiers/go/                    Go reference verifier (full hybrid)
+verifiers/python/                Python reference verifier (Ed25519)
+scripts/generate-fixtures/       deterministic fixture generator (Go)
+```
+
+## Versioning and stability
+
+- The conformance fixture file format (`$schema: fixture-v1`) is stable
+  across patch revisions of this repository. Adding new fixture fields is
+  a minor version bump; renaming or removing fields is a major version
+  bump.
+- The set of fixtures may grow. New fixtures are additive and do not
+  invalidate prior `MANIFEST.sha256` entries; each new fixture appears as
+  a new line in the manifest.
+- Existing fixtures are immutable once published. If a fixture needs to
+  change semantically, it ships under a new name. This is what makes
+  `MANIFEST.sha256` a useful regression check.
+
+## Contributing
+
+Issues and PRs welcome on this repository. Substantive coordination on the
+ATX wire format itself happens in [`opena2a-org/atx-spec`](https://github.com/opena2a-org/atx-spec)
+and in the A2A coordination map on
+[a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876).
+
+## License
+
+Apache 2.0, see [`LICENSE`](./LICENSE).
