@@ -74,7 +74,7 @@ signature verification. This is a known shape of ATX v1.0 and is documented
 here so reviewers do not have to discover it from the code. JCS-canonical
 JSON signing (RFC 8785) is a candidate hardening for v2.
 
-### Hybrid signing: production status, and a verifier-side gap
+### Hybrid signing: production status
 
 ATX v1.0 mandates hybrid Ed25519 + ML-DSA-65 signing at the wire format.
 The registry-side issuance path (`opena2a-registry/internal/application/atc_service.go` `IssueATC()`)
@@ -84,13 +84,16 @@ keypair wired in at `cmd/server/main.go:682-685`. Issued ATX credentials
 in production today therefore carry both algorithms, matching the
 `baseline-valid-hybrid.json` fixture in this repository.
 
-The verifier-side gap is on the offline-verify path: the standalone
-verifier package (`opena2a-registry/pkg/atcverify`) verifies only the
-Ed25519 signature(s) and silently ignores any ML-DSA-65 signature in the
-credential. The hybrid wrapper at `agent-identity-management/apps/backend/internal/crypto/pqc/hybrid.go`
-implements full hybrid verification but is invoked from the request-auth
-middleware, not from offline verify. Extending `pkg/atcverify` to verify
-the ML-DSA-65 signature when present is a separate hardening item.
+The standalone offline verifier (`opena2a-registry/pkg/atcverify`)
+verifies both algorithms as of opena2a-registry PR #214: when a
+credential declares an ML-DSA-65 signature, at least one ML-DSA-65
+signature must verify in addition to at least one Ed25519 signature.
+The wire-format alignment between the issuer's emitted ML-DSA-65
+signature `Value` (raw 3309-byte `mldsa65.SignatureSize` blob) and the
+spec / conformance-fixture format was closed by opena2a-registry PR #215.
+Credentials issued before PR #215 carry a legacy combined-blob encoding
+that the new verifier rejects; ATC TTL is 7 days so the rollover is
+naturally complete one week after PR #215 ships.
 
 A separate AIM-side credential format (`RealATCIssuer.Issue()` in
 `agent-identity-management/apps/backend/internal/infrastructure/atc/atc_issuer.go`)
@@ -258,6 +261,7 @@ breaking change for downstream verifiers.
 |---|---|---|
 | `opena2a-org/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65 | 8 / 8 PASS |
 | `opena2a-org/atx-conformance/verifiers/python` (this repo) | Python, Ed25519, ML-DSA-65 out of scope | 8 / 8 PASS |
+| `opena2a-org/opena2a-registry/pkg/atcverify` (production offline verifier) | Go, full Ed25519 plus ML-DSA-65 | passes the hybrid fixture as of opena2a-registry PR #214 + PR #215; integration via vendored fixture or `go get` import open as a follow-up |
 
 Independent second-party implementations are tracked on the sibling issue
 [a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876).
