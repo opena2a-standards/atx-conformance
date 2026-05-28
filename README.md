@@ -259,12 +259,29 @@ breaking change for downstream verifiers.
 
 | Implementation | Verifier | Status |
 |---|---|---|
-| `opena2a-org/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65 | 8 / 8 PASS |
-| `opena2a-org/atx-conformance/verifiers/python` (this repo) | Python, Ed25519, ML-DSA-65 out of scope | 8 / 8 PASS |
+| `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65 | 8 / 8 PASS |
+| `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, Ed25519, ML-DSA-65 out of scope | 8 / 8 PASS |
 | `opena2a-org/opena2a-registry/pkg/atcverify` (production offline verifier) | Go, full Ed25519 plus ML-DSA-65 | passes the hybrid fixture as of opena2a-registry PR #214 + PR #215; integration via vendored fixture or `go get` import open as a follow-up |
 
 Independent second-party implementations are tracked on the sibling issue
 [a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876).
+
+## Sibling repositories
+
+Two peer conformance suites cover the other OpenA2A specs in scope of the
+A2A coordination map's criterion (c) thread
+[`a2aproject/A2A#1885`](https://github.com/a2aproject/A2A/issues/1885):
+
+| Repo | Spec | Status |
+|---|---|---|
+| `atx-conformance` (this repo) | ATX v1.0 credential schema | 8 fixtures, 2 verifiers (Go full hybrid, Python Ed25519), `MANIFEST.sha256` pinned |
+| [`atp-conformance`](https://github.com/opena2a-org/atp-conformance) | ATP v1.0.0-rc1 protocol | 4 fixtures (discovery, trust-proof baseline, trust-proof hybrid, Signed Tree Head), same 2-verifier pair, `MANIFEST.sha256` pinned |
+| [`aip-conformance`](https://github.com/opena2a-org/aip-conformance) | AIP v1.0.0-draft identity protocol | §6.4 (VC `AgentTrustCredential`) covered by cross-linking this repo's 8 fixtures; §5.1 challenge-response transcript fixtures in flight as a separate workstream (CHIEF-CA Decision 3-C resolved 2026-05-27) |
+
+The three suites share the same MANIFEST-pinned byte-stable shape and are
+structurally comparable to A2A-IDF's
+[`aim-did-rfc9421/*`](https://github.com/opena2a-org/a2a-idf-conformance/tree/main/fixtures/composition/aim-did-rfc9421)
+set.
 
 ## Repository layout
 
