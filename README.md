@@ -275,8 +275,8 @@ A2A coordination map's criterion (c) thread
 | Repo | Spec | Status |
 |---|---|---|
 | `atx-conformance` (this repo) | ATX v1.0 credential schema | 8 fixtures, 2 verifiers (Go full hybrid, Python Ed25519), `MANIFEST.sha256` pinned |
-| [`atp-conformance`](https://github.com/opena2a-org/atp-conformance) | ATP v1.0.0-rc1 protocol | 4 fixtures (discovery, trust-proof baseline, trust-proof hybrid, Signed Tree Head), same 2-verifier pair, `MANIFEST.sha256` pinned |
-| [`aip-conformance`](https://github.com/opena2a-org/aip-conformance) | AIP v1.0.0-draft identity protocol | §6.4 (VC `AgentTrustCredential`) covered by cross-linking this repo's 8 fixtures; §5.1 challenge-response transcript fixtures in flight as a separate workstream (CHIEF-CA Decision 3-C resolved 2026-05-27) |
+| [`atp-conformance`](https://github.com/opena2a-standards/atp-conformance) | ATP v1.0.0-rc1 protocol | 4 fixtures (discovery, trust-proof baseline, trust-proof hybrid, Signed Tree Head), same 2-verifier pair, `MANIFEST.sha256` pinned |
+| [`aip-conformance`](https://github.com/opena2a-standards/aip-conformance) | AIP v1.0.0-draft identity protocol | §6.4 (VC `AgentTrustCredential`) covered by cross-linking this repo's 8 fixtures; §5.1 challenge-response covered by 4 dedicated fixtures + Go/Python verifiers shipped at v0.2 (2026-05-28, Decision 3-C) |
 
 The three suites share the same MANIFEST-pinned byte-stable shape and are
 structurally comparable to A2A-IDF's
