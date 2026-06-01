@@ -114,13 +114,18 @@ hybrid verification end to end, run the Go verifier.
 
 This suite uses the canonical post-consolidation DID method
 `did:opena2a:<type>:<id>` with type prefix `authority` for issuers, matching
-the 2026-05-23 unification across AIP-SPEC and ATX-SPEC. The production
-offline verifier in `opena2a-registry/pkg/atcverify/verify.go` still
-hardcodes `did:opena2a:registry:opena2a.org` (note the `registry` type
-prefix) and a legacy `did:atp:registry:opena2a`. The conformance verifiers
-configure trusted issuers from the fixture, so they do not rely on the
-production verifier's hardcoded list. The drift is a separate reconciliation
-item against the ATC to ATX code rename.
+the 2026-05-23 unification across AIP-SPEC and ATX-SPEC. The `did:opena2a`
+method itself is formally documented at
+[`opena2a-standards/did-method-opena2a`](https://github.com/opena2a-standards/did-method-opena2a)
+(Apache-2.0) and is filed for registration with the W3C DID Extensions
+registry on
+[`w3c/did-extensions#717`](https://github.com/w3c/did-extensions/pull/717).
+The production offline verifier in `opena2a-registry/pkg/atcverify/verify.go`
+still hardcodes `did:opena2a:registry:opena2a.org` (note the `registry`
+type prefix) and a legacy `did:atp:registry:opena2a`. The conformance
+verifiers configure trusted issuers from the fixture, so they do not
+rely on the production verifier's hardcoded list. The drift is a separate
+reconciliation item against the ATC to ATX code rename.
 
 ### Trust scoring: 9-factor reference
 
@@ -249,6 +254,7 @@ breaking change for downstream verifiers.
 |---|---|---|
 | ATX schema | v1.0 | [`opena2a-org/atx-spec/core.md`](https://github.com/opena2a-org/atx-spec/blob/main/core.md) |
 | AIP spec | v1.0 (in flight on PR 1496) | [`opena2a-org/agent-identity-protocol`](https://github.com/opena2a-org/agent-identity-protocol) |
+| `did:opena2a` method | v0.1 (W3C registration filed, PR `w3c/did-extensions#717`) | [`opena2a-standards/did-method-opena2a`](https://github.com/opena2a-standards/did-method-opena2a/blob/main/did-method-opena2a.md) |
 | Ed25519 test vector source | RFC 8032 §7.1 Tests 1, 2, 3, 1024 | [datatracker.ietf.org/doc/html/rfc8032](https://datatracker.ietf.org/doc/html/rfc8032) |
 | ML-DSA-65 | FIPS 204 final | [csrc.nist.gov/pubs/fips/204/final](https://csrc.nist.gov/pubs/fips/204/final) |
 | CIRCL (ML-DSA-65 implementation) | v1.6.2 | [github.com/cloudflare/circl](https://github.com/cloudflare/circl) |
