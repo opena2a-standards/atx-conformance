@@ -39,6 +39,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rfc8785 import canonicalize as _jcs_canonicalize  # noqa: E402
+
 try:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     from cryptography.exceptions import InvalidSignature
@@ -50,6 +53,7 @@ except ImportError:
 
 
 SUPPORTED_ATC_VERSION = "1.0"
+SUPPORTED_ATC_VERSION_V11 = "1.1"
 
 
 @dataclass
@@ -93,6 +97,59 @@ def canonical_payload(atx: dict[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
+def canonical_payload_v11(atx: dict[str, Any]) -> bytes:
+    """Project the credential into the ATX v1.1 TBS and JCS-canonicalize it.
+
+    atx-spec core.md §1.3a.2. Unlike canonical_payload, this covers capabilities,
+    scanSummary, issuerChain, publisher, and behavioralProfile. The byte
+    agreement with the Go and TypeScript verifiers is guaranteed by the
+    jcs-vectors suite, not by shared code.
+    """
+    scan = atx.get("scanSummary")
+    if not isinstance(scan, dict):
+        scan = {}
+    scan_summary = {
+        "hma": scan.get("hma", "") or "",
+        "criticalFindings": int(scan.get("criticalFindings", 0) or 0),
+        "highFindings": int(scan.get("highFindings", 0) or 0),
+        "secretless": scan.get("secretless", "") or "",
+        "cryptoServe": scan.get("cryptoServe", "") or "",
+        "oasbLevel": scan.get("oasbLevel", "") or "",
+    }
+
+    bp_in = atx.get("behavioralProfile")
+    if isinstance(bp_in, dict):
+        behavioral_profile: Any = {
+            "checksum": bp_in.get("checksum", "") or "",
+            "generatedAt": _normalize_rfc3339(bp_in["generatedAt"]) if bp_in.get("generatedAt") else "",
+            "observationDays": int(bp_in.get("observationDays", 0) or 0),
+        }
+    else:
+        behavioral_profile = None
+
+    tbs = {
+        "atcVersion": atx["atcVersion"],
+        "agentId": atx["agentId"],
+        "agentDid": atx["agentDid"],
+        "publisher": atx.get("publisher", "") or "",
+        "publisherDid": atx.get("publisherDid", "") or "",
+        "version": atx["version"],
+        "contentHash": atx["contentHash"],
+        "buildAttestation": atx.get("buildAttestation", "") or "",
+        "capabilities": list(atx.get("capabilities") or []),
+        "behavioralProfile": behavioral_profile,
+        "scanSummary": scan_summary,
+        # trustScore is string-encoded %.6f so trustLevel is the only JSON number.
+        "trustScore": "%.6f" % float(atx["trustScore"]),
+        "trustLevel": int(atx["trustLevel"]),
+        "issuedAt": _normalize_rfc3339(atx["issuedAt"]),
+        "expiresAt": _normalize_rfc3339(atx["expiresAt"]),
+        "issuerDid": atx["issuerDid"],
+        "issuerChain": list(atx.get("issuerChain") or []),
+    }
+    return _jcs_canonicalize(tbs)
+
+
 def _normalize_rfc3339(s: str) -> str:
     """Round-trip RFC 3339 through Python's datetime, normalize to UTC ISO with
     seconds precision (matching Go's time.RFC3339 "2006-01-02T15:04:05Z07:00").
@@ -127,11 +184,13 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
 
     now = datetime.fromisoformat(vs["clockRfc3339"].replace("Z", "+00:00")).astimezone(timezone.utc)
 
-    # Step 1: schema version.
-    if atx.get("atcVersion") != SUPPORTED_ATC_VERSION:
+    # Step 1: schema version. Dispatch on atcVersion: "1.0" verifies the legacy
+    # pipe form, "1.1" verifies JCS(TBS) (atx-spec §1.3a).
+    version = atx.get("atcVersion")
+    if version not in (SUPPORTED_ATC_VERSION, SUPPORTED_ATC_VERSION_V11):
         return VerifyResult(
             reject_category="UNSUPPORTED_VERSION",
-            reason=f"unsupported atcVersion {atx.get('atcVersion')!r} (this verifier supports {SUPPORTED_ATC_VERSION})",
+            reason=f"unsupported atcVersion {version!r} (this verifier supports {SUPPORTED_ATC_VERSION} and {SUPPORTED_ATC_VERSION_V11})",
         )
 
     # Step 2: expiry.
@@ -162,7 +221,7 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
         )
 
     # Step 5: signature verification (Ed25519 fully, ML-DSA-65 marked skipped).
-    payload = canonical_payload(atx)
+    payload = canonical_payload_v11(atx) if version == SUPPORTED_ATC_VERSION_V11 else canonical_payload(atx)
     eds, mldsa_keys_present = index_public_keys(vs["publicKeys"])
     result = VerifyResult(sigs_expected=len(atx.get("signatures", [])))
 

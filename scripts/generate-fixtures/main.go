@@ -30,10 +30,18 @@ import (
 	"time"
 
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
+	"github.com/gowebpki/jcs"
 )
 
-// ATCVersion of the credential schema this generator emits.
+// ATCVersion of the legacy credential schema this generator emits. v1.1 fixtures
+// set atcVersion "1.1" and sign JCS(TBS); see canonicalPayloadV11.
 const atcVersion = "1.0"
+const atcVersionV11 = "1.1"
+
+// jcsBaselineCanonicalHex is the canonical JCS(TBS) of the baseline vector in
+// jcs-vectors/vectors/01-baseline.json. The v1.1 baseline fixture must reproduce
+// it, or the fixtures and the cross-language byte-agreement gate have diverged.
+const jcsBaselineCanonicalHex = "7b226167656e74446964223a226469643a6f70656e6132613a6167656e743a6167656e745f636f6e666f726d616e63655f746573745f303031222c226167656e744964223a226167656e745f636f6e666f726d616e63655f746573745f303031222c2261746356657273696f6e223a22312e31222c226265686176696f72616c50726f66696c65223a7b22636865636b73756d223a227368613235363a676869373839222c2267656e6572617465644174223a22323032362d30352d31395430303a30303a30305a222c226f62736572766174696f6e44617973223a31347d2c226275696c644174746573746174696f6e223a2268747470733a2f2f736c73612e6465762f70726f76656e616e63652f7631236f70656e6132612d636f6e666f726d616e6365222c226361706162696c6974696573223a5b22726561643a7075626c6963222c2277726974653a6f776e6564225d2c22636f6e74656e7448617368223a2230303030313131313232323233333333343434343535353536363636373737373838383839393939616161616262626263636363646464646565656566666666222c22657870697265734174223a22323039392d31322d33315432333a35393a35395a222c226973737565644174223a22323032362d30352d32335430303a30303a30305a222c22697373756572436861696e223a5b226469643a6f70656e6132613a617574686f726974793a6f70656e6132612e6f72672d726f6f74222c226469643a6f70656e6132613a617574686f726974793a6f70656e6132612e6f7267225d2c22697373756572446964223a226469643a6f70656e6132613a617574686f726974793a6f70656e6132612e6f7267222c227075626c6973686572223a226f70656e6132612d636f6e666f726d616e6365222c227075626c6973686572446964223a226469643a6f70656e6132613a7075626c69736865723a6f70656e6132612d636f6e666f726d616e6365222c227363616e53756d6d617279223a7b22637269746963616c46696e64696e6773223a302c2263727970746f5365727665223a226e6f2d7765616b2d63727970746f222c226869676846696e64696e6773223a302c22686d61223a22706173736564222c226f6173624c6576656c223a224c31222c227365637265746c657373223a22636c65616e227d2c2274727573744c6576656c223a342c22747275737453636f7265223a2238372e353030303030222c2276657273696f6e223a22312e302e30227d"
 
 // fixedClock pins the verifier clock for the entire suite. Valid fixtures
 // have ExpiresAt later than this; the expired fixture has ExpiresAt earlier.
@@ -121,6 +129,96 @@ func canonicalPayload(a *ATX) []byte {
 		atcVersion,
 	)
 	return []byte(canonical)
+}
+
+// tbsV11 and friends are the ATX v1.1 to-be-signed projection (atx-spec
+// core.md §1.3a.2), identical to opena2a-registry/pkg/atcverify and the
+// conformance verifier. JCS sorts member names, so field order is irrelevant.
+type tbsScanSummaryV11 struct {
+	HMA              string `json:"hma"`
+	CriticalFindings int    `json:"criticalFindings"`
+	HighFindings     int    `json:"highFindings"`
+	Secretless       string `json:"secretless"`
+	CryptoServe      string `json:"cryptoServe"`
+	OASBLevel        string `json:"oasbLevel"`
+}
+
+type tbsBehavioralProfileV11 struct {
+	Checksum        string `json:"checksum"`
+	GeneratedAt     string `json:"generatedAt"`
+	ObservationDays int    `json:"observationDays"`
+}
+
+type tbsV11 struct {
+	ATCVersion        string            `json:"atcVersion"`
+	AgentID           string            `json:"agentId"`
+	AgentDID          string            `json:"agentDid"`
+	Publisher         string            `json:"publisher"`
+	PublisherDID      string            `json:"publisherDid"`
+	Version           string            `json:"version"`
+	ContentHash       string            `json:"contentHash"`
+	BuildAttestation  string            `json:"buildAttestation"`
+	Capabilities      []string          `json:"capabilities"`
+	BehavioralProfile json.RawMessage   `json:"behavioralProfile"`
+	ScanSummary       tbsScanSummaryV11 `json:"scanSummary"`
+	TrustScore        string            `json:"trustScore"`
+	TrustLevel        int               `json:"trustLevel"`
+	IssuedAt          string            `json:"issuedAt"`
+	ExpiresAt         string            `json:"expiresAt"`
+	IssuerDID         string            `json:"issuerDid"`
+	IssuerChain       []string          `json:"issuerChain"`
+}
+
+// canonicalPayloadV11 projects an ATX into the v1.1 TBS and returns JCS(TBS).
+func canonicalPayloadV11(a *ATX) []byte {
+	caps := a.Capabilities
+	if caps == nil {
+		caps = []string{}
+	}
+	chain := a.IssuerChain
+	if chain == nil {
+		chain = []string{}
+	}
+	var ss tbsScanSummaryV11
+	if a.ScanSummary != nil {
+		ss = tbsScanSummaryV11{
+			HMA: a.ScanSummary.HMA, CriticalFindings: a.ScanSummary.CriticalFindings,
+			HighFindings: a.ScanSummary.HighFindings, Secretless: a.ScanSummary.Secretless,
+			CryptoServe: a.ScanSummary.CryptoServe, OASBLevel: a.ScanSummary.OASBLevel,
+		}
+	}
+	bp := json.RawMessage("null")
+	if a.BehavioralProfile != nil {
+		bpObj := tbsBehavioralProfileV11{
+			Checksum:        a.BehavioralProfile.Checksum,
+			GeneratedAt:     a.BehavioralProfile.GeneratedAt.UTC().Format(time.RFC3339),
+			ObservationDays: a.BehavioralProfile.ObservationDays,
+		}
+		b, err := json.Marshal(&bpObj)
+		must(err)
+		bp = b
+	}
+	tbs := tbsV11{
+		ATCVersion: a.ATCVersion, AgentID: a.AgentID, AgentDID: a.AgentDID,
+		Publisher: a.Publisher, PublisherDID: a.PublisherDID, Version: a.Version,
+		ContentHash: a.ContentHash, BuildAttestation: a.BuildAttestation,
+		Capabilities: caps, BehavioralProfile: bp, ScanSummary: ss,
+		TrustScore: fmt.Sprintf("%.6f", a.TrustScore), TrustLevel: a.TrustLevel,
+		IssuedAt: a.IssuedAt.UTC().Format(time.RFC3339), ExpiresAt: a.ExpiresAt.UTC().Format(time.RFC3339),
+		IssuerDID: a.IssuerDID, IssuerChain: chain,
+	}
+	raw, err := json.Marshal(&tbs)
+	must(err)
+	out, err := jcs.Transform(raw)
+	must(err)
+	return out
+}
+
+// signV11WithKey signs JCS(TBS) with a vector's Ed25519 seed.
+func signV11WithKey(v keyVector, a ATX) ATCSignature {
+	sig := signEd25519(v.SeedHex, canonicalPayloadV11(&a))
+	sig.KeyID = v.KeyID
+	return sig
 }
 
 // signEd25519 signs the canonical payload with an Ed25519 keypair derived from
@@ -262,6 +360,12 @@ func main() {
 	} else if mldsa.PublicKeyHex != mldsaPubHex {
 		panic(fmt.Sprintf("ML-DSA-65 pubkey drift: vector says %s, generator computed %s",
 			mldsa.PublicKeyHex[:16]+"...", mldsaPubHex[:16]+"..."))
+	}
+
+	// Cross-check: the v1.1 baseline must canonicalize to the bytes pinned in
+	// jcs-vectors/vectors/01-baseline.json.
+	if base := newBaselineV11ATX(); hex.EncodeToString(canonicalPayloadV11(&base)) != jcsBaselineCanonicalHex {
+		panic("v1.1 baseline canonical bytes diverge from jcs-vectors baseline vector; fixtures and the byte-agreement gate are out of sync")
 	}
 
 	defaultVerifierState := VerifierState{
@@ -417,6 +521,49 @@ func main() {
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "UNSUPPORTED_VERSION", ReasonContains: "version"},
 				atx)
 		}},
+		// ---- ATX v1.1 fixtures (additive; sign JCS(TBS), atx-spec §1.3a.2) ----
+		{"fixtures/v1_1-baseline-valid.json", func() Fixture {
+			atx := newBaselineV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/baseline-valid",
+				"A baseline ATX v1.1 credential. The single Ed25519 signature covers JCS(TBS) per atx-spec core.md §1.3a.2, so capabilities, scanSummary, issuerChain, publisher, and behavioralProfile are integrity-protected. Verifier MUST ACCEPT. The canonical bytes equal the jcs-vectors baseline vector.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "ACCEPT"},
+				atx)
+		}},
+		{"fixtures/v1_1-baseline-valid-hybrid.json", func() Fixture {
+			atx := newBaselineV11ATX()
+			ed := signV11WithKey(primary, atx)
+			pq, _ := signMLDSA65(mldsa.SeedHex, canonicalPayloadV11(&atx))
+			pq.KeyID = mldsa.KeyID
+			atx.Signatures = []ATCSignature{ed, pq}
+			return wrap("atx-v1_1/baseline-valid-hybrid",
+				"An ATX v1.1 credential carrying both an Ed25519 signature and an ML-DSA-65 signature over the SAME JCS(TBS) bytes. A spec-conformant verifier MUST verify both and ACCEPT.",
+				[]KeypairRef{
+					keypairRefFor(primary, "vectors/issuer-primary.json"),
+					{Role: mldsa.Role, Path: "vectors/mldsa65-seed.json", Algorithm: mldsa.Algorithm, PublicKeyHex: mldsa.PublicKeyHex, KeyID: mldsa.KeyID},
+				},
+				hybridVerifierState,
+				ExpectedOutcome{VerifyResult: "ACCEPT"},
+				atx)
+		}},
+		{"fixtures/v1_1-tampered-capabilities.json", func() Fixture {
+			// The v1.1 win, made concrete. Sign the TBS with the honest
+			// capabilities, then escalate capabilities AFTER signing. Under
+			// v1.0 the signature would still verify (capabilities unsigned);
+			// under v1.1 the recomputed JCS(TBS) no longer matches the
+			// signature, so the verifier MUST REJECT.
+			atx := newBaselineV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			atx.Capabilities = []string{"read:public", "write:owned", "admin:all"}
+			return wrap("atx-v1_1/tampered-capabilities",
+				"An ATX v1.1 credential whose capabilities were escalated to include admin:all AFTER signing. Because v1.1 signs JCS(TBS), capabilities are covered by the signature; the verifier recomputes the canonical bytes, finds they no longer match, and MUST REJECT with a signature-validation reason. This is the integrity property v1.0 lacked.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
 	}
 
 	type manifestEntry struct {
@@ -474,6 +621,23 @@ func newBaselineATX() ATX {
 		Revoked:     false,
 		CreatedAt:   createdAt,
 	}
+}
+
+// newBaselineV11ATX returns the v1.1 baseline credential. It mirrors the
+// jcs-vectors baseline vector: atcVersion 1.1, a populated behavioralProfile,
+// and a root-first issuerChain (atx-spec §1.3a.2). Its JCS(TBS) bytes therefore
+// equal that vector's pinned canonical bytes.
+func newBaselineV11ATX() ATX {
+	a := newBaselineATX()
+	a.ATCVersion = atcVersionV11
+	a.BehavioralProfile = &ATCBehavioralProfile{
+		Checksum:        "sha256:ghi789",
+		GeneratedAt:     mustParseTime("2026-05-19T00:00:00Z"),
+		ObservationDays: 14,
+	}
+	// Root-first order per §1.3a.2 (the v1.0 baseline uses the legacy order).
+	a.IssuerChain = []string{"did:opena2a:authority:opena2a.org-root", "did:opena2a:authority:opena2a.org"}
+	return a
 }
 
 // signWithKey signs the canonical payload using a vector's seed and attaches

@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
+	"github.com/gowebpki/jcs"
 )
 
 // ---------------------------------------------------------------------------
@@ -107,6 +108,7 @@ type atx struct {
 	BuildAttestation     string          `json:"buildAttestation,omitempty"`
 	TransparencyLogIndex int64           `json:"transparencyLogIndex"`
 	Capabilities         []string        `json:"capabilities"`
+	BehavioralProfile    json.RawMessage `json:"behavioralProfile,omitempty"`
 	ScanSummary          json.RawMessage `json:"scanSummary"`
 	TrustScore           float64         `json:"trustScore"`
 	TrustLevel           int             `json:"trustLevel"`
@@ -140,6 +142,117 @@ func canonicalPayload(a *atx) []byte {
 		a.ExpiresAt.UTC().Format(time.RFC3339),
 		"1.0",
 	))
+}
+
+// tbsScanSummaryV11, tbsBehavioralProfileV11, and tbsV11 are the v1.1
+// to-be-signed projection per atx-spec core.md §1.3a.2. This is the same
+// projection as opena2a-registry/pkg/atcverify and is duplicated here so the
+// conformance verifier keeps zero dependency on the production codebase. The
+// byte agreement is guaranteed by jcs-vectors/, not by shared code.
+type tbsScanSummaryV11 struct {
+	HMA              string `json:"hma"`
+	CriticalFindings int    `json:"criticalFindings"`
+	HighFindings     int    `json:"highFindings"`
+	Secretless       string `json:"secretless"`
+	CryptoServe      string `json:"cryptoServe"`
+	OASBLevel        string `json:"oasbLevel"`
+}
+
+type tbsBehavioralProfileV11 struct {
+	Checksum        string `json:"checksum"`
+	GeneratedAt     string `json:"generatedAt"`
+	ObservationDays int    `json:"observationDays"`
+}
+
+type tbsV11 struct {
+	ATCVersion        string          `json:"atcVersion"`
+	AgentID           string          `json:"agentId"`
+	AgentDID          string          `json:"agentDid"`
+	Publisher         string          `json:"publisher"`
+	PublisherDID      string          `json:"publisherDid"`
+	Version           string          `json:"version"`
+	ContentHash       string          `json:"contentHash"`
+	BuildAttestation  string          `json:"buildAttestation"`
+	Capabilities      []string        `json:"capabilities"`
+	BehavioralProfile json.RawMessage `json:"behavioralProfile"`
+	ScanSummary       tbsScanSummaryV11 `json:"scanSummary"`
+	TrustScore        string          `json:"trustScore"`
+	TrustLevel        int             `json:"trustLevel"`
+	IssuedAt          string          `json:"issuedAt"`
+	ExpiresAt         string          `json:"expiresAt"`
+	IssuerDID         string          `json:"issuerDid"`
+	IssuerChain       []string        `json:"issuerChain"`
+}
+
+// canonicalPayloadV11 projects the credential into the v1.1 TBS and returns its
+// JCS (RFC 8785) canonicalization. Unlike canonicalPayload, this covers
+// capabilities, scanSummary, issuerChain, publisher, and behavioralProfile.
+func canonicalPayloadV11(a *atx) ([]byte, error) {
+	caps := a.Capabilities
+	if caps == nil {
+		caps = []string{}
+	}
+	chain := a.IssuerChain
+	if chain == nil {
+		chain = []string{}
+	}
+	tbs := tbsV11{
+		ATCVersion:        a.ATCVersion,
+		AgentID:           a.AgentID,
+		AgentDID:          a.AgentDID,
+		Publisher:         a.Publisher,
+		PublisherDID:      a.PublisherDID,
+		Version:           a.Version,
+		ContentHash:       a.ContentHash,
+		BuildAttestation:  a.BuildAttestation,
+		Capabilities:      caps,
+		BehavioralProfile: projectBehavioralProfileV11(a.BehavioralProfile),
+		ScanSummary:       projectScanSummaryV11(a.ScanSummary),
+		TrustScore:        fmt.Sprintf("%.6f", a.TrustScore),
+		TrustLevel:        a.TrustLevel,
+		IssuedAt:          a.IssuedAt.UTC().Format(time.RFC3339),
+		ExpiresAt:         a.ExpiresAt.UTC().Format(time.RFC3339),
+		IssuerDID:         a.IssuerDID,
+		IssuerChain:       chain,
+	}
+	raw, err := json.Marshal(&tbs)
+	if err != nil {
+		return nil, fmt.Errorf("marshal v1.1 TBS: %w", err)
+	}
+	return jcs.Transform(raw)
+}
+
+func projectScanSummaryV11(raw json.RawMessage) tbsScanSummaryV11 {
+	var ss tbsScanSummaryV11
+	if len(raw) == 0 || string(raw) == "null" {
+		return ss
+	}
+	_ = json.Unmarshal(raw, &ss)
+	return ss
+}
+
+func projectBehavioralProfileV11(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || string(raw) == "null" {
+		return json.RawMessage("null")
+	}
+	var wire struct {
+		Checksum        string    `json:"checksum"`
+		GeneratedAt     time.Time `json:"generatedAt"`
+		ObservationDays int       `json:"observationDays"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return json.RawMessage("null")
+	}
+	bp := tbsBehavioralProfileV11{
+		Checksum:        wire.Checksum,
+		GeneratedAt:     wire.GeneratedAt.UTC().Format(time.RFC3339),
+		ObservationDays: wire.ObservationDays,
+	}
+	out, err := json.Marshal(&bp)
+	if err != nil {
+		return json.RawMessage("null")
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -178,11 +291,12 @@ func verify(f fixture) result {
 	}
 	now = now.UTC()
 
-	// Step 1: schema version
-	if a.ATCVersion != "1.0" {
+	// Step 1: schema version. Dispatch on atcVersion: "1.0" verifies the legacy
+	// pipe form, "1.1" verifies JCS(TBS) (atx-spec §1.3a).
+	if a.ATCVersion != "1.0" && a.ATCVersion != "1.1" {
 		return result{
 			RejectCategory: "UNSUPPORTED_VERSION",
-			Reason:         fmt.Sprintf("unsupported atcVersion %q (this verifier supports 1.0)", a.ATCVersion),
+			Reason:         fmt.Sprintf("unsupported atcVersion %q (this verifier supports 1.0 and 1.1)", a.ATCVersion),
 		}
 	}
 
@@ -225,7 +339,16 @@ func verify(f fixture) result {
 	// Spec mandate: every declared signature MUST verify. The conformance
 	// verifier does not silently skip ML-DSA-65 signatures even though the
 	// current pkg/atcverify production verifier does.
-	payload := canonicalPayload(&a)
+	var payload []byte
+	if a.ATCVersion == "1.1" {
+		pb, err := canonicalPayloadV11(&a)
+		if err != nil {
+			return result{RejectCategory: "VERIFIER_CONFIG_ERROR", Reason: "v1.1 canonicalization failed: " + err.Error()}
+		}
+		payload = pb
+	} else {
+		payload = canonicalPayload(&a)
+	}
 	res := result{SigsExpected: len(a.Signatures)}
 
 	// Index public keys by algorithm for lookup.
