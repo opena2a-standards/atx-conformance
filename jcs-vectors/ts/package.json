@@ -1,0 +1,13 @@
+{
+  "name": "atx-jcs-vectors-ts-check",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "TypeScript/JS leg of the ATX v1.1 JCS byte-agreement gate (erdtman/canonicalize, the RFC 8785 reference implementation).",
+  "scripts": {
+    "check": "node check.mjs"
+  },
+  "dependencies": {
+    "canonicalize": "2.1.0"
+  }
+}

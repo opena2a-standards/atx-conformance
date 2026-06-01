@@ -1,0 +1,8 @@
+# TS leg dependency tree (pinned via ts/package-lock.json); reinstalled by run-agreement.sh
+ts/node_modules/
+# Go build artifacts (never commit compiled binaries)
+/check/check
+/pin/pin
+*.test
+__pycache__/
+*.pyc
