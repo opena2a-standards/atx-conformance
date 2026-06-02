@@ -13,3 +13,17 @@ venv/
 # OS noise.
 .DS_Store
 Thumbs.db
+
+# Secrets (never commit). This repo intentionally contains only PUBLIC
+# test-vector seeds (RFC 8032 / FIPS 204 known-answer tests), never real
+# credentials; these patterns are defensive so a stray secret cannot be added.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.json
+credentials.json
+*.tfstate
+*.tfvars

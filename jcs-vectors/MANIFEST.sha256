@@ -1,0 +1,7 @@
+6f9ad0f523de410652ba2123b8e9a8a59916e3614cdae2871c4d83c295758ba9  jcs-vectors/vectors/01-baseline.json
+c2a61e8614fbf95ded9e27ccdfcd5a4c21651789161102e47bd1a11de8109338  jcs-vectors/vectors/02-unicode-and-escaping.json
+ac5bcd84acc6ff33ff16220fd4805b98e88e12484c07d2f591ca85151ba83b37  jcs-vectors/vectors/03-canonical-empties.json
+0223ee5cd637d260803062d5a346079b1f37ddc104821c9d50e71d5c8527b9c4  jcs-vectors/vectors/04-key-order-scramble.json
+01175d48e144872ced1680b7e3beac7909fe0f9cc6a9bb191bf7545fab11dc93  jcs-vectors/vectors/05-issuer-chain-order.json
+5797a17a9ed75b1a7adca9e4d6843a142d352e17b4081a2e1fb720a27f180988  jcs-vectors/vectors/06-trustscore-string.json
+794f209eb826d7e83b1e2c45f6b3e401674bea0f4d8f5384b046acbee978393d  jcs-vectors/vectors/07-nested-and-unicode-arrays.json

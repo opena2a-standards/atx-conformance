@@ -33,6 +33,7 @@ What this suite verifies:
 | Hybrid Ed25519 + ML-DSA-65 signature verification (FIPS 204) | `fixtures/baseline-valid-hybrid.json` |
 | Threshold 2-of-3 cosignature path | `fixtures/threshold-2of3-cosignature.json` |
 | Tampered-signature rejection | `fixtures/tampered-signature.json` |
+| ATX v1.1 JCS(TBS) signing, signed-field integrity | `fixtures/v1_1-baseline-valid.json`, `fixtures/v1_1-tampered-capabilities.json` |
 | Issuer-chain depth requirement for trust level 3 and above | implicit in every ACCEPT fixture (all use trust level 4 with a 2-link chain) |
 
 What this suite does NOT verify:
@@ -52,7 +53,7 @@ What this suite does NOT verify:
 This is the section that future reviewers, second-implementation authors, and
 A2A coordination-map readers should read before forming judgments.
 
-### Canonicalization: 11 signed fields, not the full JSON
+### Canonicalization: v1.0 signs 11 fields; v1.1 signs JCS(TBS)
 
 ATX v1.0 signs a pipe-delimited canonical string, not the JSON body. The
 signature covers exactly 11 fields, defined verbatim in
@@ -65,14 +66,25 @@ trustLevel | trustScore (%.6f) | issuedAt (RFC 3339) | expiresAt (RFC 3339) |
 atcVersion (hardcoded "1.0")
 ```
 
-Fields NOT covered by the signature include `capabilities`, `scanSummary`,
+Fields NOT covered by the v1.0 signature include `capabilities`, `scanSummary`,
 `behavioralProfile`, `publisher`, `publisherDid`, `transparencyLogIndex`,
 `signatures`, `revoked`, `revokedAt`, `revocationReason`, `createdAt`, `id`,
-`issuerChain`. A consequence is that an attacker who can write to a stored
+`issuerChain`. A consequence is that an attacker who can write to a stored v1.0
 credential could modify `capabilities` or `scanSummary` without breaking
-signature verification. This is a known shape of ATX v1.0 and is documented
-here so reviewers do not have to discover it from the code. JCS-canonical
-JSON signing (RFC 8785) is a candidate hardening for v2.
+signature verification.
+
+**ATX v1.1 closes this.** A v1.1 credential (`atcVersion: "1.1"`) signs
+`JCS(TBS)`: the [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) canonical form
+of a projected to-be-signed object that includes `capabilities`, `scanSummary`,
+`issuerChain`, `publisher`, and `behavioralProfile`, so those fields become
+integrity-protected. The normative projection and determinism rules are in
+[`atx-spec/core.md`](https://github.com/opena2a-org/atx-spec/blob/main/core.md)
+§1.3a.2. The verifiers dispatch on `atcVersion`; the v1.0 pipe form is frozen and
+unchanged. Cross-language byte agreement on `JCS(TBS)` is proven by
+[`jcs-vectors/`](jcs-vectors/) (Go, Python, and TypeScript canonicalizers must
+agree byte-for-byte). The `fixtures/v1_1-*.json` fixtures exercise the v1.1 path,
+including `v1_1-tampered-capabilities.json`, which is REJECTED precisely because
+capabilities are now signed.
 
 ### Hybrid signing: production status
 
@@ -169,6 +181,9 @@ All fixtures use:
 | `fixtures/wrong-issuer.json` | REJECT (UNTRUSTED_ISSUER) | Real Ed25519 signature from an untrusted-issuer keypair (RFC 8032 §7.1 Test 1024 first 32 bytes), `issuerDid: did:opena2a:authority:attacker.example`. Signature is mathematically valid; issuer is not in trusted set. |
 | `fixtures/tampered-signature.json` | REJECT (SIGNATURE_INVALID) | One bit of the signature value flipped after signing. All other fields unchanged. |
 | `fixtures/malformed-schema.json` | REJECT (UNSUPPORTED_VERSION) | `atcVersion: "2.0"`. Verifier rejects at step 1 before any signature check. |
+| `fixtures/v1_1-baseline-valid.json` | ACCEPT | ATX v1.1. Single Ed25519 signature over `JCS(TBS)` (atx-spec §1.3a.2). Canonical bytes equal the `jcs-vectors` baseline. |
+| `fixtures/v1_1-baseline-valid-hybrid.json` | ACCEPT | ATX v1.1 with Ed25519 plus ML-DSA-65 over the same `JCS(TBS)` bytes. Go validates both; Python validates Ed25519 only. |
+| `fixtures/v1_1-tampered-capabilities.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 whose `capabilities` were escalated to `admin:all` after signing. Rejected because v1.1 signs capabilities; the v1.0 form would have accepted it. |
 
 ## Running the verifiers
 
@@ -206,7 +221,7 @@ For full hybrid verification end to end, use the Go verifier.
 
 ### Expected output
 
-Both verifiers report `summary: 8 pass, 0 fail (8 fixtures)` against the
+Both verifiers report `summary: 11 pass, 0 fail (11 fixtures)` against the
 shipped fixture set. Any divergence on bytes (the fixture file was modified)
 or on verifier semantics (the verifier has drifted from the spec) shows up
 as one or more FAIL lines.
@@ -265,8 +280,8 @@ breaking change for downstream verifiers.
 
 | Implementation | Verifier | Status |
 |---|---|---|
-| `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65 | 8 / 8 PASS |
-| `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, Ed25519, ML-DSA-65 out of scope | 8 / 8 PASS |
+| `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 11 / 11 PASS |
+| `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, Ed25519, ML-DSA-65 out of scope, v1.0 + v1.1 | 11 / 11 PASS |
 | `opena2a-org/opena2a-registry/pkg/atcverify` (production offline verifier) | Go, full Ed25519 plus ML-DSA-65 | passes the hybrid fixture as of opena2a-registry PR #214 + PR #215; integration via vendored fixture or `go get` import open as a follow-up |
 
 Independent second-party implementations are tracked on the sibling issue
@@ -280,9 +295,9 @@ A2A coordination map's criterion (c) thread
 
 | Repo | Spec | Status |
 |---|---|---|
-| `atx-conformance` (this repo) | ATX v1.0 credential schema | 8 fixtures, 2 verifiers (Go full hybrid, Python Ed25519), `MANIFEST.sha256` pinned |
+| `atx-conformance` (this repo) | ATX v1.0 + v1.1 credential schema | 11 fixtures (8 v1.0, 3 v1.1 JCS), 2 verifiers (Go full hybrid, Python Ed25519), `jcs-vectors/` byte-agreement gate, `MANIFEST.sha256` pinned |
 | [`atp-conformance`](https://github.com/opena2a-standards/atp-conformance) | ATP v1.0.0-rc1 protocol | 4 fixtures (discovery, trust-proof baseline, trust-proof hybrid, Signed Tree Head), same 2-verifier pair, `MANIFEST.sha256` pinned |
-| [`aip-conformance`](https://github.com/opena2a-standards/aip-conformance) | AIP v1.0.0-draft identity protocol | §6.4 (VC `AgentTrustCredential`) covered by cross-linking this repo's 8 fixtures; §5.1 challenge-response covered by 4 dedicated fixtures + Go/Python verifiers shipped at v0.2 (2026-05-28, Decision 3-C) |
+| [`aip-conformance`](https://github.com/opena2a-standards/aip-conformance) | AIP v1.0.0-draft identity protocol | §6.4 (VC `AgentTrustCredential`) covered by cross-linking this repo's fixtures; §5.1 challenge-response covered by 4 dedicated fixtures + Go/Python verifiers shipped at v0.2 (2026-05-28, Decision 3-C) |
 
 The three suites share the same MANIFEST-pinned byte-stable shape and are
 structurally comparable to A2A-IDF's
