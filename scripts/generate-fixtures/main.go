@@ -274,14 +274,14 @@ type KeypairRef struct {
 // Fixture wraps an ATX with all the metadata a language-agnostic verifier
 // needs: spec refs, expected outcome, verifier configuration.
 type Fixture struct {
-	Schema        string             `json:"$schema"`
-	Name          string             `json:"name"`
-	Description   string             `json:"description"`
-	Spec          []SpecRef          `json:"spec"`
-	KeypairRefs   []KeypairRef       `json:"keypairRefs"`
-	VerifierState VerifierState      `json:"verifierState"`
-	Expected      ExpectedOutcome    `json:"expected"`
-	ATX           json.RawMessage    `json:"atx"`
+	Schema        string          `json:"$schema"`
+	Name          string          `json:"name"`
+	Description   string          `json:"description"`
+	Spec          []SpecRef       `json:"spec"`
+	KeypairRefs   []KeypairRef    `json:"keypairRefs"`
+	VerifierState VerifierState   `json:"verifierState"`
+	Expected      ExpectedOutcome `json:"expected"`
+	ATX           json.RawMessage `json:"atx"`
 }
 
 // SpecRef cites a normative document.

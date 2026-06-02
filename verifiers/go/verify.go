@@ -165,23 +165,23 @@ type tbsBehavioralProfileV11 struct {
 }
 
 type tbsV11 struct {
-	ATCVersion        string          `json:"atcVersion"`
-	AgentID           string          `json:"agentId"`
-	AgentDID          string          `json:"agentDid"`
-	Publisher         string          `json:"publisher"`
-	PublisherDID      string          `json:"publisherDid"`
-	Version           string          `json:"version"`
-	ContentHash       string          `json:"contentHash"`
-	BuildAttestation  string          `json:"buildAttestation"`
-	Capabilities      []string        `json:"capabilities"`
-	BehavioralProfile json.RawMessage `json:"behavioralProfile"`
+	ATCVersion        string            `json:"atcVersion"`
+	AgentID           string            `json:"agentId"`
+	AgentDID          string            `json:"agentDid"`
+	Publisher         string            `json:"publisher"`
+	PublisherDID      string            `json:"publisherDid"`
+	Version           string            `json:"version"`
+	ContentHash       string            `json:"contentHash"`
+	BuildAttestation  string            `json:"buildAttestation"`
+	Capabilities      []string          `json:"capabilities"`
+	BehavioralProfile json.RawMessage   `json:"behavioralProfile"`
 	ScanSummary       tbsScanSummaryV11 `json:"scanSummary"`
-	TrustScore        string          `json:"trustScore"`
-	TrustLevel        int             `json:"trustLevel"`
-	IssuedAt          string          `json:"issuedAt"`
-	ExpiresAt         string          `json:"expiresAt"`
-	IssuerDID         string          `json:"issuerDid"`
-	IssuerChain       []string        `json:"issuerChain"`
+	TrustScore        string            `json:"trustScore"`
+	TrustLevel        int               `json:"trustLevel"`
+	IssuedAt          string            `json:"issuedAt"`
+	ExpiresAt         string            `json:"expiresAt"`
+	IssuerDID         string            `json:"issuerDid"`
+	IssuerChain       []string          `json:"issuerChain"`
 }
 
 // canonicalPayloadV11 projects the credential into the v1.1 TBS and returns its
