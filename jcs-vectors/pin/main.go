@@ -277,6 +277,54 @@ var vectors = []vector{
   "issuerChain": ["did:opena2a:authority:opena2a.org-root", "did:opena2a:authority:google.com", "did:opena2a:authority:opena2a.org"]
 }`,
 	},
+	{
+		file: "08-declared-purpose.json",
+		name: "declared-purpose",
+		desc: "PRESENT-CASE declaredPurpose (atx-spec §1.5), the one presence-based v1.1 TBS member. The fully-populated purpose object (vocabVersion, statement, category, taskScopes, nested capabilityJustification map, autonomy, dataScopes, egressScopes) is authored AFTER issuerChain and with its own members + the nested capabilityJustification keys in scrambled order, and the statement carries multi-byte UTF-8. JCS must move declaredPurpose between contentHash and expiresAt and recursively sort its nested members, identically across Go, Python, and TS. The absent case is covered by every other vector (no declaredPurpose key); the presence-based omission rule itself lives in the verifier projection, not here.",
+		tbs: `{
+  "atcVersion": "1.1",
+  "agentId": "agent_conformance_test_001",
+  "agentDid": "did:opena2a:agent:agent_conformance_test_001",
+  "publisher": "opena2a-conformance",
+  "publisherDid": "did:opena2a:publisher:opena2a-conformance",
+  "version": "1.0.0",
+  "contentHash": "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff",
+  "buildAttestation": "https://slsa.dev/provenance/v1#opena2a-conformance",
+  "capabilities": ["read:public", "write:owned"],
+  "behavioralProfile": {
+    "checksum": "sha256:ghi789",
+    "generatedAt": "2026-05-19T00:00:00Z",
+    "observationDays": 14
+  },
+  "scanSummary": {
+    "hma": "passed",
+    "criticalFindings": 0,
+    "highFindings": 0,
+    "secretless": "clean",
+    "cryptoServe": "no-weak-crypto",
+    "oasbLevel": "L1"
+  },
+  "trustScore": "87.500000",
+  "trustLevel": 4,
+  "issuedAt": "2026-05-23T00:00:00Z",
+  "expiresAt": "2099-12-31T23:59:59Z",
+  "issuerDid": "did:opena2a:authority:opena2a.org",
+  "issuerChain": ["did:opena2a:authority:opena2a.org-root", "did:opena2a:authority:opena2a.org"],
+  "declaredPurpose": {
+    "statement": "Processes customer billing inquiries and issues refunds up to a supervisor-set limit. 北京",
+    "vocabVersion": "1",
+    "taskScopes": ["billing:inquiry", "billing:refund"],
+    "category": "financial-operations",
+    "capabilityJustification": {
+      "write:owned": ["billing:refund"],
+      "read:public": ["billing:inquiry"]
+    },
+    "egressScopes": ["api.stripe.com", "hooks.internal.acme.com"],
+    "autonomy": "supervised",
+    "dataScopes": ["customer.billing", "customer.contact"]
+  }
+}`,
+	},
 }
 
 type edVector struct {

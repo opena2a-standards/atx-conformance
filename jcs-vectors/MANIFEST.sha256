@@ -5,3 +5,4 @@ ac5bcd84acc6ff33ff16220fd4805b98e88e12484c07d2f591ca85151ba83b37  jcs-vectors/ve
 01175d48e144872ced1680b7e3beac7909fe0f9cc6a9bb191bf7545fab11dc93  jcs-vectors/vectors/05-issuer-chain-order.json
 5797a17a9ed75b1a7adca9e4d6843a142d352e17b4081a2e1fb720a27f180988  jcs-vectors/vectors/06-trustscore-string.json
 794f209eb826d7e83b1e2c45f6b3e401674bea0f4d8f5384b046acbee978393d  jcs-vectors/vectors/07-nested-and-unicode-arrays.json
+5d50234bc0597111516bf3fa6d212896f7bece677614d18010ac0a332985cf6b  jcs-vectors/vectors/08-declared-purpose.json
