@@ -108,6 +108,7 @@ type atx struct {
 	BuildAttestation     string          `json:"buildAttestation,omitempty"`
 	TransparencyLogIndex int64           `json:"transparencyLogIndex"`
 	Capabilities         []string        `json:"capabilities"`
+	DeclaredPurpose      json.RawMessage `json:"declaredPurpose,omitempty"`
 	BehavioralProfile    json.RawMessage `json:"behavioralProfile,omitempty"`
 	ScanSummary          json.RawMessage `json:"scanSummary"`
 	TrustScore           float64         `json:"trustScore"`
@@ -174,6 +175,7 @@ type tbsV11 struct {
 	ContentHash       string            `json:"contentHash"`
 	BuildAttestation  string            `json:"buildAttestation"`
 	Capabilities      []string          `json:"capabilities"`
+	DeclaredPurpose   json.RawMessage   `json:"declaredPurpose,omitempty"`
 	BehavioralProfile json.RawMessage   `json:"behavioralProfile"`
 	ScanSummary       tbsScanSummaryV11 `json:"scanSummary"`
 	TrustScore        string            `json:"trustScore"`
@@ -206,6 +208,7 @@ func canonicalPayloadV11(a *atx) ([]byte, error) {
 		ContentHash:       a.ContentHash,
 		BuildAttestation:  a.BuildAttestation,
 		Capabilities:      caps,
+		DeclaredPurpose:   projectDeclaredPurposeV11(a.DeclaredPurpose),
 		BehavioralProfile: projectBehavioralProfileV11(a.BehavioralProfile),
 		ScanSummary:       projectScanSummaryV11(a.ScanSummary),
 		TrustScore:        fmt.Sprintf("%.6f", a.TrustScore),
@@ -229,6 +232,20 @@ func projectScanSummaryV11(raw json.RawMessage) tbsScanSummaryV11 {
 	}
 	_ = json.Unmarshal(raw, &ss)
 	return ss
+}
+
+// projectDeclaredPurposeV11 implements the presence-based rule for the optional
+// declaredPurpose member (atx-spec §1.3a.2 rule 5): an absent purpose — missing,
+// null, or empty object {} — normalizes to nil so omitempty drops it, keeping a
+// no-purpose credential byte-identical to one issued before the field existed. A
+// present, non-empty object is passed through and JCS re-canonicalizes it.
+func projectDeclaredPurposeV11(raw json.RawMessage) json.RawMessage {
+	switch strings.TrimSpace(string(raw)) {
+	case "", "null", "{}":
+		return nil
+	default:
+		return raw
+	}
 }
 
 func projectBehavioralProfileV11(raw json.RawMessage) json.RawMessage {

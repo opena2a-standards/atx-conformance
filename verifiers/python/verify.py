@@ -127,6 +127,13 @@ def canonical_payload_v11(atx: dict[str, Any]) -> bytes:
     else:
         behavioral_profile = None
 
+    # declaredPurpose is the one presence-based TBS member (atx-spec §1.3a.2
+    # rule 5): absent / null / empty-object are all "absent" and the key is
+    # omitted entirely (added below), keeping a no-purpose credential
+    # byte-identical to one issued before the field existed.
+    dp_in = atx.get("declaredPurpose")
+    declared_purpose = dp_in if isinstance(dp_in, dict) and dp_in else None
+
     tbs = {
         "atcVersion": atx["atcVersion"],
         "agentId": atx["agentId"],
@@ -147,6 +154,8 @@ def canonical_payload_v11(atx: dict[str, Any]) -> bytes:
         "issuerDid": atx["issuerDid"],
         "issuerChain": list(atx.get("issuerChain") or []),
     }
+    if declared_purpose is not None:
+        tbs["declaredPurpose"] = declared_purpose
     return _jcs_canonicalize(tbs)
 
 
