@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
@@ -42,6 +43,12 @@ const atcVersionV11 = "1.1"
 // jcs-vectors/vectors/01-baseline.json. The v1.1 baseline fixture must reproduce
 // it, or the fixtures and the cross-language byte-agreement gate have diverged.
 const jcsBaselineCanonicalHex = "7b226167656e74446964223a226469643a6f70656e6132613a6167656e743a6167656e745f636f6e666f726d616e63655f746573745f303031222c226167656e744964223a226167656e745f636f6e666f726d616e63655f746573745f303031222c2261746356657273696f6e223a22312e31222c226265686176696f72616c50726f66696c65223a7b22636865636b73756d223a227368613235363a676869373839222c2267656e6572617465644174223a22323032362d30352d31395430303a30303a30305a222c226f62736572766174696f6e44617973223a31347d2c226275696c644174746573746174696f6e223a2268747470733a2f2f736c73612e6465762f70726f76656e616e63652f7631236f70656e6132612d636f6e666f726d616e6365222c226361706162696c6974696573223a5b22726561643a7075626c6963222c2277726974653a6f776e6564225d2c22636f6e74656e7448617368223a2230303030313131313232323233333333343434343535353536363636373737373838383839393939616161616262626263636363646464646565656566666666222c22657870697265734174223a22323039392d31322d33315432333a35393a35395a222c226973737565644174223a22323032362d30352d32335430303a30303a30305a222c22697373756572436861696e223a5b226469643a6f70656e6132613a617574686f726974793a6f70656e6132612e6f72672d726f6f74222c226469643a6f70656e6132613a617574686f726974793a6f70656e6132612e6f7267225d2c22697373756572446964223a226469643a6f70656e6132613a617574686f726974793a6f70656e6132612e6f7267222c227075626c6973686572223a226f70656e6132612d636f6e666f726d616e6365222c227075626c6973686572446964223a226469643a6f70656e6132613a7075626c69736865723a6f70656e6132612d636f6e666f726d616e6365222c227363616e53756d6d617279223a7b22637269746963616c46696e64696e6773223a302c2263727970746f5365727665223a226e6f2d7765616b2d63727970746f222c226869676846696e64696e6773223a302c22686d61223a22706173736564222c226f6173624c6576656c223a224c31222c227365637265746c657373223a22636c65616e227d2c2274727573744c6576656c223a342c22747275737453636f7265223a2238372e353030303030222c2276657273696f6e223a22312e302e30227d"
+
+// jcsDeclaredPurposeCanonicalHex is the canonical JCS(TBS) of the present-case
+// vector in jcs-vectors/vectors/08-declared-purpose.json. The baseline-v1.1
+// credential carrying presentDeclaredPurpose must reproduce it, or the present-case
+// fixtures and the byte-agreement gate have diverged on declaredPurpose.
+const jcsDeclaredPurposeCanonicalHex = "7b226167656e74446964223a226469643a6f70656e6132613a6167656e743a6167656e745f636f6e666f726d616e63655f746573745f303031222c226167656e744964223a226167656e745f636f6e666f726d616e63655f746573745f303031222c2261746356657273696f6e223a22312e31222c226265686176696f72616c50726f66696c65223a7b22636865636b73756d223a227368613235363a676869373839222c2267656e6572617465644174223a22323032362d30352d31395430303a30303a30305a222c226f62736572766174696f6e44617973223a31347d2c226275696c644174746573746174696f6e223a2268747470733a2f2f736c73612e6465762f70726f76656e616e63652f7631236f70656e6132612d636f6e666f726d616e6365222c226361706162696c6974696573223a5b22726561643a7075626c6963222c2277726974653a6f776e6564225d2c22636f6e74656e7448617368223a2230303030313131313232323233333333343434343535353536363636373737373838383839393939616161616262626263636363646464646565656566666666222c226465636c61726564507572706f7365223a7b226175746f6e6f6d79223a2273757065727669736564222c226361706162696c6974794a757374696669636174696f6e223a7b22726561643a7075626c6963223a5b2262696c6c696e673a696e7175697279225d2c2277726974653a6f776e6564223a5b2262696c6c696e673a726566756e64225d7d2c2263617465676f7279223a2266696e616e6369616c2d6f7065726174696f6e73222c226461746153636f706573223a5b22637573746f6d65722e62696c6c696e67222c22637573746f6d65722e636f6e74616374225d2c2265677265737353636f706573223a5b226170692e7374726970652e636f6d222c22686f6f6b732e696e7465726e616c2e61636d652e636f6d225d2c2273746174656d656e74223a2250726f63657373657320637573746f6d65722062696c6c696e6720696e7175697269657320616e642069737375657320726566756e647320757020746f20612073757065727669736f722d736574206c696d69742e20e58c97e4baac222c227461736b53636f706573223a5b2262696c6c696e673a696e7175697279222c2262696c6c696e673a726566756e64225d2c22766f63616256657273696f6e223a2231227d2c22657870697265734174223a22323039392d31322d33315432333a35393a35395a222c226973737565644174223a22323032362d30352d32335430303a30303a30305a222c22697373756572436861696e223a5b226469643a6f70656e6132613a617574686f726974793a6f70656e6132612e6f72672d726f6f74222c226469643a6f70656e6132613a617574686f726974793a6f70656e6132612e6f7267225d2c22697373756572446964223a226469643a6f70656e6132613a617574686f726974793a6f70656e6132612e6f7267222c227075626c6973686572223a226f70656e6132612d636f6e666f726d616e6365222c227075626c6973686572446964223a226469643a6f70656e6132613a7075626c69736865723a6f70656e6132612d636f6e666f726d616e6365222c227363616e53756d6d617279223a7b22637269746963616c46696e64696e6773223a302c2263727970746f5365727665223a226e6f2d7765616b2d63727970746f222c226869676846696e64696e6773223a302c22686d61223a22706173736564222c226f6173624c6576656c223a224c31222c227365637265746c657373223a22636c65616e227d2c2274727573744c6576656c223a342c22747275737453636f7265223a2238372e353030303030222c2276657273696f6e223a22312e302e30227d"
 
 // fixedClock pins the verifier clock for the entire suite. Valid fixtures
 // have ExpiresAt later than this; the expired fixture has ExpiresAt earlier.
@@ -91,6 +98,7 @@ type ATX struct {
 	BuildAttestation     string                `json:"buildAttestation,omitempty"`
 	TransparencyLogIndex int64                 `json:"transparencyLogIndex"`
 	Capabilities         []string              `json:"capabilities"`
+	DeclaredPurpose      json.RawMessage       `json:"declaredPurpose,omitempty"`
 	BehavioralProfile    *ATCBehavioralProfile `json:"behavioralProfile,omitempty"`
 	ScanSummary          *ATCScanSummary       `json:"scanSummary"`
 	TrustScore           float64               `json:"trustScore"`
@@ -159,6 +167,7 @@ type tbsV11 struct {
 	ContentHash       string            `json:"contentHash"`
 	BuildAttestation  string            `json:"buildAttestation"`
 	Capabilities      []string          `json:"capabilities"`
+	DeclaredPurpose   json.RawMessage   `json:"declaredPurpose,omitempty"`
 	BehavioralProfile json.RawMessage   `json:"behavioralProfile"`
 	ScanSummary       tbsScanSummaryV11 `json:"scanSummary"`
 	TrustScore        string            `json:"trustScore"`
@@ -202,7 +211,8 @@ func canonicalPayloadV11(a *ATX) []byte {
 		ATCVersion: a.ATCVersion, AgentID: a.AgentID, AgentDID: a.AgentDID,
 		Publisher: a.Publisher, PublisherDID: a.PublisherDID, Version: a.Version,
 		ContentHash: a.ContentHash, BuildAttestation: a.BuildAttestation,
-		Capabilities: caps, BehavioralProfile: bp, ScanSummary: ss,
+		Capabilities: caps, DeclaredPurpose: projectDeclaredPurposeV11(a.DeclaredPurpose),
+		BehavioralProfile: bp, ScanSummary: ss,
 		TrustScore: fmt.Sprintf("%.6f", a.TrustScore), TrustLevel: a.TrustLevel,
 		IssuedAt: a.IssuedAt.UTC().Format(time.RFC3339), ExpiresAt: a.ExpiresAt.UTC().Format(time.RFC3339),
 		IssuerDID: a.IssuerDID, IssuerChain: chain,
@@ -212,6 +222,21 @@ func canonicalPayloadV11(a *ATX) []byte {
 	out, err := jcs.Transform(raw)
 	must(err)
 	return out
+}
+
+// projectDeclaredPurposeV11 implements the presence-based rule for the optional
+// declaredPurpose TBS member (atx-spec §1.3a.2 rule 5), byte-identical to
+// opena2a-registry (pkg/atcverify + internal/application) and ../verifiers: an
+// absent purpose (missing, null, or {}) normalizes to nil so omitempty drops it
+// from the TBS, keeping a no-purpose credential byte-identical to one issued
+// before the field existed; a present object passes through for JCS to sort.
+func projectDeclaredPurposeV11(raw json.RawMessage) json.RawMessage {
+	switch strings.TrimSpace(string(raw)) {
+	case "", "null", "{}":
+		return nil
+	default:
+		return raw
+	}
 }
 
 // signV11WithKey signs JCS(TBS) with a vector's Ed25519 seed.
@@ -342,6 +367,26 @@ const (
 	testBuildAtt   = "https://slsa.dev/provenance/v1#opena2a-conformance"
 )
 
+// presentDeclaredPurpose is the populated declaredPurpose object the present-case
+// v1.1 fixtures carry. Its logical content matches jcs-vectors/vectors/
+// 08-declared-purpose.json, so a baseline-v1.1 credential carrying it canonicalizes
+// to that vector's pinned bytes (JCS sorts members, so the authored order here is
+// irrelevant). Capabilities (read:public, write:owned) cover the
+// capabilityJustification keys, per atx-spec §1.5.2.
+const presentDeclaredPurpose = `{
+  "vocabVersion": "1",
+  "statement": "Processes customer billing inquiries and issues refunds up to a supervisor-set limit. 北京",
+  "category": "financial-operations",
+  "taskScopes": ["billing:inquiry", "billing:refund"],
+  "capabilityJustification": {
+    "read:public": ["billing:inquiry"],
+    "write:owned": ["billing:refund"]
+  },
+  "autonomy": "supervised",
+  "dataScopes": ["customer.billing", "customer.contact"],
+  "egressScopes": ["api.stripe.com", "hooks.internal.acme.com"]
+}`
+
 func main() {
 	outDir = mustResolveOutDir()
 
@@ -366,6 +411,15 @@ func main() {
 	// jcs-vectors/vectors/01-baseline.json.
 	if base := newBaselineV11ATX(); hex.EncodeToString(canonicalPayloadV11(&base)) != jcsBaselineCanonicalHex {
 		panic("v1.1 baseline canonical bytes diverge from jcs-vectors baseline vector; fixtures and the byte-agreement gate are out of sync")
+	}
+
+	// Cross-check: the present-case credential (baseline + presentDeclaredPurpose)
+	// must canonicalize to the bytes pinned in jcs-vectors/vectors/08-declared-purpose.json,
+	// so the declaredPurpose fixtures and the cross-language byte-agreement gate stay in sync.
+	dpBase := newBaselineV11ATX()
+	dpBase.DeclaredPurpose = json.RawMessage(presentDeclaredPurpose)
+	if hex.EncodeToString(canonicalPayloadV11(&dpBase)) != jcsDeclaredPurposeCanonicalHex {
+		panic("present-case declaredPurpose canonical bytes diverge from jcs-vectors 08-declared-purpose vector; fixtures and the byte-agreement gate are out of sync")
 	}
 
 	defaultVerifierState := VerifierState{
@@ -559,6 +613,39 @@ func main() {
 			atx.Capabilities = []string{"read:public", "write:owned", "admin:all"}
 			return wrap("atx-v1_1/tampered-capabilities",
 				"An ATX v1.1 credential whose capabilities were escalated to include admin:all AFTER signing. Because v1.1 signs JCS(TBS), capabilities are covered by the signature; the verifier recomputes the canonical bytes, finds they no longer match, and MUST REJECT with a signature-validation reason. This is the integrity property v1.0 lacked.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
+		{"fixtures/v1_1-declared-purpose-valid.json", func() Fixture {
+			// PRESENT-CASE: a credential that actually CARRIES a declaredPurpose
+			// (atx-spec §1.5). The purpose object is part of JCS(TBS), so the single
+			// Ed25519 signature covers it; the verifier reprojects the same bytes and
+			// MUST ACCEPT. Exercises the presence-based member end-to-end.
+			atx := newBaselineV11ATX()
+			atx.DeclaredPurpose = json.RawMessage(presentDeclaredPurpose)
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/declared-purpose-valid",
+				"A baseline ATX v1.1 credential carrying a populated declaredPurpose (atx-spec §1.5): vocabVersion, statement, category, taskScopes, capabilityJustification, autonomy, dataScopes, egressScopes. declaredPurpose is the one presence-based TBS member (§1.3a.2 rule 5); when present it is signed as part of JCS(TBS). Verifier MUST ACCEPT. Canonical bytes equal the jcs-vectors 08-declared-purpose vector.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "ACCEPT"},
+				atx)
+		}},
+		{"fixtures/v1_1-tampered-declared-purpose.json", func() Fixture {
+			// The purpose-laundering defense, made concrete. Sign with the honest
+			// category (financial-operations), then rewrite declaredPurpose.category
+			// to a broader one AFTER signing. Because declaredPurpose is in JCS(TBS),
+			// the recomputed canonical bytes no longer match the signature, so the
+			// verifier MUST REJECT — a publisher cannot forge what its agent claimed
+			// to be for after issuance.
+			atx := newBaselineV11ATX()
+			atx.DeclaredPurpose = json.RawMessage(presentDeclaredPurpose)
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			atx.DeclaredPurpose = json.RawMessage(strings.Replace(presentDeclaredPurpose, "financial-operations", "agent-orchestration", 1))
+			return wrap("atx-v1_1/tampered-declared-purpose",
+				"An ATX v1.1 credential whose declaredPurpose.category was rewritten from financial-operations to agent-orchestration AFTER signing. Because v1.1 signs JCS(TBS) and declaredPurpose is part of it, the verifier recomputes the canonical bytes, finds they no longer match the signature, and MUST REJECT. This is the integrity property that makes a declared purpose binding and non-repudiable (§1.5).",
 				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
 				defaultVerifierState,
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},

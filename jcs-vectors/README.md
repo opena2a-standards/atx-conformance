@@ -54,6 +54,14 @@ Excluded: `id`, `transparencyLogIndex` (dead field), `signatures` (the
 envelope), `revoked`/`revokedAt`/`revocationReason` (mutated post-issuance via
 CRL/DB), `createdAt`.
 
+`declaredPurpose` (atx-spec §1.5) is the one **presence-based** member: when a
+publisher declares a purpose it is included and JCS sorts it (recursively,
+including the nested `capabilityJustification` map) into position between
+`contentHash` and `expiresAt`; when absent it is omitted entirely, so a
+no-purpose TBS is byte-identical to one from before the field existed. Every
+vector except `08-declared-purpose` exercises the absent case (no key); the
+omission rule itself lives in each verifier's projection, not here.
+
 Determinism rules (the part that bites cross-language):
 
 - **Canonical empties, always present.** Optional strings (`publisherDid`,
@@ -82,6 +90,7 @@ Determinism rules (the part that bites cross-language):
 | `05-issuer-chain-order.json` | three-authority root-first chain; array order is significant |
 | `06-trustscore-string.json` | `trustScore` as the `%.6f` string `"66.666667"`, never a JSON number |
 | `07-nested-and-unicode-arrays.json` | nested `behavioralProfile` + non-zero `scanSummary` + unicode array elements together |
+| `08-declared-purpose.json` | present-case `declaredPurpose` (§1.5) authored after `issuerChain` with scrambled own + nested `capabilityJustification` keys and a multi-byte statement; JCS must reposition and recursively sort it |
 
 Each vector file carries the authored `tbs`, plus the pinned
 `expected.canonicalString`, `expected.canonicalHex`, `expected.canonicalSha256`,
