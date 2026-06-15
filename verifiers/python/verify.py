@@ -173,10 +173,33 @@ def _normalize_rfc3339(s: str) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def index_public_keys(refs: list[dict[str, Any]]):
+def _controller_did(key_id: str) -> str:
+    """DID portion of a keyId DID-URL (everything before the first '#')."""
+    return key_id.split("#", 1)[0]
+
+
+def _authority_set_for(atx: dict[str, Any]) -> set[str]:
+    """DIDs whose keys may sign this credential: the issuer always, plus the
+    issuerChain authorities for v1.1 (where issuerChain is covered by the
+    signature). v1.0 issuerChain is unsigned and therefore forgeable, so it is
+    NOT trusted as a signer source — only the issuer is.
+    """
+    authorities = {atx["issuerDid"]}
+    if atx.get("atcVersion") == SUPPORTED_ATC_VERSION_V11:
+        authorities.update(atx.get("issuerChain") or [])
+    return authorities
+
+
+def index_public_keys(refs: list[dict[str, Any]], authority_set: set[str]):
+    # Key↔issuer binding: a key is eligible to verify a signature for this
+    # credential only if its keyId's controller DID is in authority_set. A key
+    # with no keyId is unbound (legacy single-issuer configs) and stays eligible.
     eds: list[Ed25519PublicKey] = []
     mldsa_keys_present = False
     for r in refs:
+        key_id = r.get("keyId", "") or ""
+        if key_id and _controller_did(key_id) not in authority_set:
+            continue
         if r["algorithm"] == "Ed25519":
             raw = bytes.fromhex(r["publicKeyHex"])
             if len(raw) != 32:
@@ -231,7 +254,7 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
 
     # Step 5: signature verification (Ed25519 fully, ML-DSA-65 marked skipped).
     payload = canonical_payload_v11(atx) if version == SUPPORTED_ATC_VERSION_V11 else canonical_payload(atx)
-    eds, mldsa_keys_present = index_public_keys(vs["publicKeys"])
+    eds, mldsa_keys_present = index_public_keys(vs["publicKeys"], _authority_set_for(atx))
     result = VerifyResult(sigs_expected=len(atx.get("signatures", [])))
 
     for sig in atx.get("signatures", []):

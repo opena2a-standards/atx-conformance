@@ -368,8 +368,11 @@ func verify(f fixture) result {
 	}
 	res := result{SigsExpected: len(a.Signatures)}
 
-	// Index public keys by algorithm for lookup.
-	edKeys, pqKeys := indexPublicKeys(f.VerifierState.PublicKeys)
+	// Index public keys by algorithm for lookup, restricted to keys controlled by
+	// the credential's issuer (key↔issuer binding). A key whose keyId's controller
+	// DID is not in the authority set is not an eligible signer for this
+	// credential, so one trusted authority cannot impersonate another.
+	edKeys, pqKeys := indexPublicKeys(f.VerifierState.PublicKeys, authoritySetFor(&a))
 
 	for _, sig := range a.Signatures {
 		sigBytes, err := base64.StdEncoding.DecodeString(sig.Value)
@@ -440,9 +443,14 @@ func verify(f fixture) result {
 }
 
 // indexPublicKeys splits the verifier's configured public keys by algorithm,
-// decoding from hex.
-func indexPublicKeys(refs []keypairRef) (eds []ed25519.PublicKey, pqs []*mldsa65.PublicKey) {
+// decoding from hex, keeping only keys eligible to sign for the credential's
+// issuer. A key is eligible iff its keyId's controller DID is in authoritySet,
+// or it carries no keyId (an unbound key — legacy single-issuer configurations).
+func indexPublicKeys(refs []keypairRef, authoritySet map[string]bool) (eds []ed25519.PublicKey, pqs []*mldsa65.PublicKey) {
 	for _, r := range refs {
+		if !keyEligible(r.KeyID, authoritySet) {
+			continue
+		}
 		switch r.Algorithm {
 		case "Ed25519":
 			raw, err := hex.DecodeString(r.PublicKeyHex)
@@ -463,6 +471,40 @@ func indexPublicKeys(refs []keypairRef) (eds []ed25519.PublicKey, pqs []*mldsa65
 		}
 	}
 	return
+}
+
+// authoritySetFor returns the DIDs whose keys may sign this credential: the
+// issuer always, plus the issuerChain authorities for v1.1 (where issuerChain is
+// covered by the signature). v1.0 issuerChain is unsigned and therefore forgeable,
+// so it is NOT trusted as a signer source — only the issuer is.
+func authoritySetFor(a *atx) map[string]bool {
+	set := map[string]bool{a.IssuerDID: true}
+	if a.ATCVersion == "1.1" {
+		for _, did := range a.IssuerChain {
+			set[did] = true
+		}
+	}
+	return set
+}
+
+// keyEligible reports whether a key may verify a signature for an issuer in
+// authoritySet. A key with no keyId is unbound (legacy) and is always eligible;
+// a key with a keyId is eligible only if its controller DID is in the set.
+func keyEligible(keyID string, authoritySet map[string]bool) bool {
+	if keyID == "" {
+		return true
+	}
+	return authoritySet[controllerDID(keyID)]
+}
+
+// controllerDID returns the DID portion of a keyId DID-URL (everything before
+// the first '#'). A keyId of "did:opena2a:authority:opena2a.org#key-1" yields
+// "did:opena2a:authority:opena2a.org".
+func controllerDID(keyID string) string {
+	if i := strings.IndexByte(keyID, '#'); i >= 0 {
+		return keyID[:i]
+	}
+	return keyID
 }
 
 // ---------------------------------------------------------------------------

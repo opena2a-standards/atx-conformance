@@ -1,0 +1,14 @@
+{
+  "$comment": "Second TRUSTED issuer keypair for the cross-issuer-key fixture. A distinct authority that the verifier trusts, but which is NOT the issuer of (nor a cosigner in the issuerChain of) the credential under test. Used to prove a verifier binds each signature to a key controlled by the credential's issuer, so one trusted issuer cannot impersonate another. TEST-ONLY keypair; the seed is a SHA-256 of a fixed label, never use it in production.",
+  "role": "issuer-secondary",
+  "algorithm": "Ed25519",
+  "provenance": {
+    "source": "SHA-256(\"opena2a-atx-conformance/issuer-secondary/key-1/v1\")",
+    "ref": "deterministic, reproducible test-only keypair (not an RFC vector)",
+    "purpose": "trusted-but-unrelated issuer for the key-issuer-binding case"
+  },
+  "seedHex": "41f7b690f5a847af98f757cb8b1fbdae2728b1b710a8991e190644df2659dc4e",
+  "publicKeyHex": "2043fa51c3d9e4a21a535ccb38bdc4fb56083737d22059d69475e7e43c47f582",
+  "issuerDid": "did:opena2a:authority:partner.example",
+  "keyId": "did:opena2a:authority:partner.example#key-1"
+}

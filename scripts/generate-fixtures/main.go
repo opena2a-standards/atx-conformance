@@ -394,6 +394,7 @@ func main() {
 	cos1 := mustLoadKeyVector("vectors/issuer-cosigner-1.json")
 	cos2 := mustLoadKeyVector("vectors/issuer-cosigner-2.json")
 	untrusted := mustLoadKeyVector("vectors/issuer-untrusted.json")
+	secondary := mustLoadKeyVector("vectors/issuer-secondary.json")
 	mldsa := mustLoadKeyVector("vectors/mldsa65-seed.json")
 
 	// Resolve ML-DSA-65 public key from seed and persist it into the vector
@@ -443,6 +444,17 @@ func main() {
 			PublicKeyHex: mldsa.PublicKeyHex,
 			KeyID:        mldsa.KeyID,
 		})
+
+	// Cross-issuer verifier state: trusts BOTH the primary authority AND a second,
+	// unrelated authority (secondary), and publishes the secondary's key. Used by
+	// the cross-issuer-key fixtures to prove a verifier binds each signature to a
+	// key controlled by the credential's issuer — so one trusted authority cannot
+	// impersonate another (key↔issuer binding, atx-spec core.md §1 steps 3-4).
+	crossIssuerVerifierState := defaultVerifierState
+	crossIssuerVerifierState.TrustedIssuers = []string{primary.IssuerDID, secondary.IssuerDID}
+	crossIssuerVerifierState.PublicKeys = append(append([]KeypairRef{},
+		defaultVerifierState.PublicKeys...),
+		keypairRefFor(secondary, "vectors/issuer-secondary.json"))
 
 	type fixtureSpec struct {
 		writePath string
@@ -648,6 +660,47 @@ func main() {
 				"An ATX v1.1 credential whose declaredPurpose.category was rewritten from financial-operations to agent-orchestration AFTER signing. Because v1.1 signs JCS(TBS) and declaredPurpose is part of it, the verifier recomputes the canonical bytes, finds they no longer match the signature, and MUST REJECT. This is the integrity property that makes a declared purpose binding and non-repudiable (§1.5).",
 				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
 				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
+		{"fixtures/cross-issuer-key.json", func() Fixture {
+			// KEY↔ISSUER BINDING. The credential is issued by the primary
+			// authority (issuerDid = opena2a.org) but is signed by the SECONDARY
+			// authority's key. The secondary is independently trusted and its key
+			// is in the verifier's set, and the signature is cryptographically
+			// valid over the canonical payload (which commits to issuerDid =
+			// opena2a.org). A naive verifier that tries every configured key would
+			// ACCEPT, letting one trusted authority impersonate another. A
+			// spec-conformant verifier binds each signature to a key controlled by
+			// the credential's issuer (the keyId's controller DID must be the
+			// issuer, or for v1.1 a signed issuerChain authority) and MUST REJECT:
+			// the secondary's key is not controlled by opena2a.org and is not in
+			// the issuerChain, so no eligible key verifies.
+			atx := newBaselineATX()
+			atx.Signatures = []ATCSignature{signWithKey(secondary, atx)}
+			return wrap("atx-v1/cross-issuer-key",
+				"An ATX v1.0 credential issued by the primary authority (issuerDid = did:opena2a:authority:opena2a.org) but signed by a DIFFERENT trusted authority's key (did:opena2a:authority:partner.example#key-1). The signature is valid over the canonical payload and the signing authority is independently trusted, yet that key is not controlled by the credential's issuer and is not in its issuerChain. A verifier MUST bind each signature to a key controlled by the credential's issuer and MUST REJECT with a signature-validation reason, so a trusted authority cannot impersonate another. A verifier that tries every configured key would wrongly ACCEPT.",
+				[]KeypairRef{
+					keypairRefFor(primary, "vectors/issuer-primary.json"),
+					keypairRefFor(secondary, "vectors/issuer-secondary.json"),
+				},
+				crossIssuerVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
+		{"fixtures/v1_1-cross-issuer-key.json", func() Fixture {
+			// Same key↔issuer-binding property under v1.1 (signs JCS(TBS)). The
+			// issuerChain is signed in v1.1, but the secondary authority is NOT in
+			// it, so its key is still not an eligible signer for this credential.
+			atx := newBaselineV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(secondary, atx)}
+			return wrap("atx-v1_1/cross-issuer-key",
+				"An ATX v1.1 credential issued by the primary authority but signed by a different trusted authority's key (partner.example). The secondary authority is trusted and its key is configured, and the signature is valid over JCS(TBS), but the secondary is neither the issuer nor present in the signed issuerChain. A spec-conformant verifier binds each signature to a key controlled by the issuer (or a signed issuerChain authority) and MUST REJECT with a signature-validation reason.",
+				[]KeypairRef{
+					keypairRefFor(primary, "vectors/issuer-primary.json"),
+					keypairRefFor(secondary, "vectors/issuer-secondary.json"),
+				},
+				crossIssuerVerifierState,
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
 				atx)
 		}},

@@ -33,6 +33,7 @@ What this suite verifies:
 | Hybrid Ed25519 + ML-DSA-65 signature verification (FIPS 204) | `fixtures/baseline-valid-hybrid.json` |
 | Threshold 2-of-3 cosignature path | `fixtures/threshold-2of3-cosignature.json` |
 | Tampered-signature rejection | `fixtures/tampered-signature.json` |
+| Key-to-issuer binding (a trusted authority cannot sign for another) | `fixtures/cross-issuer-key.json`, `fixtures/v1_1-cross-issuer-key.json` |
 | ATX v1.1 JCS(TBS) signing, signed-field integrity | `fixtures/v1_1-baseline-valid.json`, `fixtures/v1_1-tampered-capabilities.json` |
 | ATX v1.1 declaredPurpose carried under the signature (§1.5) | `fixtures/v1_1-declared-purpose-valid.json`, `fixtures/v1_1-tampered-declared-purpose.json` |
 | Issuer-chain depth requirement for trust level 3 and above | implicit in every ACCEPT fixture (all use trust level 4 with a 2-link chain) |
