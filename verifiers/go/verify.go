@@ -579,7 +579,9 @@ func main() {
 }
 
 func loadFixture(path string) (fixture, error) {
-	b, err := os.ReadFile(path)
+	// path originates from os.Args[1:] (operator-supplied fixture file/dir); this is a
+	// standalone CLI verifier with no network/request surface, so no untrusted taint.
+	b, err := os.ReadFile(path) //nolint:gosec // G304: operator-supplied CLI arg, not request-derived
 	if err != nil {
 		return fixture{}, err
 	}
@@ -593,7 +595,7 @@ func loadFixture(path string) (fixture, error) {
 func expandFixturePaths(args []string) ([]string, error) {
 	var out []string
 	for _, a := range args {
-		info, err := os.Stat(a)
+		info, err := os.Stat(a) //nolint:gosec // G703: operator-supplied CLI arg, not request-derived
 		if err != nil {
 			return nil, err
 		}
@@ -601,7 +603,7 @@ func expandFixturePaths(args []string) ([]string, error) {
 		case info.IsDir():
 			fixDir := a
 			// Allow passing the repo root: look in $arg/fixtures if it exists.
-			if _, err := os.Stat(filepath.Join(a, "fixtures")); err == nil {
+			if _, err := os.Stat(filepath.Join(a, "fixtures")); err == nil { //nolint:gosec // G703: operator-supplied CLI arg
 				fixDir = filepath.Join(a, "fixtures")
 			}
 			entries, err := os.ReadDir(fixDir)
