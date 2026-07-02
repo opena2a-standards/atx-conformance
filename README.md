@@ -50,6 +50,29 @@ What this suite does NOT verify:
   do not parse it.
 - Behavioral profile validation. Field is omitted from these fixtures.
 
+The full requirement-to-fixture mapping is machine-readable in
+[`conformance.json`](./conformance.json), regenerated from the fixtures by
+[`scripts/conformance_profile.py`](./scripts/conformance_profile.py) and
+CI-checked against drift.
+
+## Continuous verification
+
+[`.github/workflows/conformance.yml`](./.github/workflows/conformance.yml)
+enforces every claim in this README on each push and pull request:
+
+1. Both reference verifiers run against `fixtures/` and must report
+   `15 pass, 0 fail`.
+2. The fixture generator re-runs and the committed fixture bytes plus
+   `MANIFEST.sha256` must reproduce exactly (byte-pin).
+3. The JCS byte-agreement gate
+   ([`jcs-vectors/run-agreement.sh`](./jcs-vectors/run-agreement.sh)) must
+   pass across the independent Go, Python, and TypeScript canonicalizers.
+4. The cross-implementation parity gate
+   ([`scripts/parity/parity.py`](./scripts/parity/parity.py)) asserts the Go
+   and Python verifiers agree per fixture on gate status, verdict, and
+   reject category, and publishes `parity-report.json` as a CI artifact.
+5. `conformance.json` must match the fixture set.
+
 ## Honest scope notes
 
 This is the section that future reviewers, second-implementation authors, and
@@ -225,7 +248,7 @@ For full hybrid verification end to end, use the Go verifier.
 
 ### Expected output
 
-Both verifiers report `summary: 13 pass, 0 fail (13 fixtures)` against the
+Both verifiers report `summary: 15 pass, 0 fail (15 fixtures)` against the
 shipped fixture set. Any divergence on bytes (the fixture file was modified)
 or on verifier semantics (the verifier has drifted from the spec) shows up
 as one or more FAIL lines.
