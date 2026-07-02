@@ -1,0 +1,500 @@
+{
+  "$schema": "https://specs.opena2a.org/schemas/conformance-profile-v1.json",
+  "suite": "atx-conformance",
+  "spec": {
+    "id": "ATX",
+    "name": "Agent Trust eXtension",
+    "version": "1.0 (v1.1 fixtures included: JCS/RFC 8785 TBS signing, declaredPurpose)",
+    "ref": "https://github.com/opena2a-standards/atx-spec/blob/main/core.md"
+  },
+  "fixtureManifest": "MANIFEST.sha256",
+  "verifiers": [
+    {
+      "language": "go",
+      "path": "verifiers/go",
+      "coverage": "full: Ed25519 and ML-DSA-65 (FIPS 204) hybrid signatures, v1.0 pipe canonical form and v1.1 JCS(TBS)"
+    },
+    {
+      "language": "python",
+      "path": "verifiers/python",
+      "coverage": "Ed25519 (v1.0 and v1.1 via vendored RFC 8785); ML-DSA-65 signatures recorded as present, verification delegated to the Go verifier"
+    }
+  ],
+  "additionalGates": [
+    {
+      "name": "jcs-byte-agreement",
+      "path": "jcs-vectors/run-agreement.sh",
+      "description": "three independent canonicalizers (Go gowebpki/jcs, vendored Python RFC 8785, TypeScript erdtman/canonicalize) must reproduce each vector's pinned canonical bytes exactly"
+    }
+  ],
+  "notCovered": [
+    {
+      "item": "Content hash matching the agent binary",
+      "reason": "contentHash is pinned for byte-stability but no agent binary ships; verifiers stop at the signature step"
+    },
+    {
+      "item": "Transparency log inclusion proofs",
+      "reason": "transparencyLogIndex is populated for byte-stability; the conformance verifiers do not consult a log"
+    },
+    {
+      "item": "Build attestation predicate verification",
+      "reason": "buildAttestation is a string field in ATX v1.0, not an inline structured SLSA v1 predicate; verifiers do not parse it"
+    },
+    {
+      "item": "Behavioral profile validation",
+      "reason": "field omitted from these fixtures"
+    }
+  ],
+  "requirements": [
+    {
+      "fixture": "fixtures/baseline-valid-hybrid.json",
+      "name": "atx-v1/baseline-valid-hybrid",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md",
+          "section": "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "ACCEPT",
+      "description": "An ATX v1.0 credential carrying both an Ed25519 signature and an ML-DSA-65 signature over the same canonical payload. This is the hybrid signing path the ATX v1.0 spec mandates. A spec-conformant verifier MUST verify BOTH signatures and ACCEPT only when both are valid. NOTE: the current opena2a-registry/pkg/atcverify verifier verifies Ed25519 only and silently ignores ML-DSA-65 signatures; the conformance Go verifier in ../verifiers/go DOES verify both, per spec."
+    },
+    {
+      "fixture": "fixtures/baseline-valid.json",
+      "name": "atx-v1/baseline-valid",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md",
+          "section": "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "ACCEPT",
+      "description": "A baseline ATX v1.0 credential issued by a single trusted authority with one Ed25519 signature. Verifier MUST ACCEPT."
+    },
+    {
+      "fixture": "fixtures/cross-issuer-key.json",
+      "name": "atx-v1/cross-issuer-key",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md",
+          "section": "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "An ATX v1.0 credential issued by the primary authority (issuerDid = did:opena2a:authority:opena2a.org) but signed by a DIFFERENT trusted authority's key (did:opena2a:authority:partner.example#key-1). The signature is valid over the canonical payload and the signing authority is independently trusted, yet that key is not controlled by the credential's issuer and is not in its issuerChain. A verifier MUST bind each signature to a key controlled by the credential's issuer and MUST REJECT with a signature-validation reason, so a trusted authority cannot impersonate another. A verifier that tries every configured key would wrongly ACCEPT."
+    },
+    {
+      "fixture": "fixtures/expired.json",
+      "name": "atx-v1/expired",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md",
+          "section": "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "REJECT[EXPIRED]",
+      "description": "An otherwise-valid ATX whose ExpiresAt is earlier than the verifier's pinned clock. Verifier MUST REJECT with an expiry reason."
+    },
+    {
+      "fixture": "fixtures/malformed-schema.json",
+      "name": "atx-v1/malformed-schema",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md",
+          "section": "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "REJECT[UNSUPPORTED_VERSION]",
+      "description": "An ATX whose atcVersion claims a version (2.0) that is not the v1.0 supported by this conformance suite. Verifier MUST REJECT at step 1 (schema-version check) with an unsupported-version reason. NOTE: the signature is computed using ATCVersion=\"1.0\" canonical bytes because the production canonicalPayload function hardcodes \"1.0\" in the canonical string regardless of the credential's atcVersion field. This is itself a discrepancy worth noting in the reconciliation log; the conformance fixture intentionally still produces a syntactically reasonable file so verifiers can demonstrate they reject on schema-version alone."
+    },
+    {
+      "fixture": "fixtures/revoked.json",
+      "name": "atx-v1/revoked",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md",
+          "section": "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "REJECT[REVOKED]",
+      "description": "A previously-valid ATX whose credential-level Revoked flag is set and whose AgentID also appears in the verifier's CRL. Verifier MUST REJECT with revocation reason. Both rejection paths are exercised."
+    },
+    {
+      "fixture": "fixtures/tampered-signature.json",
+      "name": "atx-v1/tampered-signature",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md",
+          "section": "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "An ATX whose Ed25519 signature has been flipped by one bit after signing. All other fields are unchanged. Verifier MUST REJECT with a signature-validation reason."
+    },
+    {
+      "fixture": "fixtures/threshold-2of3-cosignature.json",
+      "name": "atx-v1/threshold-2of3-cosignature",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md",
+          "section": "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "ACCEPT",
+      "description": "An ATX cosigned by all three keys of a 2-of-3 threshold issuer (primary plus two cosigners). All three signatures are Ed25519 and cover the same canonical payload. Verifier MUST ACCEPT. A spec-conformant verifier additionally MUST validate at least two of the three signatures for trust level 4."
+    },
+    {
+      "fixture": "fixtures/v1_1-baseline-valid-hybrid.json",
+      "name": "atx-v1_1/baseline-valid-hybrid",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md",
+          "section": "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "ACCEPT",
+      "description": "An ATX v1.1 credential carrying both an Ed25519 signature and an ML-DSA-65 signature over the SAME JCS(TBS) bytes. A spec-conformant verifier MUST verify both and ACCEPT."
+    },
+    {
+      "fixture": "fixtures/v1_1-baseline-valid.json",
+      "name": "atx-v1_1/baseline-valid",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md",
+          "section": "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "ACCEPT",
+      "description": "A baseline ATX v1.1 credential. The single Ed25519 signature covers JCS(TBS) per atx-spec core.md §1.3a.2, so capabilities, scanSummary, issuerChain, publisher, and behavioralProfile are integrity-protected. Verifier MUST ACCEPT. The canonical bytes equal the jcs-vectors baseline vector."
+    },
+    {
+      "fixture": "fixtures/v1_1-cross-issuer-key.json",
+      "name": "atx-v1_1/cross-issuer-key",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md",
+          "section": "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "An ATX v1.1 credential issued by the primary authority but signed by a different trusted authority's key (partner.example). The secondary authority is trusted and its key is configured, and the signature is valid over JCS(TBS), but the secondary is neither the issuer nor present in the signed issuerChain. A spec-conformant verifier binds each signature to a key controlled by the issuer (or a signed issuerChain authority) and MUST REJECT with a signature-validation reason."
+    },
+    {
+      "fixture": "fixtures/v1_1-declared-purpose-valid.json",
+      "name": "atx-v1_1/declared-purpose-valid",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md",
+          "section": "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "ACCEPT",
+      "description": "A baseline ATX v1.1 credential carrying a populated declaredPurpose (atx-spec §1.5): vocabVersion, statement, category, taskScopes, capabilityJustification, autonomy, dataScopes, egressScopes. declaredPurpose is the one presence-based TBS member (§1.3a.2 rule 5); when present it is signed as part of JCS(TBS). Verifier MUST ACCEPT. Canonical bytes equal the jcs-vectors 08-declared-purpose vector."
+    },
+    {
+      "fixture": "fixtures/v1_1-tampered-capabilities.json",
+      "name": "atx-v1_1/tampered-capabilities",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md",
+          "section": "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "An ATX v1.1 credential whose capabilities were escalated to include admin:all AFTER signing. Because v1.1 signs JCS(TBS), capabilities are covered by the signature; the verifier recomputes the canonical bytes, finds they no longer match, and MUST REJECT with a signature-validation reason. This is the integrity property v1.0 lacked."
+    },
+    {
+      "fixture": "fixtures/v1_1-tampered-declared-purpose.json",
+      "name": "atx-v1_1/tampered-declared-purpose",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md",
+          "section": "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "An ATX v1.1 credential whose declaredPurpose.category was rewritten from financial-operations to agent-orchestration AFTER signing. Because v1.1 signs JCS(TBS) and declaredPurpose is part of it, the verifier recomputes the canonical bytes, finds they no longer match the signature, and MUST REJECT. This is the integrity property that makes a declared purpose binding and non-repudiable (§1.5)."
+    },
+    {
+      "fixture": "fixtures/wrong-issuer.json",
+      "name": "atx-v1/wrong-issuer",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md",
+          "section": "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "REJECT[UNTRUSTED_ISSUER]",
+      "description": "A syntactically valid ATX signed by a real keypair, but issued under a DID that is NOT in the verifier's trusted set. The signature itself is valid; the issuer is not. Verifier MUST REJECT with an untrusted-issuer reason."
+    }
+  ]
+}
