@@ -235,17 +235,24 @@ func projectScanSummaryV11(raw json.RawMessage) tbsScanSummaryV11 {
 }
 
 // projectDeclaredPurposeV11 implements the presence-based rule for the optional
-// declaredPurpose member (atx-spec §1.3a.2 rule 5): an absent purpose — missing,
-// null, or empty object {} — normalizes to nil so omitempty drops it, keeping a
-// no-purpose credential byte-identical to one issued before the field existed. A
-// present, non-empty object is passed through and JCS re-canonicalizes it.
+// declaredPurpose member (atx-spec §1.3a.2 rule 5, degenerate inputs pinned per
+// issue #11): emptiness is a JSON-parse-level property — missing, null, or any
+// serialization of the empty object (including whitespace variants like `{ }`)
+// normalizes to nil so omitempty drops it, keeping a no-purpose credential
+// byte-identical to one issued before the field existed. ANY other present
+// value — including non-object values — passes through verbatim so unsigned
+// injected purpose content breaks the signature instead of being silently
+// normalized away; JCS re-canonicalizes whatever is included.
 func projectDeclaredPurposeV11(raw json.RawMessage) json.RawMessage {
-	switch strings.TrimSpace(string(raw)) {
-	case "", "null", "{}":
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
 		return nil
-	default:
-		return raw
 	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err == nil && len(obj) == 0 {
+		return nil
+	}
+	return raw
 }
 
 func projectBehavioralProfileV11(raw json.RawMessage) json.RawMessage {

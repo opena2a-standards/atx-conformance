@@ -18,6 +18,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -225,18 +226,24 @@ func canonicalPayloadV11(a *ATX) []byte {
 }
 
 // projectDeclaredPurposeV11 implements the presence-based rule for the optional
-// declaredPurpose TBS member (atx-spec §1.3a.2 rule 5), byte-identical to
-// opena2a-registry (pkg/atcverify + internal/application) and ../verifiers: an
-// absent purpose (missing, null, or {}) normalizes to nil so omitempty drops it
-// from the TBS, keeping a no-purpose credential byte-identical to one issued
-// before the field existed; a present object passes through for JCS to sort.
+// declaredPurpose TBS member (atx-spec §1.3a.2 rule 5, degenerate inputs pinned
+// per issue #11), mirrored in ../verifiers: emptiness is a JSON-parse-level
+// property — absent, null, or any serialization of the empty object (including
+// whitespace variants like `{ }`) normalizes to nil so omitempty drops it from
+// the TBS, keeping a no-purpose credential byte-identical to one issued before
+// the field existed. ANY other value — including non-object values — passes
+// through verbatim, so unsigned injected purpose content breaks the signature
+// instead of being silently normalized away.
 func projectDeclaredPurposeV11(raw json.RawMessage) json.RawMessage {
-	switch strings.TrimSpace(string(raw)) {
-	case "", "null", "{}":
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
 		return nil
-	default:
-		return raw
 	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err == nil && len(obj) == 0 {
+		return nil
+	}
+	return raw
 }
 
 // signV11WithKey signs JCS(TBS) with a vector's Ed25519 seed.
@@ -704,6 +711,55 @@ func main() {
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
 				atx)
 		}},
+		// ---- degenerate declaredPurpose pins (issue #11, §1.3a.2 rule 5) ----
+		{"fixtures/v1_1-declared-purpose-empty-whitespace.json", func() Fixture {
+			// MALLEABILITY, PINNED BENIGN. Sign WITHOUT declaredPurpose, then
+			// append a whitespace-empty object AFTER signing (the postWrite
+			// transform keeps the interior space in the file bytes, which
+			// encoding/json would otherwise normalize). Emptiness is decided at
+			// the JSON parse level: `{ }` IS the empty object, treated as
+			// absent and omitted from the TBS, so the recomputed canonical
+			// bytes still match. Verifier MUST ACCEPT.
+			atx := newBaselineV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			atx.DeclaredPurpose = json.RawMessage("{}")
+			return wrap("atx-v1_1/declared-purpose-empty-whitespace",
+				"An ATX v1.1 credential signed with no declaredPurpose, carrying a whitespace-empty declaredPurpose object ({ }) appended after signing. Emptiness is a JSON-parse-level property (atx-spec \u00a71.3a.2 rule 5): any serialization of the empty object is the empty object, treated as absent and omitted from the TBS, so the signature still verifies. Verifier MUST ACCEPT. A verifier that compares the raw byte string against \"{}\" instead of parsing wrongly includes the value and REJECTs.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "ACCEPT"},
+				atx)
+		}},
+		{"fixtures/v1_1-declared-purpose-array-injected.json", func() Fixture {
+			// UNSIGNED INJECTION. Sign WITHOUT declaredPurpose, then append a
+			// non-object (array) value AFTER signing. Rule 5 requires any
+			// present non-empty value — including non-objects — to enter the
+			// TBS verbatim, so the recomputed bytes no longer match. Verifier
+			// MUST REJECT. A verifier that silently omits non-object values
+			// (the pre-#11 Python reference) wrongly ACCEPTs a credential
+			// carrying unsigned purpose content.
+			atx := newBaselineV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			atx.DeclaredPurpose = json.RawMessage(`["billing:inquiry", "act-autonomously"]`)
+			return wrap("atx-v1_1/declared-purpose-array-injected",
+				"An ATX v1.1 credential signed with no declaredPurpose, carrying an attacker-appended ARRAY declaredPurpose value. Non-object values are included in the TBS verbatim (atx-spec \u00a71.3a.2 rule 5), so the recomputed canonical bytes no longer match the signature and the verifier MUST REJECT with a signature-validation reason. A verifier that normalizes non-object values away would accept unsigned purpose content riding a valid signature.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
+		{"fixtures/v1_1-declared-purpose-string-injected.json", func() Fixture {
+			// Same injection with a STRING value.
+			atx := newBaselineV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			atx.DeclaredPurpose = json.RawMessage(`"customer-support"`)
+			return wrap("atx-v1_1/declared-purpose-string-injected",
+				"An ATX v1.1 credential signed with no declaredPurpose, carrying an attacker-appended STRING declaredPurpose value. Non-object values are included in the TBS verbatim (atx-spec \u00a71.3a.2 rule 5), so the recomputed canonical bytes no longer match the signature and the verifier MUST REJECT with a signature-validation reason.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
 	}
 
 	type manifestEntry struct {
@@ -716,6 +772,18 @@ func main() {
 		f := fs.build()
 		path := filepath.Join(outDir, fs.writePath)
 		mustWriteJSONPretty(path, f)
+		if fs.writePath == "fixtures/v1_1-declared-purpose-empty-whitespace.json" {
+			// encoding/json normalizes the raw `{ }` to `{}` on marshal; restore
+			// the interior whitespace so the on-disk fixture pins the
+			// parse-level emptiness rule (issue #11) at the byte level.
+			b, err := os.ReadFile(path) //nolint:gosec // G304: file just written above
+			must(err)
+			replaced := bytes.Replace(b, []byte(`"declaredPurpose": {}`), []byte(`"declaredPurpose": { }`), 1)
+			if bytes.Equal(replaced, b) {
+				panic("empty-whitespace fixture: substitution target not found")
+			}
+			must(os.WriteFile(path, replaced, 0o644))
+		}
 		sha := sha256FileHex(path)
 		manifest = append(manifest, manifestEntry{path: fs.writePath, sha: sha})
 		fmt.Printf("wrote %s (sha256=%s)\n", fs.writePath, sha)
