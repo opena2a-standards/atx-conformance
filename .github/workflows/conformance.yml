@@ -49,6 +49,24 @@ jobs:
         working-directory: verifiers/python
         run: python3 verify.py ../../fixtures
 
+      - name: Schema validation (fixtures vs vendored spec schema)
+        run: |
+          python3 -m pip install "jsonschema>=4.21"
+          python3 scripts/schema_validation.py
+
+      - name: Vendored schema drift gate (pinned atx-spec ref)
+        uses: actions/checkout@v4
+        with:
+          repository: opena2a-standards/atx-spec
+          ref: a1d60ec4c27e200c35133b9be2c0e6f41c65ab17
+          path: .spec-src
+
+      - name: Vendored schema drift gate (compare)
+        run: |
+          diff .spec-src/schemas/atx-credential-v1.1.schema.json \
+               schemas/vendor/atx-spec/atx-credential-v1.1.schema.json
+          rm -rf .spec-src
+
       - name: Fixture byte-pin (generator determinism)
         working-directory: scripts/generate-fixtures
         run: |
