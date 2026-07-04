@@ -72,6 +72,12 @@ enforces every claim in this README on each push and pull request:
    and Python verifiers agree per fixture on gate status, verdict, and
    reject category, and publishes `parity-report.json` as a CI artifact.
 5. `conformance.json` must match the fixture set.
+6. Schema validation
+   ([`scripts/schema_validation.py`](./scripts/schema_validation.py)): every
+   fixture's `atx` member must validate against the atx-spec machine-readable
+   credential schema, vendored under `schemas/vendor/atx-spec/` and
+   byte-drift-gated against a pinned atx-spec ref; the `malformed-schema`
+   fixture must fail on exactly the `atcVersion` registry enum.
 
 ## Honest scope notes
 
