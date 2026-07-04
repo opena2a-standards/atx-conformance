@@ -782,6 +782,7 @@ func main() {
 			if bytes.Equal(replaced, b) {
 				panic("empty-whitespace fixture: substitution target not found")
 			}
+			//nolint:gosec // G703: build-time tool rewriting the fixture it just wrote under outDir
 			must(os.WriteFile(path, replaced, 0o644))
 		}
 		sha := sha256FileHex(path)
