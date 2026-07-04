@@ -36,6 +36,7 @@ What this suite verifies:
 | Key-to-issuer binding (a trusted authority cannot sign for another) | `fixtures/cross-issuer-key.json`, `fixtures/v1_1-cross-issuer-key.json` |
 | ATX v1.1 JCS(TBS) signing, signed-field integrity | `fixtures/v1_1-baseline-valid.json`, `fixtures/v1_1-tampered-capabilities.json` |
 | ATX v1.1 declaredPurpose carried under the signature (§1.5) | `fixtures/v1_1-declared-purpose-valid.json`, `fixtures/v1_1-tampered-declared-purpose.json` |
+| Degenerate declaredPurpose (§1.3a.2 rule 5, issue #11): parse-level emptiness, verbatim non-object inclusion | `fixtures/v1_1-declared-purpose-empty-whitespace.json`, `fixtures/v1_1-declared-purpose-array-injected.json`, `fixtures/v1_1-declared-purpose-string-injected.json` |
 | Issuer-chain depth requirement for trust level 3 and above | implicit in every ACCEPT fixture (all use trust level 4 with a 2-link chain) |
 
 What this suite does NOT verify:
@@ -61,7 +62,7 @@ CI-checked against drift.
 enforces every claim in this README on each push and pull request:
 
 1. Both reference verifiers run against `fixtures/` and must report
-   `15 pass, 0 fail`.
+   `18 pass, 0 fail`.
 2. The fixture generator re-runs and the committed fixture bytes plus
    `MANIFEST.sha256` must reproduce exactly (byte-pin).
 3. The JCS byte-agreement gate
@@ -254,7 +255,7 @@ For full hybrid verification end to end, use the Go verifier.
 
 ### Expected output
 
-Both verifiers report `summary: 15 pass, 0 fail (15 fixtures)` against the
+Both verifiers report `summary: 18 pass, 0 fail (18 fixtures)` against the
 shipped fixture set. Any divergence on bytes (the fixture file was modified)
 or on verifier semantics (the verifier has drifted from the spec) shows up
 as one or more FAIL lines.

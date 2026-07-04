@@ -58,7 +58,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: opena2a-standards/atx-spec
-          ref: a1d60ec4c27e200c35133b9be2c0e6f41c65ab17
+          ref: 7551902e7dc4d86fbecf936a43317ba032817265
           path: .spec-src
 
       - name: Vendored schema drift gate (compare)

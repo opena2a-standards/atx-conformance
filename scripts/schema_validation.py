@@ -10,9 +10,12 @@ Contract:
 - every fixture's `atx` member MUST validate against the schema, EXCEPT
 - fixtures whose expected.rejectCategory is UNSUPPORTED_VERSION, which MUST
   fail validation and MUST fail on exactly the `atcVersion` enum (they carry
-  an unregistered version by design; any other schema error means fixture and
-  schema have drifted apart).
+  an unregistered version by design), and
+- the declared-purpose injection fixtures (issue #11), which carry an
+  attacker-appended NON-OBJECT declaredPurpose by design and MUST fail
+  validation on exactly the `declaredPurpose` member.
 
+Any other schema error means fixture and schema have drifted apart.
 Exit 0 only if the whole contract holds.
 """
 
@@ -49,8 +52,12 @@ def main() -> int:
             failures += 1
             continue
         errors = sorted(validator.iter_errors(atx), key=lambda e: e.json_path)
-        expect_invalid = doc.get("expected", {}).get("rejectCategory") == "UNSUPPORTED_VERSION"
-        if expect_invalid:
+        expect_version_invalid = doc.get("expected", {}).get("rejectCategory") == "UNSUPPORTED_VERSION"
+        expect_purpose_invalid = path.name in (
+            "v1_1-declared-purpose-array-injected.json",
+            "v1_1-declared-purpose-string-injected.json",
+        )
+        if expect_version_invalid:
             only_version_enum = len(errors) == 1 and list(errors[0].absolute_path) == ["atcVersion"]
             if only_version_enum:
                 print(f"PASS  {path.name}: schema-invalid on exactly atcVersion (as pinned)")
@@ -60,6 +67,19 @@ def main() -> int:
                     print(f"      {err.json_path}: {err.message}")
                 if not errors:
                     print("      (validated cleanly - fixture no longer exercises the version registry)")
+                failures += 1
+        elif expect_purpose_invalid:
+            only_purpose = bool(errors) and all(
+                list(e.absolute_path)[:1] == ["declaredPurpose"] for e in errors
+            )
+            if only_purpose:
+                print(f"PASS  {path.name}: schema-invalid on exactly declaredPurpose (as pinned)")
+            else:
+                print(f"FAIL  {path.name}: expected errors only under declaredPurpose, got:")
+                for err in errors or []:
+                    print(f"      {err.json_path}: {err.message}")
+                if not errors:
+                    print("      (validated cleanly - fixture no longer carries an injected non-object)")
                 failures += 1
         elif errors:
             print(f"FAIL  {path.name}:")

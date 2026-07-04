@@ -128,11 +128,14 @@ def canonical_payload_v11(atx: dict[str, Any]) -> bytes:
         behavioral_profile = None
 
     # declaredPurpose is the one presence-based TBS member (atx-spec §1.3a.2
-    # rule 5): absent / null / empty-object are all "absent" and the key is
+    # rule 5, degenerate inputs pinned per issue #11): absent / null /
+    # empty-object are all "absent" (a parse-level property) and the key is
     # omitted entirely (added below), keeping a no-purpose credential
-    # byte-identical to one issued before the field existed.
+    # byte-identical to one issued before the field existed. ANY other value —
+    # including non-object values — is included verbatim so unsigned injected
+    # purpose content breaks the signature instead of being silently omitted.
     dp_in = atx.get("declaredPurpose")
-    declared_purpose = dp_in if isinstance(dp_in, dict) and dp_in else None
+    declared_purpose = None if dp_in is None or dp_in == {} else dp_in
 
     tbs = {
         "atcVersion": atx["atcVersion"],
