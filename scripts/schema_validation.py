@@ -17,6 +17,12 @@ Contract:
 
 Any other schema error means fixture and schema have drifted apart.
 Exit 0 only if the whole contract holds.
+
+Note: the duplicate-member fixture (v1_1-duplicate-purpose-member) validates
+CLEANLY here by design — json.loads collapses duplicate members last-wins
+before jsonschema sees them, and the collapsed credential is schema-valid.
+The strict-parse rejection is pinned by the verifiers (PARSE_ERROR), not by
+this schema layer, which is parse-semantics-agnostic.
 """
 
 import json

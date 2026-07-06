@@ -760,6 +760,31 @@ func main() {
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
 				atx)
 		}},
+		// ---- duplicate-member strict parse (issue opena2a-registry#305) ----
+		{"fixtures/v1_1-duplicate-purpose-member.json", func() Fixture {
+			// DUPLICATE-MEMBER SMUGGLING. Sign the honest purpose (category
+			// financial-operations), then inject a DECOY duplicate `category`
+			// member BEFORE the signed one in the raw credential bytes. RFC 8259
+			// \u00a74 leaves duplicate names undefined: a last-wins parser collapses
+			// to the signed content, so the signature VERIFIES over smuggled
+			// bytes; a first-wins parser sees the decoy and fails the signature
+			// with the wrong category. The whole ATX credential feeds signed
+			// canonical forms (v1.1 JCS(TBS); v1.0 pipe fields) \u2014 there is no
+			// layer with sanctioned last-wins semantics \u2014 so verifiers MUST
+			// strict-parse the credential and reject duplicate members at any
+			// depth as PARSE_ERROR before interpreting any field.
+			atx := newBaselineV11ATX()
+			atx.DeclaredPurpose = json.RawMessage(presentDeclaredPurpose)
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			atx.DeclaredPurpose = json.RawMessage(strings.Replace(presentDeclaredPurpose,
+				`"category":`, `"category": "customer-support", "category":`, 1))
+			return wrap("atx-v1_1/duplicate-purpose-member",
+				"An ATX v1.1 credential whose declaredPurpose bytes contain the category member twice: a decoy (customer-support) followed by the signed value (financial-operations). The Ed25519 signature is REAL and covers the last-wins interpretation, so a lenient last-wins parser sees a verifying credential while a first-wins parser sees different content \u2014 the classic RFC 8259 \u00a74 duplicate-member smuggling split. Because the entire ATX credential feeds the signed canonical form (JCS(TBS), \u00a71.3a.2), verifiers MUST strict-parse the credential object and REJECT duplicate members at any depth with PARSE_ERROR, before interpreting any field. A verifier that parses last-wins without a duplicate check wrongly ACCEPTs; a first-wins verifier rejects with the wrong category (SIGNATURE_INVALID).",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "PARSE_ERROR", ReasonContains: "duplicate"},
+				atx)
+		}},
 	}
 
 	type manifestEntry struct {

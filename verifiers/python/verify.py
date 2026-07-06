@@ -13,6 +13,17 @@ Spec coverage:
   - Ed25519 verification, threshold (>=1 valid), trust level 3+ chain check,
     expiry, revocation, issuer-trust.
 
+Parsing rule (strict parse, ported from the aap-conformance protected-header
+lesson and scoped to the whole body because ATX signs it all):
+  - the ATX credential is STRICT-parsed as a whole: a duplicate object member
+    at ANY depth of the credential rejects as PARSE_ERROR before any field is
+    interpreted. Every credential field feeds a signed canonical form (v1.1
+    JCS(TBS) projection, v1.0 pipe fields), so there is no layer with
+    sanctioned RFC 7519 last-wins semantics — duplicates are the RFC 8259 §4
+    first-wins/last-wins parser-divergence smuggling split.
+  - the fixture wrapper (name/verifierState/expected) is harness metadata and
+    parses leniently.
+
 Out of scope:
   - ML-DSA-65 verification. The post-quantum library landscape in Python is
     fragmented (no stdlib support, liboqs / dilithium-py require optional
@@ -54,6 +65,39 @@ except ImportError:
 
 SUPPORTED_ATC_VERSION = "1.0"
 SUPPORTED_ATC_VERSION_V11 = "1.1"
+
+
+class _DupMarkedDict(dict):
+    """dict that remembers the first duplicate member name seen in this object
+    or any descendant (None when the subtree is duplicate-free). Values keep
+    standard last-wins semantics so everything outside the strict-parse check
+    behaves exactly as a plain json.loads."""
+
+    __slots__ = ("duplicate_member",)
+
+
+def _subtree_duplicate(value: Any) -> str | None:
+    if isinstance(value, _DupMarkedDict):
+        return value.duplicate_member
+    if isinstance(value, list):
+        for item in value:
+            dup = _subtree_duplicate(item)
+            if dup is not None:
+                return dup
+    return None
+
+
+def _dup_marking_pairs(pairs: list[tuple[str, Any]]) -> "_DupMarkedDict":
+    out = _DupMarkedDict()
+    dup: str | None = None
+    for key, value in pairs:
+        if dup is None and key in out:
+            dup = key
+        if dup is None:
+            dup = _subtree_duplicate(value)
+        out[key] = value
+    out.duplicate_member = dup
+    return out
 
 
 @dataclass
@@ -217,6 +261,16 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
     atx = fixture["atx"]
     vs = fixture["verifierState"]
 
+    # Step 0: strict parse. A duplicate member at any depth of the CREDENTIAL
+    # rejects before any field is interpreted (see module docstring). The
+    # fixture wrapper stays lenient: only the atx subtree is consulted.
+    dup = _subtree_duplicate(atx)
+    if dup is not None:
+        return VerifyResult(
+            reject_category="PARSE_ERROR",
+            reason=f'credential contains duplicate member "{dup}" (strict parse: the whole ATX credential is a signed body; RFC 8259 §4 duplicate names are parser-divergent)',
+        )
+
     now = datetime.fromisoformat(vs["clockRfc3339"].replace("Z", "+00:00")).astimezone(timezone.utc)
 
     # Step 1: schema version. Dispatch on atcVersion: "1.0" verifies the legacy
@@ -316,7 +370,10 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
 
 
 def load_fixture(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text())
+    # The duplicate-marking hook preserves last-wins values (plain dict
+    # semantics) while recording duplicates for the strict-parse check in
+    # verify_fixture, which consults only the atx subtree.
+    return json.loads(path.read_text(), object_pairs_hook=_dup_marking_pairs)
 
 
 def expand_paths(args: list[str]) -> list[Path]:

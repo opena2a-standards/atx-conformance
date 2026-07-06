@@ -37,6 +37,7 @@ What this suite verifies:
 | ATX v1.1 JCS(TBS) signing, signed-field integrity | `fixtures/v1_1-baseline-valid.json`, `fixtures/v1_1-tampered-capabilities.json` |
 | ATX v1.1 declaredPurpose carried under the signature (§1.5) | `fixtures/v1_1-declared-purpose-valid.json`, `fixtures/v1_1-tampered-declared-purpose.json` |
 | Degenerate declaredPurpose (§1.3a.2 rule 5, issue #11): parse-level emptiness, verbatim non-object inclusion | `fixtures/v1_1-declared-purpose-empty-whitespace.json`, `fixtures/v1_1-declared-purpose-array-injected.json`, `fixtures/v1_1-declared-purpose-string-injected.json` |
+| Strict credential parse: duplicate object members reject at any depth (RFC 8259 §4 parser-divergence smuggling) | `fixtures/v1_1-duplicate-purpose-member.json` |
 | Issuer-chain depth requirement for trust level 3 and above | implicit in every ACCEPT fixture (all use trust level 4 with a 2-link chain) |
 
 What this suite does NOT verify:
@@ -62,7 +63,7 @@ CI-checked against drift.
 enforces every claim in this README on each push and pull request:
 
 1. Both reference verifiers run against `fixtures/` and must report
-   `18 pass, 0 fail`.
+   `19 pass, 0 fail`.
 2. The fixture generator re-runs and the committed fixture bytes plus
    `MANIFEST.sha256` must reproduce exactly (byte-pin).
 3. The JCS byte-agreement gate
@@ -218,6 +219,12 @@ All fixtures use:
 | `fixtures/v1_1-tampered-capabilities.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 whose `capabilities` were escalated to `admin:all` after signing. Rejected because v1.1 signs capabilities; the v1.0 form would have accepted it. |
 | `fixtures/v1_1-declared-purpose-valid.json` | ACCEPT | ATX v1.1 carrying a populated `declaredPurpose` (§1.5: vocabVersion, statement, category, taskScopes, capabilityJustification, autonomy, dataScopes, egressScopes). The presence-based member is signed as part of `JCS(TBS)`; canonical bytes equal the `jcs-vectors` `08-declared-purpose` vector. |
 | `fixtures/v1_1-tampered-declared-purpose.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 whose `declaredPurpose.category` was rewritten from `financial-operations` to `agent-orchestration` after signing. Rejected because v1.1 signs declaredPurpose; this is the integrity that makes a declared purpose binding and non-repudiable (no post-issuance purpose-laundering). |
+| `fixtures/cross-issuer-key.json` | REJECT (SIGNATURE_INVALID) | ATX v1.0 issued by the primary authority but signed by a DIFFERENT trusted authority's key. Signature is valid and the signer is independently trusted, yet the key is not controlled by the credential's issuer. A verifier that tries every configured key wrongly accepts. |
+| `fixtures/v1_1-cross-issuer-key.json` | REJECT (SIGNATURE_INVALID) | Same key-to-issuer binding property under v1.1: the secondary authority is neither the issuer nor in the signed issuerChain, so its key is not an eligible signer. |
+| `fixtures/v1_1-declared-purpose-empty-whitespace.json` | ACCEPT | ATX v1.1 signed with no declaredPurpose, carrying a whitespace-empty `{ }` appended after signing. Emptiness is a parse-level property (§1.3a.2 rule 5): any serialization of the empty object is treated as absent, so the signature still verifies. |
+| `fixtures/v1_1-declared-purpose-array-injected.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 signed with no declaredPurpose, carrying an attacker-appended ARRAY value. Present non-empty values — including non-objects — enter the TBS verbatim, so the recomputed bytes no longer match the signature. |
+| `fixtures/v1_1-declared-purpose-string-injected.json` | REJECT (SIGNATURE_INVALID) | Same unsigned-injection defense with a STRING value. |
+| `fixtures/v1_1-duplicate-purpose-member.json` | REJECT (PARSE_ERROR) | ATX v1.1 whose declaredPurpose bytes carry the `category` member TWICE — a decoy followed by the signed value, with a REAL signature over the last-wins interpretation. A last-wins parser without a duplicate check wrongly ACCEPTs (smuggling); a first-wins parser rejects with the wrong category. Verifiers MUST strict-parse the whole credential and reject duplicate members at any depth (RFC 8259 §4). |
 
 ## Running the verifiers
 
@@ -255,7 +262,7 @@ For full hybrid verification end to end, use the Go verifier.
 
 ### Expected output
 
-Both verifiers report `summary: 18 pass, 0 fail (18 fixtures)` against the
+Both verifiers report `summary: 19 pass, 0 fail (19 fixtures)` against the
 shipped fixture set. Any divergence on bytes (the fixture file was modified)
 or on verifier semantics (the verifier has drifted from the spec) shows up
 as one or more FAIL lines.
@@ -329,7 +336,7 @@ A2A coordination map's criterion (c) thread
 
 | Repo | Spec | Status |
 |---|---|---|
-| `atx-conformance` (this repo) | ATX v1.0 + v1.1 credential schema | 13 fixtures (8 v1.0, 5 v1.1 JCS incl. 2 declaredPurpose), 2 verifiers (Go full hybrid, Python Ed25519), `jcs-vectors/` byte-agreement gate (8 vectors, Go/Python/TS), `MANIFEST.sha256` pinned |
+| `atx-conformance` (this repo) | ATX v1.0 + v1.1 credential schema | 19 fixtures (9 v1.0, 10 v1.1 JCS incl. 6 declaredPurpose), 2 verifiers (Go full hybrid, Python Ed25519), `jcs-vectors/` byte-agreement gate (8 vectors, Go/Python/TS), `MANIFEST.sha256` pinned |
 | [`atp-conformance`](https://github.com/opena2a-standards/atp-conformance) | ATP v1.0.0-rc1 protocol | 4 fixtures (discovery, trust-proof baseline, trust-proof hybrid, Signed Tree Head), same 2-verifier pair, `MANIFEST.sha256` pinned |
 | [`aip-conformance`](https://github.com/opena2a-standards/aip-conformance) | AIP v1.0.0-draft identity protocol | §6.4 (VC `AgentTrustCredential`) covered by cross-linking this repo's fixtures; §5.1 challenge-response covered by 4 dedicated fixtures + Go/Python verifiers shipped at v0.2 (2026-05-28, Decision 3-C) |
 

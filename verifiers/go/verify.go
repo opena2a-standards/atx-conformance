@@ -24,6 +24,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/hex"
@@ -301,9 +302,73 @@ func (r result) String() string {
 	return fmt.Sprintf("REJECT[%s: %s]", r.RejectCategory, r.Reason)
 }
 
+// rawDuplicateMember scans raw JSON for a duplicated object member name at any
+// depth and returns the first one found. The ATX credential is strict-parsed as
+// a whole: every field feeds a signed canonical form (v1.1 JCS(TBS) projection,
+// v1.0 pipe fields), so there is no layer with sanctioned RFC 7519 last-wins
+// semantics — a duplicate member anywhere in the credential is the RFC 8259 §4
+// first-wins/last-wins parser-divergence smuggling split and MUST reject as
+// PARSE_ERROR before any field is interpreted. Strictness applies to the
+// credential object only; the fixture wrapper is harness metadata and parses
+// leniently. (Same rule in ../python; ported from the aap-conformance
+// protected-header lesson, scoped to the whole body because ATX signs it all.)
+func rawDuplicateMember(raw []byte) (string, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	return scanValueForDuplicates(dec)
+}
+
+// scanValueForDuplicates consumes exactly one JSON value from dec. Syntax
+// errors are ignored here; they resurface as PARSE_ERROR via json.Unmarshal.
+func scanValueForDuplicates(dec *json.Decoder) (string, bool) {
+	tok, err := dec.Token()
+	if err != nil {
+		return "", false
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok {
+		return "", false // scalar
+	}
+	switch delim {
+	case '{':
+		seen := map[string]bool{}
+		for dec.More() {
+			keyTok, err := dec.Token()
+			if err != nil {
+				return "", false
+			}
+			key, _ := keyTok.(string)
+			if seen[key] {
+				return key, true
+			}
+			seen[key] = true
+			if name, dup := scanValueForDuplicates(dec); dup {
+				return name, true
+			}
+		}
+		_, _ = dec.Token() // consume '}'
+	case '[':
+		for dec.More() {
+			if name, dup := scanValueForDuplicates(dec); dup {
+				return name, true
+			}
+		}
+		_, _ = dec.Token() // consume ']'
+	}
+	return "", false
+}
+
 // verify implements the 8-step ATX v1.0 verification algorithm with hybrid
 // signing enforcement per AIP §3.
 func verify(f fixture) result {
+	// Step 0: strict parse. Duplicate members reject before interpretation
+	// (see rawDuplicateMember).
+	if name, dup := rawDuplicateMember(f.ATX); dup {
+		return result{
+			RejectCategory: "PARSE_ERROR",
+			Reason:         fmt.Sprintf("credential contains duplicate member %q (strict parse: the whole ATX credential is a signed body; RFC 8259 §4 duplicate names are parser-divergent)", name),
+		}
+	}
+
 	var a atx
 	if err := json.Unmarshal(f.ATX, &a); err != nil {
 		return result{RejectCategory: "PARSE_ERROR", Reason: err.Error()}
