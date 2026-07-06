@@ -785,6 +785,36 @@ func main() {
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "PARSE_ERROR", ReasonContains: "duplicate"},
 				atx)
 		}},
+		// ---- case-variant member (fold-collapse) strict parse (atx-conformance#16) ----
+		{"fixtures/v1_1-case-variant-member.json", func() Fixture {
+			// CASE-VARIANT SMUGGLING (fold collapse). Sign the honest baseline
+			// (trustLevel 4). A decoy top-level `TRUSTLEVEL` member (9) is injected
+			// into the raw credential bytes AFTER signing (postWrite, below):
+			// encoding/json can't emit two case-variant struct fields, so the decoy
+			// is added at the byte level. TRUSTLEVEL and trustLevel fold to the same
+			// field. Go's encoding/json resolves struct fields case-insensitively
+			// last-wins, so `{"TRUSTLEVEL":9,...,"trustLevel":4}` collapses to
+			// trustLevel=4 — the SIGNED value — and a lenient Go verifier ACCEPTs,
+			// silently carrying a stray fold-colliding TRUSTLEVEL member. The same
+			// bytes read differently under other conforming parsers: a
+			// case-insensitive FIRST-wins parser reads 9, and a case-sensitive parser
+			// (this suite's Python json.loads) keeps both as distinct members,
+			// reading trustLevel=4 alongside a separate TRUSTLEVEL=9. A
+			// case-SENSITIVE duplicate check flags neither. Because encoding/json's
+			// field folding makes the credential mean different things to different
+			// conforming parsers — the RFC 8259 §4 first-wins/last-wins divergence
+			// the strict parse exists to close — verifiers MUST fold member names and
+			// REJECT fold-colliding members as PARSE_ERROR before interpreting any
+			// field (foldKey in verifiers/{go,python}).
+			atx := newBaselineV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/case-variant-member",
+				"An ATX v1.1 credential carrying a decoy top-level TRUSTLEVEL member (value 9) injected before the signed trustLevel member (value 4) — two names that fold to the same field. Go's encoding/json resolves struct fields case-insensitively last-wins, so it collapses the pair to the signed trustLevel=4: a lenient Go verifier ACCEPTs, silently carrying a stray fold-colliding TRUSTLEVEL member. The same bytes read differently under other conforming parsers: a case-insensitive first-wins parser reads 9, and a case-sensitive parser (this suite's Python json.loads) keeps both as distinct members, reading trustLevel=4 alongside a separate TRUSTLEVEL=9. A case-SENSITIVE duplicate check flags neither. Because encoding/json's field folding makes the credential mean different things to different conforming parsers — the RFC 8259 §4 first-wins/last-wins parser divergence the strict parse exists to close — verifiers MUST fold member names and REJECT fold-colliding members with PARSE_ERROR before interpreting any field. Reference: foldKey in verifiers/go and verifiers/python (atx-conformance#16).",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "PARSE_ERROR", ReasonContains: "duplicate"},
+				atx)
+		}},
 	}
 
 	type manifestEntry struct {
@@ -806,6 +836,22 @@ func main() {
 			replaced := bytes.Replace(b, []byte(`"declaredPurpose": {}`), []byte(`"declaredPurpose": { }`), 1)
 			if bytes.Equal(replaced, b) {
 				panic("empty-whitespace fixture: substitution target not found")
+			}
+			//nolint:gosec // G703: build-time tool rewriting the fixture it just wrote under outDir
+			must(os.WriteFile(path, replaced, 0o644))
+		}
+		if fs.writePath == "fixtures/v1_1-case-variant-member.json" {
+			// Inject a decoy top-level TRUSTLEVEL member immediately BEFORE the
+			// signed trustLevel. encoding/json cannot emit two case-variant struct
+			// fields, so the decoy is added at the byte level after signing; a
+			// lenient Go parse collapses the pair last-wins to the signed
+			// trustLevel=4, making this a real silent smuggle a fold-aware
+			// duplicate check (foldKey) must reject as PARSE_ERROR.
+			b, err := os.ReadFile(path) //nolint:gosec // G304: file just written above
+			must(err)
+			replaced := bytes.Replace(b, []byte("    \"trustLevel\": 4,"), []byte("    \"TRUSTLEVEL\": 9,\n    \"trustLevel\": 4,"), 1)
+			if bytes.Equal(replaced, b) {
+				panic("case-variant fixture: trustLevel substitution target not found")
 			}
 			//nolint:gosec // G703: build-time tool rewriting the fixture it just wrote under outDir
 			must(os.WriteFile(path, replaced, 0o644))

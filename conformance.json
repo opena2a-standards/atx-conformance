@@ -347,6 +347,36 @@
       "description": "A baseline ATX v1.1 credential. The single Ed25519 signature covers JCS(TBS) per atx-spec core.md §1.3a.2, so capabilities, scanSummary, issuerChain, publisher, and behavioralProfile are integrity-protected. Verifier MUST ACCEPT. The canonical bytes equal the jcs-vectors baseline vector."
     },
     {
+      "fixture": "fixtures/v1_1-case-variant-member.json",
+      "name": "atx-v1_1/case-variant-member",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md",
+          "section": "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "REJECT[PARSE_ERROR]",
+      "description": "An ATX v1.1 credential carrying a decoy top-level TRUSTLEVEL member (value 9) injected before the signed trustLevel member (value 4) — two names that fold to the same field. Go's encoding/json resolves struct fields case-insensitively last-wins, so it collapses the pair to the signed trustLevel=4: a lenient Go verifier ACCEPTs, silently carrying a stray fold-colliding TRUSTLEVEL member. The same bytes read differently under other conforming parsers: a case-insensitive first-wins parser reads 9, and a case-sensitive parser (this suite's Python json.loads) keeps both as distinct members, reading trustLevel=4 alongside a separate TRUSTLEVEL=9. A case-SENSITIVE duplicate check flags neither. Because encoding/json's field folding makes the credential mean different things to different conforming parsers — the RFC 8259 §4 first-wins/last-wins parser divergence the strict parse exists to close — verifiers MUST fold member names and REJECT fold-colliding members with PARSE_ERROR before interpreting any field. Reference: foldKey in verifiers/go and verifiers/python (atx-conformance#16)."
+    },
+    {
       "fixture": "fixtures/v1_1-cross-issuer-key.json",
       "name": "atx-v1_1/cross-issuer-key",
       "fixtureType": "atx-credential",

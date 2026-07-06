@@ -35,6 +35,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	"github.com/gowebpki/jcs"
@@ -302,59 +303,122 @@ func (r result) String() string {
 	return fmt.Sprintf("REJECT[%s: %s]", r.RejectCategory, r.Reason)
 }
 
-// rawDuplicateMember scans raw JSON for a duplicated object member name at any
-// depth and returns the first one found. The ATX credential is strict-parsed as
-// a whole: every field feeds a signed canonical form (v1.1 JCS(TBS) projection,
-// v1.0 pipe fields), so there is no layer with sanctioned RFC 7519 last-wins
-// semantics — a duplicate member anywhere in the credential is the RFC 8259 §4
-// first-wins/last-wins parser-divergence smuggling split and MUST reject as
-// PARSE_ERROR before any field is interpreted. Strictness applies to the
-// credential object only; the fixture wrapper is harness metadata and parses
-// leniently. (Same rule in ../python; ported from the aap-conformance
-// protected-header lesson, scoped to the whole body because ATX signs it all.)
+// maxScanDepth bounds the strict-parse recursion. It matches encoding/json's
+// own maxNestingDepth (10000): anything deeper is rejected by json.Unmarshal in
+// verify() below, so stopping the scan here loses no coverage while keeping
+// recursion bounded. Without this bound a deeply-nested credential drives
+// json.Decoder.Token (which enforces no depth limit) into unbounded recursion
+// and a fatal, unrecoverable stack overflow. Reference implementation:
+// opena2a-registry pkg/atcverify (registry #305 / #307). Tracked by
+// atx-conformance#16.
+const maxScanDepth = 10000
+
+// rawDuplicateMember scans raw JSON for a member name that collides — under
+// encoding/json's field folding (foldKey) — with an earlier member of the same
+// object, at any depth, and returns the first one found. The ATX credential is
+// strict-parsed as a whole: every field feeds a signed canonical form (v1.1
+// JCS(TBS) projection, v1.0 pipe fields), so there is no layer with sanctioned
+// RFC 7519 last-wins semantics — a duplicate member anywhere in the credential
+// is the RFC 8259 §4 first-wins/last-wins parser-divergence smuggling split and
+// MUST reject as PARSE_ERROR before any field is interpreted. Member equality
+// is judged under folding because Go's encoding/json resolves struct fields
+// case-insensitively last-wins, so a case-variant pair like
+// {"trustLevel":9,"TRUSTLEVEL":1} collapses to one field — a case-sensitive
+// check would miss that collapse and leave the exact divergence this guard
+// closes. Strictness applies to the credential object only; the fixture wrapper
+// is harness metadata and parses leniently. (Same rule in ../python; ported
+// from the aap-conformance protected-header lesson, scoped to the whole body
+// because ATX signs it all.)
 func rawDuplicateMember(raw []byte) (string, bool) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
-	return scanValueForDuplicates(dec)
+	name, dup, _ := scanValueForDuplicates(dec, 0)
+	return name, dup
 }
 
-// scanValueForDuplicates consumes exactly one JSON value from dec. Syntax
-// errors are ignored here; they resurface as PARSE_ERROR via json.Unmarshal.
-func scanValueForDuplicates(dec *json.Decoder) (string, bool) {
+// scanValueForDuplicates consumes exactly one JSON value from dec and reports
+// the first folded-duplicate member found in it. The third return, abort,
+// unwinds the ENTIRE scan (not just the current subtree) when the input is
+// malformed or exceeds maxScanDepth; the caller stops immediately rather than
+// re-reading a token it never consumed (which would spin dec.More() forever).
+// An aborted scan reports no duplicate — the json.Unmarshal in verify() is what
+// then rejects the malformed / over-deep input.
+func scanValueForDuplicates(dec *json.Decoder, depth int) (name string, dup, abort bool) {
+	if depth > maxScanDepth {
+		return "", false, true
+	}
 	tok, err := dec.Token()
 	if err != nil {
-		return "", false
+		return "", false, true
 	}
 	delim, ok := tok.(json.Delim)
 	if !ok {
-		return "", false // scalar
+		return "", false, false // scalar
 	}
 	switch delim {
 	case '{':
-		seen := map[string]bool{}
+		seen := map[string]string{} // foldKey -> first raw key seen
 		for dec.More() {
 			keyTok, err := dec.Token()
 			if err != nil {
-				return "", false
+				return "", false, true
 			}
 			key, _ := keyTok.(string)
-			if seen[key] {
-				return key, true
+			fk := foldKey(key)
+			if _, isDup := seen[fk]; isDup {
+				return key, true, false
 			}
-			seen[key] = true
-			if name, dup := scanValueForDuplicates(dec); dup {
-				return name, true
+			seen[fk] = key
+			if n, d, a := scanValueForDuplicates(dec, depth+1); d || a {
+				return n, d, a
 			}
 		}
-		_, _ = dec.Token() // consume '}'
+		if _, err := dec.Token(); err != nil { // consume '}'
+			return "", false, true
+		}
 	case '[':
 		for dec.More() {
-			if name, dup := scanValueForDuplicates(dec); dup {
-				return name, true
+			if n, d, a := scanValueForDuplicates(dec, depth+1); d || a {
+				return n, d, a
 			}
 		}
-		_, _ = dec.Token() // consume ']'
+		if _, err := dec.Token(); err != nil { // consume ']'
+			return "", false, true
+		}
 	}
-	return "", false
+	return "", false, false
+}
+
+// foldKey normalizes a JSON member name the way encoding/json folds names when
+// matching them to struct fields: ASCII letters lowercased, plus the two
+// non-ASCII letters encoding/json folds onto ASCII (Kelvin sign U+212A -> k,
+// long s U+017F -> s); any other rune is lowercased via unicode.ToLower. Two
+// names with the same fold key are the same field to the unmarshaler, so
+// treating them as a duplicate here catches the case-variant collapse.
+//
+// This is faithful for every collapse that can smuggle: ATX member names are
+// ASCII (a non-ASCII member is already schema-invalid and matches no struct
+// field), and the only non-ASCII runes encoding/json folds onto ASCII field
+// names are the two special-cased above. The unicode.ToLower fallback governs
+// only other non-ASCII runes, which collapse onto no struct field; there it may
+// diverge from encoding/json — and from the Python reference, whose str.lower
+// can expand a rune Go's simple ToLower does not — but only on inputs no honest
+// credential produces. Ported from opena2a-registry pkg/atcverify (registry #307).
+func foldKey(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case 'A' <= r && r <= 'Z':
+			b.WriteRune(r + ('a' - 'A'))
+		case r == 'K': // Kelvin sign -> k
+			b.WriteRune('k')
+		case r == 'ſ': // latin small letter long s -> s
+			b.WriteRune('s')
+		default:
+			b.WriteRune(unicode.ToLower(r))
+		}
+	}
+	return b.String()
 }
 
 // verify implements the 8-step ATX v1.0 verification algorithm with hybrid
