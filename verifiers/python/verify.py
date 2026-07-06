@@ -87,12 +87,44 @@ def _subtree_duplicate(value: Any) -> str | None:
     return None
 
 
+def _fold_key(s: str) -> str:
+    """Fold a JSON member name the way Go's encoding/json folds struct field
+    names, matching the Go reference verifier's foldKey (verifiers/go/verify.go):
+    ASCII uppercase lowercased, Kelvin sign U+212A -> k, long s U+017F -> s, any
+    other rune via str.lower(). Two names with the same fold key collapse to one
+    struct field under a Go last-wins unmarshaler, so treating them as duplicates
+    here keeps this verifier category-consistent (PARSE_ERROR) with the Go
+    reference on case-variant members — a deliberate ecosystem rule, since a
+    fold-colliding member is ambiguous across conforming parsers. This verifier's
+    own json.loads is case-sensitive and would not otherwise collapse them. This
+    matches the Go foldKey for ASCII names and the two special runes — the domain
+    that matters, since ATX member names are ASCII. For other non-ASCII runes
+    str.lower() can diverge from Go's simple unicode.ToLower, but no honest
+    credential has non-ASCII member names (they are already schema-invalid). See
+    atx-conformance#16.
+    """
+    out: list[str] = []
+    for ch in s:
+        if "A" <= ch <= "Z":
+            out.append(chr(ord(ch) + 32))
+        elif ch == "K":  # Kelvin sign -> k
+            out.append("k")
+        elif ch == "ſ":  # latin small letter long s -> s
+            out.append("s")
+        else:
+            out.append(ch.lower())
+    return "".join(out)
+
+
 def _dup_marking_pairs(pairs: list[tuple[str, Any]]) -> "_DupMarkedDict":
     out = _DupMarkedDict()
     dup: str | None = None
+    seen_folded: dict[str, str] = {}
     for key, value in pairs:
-        if dup is None and key in out:
+        fk = _fold_key(key)
+        if dup is None and fk in seen_folded:
             dup = key
+        seen_folded[fk] = key
         if dup is None:
             dup = _subtree_duplicate(value)
         out[key] = value

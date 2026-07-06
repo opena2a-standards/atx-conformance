@@ -45,6 +45,10 @@ jobs:
         working-directory: verifiers/go
         run: go run . ../../fixtures
 
+      - name: Go verifier unit tests (strict-parse depth guard + foldKey)
+        working-directory: verifiers/go
+        run: go test ./...
+
       - name: Python verifier over fixtures
         working-directory: verifiers/python
         run: python3 verify.py ../../fixtures
