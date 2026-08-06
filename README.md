@@ -1,7 +1,7 @@
 # atx-conformance
 
 Conformance fixtures and reference verifiers for the
-[ATX v1.0 credential schema](https://github.com/opena2a-org/atx-spec).
+[ATX v1.0 credential schema](https://github.com/opena2a-standards/atx-spec).
 
 Each fixture is a byte-stable JSON file that bundles an Agent Trust Credential
 with verifier configuration and an expected outcome (ACCEPT or REJECT). Two
@@ -10,7 +10,7 @@ report PASS or FAIL per vector. Fixture bytes are pinned in
 [`MANIFEST.sha256`](./MANIFEST.sha256).
 
 This suite mirrors the pattern set by
-[`a2a-idf-conformance/fixtures/composition/aim-did-rfc9421/`](https://github.com/opena2a-org/a2a-idf-conformance/tree/main/fixtures/composition/aim-did-rfc9421)
+[`a2a-idf-conformance/fixtures/composition/aim-did-rfc9421/`](https://github.com/opena2a-standards/a2a-idf-conformance/tree/main/fixtures/composition/aim-did-rfc9421)
 (APS interop conformance for A2A-IDF wire signatures). It closes criterion (c)
 on the OpenA2A maturity bar tracked in [a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876):
 "peer-cosigned conformance fixtures comparable to APS's `aim-did-rfc9421/*`
@@ -90,9 +90,10 @@ A2A coordination-map readers should read before forming judgments.
 ### Canonicalization: v1.0 signs 11 fields; v1.1 signs JCS(TBS)
 
 ATX v1.0 signs a pipe-delimited canonical string, not the JSON body. The
-signature covers exactly 11 fields, defined verbatim in
-[`opena2a-registry/pkg/atcverify/verify.go`](https://github.com/opena2a-org/opena2a-registry/blob/main/pkg/atcverify/verify.go)
-`canonicalPayload()`:
+signature covers exactly 11 fields, defined normatively in
+[`atx-spec/core.md`](https://github.com/opena2a-standards/atx-spec/blob/main/core.md)
+§1.3a.1 (the production implementation of that form is
+`opena2a-registry/pkg/atcverify` `canonicalPayload()`, in a private repository):
 
 ```
 agentId | agentDid | version | contentHash | buildAttestation | issuerDid |
@@ -112,7 +113,7 @@ signature verification.
 of a projected to-be-signed object that includes `capabilities`, `scanSummary`,
 `issuerChain`, `publisher`, and `behavioralProfile`, so those fields become
 integrity-protected. The normative projection and determinism rules are in
-[`atx-spec/core.md`](https://github.com/opena2a-org/atx-spec/blob/main/core.md)
+[`atx-spec/core.md`](https://github.com/opena2a-standards/atx-spec/blob/main/core.md)
 §1.3a.2. The verifiers dispatch on `atcVersion`; the v1.0 pipe form is frozen and
 unchanged. Cross-language byte agreement on `JCS(TBS)` is proven by
 [`jcs-vectors/`](jcs-vectors/) (Go, Python, and TypeScript canonicalizers must
@@ -309,8 +310,8 @@ breaking change for downstream verifiers.
 
 | Component | Version | Source |
 |---|---|---|
-| ATX schema | v1.0 | [`opena2a-org/atx-spec/core.md`](https://github.com/opena2a-org/atx-spec/blob/main/core.md) |
-| AIP spec | v1.0 (in flight on PR 1496) | [`opena2a-org/agent-identity-protocol`](https://github.com/opena2a-org/agent-identity-protocol) |
+| ATX schema | v1.0 | [`opena2a-org/atx-spec/core.md`](https://github.com/opena2a-standards/atx-spec/blob/main/core.md) |
+| AIP spec | v1.0 (in flight on PR 1496) | [`opena2a-org/agent-identity-protocol`](https://github.com/opena2a-standards/agent-identity-protocol) |
 | `did:opena2a` method | v0.1 (W3C registration filed, PR `w3c/did-extensions#717`) | [`opena2a-standards/did-method-opena2a`](https://github.com/opena2a-standards/did-method-opena2a/blob/main/did-method-opena2a.md) |
 | Ed25519 test vector source | RFC 8032 §7.1 Tests 1, 2, 3, 1024 | [datatracker.ietf.org/doc/html/rfc8032](https://datatracker.ietf.org/doc/html/rfc8032) |
 | ML-DSA-65 | FIPS 204 final | [csrc.nist.gov/pubs/fips/204/final](https://csrc.nist.gov/pubs/fips/204/final) |
@@ -322,9 +323,9 @@ breaking change for downstream verifiers.
 
 | Implementation | Verifier | Status |
 |---|---|---|
-| `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 11 / 11 PASS |
-| `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, Ed25519, ML-DSA-65 out of scope, v1.0 + v1.1 | 11 / 11 PASS |
-| `opena2a-org/opena2a-registry/pkg/atcverify` (production offline verifier) | Go, full Ed25519 plus ML-DSA-65 | passes the hybrid fixture as of opena2a-registry PR #214 + PR #215; integration via vendored fixture or `go get` import open as a follow-up |
+| `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 20 / 20 PASS |
+| `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, Ed25519, ML-DSA-65 out of scope, v1.0 + v1.1 | 20 / 20 PASS |
+| `opena2a-registry/pkg/atcverify` (production offline verifier, private repository) | Go, full Ed25519 plus ML-DSA-65 | passes the hybrid fixture as of opena2a-registry PR #214 + PR #215; integration via vendored fixture or `go get` import open as a follow-up |
 
 Independent second-party implementations are tracked on the sibling issue
 [a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876).
@@ -343,7 +344,7 @@ A2A coordination map's criterion (c) thread
 
 The three suites share the same MANIFEST-pinned byte-stable shape and are
 structurally comparable to A2A-IDF's
-[`aim-did-rfc9421/*`](https://github.com/opena2a-org/a2a-idf-conformance/tree/main/fixtures/composition/aim-did-rfc9421)
+[`aim-did-rfc9421/*`](https://github.com/opena2a-standards/a2a-idf-conformance/tree/main/fixtures/composition/aim-did-rfc9421)
 set.
 
 ## Repository layout
@@ -375,7 +376,7 @@ scripts/generate-fixtures/       deterministic fixture generator (Go)
 ## Contributing
 
 Issues and PRs welcome on this repository. Substantive coordination on the
-ATX wire format itself happens in [`opena2a-org/atx-spec`](https://github.com/opena2a-org/atx-spec)
+ATX wire format itself happens in [`opena2a-org/atx-spec`](https://github.com/opena2a-standards/atx-spec)
 and in the A2A coordination map on
 [a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876).
 
