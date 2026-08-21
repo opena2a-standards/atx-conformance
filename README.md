@@ -93,7 +93,7 @@ ATX v1.0 signs a pipe-delimited canonical string, not the JSON body. The
 signature covers exactly 11 fields, defined normatively in
 [`atx-spec/core.md`](https://github.com/opena2a-standards/atx-spec/blob/main/core.md)
 §1.3a.1 (the production implementation of that form is
-`opena2a-registry/pkg/atcverify` `canonicalPayload()`, in a private repository):
+`opena2a-registry/pkg/atcverify` `canonicalPayload()`):
 
 ```
 agentId | agentDid | version | contentHash | buildAttestation | issuerDid |
@@ -121,43 +121,25 @@ agree byte-for-byte). The `fixtures/v1_1-*.json` fixtures exercise the v1.1 path
 including `v1_1-tampered-capabilities.json`, which is REJECTED precisely because
 capabilities are now signed.
 
-### Hybrid signing: production status
+### Hybrid signing: what this suite requires
 
 ATX v1.0 mandates hybrid Ed25519 + ML-DSA-65 signing at the wire format.
-The registry-side issuance path (`opena2a-registry/internal/application/atc_service.go` `IssueATC()`)
-emits hybrid signatures in production: threshold Ed25519 signatures from
-the multi-key signing set, plus one ML-DSA-65 signature from the hybrid
-keypair wired in at `cmd/server/main.go:682-685`. Issued ATX credentials
-in production today therefore carry both algorithms, matching the
-`baseline-valid-hybrid.json` fixture in this repository.
-
-The standalone offline verifier (`opena2a-registry/pkg/atcverify`)
-verifies both algorithms as of opena2a-registry PR #214: when a
-credential declares an ML-DSA-65 signature, at least one ML-DSA-65
-signature must verify in addition to at least one Ed25519 signature.
-The wire-format alignment between the issuer's emitted ML-DSA-65
-signature `Value` (raw 3309-byte `mldsa65.SignatureSize` blob) and the
-spec / conformance-fixture format was closed by opena2a-registry PR #215.
-Credentials issued before PR #215 carry a legacy combined-blob encoding
-that the new verifier rejects; ATC TTL is 7 days so the rollover is
-naturally complete one week after PR #215 ships.
-
-A separate AIM-side credential format (`RealATCIssuer.Issue()` in
-`agent-identity-management/apps/backend/internal/infrastructure/atc/atc_issuer.go`)
-produces CBOR-encoded credentials and signs Ed25519 only. That issuer has
-no active callers in the AIM backend today; whether it ships as a future
-artifact or gets removed is tracked separately. It is not the credential
-this conformance suite tests.
+`baseline-valid-hybrid.json` and `v1_1-baseline-valid-hybrid.json` each
+carry an Ed25519 signature and an ML-DSA-65 signature over the same signed
+payload. In both, the ML-DSA-65 `value` is the base64 of a raw FIPS 204
+ML-DSA-65 signature (3309 bytes decoded); no container or combined-blob
+framing is used.
 
 The Go reference verifier in this repository ([`verifiers/go`](./verifiers/go))
 DOES verify ML-DSA-65 signatures per the spec mandate. The Python reference
 verifier ([`verifiers/python`](./verifiers/python)) treats ML-DSA-65 as
 present but out-of-scope (the post-quantum Python library landscape is
-fragmented; no stdlib support). The hybrid fixture is annotated to be
-ACCEPTed on the Ed25519 path alone in Python, with a banner. For full
+fragmented; no stdlib support). On both hybrid fixtures it records the
+ML-DSA-65 signature as present, verifies the Ed25519 signature, and ACCEPTs,
+appending a note to that fixture's `signatures:` output line. For full
 hybrid verification end to end, run the Go verifier.
 
-### Trusted-issuer DID drift between this suite and the production verifier
+### Trusted-issuer DID method used by this suite
 
 This suite uses the canonical post-consolidation DID method
 `did:opena2a:<type>:<id>` with type prefix `authority` for issuers, matching
@@ -167,12 +149,10 @@ method itself is formally documented at
 (Apache-2.0) and is filed for registration with the W3C DID Extensions
 registry on
 [`w3c/did-extensions#717`](https://github.com/w3c/did-extensions/pull/717).
-The production offline verifier in `opena2a-registry/pkg/atcverify/verify.go`
-still hardcodes `did:opena2a:registry:opena2a.org` (note the `registry`
-type prefix) and a legacy `did:atp:registry:opena2a`. The conformance
-verifiers configure trusted issuers from the fixture, so they do not
-rely on the production verifier's hardcoded list. The drift is a separate
-reconciliation item against the ATC to ATX code rename.
+Because the suite must run without any external trust configuration, the
+conformance verifiers take their trusted-issuer set from each fixture's
+`verifierState.trustedIssuers`; running the suite requires no issuer
+configuration outside the fixture files.
 
 ### Trust scoring: 9-factor reference
 
@@ -291,8 +271,8 @@ The generator:
    then per-fixture mutates exactly the fields needed to exercise that
    fixture's path (revoke, expire, swap issuer, tamper signature, change
    schema version, add cosigners or ML-DSA-65 sig).
-4. Computes the pipe-delimited canonical payload (the same 11-field
-   function the production verifier in `pkg/atcverify` uses, duplicated
+4. Computes the pipe-delimited canonical payload (the 11-field form
+   defined normatively in `atx-spec` `core.md` §1.3a.1, duplicated
    verbatim in the generator and in each reference verifier).
 5. Ed25519-signs (and ML-DSA-65-signs where applicable) the canonical
    payload.
@@ -325,7 +305,6 @@ breaking change for downstream verifiers.
 |---|---|---|
 | `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 20 / 20 PASS |
 | `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, Ed25519, ML-DSA-65 out of scope, v1.0 + v1.1 | 20 / 20 PASS |
-| `opena2a-registry/pkg/atcverify` (production offline verifier, private repository) | Go, full Ed25519 plus ML-DSA-65 | passes the hybrid fixture as of opena2a-registry PR #214 + PR #215; integration via vendored fixture or `go get` import open as a follow-up |
 
 Independent second-party implementations are tracked on the sibling issue
 [a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876).

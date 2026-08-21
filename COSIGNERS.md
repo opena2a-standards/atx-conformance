@@ -35,9 +35,10 @@ cosign sign-blob MANIFEST.sha256 \
 
 The Go verifier validates Ed25519 + ML-DSA-65 (FIPS 204) end to end. The
 Python verifier validates Ed25519 only and treats ML-DSA-65 as
-present-but-out-of-scope; the `baseline-valid-hybrid.json` fixture is
-annotated to accept on the Ed25519 path alone in Python. See the README's
-"Hybrid signing: production status" section for the full picture.
+present-but-out-of-scope: on the two hybrid fixtures it records the
+ML-DSA-65 signature as present, verifies the Ed25519 signature, and accepts,
+printing a note on each. See the README's "Hybrid signing: what this suite
+requires" section for the full picture.
 
 ## CI self-cosignature (baseline)
 

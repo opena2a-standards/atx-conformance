@@ -27,9 +27,10 @@ lesson and scoped to the whole body because ATX signs it all):
 Out of scope:
   - ML-DSA-65 verification. The post-quantum library landscape in Python is
     fragmented (no stdlib support, liboqs / dilithium-py require optional
-    native dependencies). The hybrid fixture is annotated and accepted on
-    the Ed25519 path alone. For spec-mandate full hybrid verification, run
-    the Go reference verifier in ../go.
+    native dependencies). On the hybrid fixtures the ML-DSA-65 signature is
+    recorded as present and not verified; the Ed25519 signature is the
+    acceptance gate. For spec-mandate full hybrid verification, run the Go
+    reference verifier in ../go.
 
 Usage:
     python verify.py ../../fixtures/baseline-valid.json
@@ -155,8 +156,8 @@ def canonical_payload(atx: dict[str, Any]) -> bytes:
     The Go signature uses fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d|%.6f|%s|%s|%s", ...)
     with the 11 fields enumerated below. Python's f-string %.6f matches Go's
     %.6f for finite floats in the ranges we use (0.0 to ~100.0). The
-    atcVersion in the canonical string is hardcoded to "1.0" in Go regardless
-    of the credential's atcVersion field; we replicate that quirk here.
+    atcVersion in the canonical string is the literal "1.0" regardless of the
+    credential's atcVersion field, a property of the v1.0 canonical form itself.
     """
     return (
         f"{atx['agentId']}|"

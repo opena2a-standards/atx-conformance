@@ -74,7 +74,7 @@
         }
       ],
       "expected": "ACCEPT",
-      "description": "An ATX v1.0 credential carrying both an Ed25519 signature and an ML-DSA-65 signature over the same canonical payload. This is the hybrid signing path the ATX v1.0 spec mandates. A spec-conformant verifier MUST verify BOTH signatures and ACCEPT only when both are valid. NOTE: the current opena2a-registry/pkg/atcverify verifier verifies Ed25519 only and silently ignores ML-DSA-65 signatures; the conformance Go verifier in ../verifiers/go DOES verify both, per spec."
+      "description": "An ATX v1.0 credential carrying both an Ed25519 signature and an ML-DSA-65 signature over the same canonical payload. This is the hybrid signing path the ATX v1.0 spec mandates. A spec-conformant verifier MUST verify BOTH signatures and ACCEPT only when both are valid. The ML-DSA-65 signature value is a raw FIPS 204 ML-DSA-65 signature (3309 bytes decoded) over the same canonical bytes as the Ed25519 signature; no container or combined-blob framing is used."
     },
     {
       "fixture": "fixtures/baseline-valid.json",
@@ -194,7 +194,7 @@
         }
       ],
       "expected": "REJECT[UNSUPPORTED_VERSION]",
-      "description": "An ATX whose atcVersion claims a version (2.0) that is not the v1.0 supported by this conformance suite. Verifier MUST REJECT at step 1 (schema-version check) with an unsupported-version reason. NOTE: the signature is computed using ATCVersion=\"1.0\" canonical bytes because the production canonicalPayload function hardcodes \"1.0\" in the canonical string regardless of the credential's atcVersion field. This is itself a discrepancy worth noting in the reconciliation log; the conformance fixture intentionally still produces a syntactically reasonable file so verifiers can demonstrate they reject on schema-version alone."
+      "description": "An ATX whose atcVersion claims a version (2.0) that is not the v1.0 supported by this conformance suite. Verifier MUST REJECT at step 1 (schema-version check) with an unsupported-version reason. NOTE: the signature is computed over v1.0 canonical bytes, whose eleventh field is the literal \"1.0\" independent of the credential's atcVersion field; the fixture is otherwise well formed so that a verifier can demonstrate it rejects on the schema-version check alone."
     },
     {
       "fixture": "fixtures/revoked.json",
