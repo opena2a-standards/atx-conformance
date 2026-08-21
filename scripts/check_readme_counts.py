@@ -33,7 +33,16 @@ def main():
     readme = README.read_text(encoding="utf-8")
     failures = []
 
-    if COSIGNERS.exists():
+    # Required, not optional. Guarding on existence meant deleting or renaming
+    # the file made the whole block vanish while the success line still printed
+    # "README and COSIGNERS counts match" -- a gate that reports on a file it
+    # never opened.
+    if not COSIGNERS.exists():
+        failures.append(
+            "COSIGNERS.md is missing; it states the count an external cosigner "
+            "is asked to observe and cannot go unchecked"
+        )
+    else:
         cosigners = COSIGNERS.read_text(encoding="utf-8")
         cos = re.findall(r"(\d+) pass, (\d+) fail", cosigners)
         if not cos:

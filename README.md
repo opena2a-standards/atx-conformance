@@ -94,8 +94,7 @@ A2A coordination-map readers should read before forming judgments.
 ATX v1.0 signs a pipe-delimited canonical string, not the JSON body. The
 signature covers exactly 11 fields, defined normatively in
 [`atx-spec/core.md`](https://github.com/opena2a-standards/atx-spec/blob/main/core.md)
-§1.3a.1 (the production implementation of that form is
-`opena2a-registry/pkg/atcverify` `canonicalPayload()`):
+§1.3a.1:
 
 ```
 agentId | agentDid | version | contentHash | buildAttestation | issuerDid |
