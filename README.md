@@ -61,7 +61,9 @@ CI-checked against drift.
 ## Continuous verification
 
 [`.github/workflows/conformance.yml`](./.github/workflows/conformance.yml)
-enforces every claim in this README on each push and pull request:
+runs the following gates on each push and pull request. They cover the
+counts, the verifier results, the fixture bytes and the claims this
+README makes about them -- not every sentence below:
 
 1. Both reference verifiers run against `fixtures/` and must report
    `20 pass, 0 fail`.
