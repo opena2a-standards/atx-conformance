@@ -4,7 +4,7 @@ Second-party cosigners attest that they have independently:
 
 1. Cloned this repository at a specific commit SHA
 2. Run BOTH reference verifiers against the published fixture set
-3. Observed `summary: 15 pass, 0 fail (15 fixtures)` from each verifier
+3. Observed `summary: 20 pass, 0 fail (20 fixtures)` from each verifier
 4. Produced a Sigstore keyless cosign signature over [`MANIFEST.sha256`](./MANIFEST.sha256)
 
 The signature attests to the fixture bytes; the entry below attests that
@@ -35,9 +35,10 @@ cosign sign-blob MANIFEST.sha256 \
 
 The Go verifier validates Ed25519 + ML-DSA-65 (FIPS 204) end to end. The
 Python verifier validates Ed25519 only and treats ML-DSA-65 as
-present-but-out-of-scope; the `baseline-valid-hybrid.json` fixture is
-annotated to accept on the Ed25519 path alone in Python. See the README's
-"Hybrid signing: production status" section for the full picture.
+present-but-out-of-scope: on the two hybrid fixtures it records the
+ML-DSA-65 signature as present, verifies the Ed25519 signature, and accepts,
+printing a note on each. See the README's "Hybrid signing: what this suite
+requires" section for the full picture.
 
 ## CI self-cosignature (baseline)
 
@@ -66,7 +67,7 @@ SHA-256 of `MANIFEST.sha256`.
 
 | Cosigner | Commit SHA | Go verifier | Python verifier | Sigstore artifact | Date |
 |---|---|---|---|---|---|
-| opena2a-org (self-cosigned baseline, CI) | every `main` push (see CI self-cosignature) | `15 pass, 0 fail` | `15 pass, 0 fail` | Rekor entry per push (keyless CI signature) | 2026-07-04 onward |
+| opena2a-org (self-cosigned baseline, CI) | every `main` push (see CI self-cosignature) | `20 pass, 0 fail` | `20 pass, 0 fail` | Rekor entry per push (keyless CI signature) | 2026-07-04 onward |
 
 Self-cosignature exists to anchor the baseline; second-party signatures are
 what close criterion (c). Recruiting at least one second-party cosigner per

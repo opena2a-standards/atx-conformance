@@ -12,9 +12,6 @@
 //
 // Hybrid signing: ML-DSA-65 signature is computed over the SAME canonical
 // payload bytes. This matches the ATX v1.0 spec mandate for hybrid signing.
-// The Ed25519-only reference verifier (pkg/atcverify) does not yet verify the
-// ML-DSA-65 path; the conformance Go verifier in ../verifiers/go DOES, as a
-// statement of what spec-conformant verifiers must do.
 package main
 
 import (
@@ -59,7 +56,8 @@ const fixedClockRFC3339 = "2026-05-24T00:00:00Z"
 // generator's location.
 var outDir string
 
-// ATCSignature mirrors the production domain type (atc.go:42-46) verbatim.
+// ATCSignature mirrors the production domain type in opena2a-registry
+// internal/domain (ATCSignature) verbatim.
 type ATCSignature struct {
 	KeyID     string `json:"keyId"`
 	Algorithm string `json:"algorithm"`
@@ -85,7 +83,7 @@ type ATCScanSummary struct {
 
 // ATX is the AgentTrustCredential as serialized for this conformance suite.
 // Field order matches the production AgentTrustCredential struct
-// (opena2a-registry/internal/domain/atc.go:50-75) so that encoded JSON byte
+// (opena2a-registry/internal/domain, AgentTrustCredential) so that encoded JSON byte
 // order is identical for both producers.
 type ATX struct {
 	ID                   string                `json:"id"`
@@ -115,7 +113,7 @@ type ATX struct {
 	CreatedAt            time.Time             `json:"createdAt"`
 }
 
-// canonicalPayload reproduces opena2a-registry/pkg/atcverify/verify.go:314-329
+// canonicalPayload reproduces opena2a-registry/pkg/atcverify canonicalPayload()
 // VERBATIM. Any divergence here breaks signature interop with the production
 // verifier. The 11 signed fields are: agentId, agentDid, version, contentHash,
 // buildAttestation, issuerDid, trustLevel, trustScore, issuedAt, expiresAt,
@@ -331,7 +329,7 @@ type VerifierState struct {
 	CRL            *CRL         `json:"crl,omitempty"`
 }
 
-// CRL is the same shape as opena2a-registry/pkg/atcverify/verify.go:82-91.
+// CRL is the same shape as opena2a-registry/pkg/atcverify CRL.
 type CRL struct {
 	Version    int        `json:"version"`
 	IssuedAt   time.Time  `json:"issuedAt"`
@@ -340,7 +338,7 @@ type CRL struct {
 	Signature  string     `json:"signature"`
 }
 
-// CRLEntry is the same shape as opena2a-registry/pkg/atcverify/verify.go:93-97.
+// CRLEntry is the same shape as opena2a-registry/pkg/atcverify CRLEntry.
 type CRLEntry struct {
 	AgentID   string    `json:"agentId"`
 	RevokedAt time.Time `json:"revokedAt"`
@@ -486,7 +484,7 @@ func main() {
 			pq.KeyID = mldsa.KeyID
 			atx.Signatures = []ATCSignature{ed, pq}
 			return wrap("atx-v1/baseline-valid-hybrid",
-				"An ATX v1.0 credential carrying both an Ed25519 signature and an ML-DSA-65 signature over the same canonical payload. This is the hybrid signing path the ATX v1.0 spec mandates. A spec-conformant verifier MUST verify BOTH signatures and ACCEPT only when both are valid. NOTE: the current opena2a-registry/pkg/atcverify verifier verifies Ed25519 only and silently ignores ML-DSA-65 signatures; the conformance Go verifier in ../verifiers/go DOES verify both, per spec.",
+				"An ATX v1.0 credential carrying both an Ed25519 signature and an ML-DSA-65 signature over the same canonical payload. This is the hybrid signing path the ATX v1.0 spec mandates. A spec-conformant verifier MUST verify BOTH signatures and ACCEPT only when both are valid. The ML-DSA-65 signature value is a raw FIPS 204 ML-DSA-65 signature (3309 bytes decoded) over the same canonical bytes as the Ed25519 signature; no container or combined-blob framing is used.",
 				[]KeypairRef{
 					keypairRefFor(primary, "vectors/issuer-primary.json"),
 					{Role: mldsa.Role, Path: "vectors/mldsa65-seed.json", Algorithm: mldsa.Algorithm, PublicKeyHex: mldsa.PublicKeyHex, KeyID: mldsa.KeyID},
@@ -498,9 +496,9 @@ func main() {
 		{"fixtures/revoked.json", func() Fixture {
 			atx := newBaselineATX()
 			atx.Signatures = []ATCSignature{signWithKey(primary, atx)}
-			// Per the production verifier (verify.go:209-220) the Revoked
-			// flag is checked BEFORE the CRL. We populate both so the
-			// fixture exercises both rejection paths.
+			// The fixture populates both the revoked flag and a CRL entry so
+			// that both rejection paths are exercised regardless of the order
+			// in which a verifier checks them.
 			atx.Revoked = true
 			rt := revokedTime
 			atx.RevokedAt = &rt
@@ -588,7 +586,7 @@ func main() {
 			atx.ATCVersion = "2.0" // unsupported per the v1.0 spec
 			atx.Signatures = []ATCSignature{signWithKey(primary, atx)}
 			return wrap("atx-v1/malformed-schema",
-				"An ATX whose atcVersion claims a version (2.0) that is not the v1.0 supported by this conformance suite. Verifier MUST REJECT at step 1 (schema-version check) with an unsupported-version reason. NOTE: the signature is computed using ATCVersion=\"1.0\" canonical bytes because the production canonicalPayload function hardcodes \"1.0\" in the canonical string regardless of the credential's atcVersion field. This is itself a discrepancy worth noting in the reconciliation log; the conformance fixture intentionally still produces a syntactically reasonable file so verifiers can demonstrate they reject on schema-version alone.",
+				"An ATX whose atcVersion claims a version (2.0) that is not the v1.0 supported by this conformance suite. Verifier MUST REJECT at step 1 (schema-version check) with an unsupported-version reason. NOTE: the signature is computed over v1.0 canonical bytes, whose eleventh field is the literal \"1.0\" independent of the credential's atcVersion field; the fixture is otherwise well formed so that a verifier can demonstrate it rejects on the schema-version check alone.",
 				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
 				defaultVerifierState,
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "UNSUPPORTED_VERSION", ReasonContains: "version"},

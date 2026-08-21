@@ -123,7 +123,7 @@ type atx struct {
 	Revoked              bool            `json:"revoked"`
 }
 
-// canonicalPayload mirrors opena2a-registry/pkg/atcverify/verify.go:314-329
+// canonicalPayload mirrors opena2a-registry/pkg/atcverify canonicalPayload()
 // VERBATIM. It is duplicated here so the conformance verifier has zero
 // dependency on the production codebase.
 //
@@ -489,9 +489,7 @@ func verify(f fixture) result {
 	}
 
 	// Step 5: signature verification.
-	// Spec mandate: every declared signature MUST verify. The conformance
-	// verifier does not silently skip ML-DSA-65 signatures even though the
-	// current pkg/atcverify production verifier does.
+	// Spec mandate: every declared signature MUST verify.
 	var payload []byte
 	if a.ATCVersion == "1.1" {
 		pb, err := canonicalPayloadV11(&a)
