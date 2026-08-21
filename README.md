@@ -350,9 +350,16 @@ scripts/generate-fixtures/       deterministic fixture generator (Go)
 - The set of fixtures may grow. New fixtures are additive and do not
   invalidate prior `MANIFEST.sha256` entries; each new fixture appears as
   a new line in the manifest.
-- Existing fixtures are immutable once published. If a fixture needs to
-  change semantically, it ships under a new name. This is what makes
-  `MANIFEST.sha256` a useful regression check.
+- Existing fixtures are immutable in the part that defines them: the
+  credential, its signatures, the verifier state and the expected outcome.
+  A fixture that needs to change in any of those ships under a new name.
+  That is what makes `MANIFEST.sha256` a useful regression check.
+- A fixture's `description` is documentation, and may be corrected in
+  place. Doing so changes that fixture's hash and its manifest line, so a
+  consumer pinning this repository at a commit sees no change until they
+  bump deliberately. A description that is wrong and cannot be fixed
+  without minting a duplicate credential under a new name is the worse
+  outcome of the two.
 
 ## Contributing
 
