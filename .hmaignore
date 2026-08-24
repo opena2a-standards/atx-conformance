@@ -1,0 +1,21 @@
+# HackMyAgent scanner exemptions. Keep this file as small as possible.
+# Format: one rule per line. Bare path patterns exempt the path from all checks;
+# `!CHECK-ID` lines exempt one check globally. Parser: `src/hardening/scanner.ts` (loadHmaIgnore)
+# in the hackmyagent repo.
+#
+# The four paths below are conformance test vectors: fixture credentials, their
+# Ed25519 signatures, canonical byte strings and their SHA-256 digests. Every
+# value in them is a published, deterministic test input — the whole point of the
+# suite is that anyone can reproduce them — so a credential detector reading them
+# reports the artifact's subject matter, not an exposure (measured 2026-08-24:
+# AST-CRED-003 fired on the label `"fixtureType": "atx-credential"` in
+# conformance.json, a type name with no value beside it; AST-CRED-001 fired on a
+# canonicalization vector's hex/digest). Exempting the paths rather than the
+# checks keeps hand-maintained source and workflows under the credential rules.
+# The exemption is safe because these paths are GENERATED (scripts/generate-fixtures)
+# and byte-pinned in CI (conformance.yml "Fixture byte-pin"): nothing lands here
+# by hand, and a regeneration that changed them fails the pin.
+fixtures/
+vectors/
+jcs-vectors/vectors/
+conformance.json
