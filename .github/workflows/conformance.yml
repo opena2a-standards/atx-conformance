@@ -71,6 +71,17 @@ jobs:
                schemas/vendor/atx-spec/atx-credential-v1.1.schema.json
           rm -rf .spec-src
 
+      # Binding Decision 10. Ordered BEFORE the byte-pin so a name that should
+      # never have been written reports as a content failure, not as a confusing
+      # `git diff`. The self-test runs first: a check that has never fired on the
+      # text this repository actually published is not a check, so it proves
+      # itself red on every denied identifier before it is trusted to say green.
+      - name: Implementation-status check proves itself non-vacuous
+        run: python3 scripts/check_no_implementation_status.py --self-test
+
+      - name: No other codebase is named in the generated artifacts
+        run: python3 scripts/check_no_implementation_status.py
+
       - name: Fixture byte-pin (generator determinism)
         working-directory: scripts/generate-fixtures
         run: |
