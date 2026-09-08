@@ -43,6 +43,22 @@
     {
       "item": "Behavioral profile validation",
       "reason": "field omitted from these fixtures"
+    },
+    {
+      "item": "Distinct signer-authority count (ATX core.md section 1.3 step 7)",
+      "reason": "no fixture carries verified signatures from more than one distinct authority, and the fixture format has no field for the required trust level that step 7's condition reads, so a verifier that omits step 7 entirely passes the suite; a length-of-issuerChain test is not step 7 (the spec says the chain length MUST NOT be counted) and implementations MUST self-attest this requirement until a fixture exists for it"
+    },
+    {
+      "item": "Cosignature requirements (ATX core.md section 7: federation cosigning, and the root cosignature at trust level 4)",
+      "reason": "the threshold fixture pins one 2-of-3 cosignature over the signing bytes; no fixture asserts that a trust level 4 credential carries the root cosignature or that a federated issuance carries its peer's cosignature"
+    },
+    {
+      "item": "Revocation propagation timing (ATX core.md section 3.3)",
+      "reason": "the revoked fixture pins the verdict for an agentId that is on the verifier's CRL; no fixture exercises the 5-minute cache bound or a stale-CRL window"
+    },
+    {
+      "item": "Transparency-log monitor behavior (ATX core.md section 6.4)",
+      "reason": "no fixture models a monitor and the conformance verifiers do not consult a log"
     }
   ],
   "requirements": [
