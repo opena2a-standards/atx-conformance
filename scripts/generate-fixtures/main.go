@@ -461,6 +461,18 @@ func main() {
 		defaultVerifierState.PublicKeys...),
 		keypairRefFor(secondary, "vectors/issuer-secondary.json"))
 
+	// Untrusted-chain verifier state: trusts ONLY the primary authority as an
+	// issuer, but its configured public keys also carry the untrusted
+	// authority's key under a DID-URL keyId (the multi-issuer anchor shape).
+	// Used by the untrusted-chain-authority fixture to prove a verifier
+	// intersects the signed v1.1 issuerChain with its trusted issuers before
+	// treating a chain DID as a key-eligible authority: a chain DID that is
+	// not a trusted issuer contributes no eligible key.
+	untrustedChainVerifierState := defaultVerifierState
+	untrustedChainVerifierState.PublicKeys = append(append([]KeypairRef{},
+		defaultVerifierState.PublicKeys...),
+		keypairRefFor(untrusted, "vectors/issuer-untrusted.json"))
+
 	type fixtureSpec struct {
 		writePath string
 		build     func() Fixture
@@ -678,7 +690,8 @@ func main() {
 			// ACCEPT, letting one trusted authority impersonate another. A
 			// spec-conformant verifier binds each signature to a key controlled by
 			// the credential's issuer (the keyId's controller DID must be the
-			// issuer, or for v1.1 a signed issuerChain authority) and MUST REJECT:
+			// issuer, or for v1.1 a signed issuerChain authority that is also a
+			// trusted issuer) and MUST REJECT:
 			// the secondary's key is not controlled by opena2a.org and is not in
 			// the issuerChain, so no eligible key verifies.
 			atx := newBaselineATX()
@@ -700,12 +713,40 @@ func main() {
 			atx := newBaselineV11ATX()
 			atx.Signatures = []ATCSignature{signV11WithKey(secondary, atx)}
 			return wrap("atx-v1_1/cross-issuer-key",
-				"An ATX v1.1 credential issued by the primary authority but signed by a different trusted authority's key (partner.example). The secondary authority is trusted and its key is configured, and the signature is valid over JCS(TBS), but the secondary is neither the issuer nor present in the signed issuerChain. A spec-conformant verifier binds each signature to a key controlled by the issuer (or a signed issuerChain authority) and MUST REJECT with a signature-validation reason.",
+				"An ATX v1.1 credential issued by the primary authority but signed by a different trusted authority's key (partner.example). The secondary authority is trusted and its key is configured, and the signature is valid over JCS(TBS), but the secondary is neither the issuer nor present in the signed issuerChain. A spec-conformant verifier binds each signature to a key controlled by the issuer, or by an authority that is both named in the signed issuerChain and in the verifier's trusted issuers, and MUST REJECT with a signature-validation reason.",
 				[]KeypairRef{
 					keypairRefFor(primary, "vectors/issuer-primary.json"),
 					keypairRefFor(secondary, "vectors/issuer-secondary.json"),
 				},
 				crossIssuerVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
+		{"fixtures/v1_1-untrusted-chain-authority.json", func() Fixture {
+			// UNTRUSTED CHAIN AUTHORITY. The credential claims issuerDid = the
+			// primary (trusted) authority and a signed issuerChain that names
+			// the primary AND the untrusted authority (attacker.example). It is
+			// signed ONLY by the untrusted key, over JCS(TBS), so the chain that
+			// names the signer is inside the signed bytes. The untrusted key is
+			// in the verifier's configured public keys under a DID-URL keyId,
+			// but attacker.example is NOT in trustedIssuers. A verifier that
+			// derives the eligible-key authority set from the credential's own
+			// issuerChain ACCEPTs: the chain names the signer's DID and the
+			// signer's key is configured. That chain is signed by the very key
+			// whose eligibility is in question, so it cannot vouch for that
+			// key. A chain DID that is not a trusted issuer contributes no
+			// eligible key, so no configured key verifies the signature and
+			// the verifier MUST REJECT with a signature-validation reason.
+			atx := newBaselineV11ATX()
+			atx.IssuerChain = []string{primary.IssuerDID, untrusted.IssuerDID}
+			atx.Signatures = []ATCSignature{signV11WithKey(untrusted, atx)}
+			return wrap("atx-v1_1/untrusted-chain-authority",
+				"An ATX v1.1 credential whose issuerDid is the primary authority (did:opena2a:authority:opena2a.org) and whose signed issuerChain names the primary authority and an untrusted authority (did:opena2a:authority:attacker.example). It carries one Ed25519 signature made ONLY by the untrusted authority's key over JCS(TBS), so the chain that names the signer is inside the signed bytes. The verifier trusts only the primary authority as an issuer, but the untrusted key is present in its configured public keys under a DID-URL keyId. A naive verifier that derives the eligible signing authorities from the credential's own issuerChain wrongly ACCEPTs: the chain names the signer's DID and the signer's key is configured. That chain is signed by the very key whose eligibility is in question, so it cannot vouch for that key. A signature verifies only against a key resolved for an authority the verifier trusts for this credential: the issuerDid, or an authority that is both named in the signed issuerChain and in the verifier's trusted issuers. A chain DID that is not a trusted issuer contributes no eligible key, so no configured key verifies the signature and the verifier MUST REJECT with a signature-validation reason.",
+				[]KeypairRef{
+					keypairRefFor(primary, "vectors/issuer-primary.json"),
+					keypairRefFor(untrusted, "vectors/issuer-untrusted.json"),
+				},
+				untrustedChainVerifierState,
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
 				atx)
 		}},

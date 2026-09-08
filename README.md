@@ -33,7 +33,7 @@ What this suite verifies:
 | Hybrid Ed25519 + ML-DSA-65 signature verification (FIPS 204) | `fixtures/baseline-valid-hybrid.json` |
 | Threshold 2-of-3 cosignature path | `fixtures/threshold-2of3-cosignature.json` |
 | Tampered-signature rejection | `fixtures/tampered-signature.json` |
-| Key-to-issuer binding (a trusted authority cannot sign for another) | `fixtures/cross-issuer-key.json`, `fixtures/v1_1-cross-issuer-key.json` |
+| Key-to-issuer binding (a trusted authority cannot sign for another; a chain DID that is not a trusted issuer contributes no eligible key) | `fixtures/cross-issuer-key.json`, `fixtures/v1_1-cross-issuer-key.json`, `fixtures/v1_1-untrusted-chain-authority.json` |
 | ATX v1.1 JCS(TBS) signing, signed-field integrity | `fixtures/v1_1-baseline-valid.json`, `fixtures/v1_1-tampered-capabilities.json` |
 | ATX v1.1 declaredPurpose carried under the signature (§1.5) | `fixtures/v1_1-declared-purpose-valid.json`, `fixtures/v1_1-tampered-declared-purpose.json` |
 | Degenerate declaredPurpose (§1.3a.2 rule 5, issue #11): parse-level emptiness, verbatim non-object inclusion | `fixtures/v1_1-declared-purpose-empty-whitespace.json`, `fixtures/v1_1-declared-purpose-array-injected.json`, `fixtures/v1_1-declared-purpose-string-injected.json` |
@@ -66,7 +66,7 @@ counts, the verifier results, the fixture bytes and the claims this
 README makes about them -- not every sentence below:
 
 1. Both reference verifiers run against `fixtures/` and must report
-   `20 pass, 0 fail`.
+   `21 pass, 0 fail`.
 2. The fixture generator re-runs and the committed fixture bytes plus
    `MANIFEST.sha256` must reproduce exactly (byte-pin).
 3. The JCS byte-agreement gate
@@ -204,6 +204,7 @@ All fixtures use:
 | `fixtures/v1_1-tampered-declared-purpose.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 whose `declaredPurpose.category` was rewritten from `financial-operations` to `agent-orchestration` after signing. Rejected because v1.1 signs declaredPurpose; this is the integrity that makes a declared purpose binding and non-repudiable (no post-issuance purpose-laundering). |
 | `fixtures/cross-issuer-key.json` | REJECT (SIGNATURE_INVALID) | ATX v1.0 issued by the primary authority but signed by a DIFFERENT trusted authority's key. Signature is valid and the signer is independently trusted, yet the key is not controlled by the credential's issuer. A verifier that tries every configured key wrongly accepts. |
 | `fixtures/v1_1-cross-issuer-key.json` | REJECT (SIGNATURE_INVALID) | Same key-to-issuer binding property under v1.1: the secondary authority is neither the issuer nor in the signed issuerChain, so its key is not an eligible signer. |
+| `fixtures/v1_1-untrusted-chain-authority.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 with `issuerDid` = the primary authority and a signed `issuerChain` of [primary, attacker.example], signed only by the attacker key. The verifier trusts only the primary as an issuer but holds the attacker key in its `publicKeys` under a DID-URL `keyId`. The chain names the signer's own DID, yet it is signed by that same key and attacker.example is not a trusted issuer, so it contributes no eligible key. A verifier that takes its eligible authorities from the credential's own `issuerChain` wrongly accepts. |
 | `fixtures/v1_1-declared-purpose-empty-whitespace.json` | ACCEPT | ATX v1.1 signed with no declaredPurpose, carrying a whitespace-empty `{ }` appended after signing. Emptiness is a parse-level property (§1.3a.2 rule 5): any serialization of the empty object is treated as absent, so the signature still verifies. |
 | `fixtures/v1_1-declared-purpose-array-injected.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 signed with no declaredPurpose, carrying an attacker-appended ARRAY value. Present non-empty values — including non-objects — enter the TBS verbatim, so the recomputed bytes no longer match the signature. |
 | `fixtures/v1_1-declared-purpose-string-injected.json` | REJECT (SIGNATURE_INVALID) | Same unsigned-injection defense with a STRING value. |
@@ -245,7 +246,7 @@ For full hybrid verification end to end, use the Go verifier.
 
 ### Expected output
 
-Both verifiers report `summary: 20 pass, 0 fail (20 fixtures)` against the
+Both verifiers report `summary: 21 pass, 0 fail (21 fixtures)` against the
 shipped fixture set. Any divergence on bytes (the fixture file was modified)
 or on verifier semantics (the verifier has drifted from the spec) shows up
 as one or more FAIL lines.
@@ -304,8 +305,8 @@ breaking change for downstream verifiers.
 
 | Implementation | Verifier | Status |
 |---|---|---|
-| `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 20 / 20 PASS |
-| `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, Ed25519, ML-DSA-65 out of scope, v1.0 + v1.1 | 20 / 20 PASS |
+| `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 21 / 21 PASS |
+| `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, Ed25519, ML-DSA-65 out of scope, v1.0 + v1.1 | 21 / 21 PASS |
 
 Independent second-party implementations are tracked on the sibling issue
 [a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876).
@@ -318,7 +319,7 @@ A2A coordination map's criterion (c) thread
 
 | Repo | Spec | Status |
 |---|---|---|
-| `atx-conformance` (this repo) | ATX v1.0 + v1.1 credential schema | 20 fixtures (9 v1.0, 11 v1.1 JCS incl. 6 declaredPurpose), 2 verifiers (Go full hybrid, Python Ed25519), `jcs-vectors/` byte-agreement gate (8 vectors, Go/Python/TS), `MANIFEST.sha256` pinned |
+| `atx-conformance` (this repo) | ATX v1.0 + v1.1 credential schema | 21 fixtures (9 v1.0, 12 v1.1 JCS incl. 6 declaredPurpose), 2 verifiers (Go full hybrid, Python Ed25519), `jcs-vectors/` byte-agreement gate (8 vectors, Go/Python/TS), `MANIFEST.sha256` pinned |
 | [`atp-conformance`](https://github.com/opena2a-standards/atp-conformance) | ATP v1.0.0-rc1 protocol | 4 fixtures (discovery, trust-proof baseline, trust-proof hybrid, Signed Tree Head), same 2-verifier pair, `MANIFEST.sha256` pinned |
 | [`aip-conformance`](https://github.com/opena2a-standards/aip-conformance) | AIP v1.0.0-draft identity protocol | §6.4 (VC `AgentTrustCredential`) covered by cross-linking this repo's fixtures; §5.1 challenge-response covered by 4 dedicated fixtures + Go/Python verifiers shipped at v0.2 (2026-05-28, Decision 3-C) |
 
