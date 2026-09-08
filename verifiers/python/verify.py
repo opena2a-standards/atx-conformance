@@ -258,15 +258,23 @@ def _controller_did(key_id: str) -> str:
     return key_id.split("#", 1)[0]
 
 
-def _authority_set_for(atx: dict[str, Any]) -> set[str]:
-    """DIDs whose keys may sign this credential: the issuer always, plus the
-    issuerChain authorities for v1.1 (where issuerChain is covered by the
-    signature). v1.0 issuerChain is unsigned and therefore forgeable, so it is
-    NOT trusted as a signer source — only the issuer is.
+def _authority_set_for(atx: dict[str, Any], trusted_issuers: list[str]) -> set[str]:
+    """DIDs whose keys may verify this credential's signatures: the issuer
+    always, plus, under v1.1 only, each issuerChain authority that is ALSO in
+    the verifier's trustedIssuers. The v1.1 issuerChain is covered by the
+    signature, but it is signed by the very key whose eligibility is in
+    question, so on its own it cannot vouch for that key: a chain DID the
+    verifier does not trust contributes no eligible key. Without the
+    intersection, a signer whose key is configured under a DID-URL keyId could
+    name its own DID in the chain and sign for a trusted issuer
+    (fixtures/v1_1-untrusted-chain-authority.json). The v1.0 issuerChain is
+    unsigned and therefore forgeable, so it contributes no eligible key at
+    all; only the issuer does.
     """
     authorities = {atx["issuerDid"]}
     if atx.get("atcVersion") == SUPPORTED_ATC_VERSION_V11:
-        authorities.update(atx.get("issuerChain") or [])
+        trusted = set(trusted_issuers)
+        authorities.update(did for did in (atx.get("issuerChain") or []) if did in trusted)
     return authorities
 
 
@@ -344,7 +352,9 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
 
     # Step 5: signature verification (Ed25519 fully, ML-DSA-65 marked skipped).
     payload = canonical_payload_v11(atx) if version == SUPPORTED_ATC_VERSION_V11 else canonical_payload(atx)
-    eds, mldsa_keys_present = index_public_keys(vs["publicKeys"], _authority_set_for(atx))
+    eds, mldsa_keys_present = index_public_keys(
+        vs["publicKeys"], _authority_set_for(atx, vs.get("trustedIssuers", []))
+    )
     result = VerifyResult(sigs_expected=len(atx.get("signatures", [])))
 
     for sig in atx.get("signatures", []):

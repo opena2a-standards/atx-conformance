@@ -506,7 +506,7 @@ func verify(f fixture) result {
 	// the credential's issuer (key↔issuer binding). A key whose keyId's controller
 	// DID is not in the authority set is not an eligible signer for this
 	// credential, so one trusted authority cannot impersonate another.
-	edKeys, pqKeys := indexPublicKeys(f.VerifierState.PublicKeys, authoritySetFor(&a))
+	edKeys, pqKeys := indexPublicKeys(f.VerifierState.PublicKeys, authoritySetFor(&a, f.VerifierState.TrustedIssuers))
 
 	for _, sig := range a.Signatures {
 		sigBytes, err := base64.StdEncoding.DecodeString(sig.Value)
@@ -607,14 +607,28 @@ func indexPublicKeys(refs []keypairRef, authoritySet map[string]bool) (eds []ed2
 	return
 }
 
-// authoritySetFor returns the DIDs whose keys may sign this credential: the
-// issuer always, plus the issuerChain authorities for v1.1 (where issuerChain is
-// covered by the signature). v1.0 issuerChain is unsigned and therefore forgeable,
-// so it is NOT trusted as a signer source — only the issuer is.
-func authoritySetFor(a *atx) map[string]bool {
+// authoritySetFor returns the DIDs whose keys may verify this credential's
+// signatures: the issuer always, plus, under v1.1 only, each issuerChain
+// authority that is ALSO in the verifier's trustedIssuers. The v1.1
+// issuerChain is covered by the signature, but it is signed by the very key
+// whose eligibility is in question, so on its own it cannot vouch for that
+// key: a chain DID the verifier does not trust contributes no eligible key.
+// Without the intersection, a signer whose key is configured under a DID-URL
+// keyId could name its own DID in the chain and sign for a trusted issuer
+// (fixtures/v1_1-untrusted-chain-authority.json). The v1.0 issuerChain is
+// unsigned and therefore forgeable, so it contributes no eligible key at all;
+// only the issuer does.
+func authoritySetFor(a *atx, trustedIssuers []string) map[string]bool {
 	set := map[string]bool{a.IssuerDID: true}
-	if a.ATCVersion == "1.1" {
-		for _, did := range a.IssuerChain {
+	if a.ATCVersion != "1.1" {
+		return set
+	}
+	trusted := make(map[string]bool, len(trustedIssuers))
+	for _, did := range trustedIssuers {
+		trusted[did] = true
+	}
+	for _, did := range a.IssuerChain {
+		if trusted[did] {
 			set[did] = true
 		}
 	}
