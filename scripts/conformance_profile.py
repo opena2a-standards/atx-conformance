@@ -40,7 +40,7 @@ SUITE = {
         {
             "language": "python",
             "path": "verifiers/python",
-            "coverage": "Ed25519 (v1.0 and v1.1 via vendored RFC 8785); ML-DSA-65 signatures recorded as present, verification delegated to the Go verifier",
+            "coverage": "full: Ed25519 and ML-DSA-65 (FIPS 204, via dilithium-py) hybrid signatures, v1.0 pipe canonical form and v1.1 JCS(TBS) via vendored RFC 8785",
         },
     ],
     "additionalGates": [

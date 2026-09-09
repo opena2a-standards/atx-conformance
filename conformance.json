@@ -17,7 +17,7 @@
     {
       "language": "python",
       "path": "verifiers/python",
-      "coverage": "Ed25519 (v1.0 and v1.1 via vendored RFC 8785); ML-DSA-65 signatures recorded as present, verification delegated to the Go verifier"
+      "coverage": "full: Ed25519 and ML-DSA-65 (FIPS 204, via dilithium-py) hybrid signatures, v1.0 pipe canonical form and v1.1 JCS(TBS) via vendored RFC 8785"
     }
   ],
   "additionalGates": [
@@ -555,6 +555,36 @@
       ],
       "expected": "REJECT[PARSE_ERROR]",
       "description": "An ATX v1.1 credential whose declaredPurpose bytes contain the category member twice: a decoy (customer-support) followed by the signed value (financial-operations). The Ed25519 signature is REAL and covers the last-wins interpretation, so a lenient last-wins parser sees a verifying credential while a first-wins parser sees different content — the classic RFC 8259 §4 duplicate-member smuggling split. Because the entire ATX credential feeds the signed canonical form (JCS(TBS), §1.3a.2), verifiers MUST strict-parse the credential object and REJECT duplicate members at any depth with PARSE_ERROR, before interpreting any field. A verifier that parses last-wins without a duplicate check wrongly ACCEPTs; a first-wins verifier rejects with the wrong category (SIGNATURE_INVALID)."
+    },
+    {
+      "fixture": "fixtures/v1_1-hybrid-mldsa-tampered.json",
+      "name": "atx-v1_1/hybrid-mldsa-tampered",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md",
+          "section": "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "An ATX v1.1 hybrid credential whose Ed25519 signature is intact and whose ML-DSA-65 signature has been flipped by one bit after signing. The spec mandates that every declared signature verifies, so the forged post-quantum entry MUST fail verification even though the classical entry is valid. Verifier MUST REJECT with a signature-validation reason. A verifier that records ML-DSA-65 signatures as present without verifying them wrongly ACCEPTs."
     },
     {
       "fixture": "fixtures/v1_1-tampered-capabilities.json",

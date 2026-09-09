@@ -2,7 +2,8 @@
 """Python reference verifier for the ATX v1.0 conformance fixture set.
 
 Depends only on the Python standard library plus the `cryptography` package
-(for Ed25519 verification). Does NOT import any opena2a-* SDK. The goal is to
+(for Ed25519 verification) and the `dilithium-py` package (for ML-DSA-65
+verification per FIPS 204). Does NOT import any opena2a-* SDK. The goal is to
 demonstrate that an independent verifier in a second language reaches the same
 ACCEPT / REJECT verdict as the Go reference verifier for every fixture.
 
@@ -10,8 +11,9 @@ Spec coverage:
   - ATX v1.0 schema (atcVersion="1.0")
   - Canonicalization: pipe-delimited 11-field string matching
     opena2a-registry/pkg/atcverify/verify.go canonicalPayload() VERBATIM
-  - Ed25519 verification, threshold (>=1 valid), trust level 3+ chain check,
-    expiry, revocation, issuer-trust.
+  - Ed25519 and ML-DSA-65 (FIPS 204) hybrid signature verification over the
+    same canonical payload, threshold (>=1 valid), trust level 3+ chain
+    check, expiry, revocation, issuer-trust.
 
 Parsing rule (strict parse, ported from the aap-conformance protected-header
 lesson and scoped to the whole body because ATX signs it all):
@@ -23,14 +25,6 @@ lesson and scoped to the whole body because ATX signs it all):
     first-wins/last-wins parser-divergence smuggling split.
   - the fixture wrapper (name/verifierState/expected) is harness metadata and
     parses leniently.
-
-Out of scope:
-  - ML-DSA-65 verification. The post-quantum library landscape in Python is
-    fragmented (no stdlib support, liboqs / dilithium-py require optional
-    native dependencies). On the hybrid fixtures the ML-DSA-65 signature is
-    recorded as present and not verified; the Ed25519 signature is the
-    acceptance gate. For spec-mandate full hybrid verification, run the Go
-    reference verifier in ../go.
 
 Usage:
     python verify.py ../../fixtures/baseline-valid.json
@@ -62,6 +56,17 @@ except ImportError:
         "missing dependency: cryptography. install with `pip install -r requirements.txt`\n"
     )
     sys.exit(2)
+
+try:
+    from dilithium_py.ml_dsa import ML_DSA_65
+except ImportError:
+    sys.stderr.write(
+        "missing dependency: dilithium-py. install with `pip install -r requirements.txt`\n"
+    )
+    sys.exit(2)
+
+# ML-DSA-65 public key size per FIPS 204 (32-byte rho + 6 x 320-byte t1).
+MLDSA65_PUBLIC_KEY_SIZE = 1952
 
 
 SUPPORTED_ATC_VERSION = "1.0"
@@ -139,8 +144,7 @@ class VerifyResult:
     reject_category: str = ""
     reason: str = ""
     ed25519_valid: bool = False
-    mldsa65_present: bool = False
-    mldsa65_skipped: bool = False
+    mldsa65_valid: bool = False
     sigs_expected: int = 0
     sigs_valid: int = 0
     # False: this verifier does not count distinct signer authorities
@@ -287,7 +291,7 @@ def index_public_keys(refs: list[dict[str, Any]], authority_set: set[str]):
     # credential only if its keyId's controller DID is in authority_set. A key
     # with no keyId is unbound (legacy single-issuer configs) and stays eligible.
     eds: list[Ed25519PublicKey] = []
-    mldsa_keys_present = False
+    pqs: list[bytes] = []
     for r in refs:
         key_id = r.get("keyId", "") or ""
         if key_id and _controller_did(key_id) not in authority_set:
@@ -298,8 +302,11 @@ def index_public_keys(refs: list[dict[str, Any]], authority_set: set[str]):
                 continue
             eds.append(Ed25519PublicKey.from_public_bytes(raw))
         elif r["algorithm"] == "ML-DSA-65":
-            mldsa_keys_present = True
-    return eds, mldsa_keys_present
+            raw = bytes.fromhex(r["publicKeyHex"])
+            if len(raw) != MLDSA65_PUBLIC_KEY_SIZE:
+                continue
+            pqs.append(raw)
+    return eds, pqs
 
 
 def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
@@ -354,9 +361,10 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
             reason=f"issuer DID {atx['issuerDid']} is not in the verifier's trusted set (untrusted issuer)",
         )
 
-    # Step 5: signature verification (Ed25519 fully, ML-DSA-65 marked skipped).
+    # Step 5: signature verification.
+    # Spec mandate: every declared signature MUST verify.
     payload = canonical_payload_v11(atx) if version == SUPPORTED_ATC_VERSION_V11 else canonical_payload(atx)
-    eds, mldsa_keys_present = index_public_keys(
+    eds, pqs = index_public_keys(
         vs["publicKeys"], _authority_set_for(atx, vs.get("trustedIssuers", []))
     )
     result = VerifyResult(sigs_expected=len(atx.get("signatures", [])))
@@ -387,21 +395,26 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
             result.ed25519_valid = True
             result.sigs_valid += 1
         elif sig["algorithm"] == "ML-DSA-65":
-            # Out of scope for this Python reference verifier. The presence
-            # of an ML-DSA-65 signature is recorded; verification itself is
-            # not attempted. See module docstring.
-            result.mldsa65_present = True
-            result.mldsa65_skipped = True
-            # Don't count as valid AND don't count as invalid; the fixture's
-            # Ed25519 signature is still the gate for acceptance here.
+            verified = False
+            for pk in pqs:
+                if ML_DSA_65.verify(pk, payload, sig_bytes):
+                    verified = True
+                    break
+            if not verified:
+                return VerifyResult(
+                    reject_category="SIGNATURE_INVALID",
+                    reason=f"ML-DSA-65 signature {sig.get('keyId')} did not verify against any configured public key",
+                )
+            result.mldsa65_valid = True
+            result.sigs_valid += 1
         else:
             return VerifyResult(
                 reject_category="SIGNATURE_INVALID",
                 reason=f"unsupported signature algorithm {sig['algorithm']}",
             )
 
-    if result.sigs_valid == 0 and not result.ed25519_valid:
-        return VerifyResult(reject_category="SIGNATURE_INVALID", reason="no valid Ed25519 signatures")
+    if result.sigs_valid == 0:
+        return VerifyResult(reject_category="SIGNATURE_INVALID", reason="no valid signatures")
 
     # Step 7 (distinct signer-authority count for trust level 3+) is NOT
     # performed by this verifier: no fixture carries verified signatures from
@@ -483,11 +496,8 @@ def main(argv: list[str]) -> int:
             print()
         print(f"       observed: {got}")
         if got.sigs_expected:
-            mldsa_note = ""
-            if got.mldsa65_present:
-                mldsa_note = " (ML-DSA-65 present, verification out of scope for this Python reference; use Go verifier for full hybrid)"
             print(
-                f"       signatures: {got.sigs_valid}/{got.sigs_expected} valid (ed25519={got.ed25519_valid}){mldsa_note}"
+                f"       signatures: {got.sigs_valid}/{got.sigs_expected} valid (ed25519={got.ed25519_valid} mldsa65={got.mldsa65_valid})"
             )
         if got.accepted and got.trust_level >= 3 and not got.step7_performed:
             print(

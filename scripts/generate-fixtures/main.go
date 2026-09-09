@@ -631,6 +631,33 @@ func main() {
 				ExpectedOutcome{VerifyResult: "ACCEPT"},
 				atx)
 		}},
+		{"fixtures/v1_1-hybrid-mldsa-tampered.json", func() Fixture {
+			// The forged-post-quantum control. The hybrid baseline with the
+			// Ed25519 signature entry left intact and one bit of the ML-DSA-65
+			// signature value flipped after signing (the tampered-signature.json
+			// recipe applied to the post-quantum entry). A verifier that
+			// verifies both declared suites MUST REJECT; a verifier that only
+			// records the ML-DSA-65 entry as present wrongly ACCEPTs on the
+			// strength of the intact Ed25519 signature.
+			atx := newBaselineV11ATX()
+			ed := signV11WithKey(primary, atx)
+			pq, _ := signMLDSA65(mldsa.SeedHex, canonicalPayloadV11(&atx))
+			pq.KeyID = mldsa.KeyID
+			tampered, err := base64.StdEncoding.DecodeString(pq.Value)
+			must(err)
+			tampered[0] ^= 0x01
+			pq.Value = base64.StdEncoding.EncodeToString(tampered)
+			atx.Signatures = []ATCSignature{ed, pq}
+			return wrap("atx-v1_1/hybrid-mldsa-tampered",
+				"An ATX v1.1 hybrid credential whose Ed25519 signature is intact and whose ML-DSA-65 signature has been flipped by one bit after signing. The spec mandates that every declared signature verifies, so the forged post-quantum entry MUST fail verification even though the classical entry is valid. Verifier MUST REJECT with a signature-validation reason. A verifier that records ML-DSA-65 signatures as present without verifying them wrongly ACCEPTs.",
+				[]KeypairRef{
+					keypairRefFor(primary, "vectors/issuer-primary.json"),
+					{Role: mldsa.Role, Path: "vectors/mldsa65-seed.json", Algorithm: mldsa.Algorithm, PublicKeyHex: mldsa.PublicKeyHex, KeyID: mldsa.KeyID},
+				},
+				hybridVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
 		{"fixtures/v1_1-tampered-capabilities.json", func() Fixture {
 			// The v1.1 win, made concrete. Sign the TBS with the honest
 			// capabilities, then escalate capabilities AFTER signing. Under
