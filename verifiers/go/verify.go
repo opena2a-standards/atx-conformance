@@ -286,6 +286,11 @@ func projectBehavioralProfileV11(raw json.RawMessage) json.RawMessage {
 // ---------------------------------------------------------------------------
 
 type result struct {
+	// Step7Performed is false: this verifier does not count distinct signer
+	// authorities (core.md section 1.3 step 7); see conformance.json notCovered.
+	Step7Performed bool
+	// TrustLevel is the credential's asserted level, carried for the report line.
+	TrustLevel     int
 	Accepted       bool
 	RejectCategory string
 	Reason         string
@@ -563,13 +568,13 @@ func verify(f fixture) result {
 
 	// Step 6: content hash. Content not supplied to this verifier; skipped.
 
-	// Step 7: issuer chain depth for trust level 3+.
-	if a.TrustLevel >= 3 && len(a.IssuerChain) < 2 {
-		return result{
-			RejectCategory: "CHAIN_TOO_SHORT",
-			Reason:         fmt.Sprintf("trust level %d requires 2+ authorities in issuer chain (got %d)", a.TrustLevel, len(a.IssuerChain)),
-		}
-	}
+	// Step 7 (distinct signer-authority count for trust level 3+) is NOT
+	// performed by this verifier: no fixture carries verified signatures from
+	// more than one authority, and core.md section 1.3 step 7 forbids counting
+	// the length of issuerChain, which the signer writes. Recorded on the
+	// result so an ACCEPT never reads as a step-7 verdict.
+	res.Step7Performed = false
+	res.TrustLevel = a.TrustLevel
 
 	// Step 8: all checks passed.
 	res.Accepted = true
@@ -716,6 +721,9 @@ func main() {
 		if got.SigsExpected > 0 {
 			fmt.Printf("       signatures: %d/%d valid (ed25519=%t mldsa65=%t)\n",
 				got.SigsValid, got.SigsExpected, got.Ed25519Valid, got.MLDSA65Valid)
+		}
+		if got.Accepted && got.TrustLevel >= 3 && !got.Step7Performed {
+			fmt.Printf("       trustLevel %d asserted; distinct-authority count (step 7) not performed by this verifier\n", got.TrustLevel)
 		}
 	}
 

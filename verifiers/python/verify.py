@@ -143,6 +143,10 @@ class VerifyResult:
     mldsa65_skipped: bool = False
     sigs_expected: int = 0
     sigs_valid: int = 0
+    # False: this verifier does not count distinct signer authorities
+    # (core.md section 1.3 step 7); see conformance.json notCovered.
+    step7_performed: bool = False
+    trust_level: int = 0
 
     def __str__(self) -> str:
         if self.accepted:
@@ -399,14 +403,13 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
     if result.sigs_valid == 0 and not result.ed25519_valid:
         return VerifyResult(reject_category="SIGNATURE_INVALID", reason="no valid Ed25519 signatures")
 
-    # Step 7: issuer chain depth for trust level 3+.
-    trust_level = int(atx.get("trustLevel", 0))
-    issuer_chain = atx.get("issuerChain", [])
-    if trust_level >= 3 and len(issuer_chain) < 2:
-        return VerifyResult(
-            reject_category="CHAIN_TOO_SHORT",
-            reason=f"trust level {trust_level} requires 2+ authorities in issuer chain (got {len(issuer_chain)})",
-        )
+    # Step 7 (distinct signer-authority count for trust level 3+) is NOT
+    # performed by this verifier: no fixture carries verified signatures from
+    # more than one authority, and core.md section 1.3 step 7 forbids counting
+    # the length of issuerChain, which the signer writes. Recorded on the
+    # result so an ACCEPT never reads as a step-7 verdict.
+    result.step7_performed = False
+    result.trust_level = int(atx.get("trustLevel", 0))
 
     result.accepted = True
     return result
@@ -485,6 +488,10 @@ def main(argv: list[str]) -> int:
                 mldsa_note = " (ML-DSA-65 present, verification out of scope for this Python reference; use Go verifier for full hybrid)"
             print(
                 f"       signatures: {got.sigs_valid}/{got.sigs_expected} valid (ed25519={got.ed25519_valid}){mldsa_note}"
+            )
+        if got.accepted and got.trust_level >= 3 and not got.step7_performed:
+            print(
+                f"       trustLevel {got.trust_level} asserted; distinct-authority count (step 7) not performed by this verifier"
             )
 
     print()

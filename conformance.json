@@ -29,22 +29,6 @@
   ],
   "notCovered": [
     {
-      "item": "Content hash matching the agent binary",
-      "reason": "contentHash is pinned for byte-stability but no agent binary ships; verifiers stop at the signature step"
-    },
-    {
-      "item": "Transparency log inclusion proofs",
-      "reason": "transparencyLogIndex is populated for byte-stability; the conformance verifiers do not consult a log"
-    },
-    {
-      "item": "Build attestation predicate verification",
-      "reason": "buildAttestation is a string field in ATX v1.0, not an inline structured SLSA v1 predicate; verifiers do not parse it"
-    },
-    {
-      "item": "Behavioral profile validation",
-      "reason": "field omitted from these fixtures"
-    },
-    {
       "item": "Distinct signer-authority count (ATX core.md section 1.3 step 7)",
       "reason": "no fixture carries verified signatures from more than one distinct authority, and the fixture format has no field for the required trust level that step 7's condition reads, so a verifier that omits step 7 entirely passes the suite; a length-of-issuerChain test is not step 7 (the spec says the chain length MUST NOT be counted) and implementations MUST self-attest this requirement until a fixture exists for it"
     },
