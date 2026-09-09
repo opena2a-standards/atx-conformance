@@ -95,7 +95,7 @@ type ATX struct {
 	Version              string                `json:"version"`
 	ContentHash          string                `json:"contentHash"`
 	BuildAttestation     string                `json:"buildAttestation,omitempty"`
-	TransparencyLogIndex int64                 `json:"transparencyLogIndex"`
+	TransparencyLogIndex *int64                `json:"transparencyLogIndex,omitempty"`
 	Capabilities         []string              `json:"capabilities"`
 	DeclaredPurpose      json.RawMessage       `json:"declaredPurpose,omitempty"`
 	BehavioralProfile    *ATCBehavioralProfile `json:"behavioralProfile,omitempty"`
@@ -615,6 +615,23 @@ func main() {
 				ExpectedOutcome{VerifyResult: "ACCEPT"},
 				atx)
 		}},
+		{"fixtures/v1_1-no-transparency-log-index.json", func() Fixture {
+			// The optionality control. atx-spec §1.1 makes transparencyLogIndex
+			// optional: it is the log-assigned index of the issuance entry, set
+			// after signing and outside both signing forms, and a verifier MUST
+			// NOT read it as evidence of log inclusion. Every other fixture
+			// carries it, so without this one a verifier that still REQUIRES the
+			// field passes the whole suite unchanged.
+			atx := newBaselineV11ATX()
+			atx.TransparencyLogIndex = nil
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/no-transparency-log-index",
+				"An ATX v1.1 credential that omits the optional transparencyLogIndex. The field is assigned by the log after signing and is outside JCS(TBS), so its absence changes no canonical bytes and no signature; this credential's JCS(TBS) is byte-identical to the v1.1 baseline's. Verifier MUST ACCEPT. A verifier that requires the field, or that reads its presence as evidence of transparency-log inclusion, wrongly REJECTs.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "ACCEPT"},
+				atx)
+		}},
 		{"fixtures/v1_1-baseline-valid-hybrid.json", func() Fixture {
 			atx := newBaselineV11ATX()
 			ed := signV11WithKey(primary, atx)
@@ -938,6 +955,12 @@ func main() {
 	fmt.Printf("wrote MANIFEST.sha256 (%d fixtures)\n", len(manifest))
 }
 
+// logIndex returns a pointer to the log-assigned issuance index, so a fixture
+// can omit transparencyLogIndex entirely by leaving the field nil. The field is
+// optional in atx-spec §1.1 and sits outside both signing forms, so its absence
+// changes no canonical bytes and no signature.
+func logIndex(n int64) *int64 { return &n }
+
 // newBaselineATX returns the credential template all fixtures derive from.
 // Adjustments are made per-fixture in the builder closures above.
 func newBaselineATX() ATX {
@@ -951,7 +974,7 @@ func newBaselineATX() ATX {
 		Version:              testVersion,
 		ContentHash:          testContentSha,
 		BuildAttestation:     testBuildAtt,
-		TransparencyLogIndex: 42,
+		TransparencyLogIndex: logIndex(42),
 		Capabilities:         []string{"db:read", "db:write"},
 		ScanSummary: &ATCScanSummary{
 			HMA: "passed", CriticalFindings: 0, HighFindings: 0,
