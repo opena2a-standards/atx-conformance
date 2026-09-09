@@ -66,7 +66,7 @@ counts, the verifier results, the fixture bytes and the claims this
 README makes about them -- not every sentence below:
 
 1. Both reference verifiers run against `fixtures/` and must report
-   `22 pass, 0 fail`.
+   `23 pass, 0 fail`.
 2. The fixture generator re-runs and the committed fixture bytes plus
    `MANIFEST.sha256` must reproduce exactly (byte-pin).
 3. The JCS byte-agreement gate
@@ -199,6 +199,7 @@ All fixtures use:
 | `fixtures/tampered-signature.json` | REJECT (SIGNATURE_INVALID) | One bit of the signature value flipped after signing. All other fields unchanged. |
 | `fixtures/malformed-schema.json` | REJECT (UNSUPPORTED_VERSION) | `atcVersion: "2.0"`. Verifier rejects at step 1 before any signature check. |
 | `fixtures/v1_1-baseline-valid.json` | ACCEPT | ATX v1.1. Single Ed25519 signature over `JCS(TBS)` (atx-spec §1.3a.2). Canonical bytes equal the `jcs-vectors` baseline. |
+| `fixtures/v1_1-no-transparency-log-index.json` | ACCEPT | ATX v1.1 omitting the optional `transparencyLogIndex`. The log assigns it after signing and it is outside `JCS(TBS)`, so this credential's canonical bytes and signature are identical to the v1.1 baseline's. A verifier that requires the field, or reads its presence as evidence of log inclusion, wrongly rejects. |
 | `fixtures/v1_1-baseline-valid-hybrid.json` | ACCEPT | ATX v1.1 with Ed25519 plus ML-DSA-65 over the same `JCS(TBS)` bytes. Both verifiers validate both signatures. |
 | `fixtures/v1_1-hybrid-mldsa-tampered.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 hybrid with the Ed25519 signature intact and one bit of the ML-DSA-65 signature flipped after signing. Every declared signature must verify, so a forged post-quantum signature cannot ride an intact classical one. A verifier that records ML-DSA-65 as present without verifying it wrongly accepts. |
 | `fixtures/v1_1-tampered-capabilities.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 whose `capabilities` were escalated to `system:exec` after signing. Rejected because v1.1 signs capabilities; the v1.0 form would have accepted it. |
@@ -247,7 +248,7 @@ Depends on:
 
 ### Expected output
 
-Both verifiers report `summary: 22 pass, 0 fail (22 fixtures)` against the
+Both verifiers report `summary: 23 pass, 0 fail (23 fixtures)` against the
 shipped fixture set. Any divergence on bytes (the fixture file was modified)
 or on verifier semantics (the verifier has drifted from the spec) shows up
 as one or more FAIL lines.
@@ -307,8 +308,8 @@ breaking change for downstream verifiers.
 
 | Implementation | Verifier | Status |
 |---|---|---|
-| `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 22 / 22 PASS |
-| `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 22 / 22 PASS |
+| `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 23 / 23 PASS |
+| `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 23 / 23 PASS |
 
 Independent second-party implementations are tracked on the sibling issue
 [a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876).
@@ -321,7 +322,7 @@ A2A coordination map's criterion (c) thread
 
 | Repo | Spec | Status |
 |---|---|---|
-| `atx-conformance` (this repo) | ATX v1.0 + v1.1 credential schema | 22 fixtures (9 v1.0, 13 v1.1 JCS incl. 6 declaredPurpose), 2 verifiers (Go and Python, both full hybrid), `jcs-vectors/` byte-agreement gate (8 vectors, Go/Python/TS), `MANIFEST.sha256` pinned |
+| `atx-conformance` (this repo) | ATX v1.0 + v1.1 credential schema | 23 fixtures (9 v1.0, 14 v1.1 JCS incl. 6 declaredPurpose), 2 verifiers (Go and Python, both full hybrid), `jcs-vectors/` byte-agreement gate (8 vectors, Go/Python/TS), `MANIFEST.sha256` pinned |
 | [`atp-conformance`](https://github.com/opena2a-standards/atp-conformance) | ATP v1.0.0-rc1 protocol | 4 fixtures (discovery, trust-proof baseline, trust-proof hybrid, Signed Tree Head), same 2-verifier pair, `MANIFEST.sha256` pinned |
 | [`aip-conformance`](https://github.com/opena2a-standards/aip-conformance) | AIP v1.0.0-draft identity protocol | §6.4 (VC `AgentTrustCredential`) covered by cross-linking this repo's fixtures; §5.1 challenge-response covered by 4 dedicated fixtures + Go/Python verifiers shipped at v0.2 (2026-05-28, Decision 3-C) |
 

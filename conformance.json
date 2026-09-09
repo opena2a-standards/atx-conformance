@@ -587,6 +587,36 @@
       "description": "An ATX v1.1 hybrid credential whose Ed25519 signature is intact and whose ML-DSA-65 signature has been flipped by one bit after signing. The spec mandates that every declared signature verifies, so the forged post-quantum entry MUST fail verification even though the classical entry is valid. Verifier MUST REJECT with a signature-validation reason. A verifier that records ML-DSA-65 signatures as present without verifying them wrongly ACCEPTs."
     },
     {
+      "fixture": "fixtures/v1_1-no-transparency-log-index.json",
+      "name": "atx-v1_1/no-transparency-log-index",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md",
+          "section": "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "ACCEPT",
+      "description": "An ATX v1.1 credential that omits the optional transparencyLogIndex. The field is assigned by the log after signing and is outside JCS(TBS), so its absence changes no canonical bytes and no signature; this credential's JCS(TBS) is byte-identical to the v1.1 baseline's. Verifier MUST ACCEPT. A verifier that requires the field, or that reads its presence as evidence of transparency-log inclusion, wrongly REJECTs."
+    },
+    {
       "fixture": "fixtures/v1_1-tampered-capabilities.json",
       "name": "atx-v1_1/tampered-capabilities",
       "fixtureType": "atx-credential",
