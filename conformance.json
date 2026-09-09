@@ -614,7 +614,7 @@
         }
       ],
       "expected": "REJECT[SIGNATURE_INVALID]",
-      "description": "An ATX v1.1 credential whose capabilities were escalated to include admin:all AFTER signing. Because v1.1 signs JCS(TBS), capabilities are covered by the signature; the verifier recomputes the canonical bytes, finds they no longer match, and MUST REJECT with a signature-validation reason. This is the integrity property v1.0 lacked."
+      "description": "An ATX v1.1 credential whose capabilities were escalated to include system:exec AFTER signing. Because v1.1 signs JCS(TBS), capabilities are covered by the signature; the verifier recomputes the canonical bytes, finds they no longer match, and MUST REJECT with a signature-validation reason. This is the integrity property v1.0 lacked."
     },
     {
       "fixture": "fixtures/v1_1-tampered-declared-purpose.json",

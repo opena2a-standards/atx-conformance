@@ -43,7 +43,7 @@ type vector struct {
 	tbs  string
 }
 
-// The seven vectors. Authored TBS objects use deliberately unsorted keys; JCS
+// The eight vectors. Authored TBS objects use deliberately unsorted keys; JCS
 // sorts them. trustScore is a STRING in every TBS (the %.6f projection rule, so
 // the float -> JCS-number cross-language hazard never arises). trustLevel is the
 // only JSON number in the TBS and is always an integer.
@@ -61,7 +61,7 @@ var vectors = []vector{
   "version": "1.0.0",
   "contentHash": "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff",
   "buildAttestation": "https://slsa.dev/provenance/v1#opena2a-conformance",
-  "capabilities": ["read:public", "write:owned"],
+  "capabilities": ["db:read", "db:write"],
   "behavioralProfile": {
     "checksum": "sha256:ghi789",
     "generatedAt": "2026-05-19T00:00:00Z",
@@ -169,7 +169,7 @@ var vectors = []vector{
     "generatedAt": "2026-05-19T00:00:00Z",
     "checksum": "sha256:ghi789"
   },
-  "capabilities": ["read:public", "write:owned"],
+  "capabilities": ["db:read", "db:write"],
   "buildAttestation": "https://slsa.dev/provenance/v1#opena2a-conformance",
   "contentHash": "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff",
   "version": "1.0.0",
@@ -193,7 +193,7 @@ var vectors = []vector{
   "version": "1.0.0",
   "contentHash": "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff",
   "buildAttestation": "https://slsa.dev/provenance/v1#opena2a-conformance",
-  "capabilities": ["read:public"],
+  "capabilities": ["db:read"],
   "behavioralProfile": null,
   "scanSummary": {
     "hma": "passed",
@@ -224,7 +224,7 @@ var vectors = []vector{
   "version": "1.0.0",
   "contentHash": "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff",
   "buildAttestation": "https://slsa.dev/provenance/v1#opena2a-conformance",
-  "capabilities": ["read:public", "write:owned"],
+  "capabilities": ["db:read", "db:write"],
   "behavioralProfile": null,
   "scanSummary": {
     "hma": "warnings",
@@ -290,7 +290,7 @@ var vectors = []vector{
   "version": "1.0.0",
   "contentHash": "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff",
   "buildAttestation": "https://slsa.dev/provenance/v1#opena2a-conformance",
-  "capabilities": ["read:public", "write:owned"],
+  "capabilities": ["db:read", "db:write"],
   "behavioralProfile": {
     "checksum": "sha256:ghi789",
     "generatedAt": "2026-05-19T00:00:00Z",
@@ -316,8 +316,8 @@ var vectors = []vector{
     "taskScopes": ["billing:inquiry", "billing:refund"],
     "category": "financial-operations",
     "capabilityJustification": {
-      "write:owned": ["billing:refund"],
-      "read:public": ["billing:inquiry"]
+      "db:write": ["billing:refund"],
+      "db:read": ["billing:inquiry"]
     },
     "egressScopes": ["api.stripe.com", "hooks.internal.acme.com"],
     "autonomy": "supervised",
