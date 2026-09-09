@@ -14,10 +14,11 @@ script makes the cross-implementation agreement explicit and machine-readable:
 it fails if any verifier skips a fixture the other saw, disagrees on verdict
 or category, or exits non-zero.
 
-Known, documented asymmetry: the Go verifier validates ML-DSA-65 signatures;
-the Python verifier records them as present and validates Ed25519 only. That
-asymmetry lives below the verdict level, so it does not (and must not) show
-up as a verdict or category divergence here.
+Both verifiers verify both declared signature suites: Ed25519 and ML-DSA-65
+(FIPS 204), each over the same canonical payload (v1.1 JCS(TBS), v1.0 pipe
+form). Per-fixture agreement on verdict and category is therefore fully
+cryptographic on the hybrid fixtures, including the forged-post-quantum
+control fixtures/v1_1-hybrid-mldsa-tampered.json.
 
 Usage:
     python3 scripts/parity/parity.py [--json parity-report.json]

@@ -66,7 +66,7 @@ counts, the verifier results, the fixture bytes and the claims this
 README makes about them -- not every sentence below:
 
 1. Both reference verifiers run against `fixtures/` and must report
-   `21 pass, 0 fail`.
+   `22 pass, 0 fail`.
 2. The fixture generator re-runs and the committed fixture bytes plus
    `MANIFEST.sha256` must reproduce exactly (byte-pin).
 3. The JCS byte-agreement gate
@@ -131,14 +131,15 @@ payload. In both, the ML-DSA-65 `value` is the base64 of a raw FIPS 204
 ML-DSA-65 signature (3309 bytes decoded); no container or combined-blob
 framing is used.
 
-The Go reference verifier in this repository ([`verifiers/go`](./verifiers/go))
-DOES verify ML-DSA-65 signatures per the spec mandate. The Python reference
-verifier ([`verifiers/python`](./verifiers/python)) treats ML-DSA-65 as
-present but out-of-scope (the post-quantum Python library landscape is
-fragmented; no stdlib support). On both hybrid fixtures it records the
-ML-DSA-65 signature as present, verifies the Ed25519 signature, and ACCEPTs,
-appending a note to that fixture's `signatures:` output line. For full
-hybrid verification end to end, run the Go verifier.
+Both reference verifiers verify both declared signature suites per the spec
+mandate: the Go verifier ([`verifiers/go`](./verifiers/go)) via
+`cloudflare/circl`, and the Python verifier
+([`verifiers/python`](./verifiers/python)) via `dilithium-py` (FIPS 204).
+Each verifies the ML-DSA-65 signature cryptographically over the same
+canonical payload the Ed25519 signature signs. The MUST-REJECT control
+`fixtures/v1_1-hybrid-mldsa-tampered.json` — the hybrid baseline with the
+Ed25519 entry intact and the ML-DSA-65 value flipped by one bit — pins that
+a forged post-quantum signature cannot ride an intact classical one.
 
 ### Trusted-issuer DID method used by this suite
 
@@ -190,7 +191,7 @@ All fixtures use:
 | Fixture | Expected | Exercises |
 |---|---|---|
 | `fixtures/baseline-valid.json` | ACCEPT | Single Ed25519 signature from primary issuer, trust level 4 with 2-link chain. The minimum viable accepted credential. |
-| `fixtures/baseline-valid-hybrid.json` | ACCEPT | Ed25519 plus ML-DSA-65 signatures from the same primary issuer over the same canonical payload. Go verifier validates both; Python validates Ed25519 only and reports ML-DSA-65 as out of scope. |
+| `fixtures/baseline-valid-hybrid.json` | ACCEPT | Ed25519 plus ML-DSA-65 signatures from the same primary issuer over the same canonical payload. Both verifiers validate both signatures. |
 | `fixtures/revoked.json` | REJECT (REVOKED) | Credential `revoked: true` AND CRL entry for the agent. Both rejection paths exercised. |
 | `fixtures/threshold-2of3-cosignature.json` | ACCEPT | Three Ed25519 signatures from three distinct keys (primary plus two cosigners). All three verify. |
 | `fixtures/expired.json` | REJECT (EXPIRED) | `expiresAt: 2025-01-01T00:00:00Z`, earlier than the pinned clock. Otherwise valid. |
@@ -198,7 +199,8 @@ All fixtures use:
 | `fixtures/tampered-signature.json` | REJECT (SIGNATURE_INVALID) | One bit of the signature value flipped after signing. All other fields unchanged. |
 | `fixtures/malformed-schema.json` | REJECT (UNSUPPORTED_VERSION) | `atcVersion: "2.0"`. Verifier rejects at step 1 before any signature check. |
 | `fixtures/v1_1-baseline-valid.json` | ACCEPT | ATX v1.1. Single Ed25519 signature over `JCS(TBS)` (atx-spec §1.3a.2). Canonical bytes equal the `jcs-vectors` baseline. |
-| `fixtures/v1_1-baseline-valid-hybrid.json` | ACCEPT | ATX v1.1 with Ed25519 plus ML-DSA-65 over the same `JCS(TBS)` bytes. Go validates both; Python validates Ed25519 only. |
+| `fixtures/v1_1-baseline-valid-hybrid.json` | ACCEPT | ATX v1.1 with Ed25519 plus ML-DSA-65 over the same `JCS(TBS)` bytes. Both verifiers validate both signatures. |
+| `fixtures/v1_1-hybrid-mldsa-tampered.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 hybrid with the Ed25519 signature intact and one bit of the ML-DSA-65 signature flipped after signing. Every declared signature must verify, so a forged post-quantum signature cannot ride an intact classical one. A verifier that records ML-DSA-65 as present without verifying it wrongly accepts. |
 | `fixtures/v1_1-tampered-capabilities.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 whose `capabilities` were escalated to `admin:all` after signing. Rejected because v1.1 signs capabilities; the v1.0 form would have accepted it. |
 | `fixtures/v1_1-declared-purpose-valid.json` | ACCEPT | ATX v1.1 carrying a populated `declaredPurpose` (§1.5: vocabVersion, statement, category, taskScopes, capabilityJustification, autonomy, dataScopes, egressScopes). The presence-based member is signed as part of `JCS(TBS)`; canonical bytes equal the `jcs-vectors` `08-declared-purpose` vector. |
 | `fixtures/v1_1-tampered-declared-purpose.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 whose `declaredPurpose.category` was rewritten from `financial-operations` to `agent-orchestration` after signing. Rejected because v1.1 signs declaredPurpose; this is the integrity that makes a declared purpose binding and non-repudiable (no post-issuance purpose-laundering). |
@@ -229,7 +231,7 @@ Depends on:
 - Go 1.22 or later
 - `github.com/cloudflare/circl v1.6.2` (resolved by `go mod tidy`)
 
-### Python (Ed25519, ML-DSA-65 out of scope)
+### Python (full hybrid Ed25519 plus ML-DSA-65)
 
 ```bash
 cd verifiers/python
@@ -241,12 +243,11 @@ Depends on:
 
 - Python 3.11 or later
 - `cryptography >= 42.0.0`
-
-For full hybrid verification end to end, use the Go verifier.
+- `dilithium-py >= 1.1.0` (ML-DSA-65 per FIPS 204)
 
 ### Expected output
 
-Both verifiers report `summary: 21 pass, 0 fail (21 fixtures)` against the
+Both verifiers report `summary: 22 pass, 0 fail (22 fixtures)` against the
 shipped fixture set. Any divergence on bytes (the fixture file was modified)
 or on verifier semantics (the verifier has drifted from the spec) shows up
 as one or more FAIL lines.
@@ -299,14 +300,15 @@ breaking change for downstream verifiers.
 | ML-DSA-65 | FIPS 204 final | [csrc.nist.gov/pubs/fips/204/final](https://csrc.nist.gov/pubs/fips/204/final) |
 | CIRCL (ML-DSA-65 implementation) | v1.6.2 | [github.com/cloudflare/circl](https://github.com/cloudflare/circl) |
 | cryptography (Python Ed25519) | >= 42.0.0 | [pyca/cryptography](https://github.com/pyca/cryptography) |
+| dilithium-py (Python ML-DSA-65) | >= 1.1.0 | [GiacomoPope/dilithium-py](https://github.com/GiacomoPope/dilithium-py) |
 | Conformance fixture format | v1 (this repo) | [`fixtures/baseline-valid.json#$schema`](./fixtures/baseline-valid.json) |
 
 ## Implementations that validate against this suite
 
 | Implementation | Verifier | Status |
 |---|---|---|
-| `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 21 / 21 PASS |
-| `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, Ed25519, ML-DSA-65 out of scope, v1.0 + v1.1 | 21 / 21 PASS |
+| `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 22 / 22 PASS |
+| `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 22 / 22 PASS |
 
 Independent second-party implementations are tracked on the sibling issue
 [a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876).
@@ -319,7 +321,7 @@ A2A coordination map's criterion (c) thread
 
 | Repo | Spec | Status |
 |---|---|---|
-| `atx-conformance` (this repo) | ATX v1.0 + v1.1 credential schema | 21 fixtures (9 v1.0, 12 v1.1 JCS incl. 6 declaredPurpose), 2 verifiers (Go full hybrid, Python Ed25519), `jcs-vectors/` byte-agreement gate (8 vectors, Go/Python/TS), `MANIFEST.sha256` pinned |
+| `atx-conformance` (this repo) | ATX v1.0 + v1.1 credential schema | 22 fixtures (9 v1.0, 13 v1.1 JCS incl. 6 declaredPurpose), 2 verifiers (Go and Python, both full hybrid), `jcs-vectors/` byte-agreement gate (8 vectors, Go/Python/TS), `MANIFEST.sha256` pinned |
 | [`atp-conformance`](https://github.com/opena2a-standards/atp-conformance) | ATP v1.0.0-rc1 protocol | 4 fixtures (discovery, trust-proof baseline, trust-proof hybrid, Signed Tree Head), same 2-verifier pair, `MANIFEST.sha256` pinned |
 | [`aip-conformance`](https://github.com/opena2a-standards/aip-conformance) | AIP v1.0.0-draft identity protocol | §6.4 (VC `AgentTrustCredential`) covered by cross-linking this repo's fixtures; §5.1 challenge-response covered by 4 dedicated fixtures + Go/Python verifiers shipped at v0.2 (2026-05-28, Decision 3-C) |
 
@@ -337,7 +339,7 @@ MANIFEST.sha256                  per-fixture SHA-256 (path-sorted)
 fixtures/                        the 8 conformance fixtures (byte-stable JSON)
 vectors/                         test keypair vectors (TEST-ONLY)
 verifiers/go/                    Go reference verifier (full hybrid)
-verifiers/python/                Python reference verifier (Ed25519)
+verifiers/python/                Python reference verifier (full hybrid)
 scripts/generate-fixtures/       deterministic fixture generator (Go)
 ```
 
