@@ -101,6 +101,9 @@ jobs:
           done < MANIFEST.sha256
           exit $rc
 
+      - name: One cloudflare/circl version across every Go module
+        run: bash scripts/check_circl_pin.sh
+
       - name: JCS byte-agreement gate (Go / Python / TypeScript)
         run: ./jcs-vectors/run-agreement.sh
 

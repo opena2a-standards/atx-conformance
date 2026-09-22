@@ -71,7 +71,10 @@ README makes about them -- not every sentence below:
    `MANIFEST.sha256` must reproduce exactly (byte-pin).
 3. The JCS byte-agreement gate
    ([`jcs-vectors/run-agreement.sh`](./jcs-vectors/run-agreement.sh)) must
-   pass across the independent Go, Python, and TypeScript canonicalizers.
+   pass across the independent Go, Python, and TypeScript canonicalizers,
+   and every Go module in the repository must pin one `cloudflare/circl`
+   version ([`scripts/check_circl_pin.sh`](./scripts/check_circl_pin.sh)),
+   so the vectors and the verifier share one crypto tree.
 4. The cross-implementation parity gate
    ([`scripts/parity/parity.py`](./scripts/parity/parity.py)) asserts the Go
    and Python verifiers agree per fixture on gate status, verdict, and
