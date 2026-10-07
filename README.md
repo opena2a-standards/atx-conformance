@@ -80,14 +80,17 @@ README makes about them -- not every sentence below:
    and Python verifiers agree per fixture on gate status, verdict, and
    reject category, and publishes `parity-report.json` as a CI artifact.
 5. `conformance.json` must match the fixture set, and every ATX citation in
-   the fixtures, the JCS vectors and `conformance.json` must name a heading
-   of atx-spec `core.md` exactly
-   ([`scripts/check_spec_refs.py`](./scripts/check_spec_refs.py)), read from
-   the copy vendored at `schemas/vendor/atx-spec/core.md` from the same
-   pinned atx-spec ref as the schema. That copy must carry the SHA-256 of
-   `core.md` at that ref, and the ref recorded with it must be the one the
-   schema drift gate checks out, so the copy cannot gain a heading by being
-   edited or fall behind a moved pin.
+   each fixture's `spec` list, each JCS vector's `spec` member and the
+   `requirements[].specRefs` of `conformance.json` must link to atx-spec
+   `core.md` at the pinned atx-spec commit and name one of its headings
+   exactly ([`scripts/check_spec_refs.py`](./scripts/check_spec_refs.py)).
+   The prose of `notCovered[].item` and the top-level `spec` member of
+   `conformance.json` are not checked. Headings are read from the copy
+   vendored at `schemas/vendor/atx-spec/core.md` from the same pinned
+   atx-spec ref as the schema. That copy must carry the SHA-256 of `core.md`
+   at that ref, and the ref recorded with it must be the one the schema
+   drift gate checks out, so the copy cannot gain a heading by being edited
+   or fall behind a moved pin.
 6. Schema validation
    ([`scripts/schema_validation.py`](./scripts/schema_validation.py)): every
    fixture's `atx` member must validate against the atx-spec machine-readable

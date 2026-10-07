@@ -4,7 +4,7 @@
   "description": "Minimal credential exercising the canonical-empty projection rules: optional strings -\u003e \"\", behavioralProfile absent -\u003e null, capabilities/issuerChain absent -\u003e [], scanSummary always a full zero-valued object. trustScore 0.000000, trustLevel 0.",
   "spec": {
     "id": "ATX",
-    "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+    "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
     "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
   },
   "tbs": {

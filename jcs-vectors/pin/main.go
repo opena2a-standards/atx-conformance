@@ -43,6 +43,11 @@ type vector struct {
 	tbs  string
 }
 
+// atxCoreRef is atx-spec core.md at the commit its headings are checked
+// against (CORE_REF in scripts/check_spec_refs.py), so a published citation
+// opens the text it was checked against after core.md changes on main.
+const atxCoreRef = "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md"
+
 // The eight vectors. Authored TBS objects use deliberately unsorted keys; JCS
 // sorts them. trustScore is a STRING in every TBS (the %.6f projection rule, so
 // the float -> JCS-number cross-language hazard never arises). trustLevel is the
@@ -421,7 +426,7 @@ func buildVectorFile(v vector, canonical []byte, canonicalHex, canonicalSha stri
 	w("  \"description\": %s,\n", jsonStr(v.desc))
 	w("  \"spec\": {\n")
 	w("    \"id\": \"ATX\",\n")
-	w("    \"ref\": \"https://github.com/opena2a-org/atx-spec/blob/main/core.md\",\n")
+	w("    \"ref\": %s,\n", jsonStr(atxCoreRef))
 	// core.md heading text, verbatim (scripts/check_spec_refs.py).
 	w("    \"section\": %s\n", jsonStr("1.3a.2 JCS form (`atcVersion` = \"1.1\")"))
 	w("  },\n")

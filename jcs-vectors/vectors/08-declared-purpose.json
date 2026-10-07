@@ -4,7 +4,7 @@
   "description": "PRESENT-CASE declaredPurpose (atx-spec §1.5), the one presence-based v1.1 TBS member. The fully-populated purpose object (vocabVersion, statement, category, taskScopes, nested capabilityJustification map, autonomy, dataScopes, egressScopes) is authored AFTER issuerChain and with its own members + the nested capabilityJustification keys in scrambled order, and the statement carries multi-byte UTF-8. JCS must move declaredPurpose between contentHash and expiresAt and recursively sort its nested members, identically across Go, Python, and TS. The absent case is covered by every other vector (no declaredPurpose key); the presence-based omission rule itself lives in the verifier projection, not here.",
   "spec": {
     "id": "ATX",
-    "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+    "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
     "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
   },
   "tbs": {

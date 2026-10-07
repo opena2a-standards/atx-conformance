@@ -4,7 +4,7 @@
   "description": "Fully populated ATX v1.1 TBS mirroring the baseline-valid v1.0 fixture, upgraded to atcVersion 1.1. Authored key order is unsorted; JCS sorts it.",
   "spec": {
     "id": "ATX",
-    "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+    "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
     "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
   },
   "tbs": {

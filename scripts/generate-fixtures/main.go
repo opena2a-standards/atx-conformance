@@ -943,6 +943,11 @@ func main() {
 		manifest = append(manifest, manifestEntry{path: fs.writePath, sha: sha})
 		fmt.Printf("wrote %s (sha256=%s)\n", fs.writePath, sha)
 	}
+	for name := range fixtureSections {
+		if !fixtureSectionsUsed[name] {
+			panic("fixtureSections names no fixture: " + name)
+		}
+	}
 
 	// MANIFEST.sha256: one line per fixture, in path-sorted order.
 	sort.Slice(manifest, func(i, j int) bool { return manifest[i].path < manifest[j].path })
@@ -1017,22 +1022,75 @@ func signWithKey(v keyVector, a ATX) ATCSignature {
 	return sig
 }
 
+// atxCoreRef is atx-spec core.md at the commit its headings are checked
+// against (CORE_REF in scripts/check_spec_refs.py), so a published citation
+// opens the text it was checked against after core.md changes on main.
+const atxCoreRef = "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md"
+
+// core.md heading text, verbatim (scripts/check_spec_refs.py).
+const (
+	secSchema          = "1.1 ATX schema"
+	secVerification    = "1.3 Local verification algorithm"
+	secLegacyForm      = "1.3a.1 Legacy form (`atcVersion` = \"1.0\")"
+	secJCSForm         = "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+	secSignedFields    = "1.3a.4 Authorization on signed fields requires v1.1"
+	secDeclaredPurpose = "1.5 Declared purpose (optional)"
+	secRevocation      = "3.3 Revocation flow"
+)
+
+// fixtureSections names the core.md sections a fixture exercises beyond the
+// ones atxSections gives every fixture of its atcVersion. main fails on an
+// entry that names no fixture, so a renamed fixture cannot drop its citation.
+var fixtureSections = map[string][]string{
+	"atx-v1/revoked":                             {secRevocation},
+	"atx-v1_1/tampered-capabilities":             {secSignedFields},
+	"atx-v1_1/declared-purpose-valid":            {secDeclaredPurpose},
+	"atx-v1_1/tampered-declared-purpose":         {secDeclaredPurpose},
+	"atx-v1_1/declared-purpose-empty-whitespace": {secDeclaredPurpose},
+	"atx-v1_1/declared-purpose-array-injected":   {secDeclaredPurpose},
+	"atx-v1_1/declared-purpose-string-injected":  {secDeclaredPurpose},
+	"atx-v1_1/duplicate-purpose-member":          {secDeclaredPurpose},
+}
+
+// fixtureSectionsUsed records which fixtureSections entries wrap consumed.
+var fixtureSectionsUsed = map[string]bool{}
+
+// atxSections lists the core.md sections a fixture cites: the schema and the
+// verification algorithm, the canonical signing form its atcVersion selects
+// (none for a version core.md does not define), then its fixtureSections.
+func atxSections(name, version string) []string {
+	sections := []string{secSchema, secVerification}
+	switch version {
+	case atcVersion:
+		sections = append(sections, secLegacyForm)
+	case atcVersionV11:
+		sections = append(sections, secJCSForm)
+	}
+	if extra, ok := fixtureSections[name]; ok {
+		fixtureSectionsUsed[name] = true
+		sections = append(sections, extra...)
+	}
+	return sections
+}
+
 // wrap bundles the signed ATX with its fixture metadata.
 func wrap(name, description string, refs []KeypairRef, vs VerifierState, expected ExpectedOutcome, atx ATX) Fixture {
 	atxBytes, err := marshalIndent(atx)
 	must(err)
+	var spec []SpecRef
+	for _, section := range atxSections(name, atx.ATCVersion) {
+		spec = append(spec, SpecRef{ID: "ATX", Ref: atxCoreRef, Section: section})
+	}
+	spec = append(spec,
+		SpecRef{ID: "AIP", Ref: "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md", Section: "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"},
+		SpecRef{ID: "RFC 8032", Ref: "https://datatracker.ietf.org/doc/html/rfc8032", Section: "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"},
+		SpecRef{ID: "FIPS 204", Ref: "https://csrc.nist.gov/pubs/fips/204/final", Section: "ML-DSA-65 (Module-Lattice-Based DSA)"},
+	)
 	return Fixture{
-		Schema:      "https://atx.opena2a.org/schemas/fixture-v1.json",
-		Name:        name,
-		Description: description,
-		Spec: []SpecRef{
-			// ATX sections are core.md heading text, verbatim (scripts/check_spec_refs.py).
-			{ID: "ATX", Ref: "https://github.com/opena2a-org/atx-spec/blob/main/core.md", Section: "1.1 ATX schema"},
-			{ID: "ATX", Ref: "https://github.com/opena2a-org/atx-spec/blob/main/core.md", Section: "1.3 Local verification algorithm"},
-			{ID: "AIP", Ref: "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md", Section: "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"},
-			{ID: "RFC 8032", Ref: "https://datatracker.ietf.org/doc/html/rfc8032", Section: "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"},
-			{ID: "FIPS 204", Ref: "https://csrc.nist.gov/pubs/fips/204/final", Section: "ML-DSA-65 (Module-Lattice-Based DSA)"},
-		},
+		Schema:        "https://atx.opena2a.org/schemas/fixture-v1.json",
+		Name:          name,
+		Description:   description,
+		Spec:          spec,
 		KeypairRefs:   refs,
 		VerifierState: vs,
 		Expected:      expected,
