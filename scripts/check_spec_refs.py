@@ -23,10 +23,19 @@ Equality is exact on purpose: "1.1 ATX schema" passes, "§1.1 ATX schema" and
 "ATX schema" do not. A citation that must name two sections carries two ATX
 entries.
 
+The vendored copy is held to the pinned commit, so a heading cannot be made to
+exist by editing it:
+
+  * its SHA-256 must equal CORE_MD_SHA256, the digest of core.md at atx-spec
+    commit CORE_MD_SPEC_REF, and
+  * CORE_MD_SPEC_REF must be the one atx-spec commit that the CI workflow
+    checks out for the vendored-schema drift gate, so moving that pin without
+    re-vendoring core.md fails here.
+
 WHAT THIS CANNOT DO. It proves a cited heading exists, not that it is the right
-section for the fixture. It reads the vendored copy, so the copy must be
-re-vendored whenever the pinned atx-spec ref moves (the same pin that guards
-the vendored credential schema).
+section for the fixture. The digest is recorded in this script, so it proves
+the copy is unchanged since it was vendored, not that it was fetched correctly;
+the gh command beside CORE_MD_SHA256 confirms that against atx-spec.
 
 `scripts/conformance_profile.py --check` runs the self-test and the check, so
 CI enforces this through the existing conformance-profile step.
@@ -37,6 +46,7 @@ Usage:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -47,12 +57,26 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CORE_MD = Path("schemas/vendor/atx-spec/core.md")
 CORE_REF_SUFFIX = "/atx-spec/blob/main/core.md"
+WORKFLOW = Path(".github/workflows/conformance.yml")
+
+# The atx-spec commit core.md was vendored from, and the SHA-256 of core.md at
+# that commit. When the atx-spec pin in WORKFLOW moves, re-vendor core.md from
+# the new commit and update both constants together. To confirm the digest
+# against the source:
+#   gh api "repos/opena2a-standards/atx-spec/contents/core.md?ref=<CORE_MD_SPEC_REF>" \
+#     -H "Accept: application/vnd.github.raw" | shasum -a 256
+CORE_MD_SPEC_REF = "e89bed94ca0a7308e2d6915e384be4c89d3a67df"
+CORE_MD_SHA256 = "0639fe4e2fd3acf9277cacd639ac0da27cf538c2b64648b349d4db48de730d3d"
 
 # ATX headings (CommonMark): up to three spaces of indent, 1-6 `#`, a space,
 # the text, an optional closing run of `#`. Lines inside fenced code blocks are
 # not headings.
 HEADING_RE = re.compile(r"^ {0,3}#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$")
 FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+# The atx-spec checkout in WORKFLOW: `repository:` followed by its `ref:`.
+SPEC_PIN_RE = re.compile(
+    r"repository:[ \t]*opena2a-standards/atx-spec[ \t]*\r?\n[ \t]*ref:[ \t]*([0-9a-f]{40})\b"
+)
 
 
 def core_headings(text: str) -> set[str]:
@@ -89,13 +113,33 @@ def cited_files(root: Path) -> list[tuple[Path, list[dict]]]:
     return out
 
 
+def pin_failures(root: Path) -> list[str]:
+    """Whether the vendored core.md is core.md at the atx-spec commit CI pins."""
+    failures: list[str] = []
+    digest = hashlib.sha256((root / CORE_MD).read_bytes()).hexdigest()
+    if digest != CORE_MD_SHA256:
+        failures.append(
+            f"{CORE_MD} has SHA-256 {digest}, not {CORE_MD_SHA256} (core.md at atx-spec "
+            f"{CORE_MD_SPEC_REF}). Re-vendor it from the pinned commit; do not edit it."
+        )
+    workflow = root / WORKFLOW
+    pins = set(SPEC_PIN_RE.findall(workflow.read_text(encoding="utf-8"))) if workflow.exists() else set()
+    if pins != {CORE_MD_SPEC_REF}:
+        failures.append(
+            f"{WORKFLOW} pins atx-spec at {', '.join(sorted(pins)) or 'no commit'}, but {CORE_MD} "
+            f"was vendored at {CORE_MD_SPEC_REF}. Re-vendor core.md from the pinned commit and "
+            f"update CORE_MD_SPEC_REF and CORE_MD_SHA256 in scripts/check_spec_refs.py."
+        )
+    return failures
+
+
 def check(root: Path) -> list[str]:
     """Every ATX citation that does not name a heading of the vendored core.md."""
     core = root / CORE_MD
     if not core.exists():
         return [f"{CORE_MD} is missing; vendor core.md from the pinned atx-spec ref"]
+    failures = pin_failures(root)
     headings = core_headings(core.read_text(encoding="utf-8"))
-    failures: list[str] = []
     for path, refs in cited_files(root):
         rel = path.relative_to(root)
         atx = [r for r in refs if r.get("id") == "ATX"]
@@ -124,11 +168,16 @@ RETIRED_SECTIONS = [
 ]
 
 
-def _probe(refs: list[dict]) -> list[str]:
+def _probe(refs: list[dict], core_extra: str = "", workflow: str | None = None) -> list[str]:
     tmp = Path(tempfile.mkdtemp(prefix="spec-refs-"))
     try:
         (tmp / CORE_MD).parent.mkdir(parents=True)
-        shutil.copyfile(ROOT / CORE_MD, tmp / CORE_MD)
+        (tmp / CORE_MD).write_bytes((ROOT / CORE_MD).read_bytes() + core_extra.encode("utf-8"))
+        (tmp / WORKFLOW).parent.mkdir(parents=True)
+        if workflow is None:
+            shutil.copyfile(ROOT / WORKFLOW, tmp / WORKFLOW)
+        else:
+            (tmp / WORKFLOW).write_text(workflow, encoding="utf-8")
         (tmp / "fixtures").mkdir()
         (tmp / "fixtures" / "probe.json").write_text(json.dumps({"spec": refs}), encoding="utf-8")
         return check(tmp)
@@ -142,6 +191,7 @@ def _atx(section: str, ref: str = "https://github.com/opena2a-standards" + CORE_
 
 def self_test() -> int:
     aip = {"id": "AIP", "ref": "https://example.org/AIP-SPEC.md", "section": "anything"}
+    workflow = (ROOT / WORKFLOW).read_text(encoding="utf-8")
     cases: list[tuple[str, bool]] = [(f"rejects retired string {s!r}", bool(_probe([_atx(s)])))
                                      for s in RETIRED_SECTIONS]
     cases += [
@@ -154,6 +204,12 @@ def self_test() -> int:
          bool(_probe([_atx("1.1 ATX schema", ref="https://example.org/other.md")]))),
         ("rejects a file with no ATX citation", bool(_probe([aip]))),
         ("ignores non-ATX citations", not _probe([_atx("1.1 ATX schema"), aip])),
+        ("rejects a retired string added as a heading to the vendored core.md",
+         bool(_probe([_atx(RETIRED_SECTIONS[0])], core_extra=f"\n## {RETIRED_SECTIONS[0]}\n"))),
+        ("rejects a workflow that pins atx-spec at another commit",
+         bool(_probe([_atx("1.1 ATX schema")], workflow=workflow.replace(CORE_MD_SPEC_REF, "0" * 40)))),
+        ("rejects a workflow that pins no atx-spec commit",
+         bool(_probe([_atx("1.1 ATX schema")], workflow=""))),
         ("skips fenced code when reading headings",
          core_headings("```\n# not a heading\n```\n## 1. Real\n") == {"1. Real"}),
         ("strips a closing # run", core_headings("## 2. Closed ##\n") == {"2. Closed"}),

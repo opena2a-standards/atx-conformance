@@ -84,7 +84,10 @@ README makes about them -- not every sentence below:
    of atx-spec `core.md` exactly
    ([`scripts/check_spec_refs.py`](./scripts/check_spec_refs.py)), read from
    the copy vendored at `schemas/vendor/atx-spec/core.md` from the same
-   pinned atx-spec ref as the schema.
+   pinned atx-spec ref as the schema. That copy must carry the SHA-256 of
+   `core.md` at that ref, and the ref recorded with it must be the one the
+   schema drift gate checks out, so the copy cannot gain a heading by being
+   edited or fall behind a moved pin.
 6. Schema validation
    ([`scripts/schema_validation.py`](./scripts/schema_validation.py)): every
    fixture's `atx` member must validate against the atx-spec machine-readable
