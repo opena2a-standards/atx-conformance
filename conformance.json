@@ -5,7 +5,7 @@
     "id": "ATX",
     "name": "Agent Trust eXtension",
     "version": "1.0 (v1.1 fixtures included: JCS/RFC 8785 TBS signing, declaredPurpose)",
-    "ref": "https://github.com/opena2a-standards/atx-spec/blob/main/core.md"
+    "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md"
   },
   "fixtureManifest": "MANIFEST.sha256",
   "verifiers": [
