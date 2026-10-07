@@ -5,7 +5,7 @@
   "spec": {
     "id": "ATX",
     "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-    "section": "§1.3a ATX v1.1 TBS canonical form (JCS / RFC 8785)"
+    "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
   },
   "tbs": {
     "atcVersion": "1.1",

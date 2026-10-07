@@ -6,10 +6,12 @@ that tests it and the pinned expected outcome. The requirement entries are
 DERIVED from the fixtures themselves (each fixture carries its spec
 references and expected block), so the profile cannot drift from the fixture
 set: regeneration is deterministic and CI verifies the committed file matches.
+`--check` also runs scripts/check_spec_refs.py: every ATX citation must name a
+heading of the vendored, pinned core.md.
 
 Usage:
     python3 scripts/conformance_profile.py            # (re)write conformance.json
-    python3 scripts/conformance_profile.py --check    # exit 1 if committed file is stale
+    python3 scripts/conformance_profile.py --check    # exit 1 if stale or a citation is not a core.md heading
 """
 from __future__ import annotations
 
@@ -105,6 +107,13 @@ def main() -> int:
             print("conformance.json is stale; run scripts/conformance_profile.py")
             return 1
         print("conformance.json is current")
+        # Every ATX citation must name a heading of the pinned core.md. The
+        # self-test runs first so the check is proven able to fail.
+        sys.path.insert(0, str(REPO_ROOT / "scripts"))
+        import check_spec_refs
+
+        if check_spec_refs.self_test() or check_spec_refs.report():
+            return 1
         return 0
     OUT.write_text(rendered)
     print(f"wrote conformance.json ({len(build()['requirements'])} requirements)")

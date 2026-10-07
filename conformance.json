@@ -55,7 +55,12 @@
         {
           "id": "ATX",
           "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "1.3 Local verification algorithm"
         },
         {
           "id": "AIP",
@@ -85,7 +90,12 @@
         {
           "id": "ATX",
           "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "1.3 Local verification algorithm"
         },
         {
           "id": "AIP",
@@ -115,7 +125,12 @@
         {
           "id": "ATX",
           "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "1.3 Local verification algorithm"
         },
         {
           "id": "AIP",
@@ -145,7 +160,12 @@
         {
           "id": "ATX",
           "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "1.3 Local verification algorithm"
         },
         {
           "id": "AIP",
@@ -175,7 +195,12 @@
         {
           "id": "ATX",
           "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "1.3 Local verification algorithm"
         },
         {
           "id": "AIP",
@@ -205,7 +230,12 @@
         {
           "id": "ATX",
           "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "1.3 Local verification algorithm"
         },
         {
           "id": "AIP",
@@ -235,7 +265,12 @@
         {
           "id": "ATX",
           "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "1.3 Local verification algorithm"
         },
         {
           "id": "AIP",
@@ -265,7 +300,12 @@
         {
           "id": "ATX",
           "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "1.3 Local verification algorithm"
         },
         {
           "id": "AIP",
@@ -295,7 +335,12 @@
         {
           "id": "ATX",
           "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "1.3 Local verification algorithm"
         },
         {
           "id": "AIP",
@@ -325,7 +370,12 @@
         {
           "id": "ATX",
           "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "1.3 Local verification algorithm"
         },
         {
           "id": "AIP",
@@ -355,7 +405,12 @@
         {
           "id": "ATX",
           "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "1.3 Local verification algorithm"
         },
         {
           "id": "AIP",
@@ -385,7 +440,12 @@
         {
           "id": "ATX",
           "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "1.3 Local verification algorithm"
         },
         {
           "id": "AIP",
@@ -415,7 +475,12 @@
         {
           "id": "ATX",
           "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "1.3 Local verification algorithm"
         },
         {
           "id": "AIP",
@@ -445,7 +510,12 @@
         {
           "id": "ATX",
           "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "1.3 Local verification algorithm"
         },
         {
           "id": "AIP",
@@ -475,7 +545,12 @@
         {
           "id": "ATX",
           "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "1.3 Local verification algorithm"
         },
         {
           "id": "AIP",
@@ -505,7 +580,12 @@
         {
           "id": "ATX",
           "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "1.3 Local verification algorithm"
         },
         {
           "id": "AIP",
@@ -535,7 +615,12 @@
         {
           "id": "ATX",
           "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "1.3 Local verification algorithm"
         },
         {
           "id": "AIP",
@@ -565,7 +650,12 @@
         {
           "id": "ATX",
           "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "1.3 Local verification algorithm"
         },
         {
           "id": "AIP",
@@ -595,7 +685,12 @@
         {
           "id": "ATX",
           "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "1.3 Local verification algorithm"
         },
         {
           "id": "AIP",
@@ -625,7 +720,12 @@
         {
           "id": "ATX",
           "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "1.3 Local verification algorithm"
         },
         {
           "id": "AIP",
@@ -655,7 +755,12 @@
         {
           "id": "ATX",
           "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "1.3 Local verification algorithm"
         },
         {
           "id": "AIP",
@@ -685,7 +790,12 @@
         {
           "id": "ATX",
           "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "1.3 Local verification algorithm"
         },
         {
           "id": "AIP",
@@ -715,7 +825,12 @@
         {
           "id": "ATX",
           "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
-          "section": "§1.1 Credential schema and §6 Threshold cosignature"
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+          "section": "1.3 Local verification algorithm"
         },
         {
           "id": "AIP",
