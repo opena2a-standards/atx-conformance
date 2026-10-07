@@ -12,17 +12,20 @@ script's CORE_REF, core.md at the pinned atx-spec commit, so moving the pin
 makes the committed profile stale until it is regenerated.
 
 A fixture that cannot be read into a requirement (not JSON, not an object, a
-required member missing, unreadable or nested too deeply) fails by name, in
-both modes, and nothing is written.
+required member missing, unreadable, or nested more than MAX_DEPTH levels
+deep) or written into the profile (carrying text with no UTF-8 form, such as
+a lone surrogate escape) fails by name, in both modes, and nothing is written.
 
 Usage:
     python3 scripts/conformance_profile.py              # (re)write conformance.json
     python3 scripts/conformance_profile.py --check      # exit 1 if stale or a citation is not a core.md heading
     python3 scripts/conformance_profile.py --self-test  # prove a broken fixture fails by name
+    python3 scripts/conformance_profile.py --help       # print this usage
 """
 from __future__ import annotations
 
 import contextlib
+import io
 import json
 import shutil
 import sys
@@ -31,7 +34,16 @@ from collections.abc import Iterator
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-OUT = REPO_ROOT / "conformance.json"
+PROFILE = "conformance.json"
+# Not sliced from __doc__, which `python -OO` strips. The self-test holds the
+# docstring's Usage block equal to this text.
+USAGE = """\
+Usage:
+    python3 scripts/conformance_profile.py              # (re)write conformance.json
+    python3 scripts/conformance_profile.py --check      # exit 1 if stale or a citation is not a core.md heading
+    python3 scripts/conformance_profile.py --self-test  # prove a broken fixture fails by name
+    python3 scripts/conformance_profile.py --help       # print this usage
+"""
 
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import check_spec_refs  # noqa: E402
@@ -153,9 +165,19 @@ def requirement(path: Path, failures: list[str]) -> dict | None:
         "expected": outcome,
         "description": fx["description"],
     }
-    # A member that parsed can still be too deep to write back out.
+    # A member that parsed can still be too deep to write back out, which is
+    # refused before anything is rendered, or carry a lone surrogate escape,
+    # which has no UTF-8 form: the requirement is encoded as the profile is.
     if _nests_deeper_than(MAX_DEPTH, req):
         failures.append(f"{where}: is nested too deeply to write into conformance.json")
+        return None
+    try:
+        render(req).encode("utf-8")
+    except UnicodeEncodeError as exc:
+        failures.append(
+            f"{where}: cannot be written into conformance.json as UTF-8 "
+            f"({exc.reason}: {exc.object[exc.start:exc.end]!r})"
+        )
         return None
     return req
 
@@ -196,17 +218,26 @@ def _fixtures(make: object) -> Iterator[Path]:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def _fails_by_name(make: object) -> bool:
+def _build(make: object) -> tuple[dict, list[str]] | None:
+    """build() on a temporary tree, or None if it raised: a traceback is the
+    defect these cases look for, so it shows as a red case."""
     with _fixtures(make) as root:
-        profile, failures = build(root)
-    return (len(failures) == 1 and failures[0].startswith("fixtures/probe.json: ")
-            and not profile["requirements"])
+        try:
+            return build(root)
+        except Exception:
+            return None
+
+
+def _fails_by_name(make: object) -> bool:
+    built = _build(make)
+    return (built is not None and len(built[1]) == 1
+            and built[1][0].startswith("fixtures/probe.json: ")
+            and not built[0]["requirements"])
 
 
 def _builds(make: object) -> bool:
-    with _fixtures(make) as root:
-        profile, failures = build(root)
-    return not failures and len(profile["requirements"]) == 1
+    built = _build(make)
+    return built is not None and not built[1] and len(built[0]["requirements"]) == 1
 
 
 def _nested(depth: int) -> str:
@@ -217,10 +248,28 @@ def _nested(depth: int) -> str:
             + ', "expected": {"verifyResult": "ACCEPT"}}')
 
 
+def _main_on(make: object, argv: list[str]) -> tuple[int, str, str, bool]:
+    """main(argv) on a temporary tree whose conformance.json holds a sentinel:
+    the exit code, stdout, stderr, and whether conformance.json is unchanged."""
+    sentinel = "sentinel\n"
+    out, err = io.StringIO(), io.StringIO()
+    with _fixtures(make) as root:
+        (root / PROFILE).write_text(sentinel, encoding="utf-8")
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = main(argv, root)
+        unchanged = (root / PROFILE).read_text(encoding="utf-8") == sentinel
+    return rc, out.getvalue(), err.getvalue(), unchanged
+
+
 def self_test() -> int:
     good = {"name": "probe", "description": "d", "spec": [], "expected": {"verifyResult": "ACCEPT"}}
     with _fixtures(good) as root:
         profile, failures = build(root)
+    write_rc, _, _, write_unchanged = _main_on(good, [])
+    broken_rc, _, _, broken_unchanged = _main_on("{", [])
+    help_rc, help_out, _, help_unchanged = _main_on(good, ["--help"])
+    h_rc, h_out, _, h_unchanged = _main_on(good, ["-h"])
+    bad_rc, bad_out, bad_err, bad_unchanged = _main_on(good, ["--bogus"])
     cases: list[tuple[str, bool]] = [
         ("builds a well-formed fixture", not failures and len(profile["requirements"]) == 1),
         ("spec.ref is core.md at the pinned atx-spec commit",
@@ -232,6 +281,8 @@ def self_test() -> int:
          _fails_by_name({k: v for k, v in good.items() if k != "expected"})),
         ("reports an expected member that is not an object by name",
          _fails_by_name({**good, "expected": "ACCEPT"})),
+        ("reports an expected member that is the string 'verifyResult' by name",
+         _fails_by_name({**good, "expected": "verifyResult"})),
         ("reports a rejectCategory that is not a string by name",
          _fails_by_name({**good, "expected": {"verifyResult": "REJECT", "rejectCategory": ["x"]}})),
         ("reports a directory named like a fixture by name", _fails_by_name(Path.mkdir)),
@@ -242,6 +293,18 @@ def self_test() -> int:
         # depth limit refuses it before anything is rendered.
         (f"reports a fixture nested {check_spec_refs.DEEP:,} levels deep by name",
          _fails_by_name(_nested(check_spec_refs.DEEP))),
+        ("reports a fixture carrying a lone surrogate escape by name",
+         _fails_by_name('{"name": "p", "description": "\\ud800", "spec": [],'
+                        ' "expected": {"verifyResult": "ACCEPT"}}')),
+        ("writes conformance.json for a well-formed fixture", write_rc == 0 and not write_unchanged),
+        ("refuses to write conformance.json when a fixture is broken",
+         broken_rc == 1 and broken_unchanged),
+        ("--help prints usage and writes nothing",
+         help_rc == 0 and help_out == USAGE and help_unchanged),
+        ("-h prints usage and writes nothing", h_rc == 0 and h_out == USAGE and h_unchanged),
+        ("an unknown argument prints usage to stderr, exits 2 and writes nothing",
+         bad_rc == 2 and bad_err == USAGE and not bad_out and bad_unchanged),
+        ("the docstring's Usage block is USAGE", __doc__ is None or __doc__.endswith(USAGE)),
     ]
     failed = 0
     for label, ok in cases:
@@ -251,35 +314,42 @@ def self_test() -> int:
     return 1 if failed else 0
 
 
-def main() -> int:
-    if "--self-test" in sys.argv:
+def main(argv: list[str], root: Path = REPO_ROOT) -> int:
+    if argv in (["-h"], ["--help"]):
+        print(USAGE, end="")
+        return 0
+    if argv == ["--self-test"]:
         return self_test()
-    profile, failures = build()
+    if argv not in ([], ["--check"]):
+        print(USAGE, end="", file=sys.stderr)
+        return 2
+    out = root / PROFILE
+    profile, failures = build(root)
     if failures:
         for f in failures:
             print(f"FAIL {f}")
-        print(f"{len(failures)} fixture(s) cannot be read into conformance.json; nothing written")
+        print(f"{len(failures)} fixture(s) cannot go into conformance.json; nothing written")
         return 1
     rendered = render(profile)
-    if "--check" in sys.argv:
+    if argv == ["--check"]:
         if self_test():
             return 1
-        if not OUT.exists():
+        if not out.exists():
             print("conformance.json missing; run scripts/conformance_profile.py")
             return 1
-        if OUT.read_text() != rendered:
+        if out.read_text(encoding="utf-8") != rendered:
             print("conformance.json is stale; run scripts/conformance_profile.py")
             return 1
         print("conformance.json is current")
         # Every ATX citation must name a heading of the pinned core.md. The
         # self-test runs first so the check is proven able to fail.
-        if check_spec_refs.self_test() or check_spec_refs.report():
+        if check_spec_refs.self_test() or check_spec_refs.report(root):
             return 1
         return 0
-    OUT.write_text(rendered)
+    out.write_text(rendered, encoding="utf-8")
     print(f"wrote conformance.json ({len(profile['requirements'])} requirements)")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

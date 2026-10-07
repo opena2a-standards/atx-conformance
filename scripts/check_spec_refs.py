@@ -21,8 +21,9 @@ scripts/conformance_profile.py writes it from CORE_REF, so its staleness check
 holds it to the pin.
 
 In those lists, each citation id is a string, and an id that differs from
-"ATX" only in case or surrounding blanks ("atx", " ATX") fails, so a misspelt
-citation cannot be skipped silently. Each citation with id "ATX":
+"ATX" only in case or surrounding blanks ("atx", " ATX") fails rather than
+being skipped. Any other id, such as "AXT" or "ATX.", is read as a citation of
+another document and is not checked. Each citation with id "ATX":
 
   * has a `ref` EQUAL to CORE_REF, core.md at the pinned atx-spec commit on
     its canonical host, so the published link opens the text the heading was
@@ -49,7 +50,8 @@ exist by editing it:
     re-vendoring core.md fails here.
 
 Every link to atx-spec core.md in LINKED_DOCS (README.md and
-verifiers/go/verify.go) must also equal CORE_REF, apart from a #fragment,
+verifiers/go/verify.go) must also equal CORE_REF, apart from a query string, a
+#fragment, sentence punctuation after it (.,;:!?) and the case of its scheme,
 so the prose links open the text the citations were checked against.
 
 CORE_REF carries CORE_MD_SPEC_REF, so moving the pin also fails every citation
@@ -125,9 +127,9 @@ SPEC_PIN_RE = re.compile(
     r"repository:[ \t]*opena2a-standards/atx-spec[ \t]*\r?\n[ \t]*ref:[ \t]*([0-9a-f]{40})\b"
 )
 
-# A URL in prose: it ends at a blank, a quote or a bracket, so a markdown link's
-# closing parenthesis is not part of it.
-URL_RE = re.compile(r"https?://[^\s<>()\[\]\"'`]+")
+# A URL in prose, its scheme in any case: it ends at a blank, a quote or a
+# bracket, so a markdown link's closing parenthesis is not part of it.
+URL_RE = re.compile(r"https?://[^\s<>()\[\]\"'`]+", re.IGNORECASE)
 
 # Returned in place of a value that could not be read; its failure is recorded.
 _UNREADABLE = object()
@@ -246,6 +248,14 @@ def pin_failures(root: Path) -> list[str]:
     return failures
 
 
+def link_base(url: str) -> str:
+    """A URL as the link check compares it with CORE_REF: without its query,
+    its #fragment or the sentence punctuation after it, scheme in lower case."""
+    base = re.split(r"[?#]", url, maxsplit=1)[0].rstrip(".,;:!?")
+    scheme, sep, rest = base.partition("://")
+    return scheme.lower() + sep + rest
+
+
 def link_failures(root: Path) -> list[str]:
     """Every link to atx-spec core.md in LINKED_DOCS that is not CORE_REF."""
     failures: list[str] = []
@@ -255,7 +265,7 @@ def link_failures(root: Path) -> list[str]:
             continue
         for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             for url in URL_RE.findall(line):
-                base = url.split("#", 1)[0]
+                base = link_base(url)
                 if "/atx-spec/" in base and base.endswith("/core.md") and base != CORE_REF:
                     failures.append(
                         f"{rel}:{n}: links {url}, not {CORE_REF}. "
@@ -419,6 +429,18 @@ def _usage_under_oo() -> bool:
     return proc.returncode == 0 and proc.stdout == USAGE
 
 
+def _shows_deep() -> bool:
+    """_show() on a list nested DEEP levels, built in Python so no parser
+    limit stops it first; plain repr() raises RecursionError on it."""
+    deep: list = []
+    for _ in range(DEEP):
+        deep = [deep]
+    try:
+        return len(_show(deep)) < 100
+    except RecursionError:
+        return False
+
+
 def _linear_heading(n: int) -> bool:
     line = "# a" + " \t" * n + "x"
     start = time.perf_counter()
@@ -491,6 +513,7 @@ def self_test() -> int:
         ("reports a deeply nested ATX ref by name",
          _names_probe(_probe_doc('{"spec": [{"id": "ATX", "ref": ' + _deep()
                                  + ', "section": "1.1 ATX schema"}]}'))),
+        ("shows a list nested 100,000 levels deep without a traceback", _shows_deep()),
         ("reports a deeply nested ATX section by name",
          _names_probe(_probe_doc('{"spec": [{"id": "ATX", "ref": "' + CORE_REF
                                  + '", "section": ' + _deep() + "}]}"))),
@@ -507,6 +530,19 @@ def self_test() -> int:
          not _probe([good], docs={"README.md": "[spec](https://github.com/opena2a-standards/atx-spec)\n"})),
         ("rejects a README link to core.md at atx-spec main",
          _names_probe(_probe([good], docs={"README.md": f"x\n[core]({stale})\n"}), "README.md:2:")),
+        ("rejects a core.md link at atx-spec main that carries a #fragment",
+         _names_probe(_probe([good], docs={"README.md": f"[core]({stale}#6-transparency-log)\n"}),
+                      "README.md:1:")),
+        ("rejects a core.md link at atx-spec main followed by a period",
+         _names_probe(_probe([good], docs={"README.md": f"See {stale}.\n"}), "README.md:1:")),
+        ("rejects a core.md link at atx-spec main that carries a query string",
+         _names_probe(_probe([good], docs={"README.md": f"See {stale}?plain=1\n"}), "README.md:1:")),
+        ("rejects a core.md link at atx-spec main with an upper-case scheme",
+         _names_probe(_probe([good], docs={"README.md": f"See {stale.replace('https', 'HTTPS', 1)}\n"}),
+                      "README.md:1:")),
+        ("accepts a pinned core.md link followed by a period, with a query or an upper-case scheme",
+         not _probe([good], docs={"README.md": f"See {CORE_REF}.\n{CORE_REF}?plain=1\n"
+                                                f"{CORE_REF.replace('https', 'HTTPS', 1)}\n"})),
         ("rejects a Go comment linking core.md on the old host",
          _names_probe(_probe([good], docs={"verifiers/go/verify.go": f"// ({stale.replace('-standards', '-org')})\n"}),
                       "verifiers/go/verify.go:1:")),
