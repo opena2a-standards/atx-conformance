@@ -4,7 +4,7 @@
   "description": "Three-authority issuerChain in normative root-first order. Array order is significant: JCS preserves it, never sorts arrays. Reordering the chain changes the canonical bytes and therefore the signature (see README; the check tools include a reorder negative).",
   "spec": {
     "id": "ATX",
-    "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+    "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
     "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
   },
   "tbs": {

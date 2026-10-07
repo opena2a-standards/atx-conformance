@@ -5,13 +5,18 @@
   "spec": [
     {
       "id": "ATX",
-      "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+      "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
       "section": "1.1 ATX schema"
     },
     {
       "id": "ATX",
-      "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+      "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
       "section": "1.3 Local verification algorithm"
+    },
+    {
+      "id": "ATX",
+      "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+      "section": "1.3a.1 Legacy form (`atcVersion` = \"1.0\")"
     },
     {
       "id": "AIP",

@@ -4,7 +4,7 @@
   "description": "publisher and a capability carry a double-quote, backslash, newline, a U+0001 control char, and multi-byte UTF-8 (CJK + emoji). Exercises RFC 8785 minimal escaping: only \", \\, and control chars escape; all other code points emit as raw UTF-8.",
   "spec": {
     "id": "ATX",
-    "ref": "https://github.com/opena2a-org/atx-spec/blob/main/core.md",
+    "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
     "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
   },
   "tbs": {
