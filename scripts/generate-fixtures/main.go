@@ -1026,7 +1026,9 @@ func wrap(name, description string, refs []KeypairRef, vs VerifierState, expecte
 		Name:        name,
 		Description: description,
 		Spec: []SpecRef{
-			{ID: "ATX", Ref: "https://github.com/opena2a-org/atx-spec/blob/main/core.md", Section: "§1.1 Credential schema and §6 Threshold cosignature"},
+			// ATX sections are core.md heading text, verbatim (scripts/check_spec_refs.py).
+			{ID: "ATX", Ref: "https://github.com/opena2a-org/atx-spec/blob/main/core.md", Section: "1.1 ATX schema"},
+			{ID: "ATX", Ref: "https://github.com/opena2a-org/atx-spec/blob/main/core.md", Section: "1.3 Local verification algorithm"},
 			{ID: "AIP", Ref: "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md", Section: "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"},
 			{ID: "RFC 8032", Ref: "https://datatracker.ietf.org/doc/html/rfc8032", Section: "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"},
 			{ID: "FIPS 204", Ref: "https://csrc.nist.gov/pubs/fips/204/final", Section: "ML-DSA-65 (Module-Lattice-Based DSA)"},

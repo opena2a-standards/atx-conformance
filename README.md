@@ -79,7 +79,12 @@ README makes about them -- not every sentence below:
    ([`scripts/parity/parity.py`](./scripts/parity/parity.py)) asserts the Go
    and Python verifiers agree per fixture on gate status, verdict, and
    reject category, and publishes `parity-report.json` as a CI artifact.
-5. `conformance.json` must match the fixture set.
+5. `conformance.json` must match the fixture set, and every ATX citation in
+   the fixtures, the JCS vectors and `conformance.json` must name a heading
+   of atx-spec `core.md` exactly
+   ([`scripts/check_spec_refs.py`](./scripts/check_spec_refs.py)), read from
+   the copy vendored at `schemas/vendor/atx-spec/core.md` from the same
+   pinned atx-spec ref as the schema.
 6. Schema validation
    ([`scripts/schema_validation.py`](./scripts/schema_validation.py)): every
    fixture's `atx` member must validate against the atx-spec machine-readable

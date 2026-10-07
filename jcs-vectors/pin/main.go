@@ -422,7 +422,8 @@ func buildVectorFile(v vector, canonical []byte, canonicalHex, canonicalSha stri
 	w("  \"spec\": {\n")
 	w("    \"id\": \"ATX\",\n")
 	w("    \"ref\": \"https://github.com/opena2a-org/atx-spec/blob/main/core.md\",\n")
-	w("    \"section\": \"§1.3a ATX v1.1 TBS canonical form (JCS / RFC 8785)\"\n")
+	// core.md heading text, verbatim (scripts/check_spec_refs.py).
+	w("    \"section\": %s\n", jsonStr("1.3a.2 JCS form (`atcVersion` = \"1.1\")"))
 	w("  },\n")
 	w("  \"tbs\": %s,\n", tbsIndented.String())
 	w("  \"expected\": {\n")
