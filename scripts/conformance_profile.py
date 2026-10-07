@@ -7,20 +7,34 @@ DERIVED from the fixtures themselves (each fixture carries its spec
 references and expected block), so the profile cannot drift from the fixture
 set: regeneration is deterministic and CI verifies the committed file matches.
 `--check` also runs scripts/check_spec_refs.py: every ATX citation must name a
-heading of the vendored, pinned core.md.
+heading of the vendored, pinned core.md. The top-level `spec.ref` is that
+script's CORE_REF, core.md at the pinned atx-spec commit, so moving the pin
+makes the committed profile stale until it is regenerated.
+
+A fixture that cannot be read into a requirement (not JSON, not an object, a
+required member missing, unreadable or nested too deeply) fails by name, in
+both modes, and nothing is written.
 
 Usage:
-    python3 scripts/conformance_profile.py            # (re)write conformance.json
-    python3 scripts/conformance_profile.py --check    # exit 1 if stale or a citation is not a core.md heading
+    python3 scripts/conformance_profile.py              # (re)write conformance.json
+    python3 scripts/conformance_profile.py --check      # exit 1 if stale or a citation is not a core.md heading
+    python3 scripts/conformance_profile.py --self-test  # prove a broken fixture fails by name
 """
 from __future__ import annotations
 
+import contextlib
 import json
+import shutil
 import sys
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 OUT = REPO_ROOT / "conformance.json"
+
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+import check_spec_refs  # noqa: E402
 
 # --- suite metadata (hand-maintained; everything under `requirements` is derived) ---
 SUITE = {
@@ -30,7 +44,7 @@ SUITE = {
         "id": "ATX",
         "name": "Agent Trust eXtension",
         "version": "1.0 (v1.1 fixtures included: JCS/RFC 8785 TBS signing, declaredPurpose)",
-        "ref": "https://github.com/opena2a-standards/atx-spec/blob/main/core.md",
+        "ref": check_spec_refs.CORE_REF,
     },
     "fixtureManifest": "MANIFEST.sha256",
     "verifiers": [
@@ -73,33 +87,156 @@ SUITE = {
 }
 
 
-def build() -> dict:
-    requirements = []
-    for path in sorted((REPO_ROOT / "fixtures").glob("*.json")):
-        fx = json.loads(path.read_text())
-        expected = fx["expected"]
-        outcome = expected["verifyResult"]
-        if expected.get("rejectCategory"):
-            outcome = f"REJECT[{expected['rejectCategory']}]"
-        requirements.append(
-            {
-                "fixture": f"fixtures/{path.name}",
-                "name": fx["name"],
-                "fixtureType": fx.get("fixtureType", "atx-credential"),
-                "level": "MUST",
-                "specRefs": fx["spec"],
-                "expected": outcome,
-                "description": fx["description"],
-            }
-        )
+def render(doc: object) -> str:
+    return json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
+
+
+def requirement(path: Path, failures: list[str]) -> dict | None:
+    """The requirement a fixture defines, or None with its failure recorded."""
+    where = f"fixtures/{path.name}"
+    try:
+        fx = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        failures.append(f"{where}: is not JSON ({exc})")
+        return None
+    except OSError as exc:
+        failures.append(f"{where}: cannot be read ({exc.strerror or type(exc).__name__})")
+        return None
+    except RecursionError:
+        failures.append(f"{where}: is nested too deeply to read as JSON")
+        return None
+    if not isinstance(fx, dict):
+        failures.append(f"{where}: is not a JSON object")
+        return None
+    missing = [k for k in ("name", "description", "spec", "expected") if k not in fx]
+    if missing:
+        noun = "member" if len(missing) == 1 else "members"
+        failures.append(f"{where}: has no {', '.join(map(repr, missing))} {noun}")
+        return None
+    expected = fx["expected"]
+    if not isinstance(expected, dict) or "verifyResult" not in expected:
+        failures.append(f"{where}: 'expected' is not an object with a 'verifyResult' member")
+        return None
+    outcome = expected["verifyResult"]
+    category = expected.get("rejectCategory")
+    if category:
+        if not isinstance(category, str):
+            failures.append(f"{where}: 'expected.rejectCategory' is not a string")
+            return None
+        outcome = f"REJECT[{category}]"
+    req = {
+        "fixture": where,
+        "name": fx["name"],
+        "fixtureType": fx.get("fixtureType", "atx-credential"),
+        "level": "MUST",
+        "specRefs": fx["spec"],
+        "expected": outcome,
+        "description": fx["description"],
+    }
+    # A member that parsed can still be too deep to write back out.
+    try:
+        render(req)
+    except RecursionError:
+        failures.append(f"{where}: is nested too deeply to write into conformance.json")
+        return None
+    return req
+
+
+def build(root: Path = REPO_ROOT) -> tuple[dict, list[str]]:
+    """The profile, and a failure for each fixture that cannot be read into a
+    requirement."""
+    requirements: list[dict] = []
+    failures: list[str] = []
+    for path in sorted((root / "fixtures").glob("*.json")):
+        req = requirement(path, failures)
+        if req is not None:
+            requirements.append(req)
     profile = dict(SUITE)
     profile["requirements"] = requirements
-    return profile
+    return profile, failures
+
+
+# --- self-test ---------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def _fixtures(make: object) -> Iterator[Path]:
+    """A temporary tree whose fixtures/probe.json is written from a str, made
+    by calling make(path), or written as JSON."""
+    tmp = Path(tempfile.mkdtemp(prefix="conformance-profile-"))
+    try:
+        probe = tmp / "fixtures" / "probe.json"
+        probe.parent.mkdir()
+        if isinstance(make, str):
+            probe.write_text(make, encoding="utf-8")
+        elif callable(make):
+            make(probe)
+        else:
+            probe.write_text(json.dumps(make), encoding="utf-8")
+        yield tmp
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _fails_by_name(make: object) -> bool:
+    with _fixtures(make) as root:
+        profile, failures = build(root)
+    return (len(failures) == 1 and failures[0].startswith("fixtures/probe.json: ")
+            and not profile["requirements"])
+
+
+def _no_traceback(make: object) -> bool:
+    """Builds, or fails by name; which one depends on how deep the running
+    Python parses JSON."""
+    with _fixtures(make) as root:
+        _, failures = build(root)
+    return all(f.startswith("fixtures/probe.json: ") for f in failures)
+
+
+def self_test() -> int:
+    good = {"name": "probe", "description": "d", "spec": [], "expected": {"verifyResult": "ACCEPT"}}
+    deep = "[" * check_spec_refs.DEEP + "]" * check_spec_refs.DEEP
+    with _fixtures(good) as root:
+        profile, failures = build(root)
+    cases: list[tuple[str, bool]] = [
+        ("builds a well-formed fixture", not failures and len(profile["requirements"]) == 1),
+        ("spec.ref is core.md at the pinned atx-spec commit",
+         profile["spec"]["ref"] == check_spec_refs.CORE_REF),
+        ("reports a fixture that is not JSON by name", _fails_by_name("{")),
+        ("reports a fixture that is a JSON array by name", _fails_by_name([good])),
+        ("reports a fixture that is a JSON number by name", _fails_by_name("5")),
+        ("reports a fixture with no expected member by name",
+         _fails_by_name({k: v for k, v in good.items() if k != "expected"})),
+        ("reports an expected member that is not an object by name",
+         _fails_by_name({**good, "expected": "ACCEPT"})),
+        ("reports a rejectCategory that is not a string by name",
+         _fails_by_name({**good, "expected": {"verifyResult": "REJECT", "rejectCategory": ["x"]}})),
+        ("reports a directory named like a fixture by name", _fails_by_name(Path.mkdir)),
+        ("reads a fixture nested too deeply without a traceback",
+         _no_traceback('{"name": "p", "description": "d", "spec": ' + deep
+                       + ', "expected": {"verifyResult": "ACCEPT"}}')),
+    ]
+    failed = 0
+    for label, ok in cases:
+        print(f"  [{'GREEN' if ok else 'RED  '}] {label}")
+        failed += not ok
+    print(f"conformance-profile self-test: {len(cases) - failed}/{len(cases)} cases green")
+    return 1 if failed else 0
 
 
 def main() -> int:
-    rendered = json.dumps(build(), indent=2, ensure_ascii=False) + "\n"
+    if "--self-test" in sys.argv:
+        return self_test()
+    profile, failures = build()
+    if failures:
+        for f in failures:
+            print(f"FAIL {f}")
+        print(f"{len(failures)} fixture(s) cannot be read into conformance.json; nothing written")
+        return 1
+    rendered = render(profile)
     if "--check" in sys.argv:
+        if self_test():
+            return 1
         if not OUT.exists():
             print("conformance.json missing; run scripts/conformance_profile.py")
             return 1
@@ -109,14 +246,11 @@ def main() -> int:
         print("conformance.json is current")
         # Every ATX citation must name a heading of the pinned core.md. The
         # self-test runs first so the check is proven able to fail.
-        sys.path.insert(0, str(REPO_ROOT / "scripts"))
-        import check_spec_refs
-
         if check_spec_refs.self_test() or check_spec_refs.report():
             return 1
         return 0
     OUT.write_text(rendered)
-    print(f"wrote conformance.json ({len(build()['requirements'])} requirements)")
+    print(f"wrote conformance.json ({len(profile['requirements'])} requirements)")
     return 0
 
 

@@ -15,10 +15,14 @@ and no others:
   * the `spec` member of every jcs-vectors/vectors/*.json, and
   * `requirements[].specRefs` in conformance.json.
 
-Prose that mentions core.md, such as conformance.json `notCovered[].item`, and
-the top-level `spec` member of conformance.json are not read.
+Prose that mentions core.md, such as conformance.json `notCovered[].item`, is
+not read. The top-level `spec.ref` of conformance.json is not read here either:
+scripts/conformance_profile.py writes it from CORE_REF, so its staleness check
+holds it to the pin.
 
-In those lists, each citation with id "ATX":
+In those lists, each citation id is a string, and an id that differs from
+"ATX" only in case or surrounding blanks ("atx", " ATX") fails, so a misspelt
+citation cannot be skipped silently. Each citation with id "ATX":
 
   * has a `ref` EQUAL to CORE_REF, core.md at the pinned atx-spec commit on
     its canonical host, so the published link opens the text the heading was
@@ -28,7 +32,8 @@ In those lists, each citation with id "ATX":
 
 Each list must carry at least one ATX citation, so a file that drops its
 citation cannot pass by having nothing to check. A file or member that cannot
-be read as a citation list fails by name.
+be read as a citation list fails by name: one that is not JSON, cannot be
+opened (a directory, no read permission) or is nested too deeply to parse.
 
 Equality is exact on purpose: "1.1 ATX schema" passes, "§1.1 ATX schema" and
 "ATX schema" do not. A citation that must name two sections carries two ATX
@@ -43,10 +48,15 @@ exist by editing it:
     checks out for the vendored-schema drift gate, so moving that pin without
     re-vendoring core.md fails here.
 
+Every link to atx-spec core.md in LINKED_DOCS (README.md and
+verifiers/go/verify.go) must also equal CORE_REF, apart from a #fragment,
+so the prose links open the text the citations were checked against.
+
 CORE_REF carries CORE_MD_SPEC_REF, so moving the pin also fails every citation
 until the generators cite the new commit (atxCoreRef in
 scripts/generate-fixtures/main.go and jcs-vectors/pin/main.go) and the
-fixtures, vectors and conformance.json are regenerated.
+fixtures, vectors and conformance.json are regenerated. It also fails every
+link in LINKED_DOCS until that link is re-pointed.
 
 WHAT THIS CANNOT DO. It proves a cited heading exists, not that it is the right
 section for the fixture. The digest is recorded in this script, so it proves
@@ -68,17 +78,29 @@ import hashlib
 import io
 import json
 import re
+import reprlib
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CORE_MD = Path("schemas/vendor/atx-spec/core.md")
 WORKFLOW = Path(".github/workflows/conformance.yml")
-USAGE = __doc__[__doc__.index("Usage:"):]
+# Not sliced from __doc__: `python -OO` strips docstrings, and this module is
+# imported by scripts/conformance_profile.py. The self-test holds the
+# docstring's Usage block equal to this text.
+USAGE = """\
+Usage:
+    python3 scripts/check_spec_refs.py               run the check
+    python3 scripts/check_spec_refs.py --self-test   prove the check can fail
+    python3 scripts/check_spec_refs.py --help        print this usage
+"""
+# Files whose prose links core.md; each link must be CORE_REF.
+LINKED_DOCS = (Path("README.md"), Path("verifiers/go/verify.go"))
 
 # The atx-spec commit core.md was vendored from, and the SHA-256 of core.md at
 # that commit. When the atx-spec pin in WORKFLOW moves, re-vendor core.md from
@@ -102,6 +124,10 @@ FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 SPEC_PIN_RE = re.compile(
     r"repository:[ \t]*opena2a-standards/atx-spec[ \t]*\r?\n[ \t]*ref:[ \t]*([0-9a-f]{40})\b"
 )
+
+# A URL in prose: it ends at a blank, a quote or a bracket, so a markdown link's
+# closing parenthesis is not part of it.
+URL_RE = re.compile(r"https?://[^\s<>()\[\]\"'`]+")
 
 # Returned in place of a value that could not be read; its failure is recorded.
 _UNREADABLE = object()
@@ -140,12 +166,24 @@ def core_headings(text: str) -> set[str]:
     return headings
 
 
+def _show(value: object) -> str:
+    """repr() of a value read from a citation file. A container is shown to a
+    bounded depth, so a deeply nested one cannot exhaust the stack."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return repr(value)
+    return reprlib.repr(value)
+
+
 def _load(path: Path, where: str, failures: list[str]) -> object:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except ValueError as exc:
         failures.append(f"{where}: is not JSON ({exc})")
-        return _UNREADABLE
+    except OSError as exc:
+        failures.append(f"{where}: cannot be read ({exc.strerror or type(exc).__name__})")
+    except RecursionError:
+        failures.append(f"{where}: is nested too deeply to read as JSON")
+    return _UNREADABLE
 
 
 def _member(doc: object, key: str, where: str, failures: list[str]) -> object:
@@ -208,13 +246,32 @@ def pin_failures(root: Path) -> list[str]:
     return failures
 
 
+def link_failures(root: Path) -> list[str]:
+    """Every link to atx-spec core.md in LINKED_DOCS that is not CORE_REF."""
+    failures: list[str] = []
+    for rel in LINKED_DOCS:
+        path = root / rel
+        if not path.is_file():
+            continue
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            for url in URL_RE.findall(line):
+                base = url.split("#", 1)[0]
+                if "/atx-spec/" in base and base.endswith("/core.md") and base != CORE_REF:
+                    failures.append(
+                        f"{rel}:{n}: links {url}, not {CORE_REF}. "
+                        f"Link core.md at the pinned commit."
+                    )
+    return failures
+
+
 def check(root: Path) -> list[str]:
-    """Every check failure: the vendored core.md is not the pinned one, or an
-    ATX citation does not name a heading of it."""
+    """Every check failure: the vendored core.md is not the pinned one, an
+    ATX citation does not name a heading of it, or a prose link to core.md is
+    not the pinned one."""
     core = root / CORE_MD
     if not core.exists():
         return [f"{CORE_MD} is missing; vendor core.md from the pinned atx-spec ref"]
-    failures = pin_failures(root)
+    failures = pin_failures(root) + link_failures(root)
     headings = core_headings(core.read_text(encoding="utf-8"))
     lists, unreadable = cited_files(root)
     failures += unreadable
@@ -222,6 +279,15 @@ def check(root: Path) -> list[str]:
         if not isinstance(refs, list) or not all(isinstance(r, dict) for r in refs):
             failures.append(f"{where}: citations must be a list of objects with id, ref and section")
             continue
+        for r in refs:
+            cid = r.get("id")
+            if not isinstance(cid, str):
+                failures.append(f"{where}: citation id {_show(cid)} is not a string")
+            elif cid != "ATX" and cid.strip(" \t").casefold() == "atx":
+                failures.append(
+                    f"{where}: citation id {cid!r} is not \"ATX\", so it would not be "
+                    f"checked. Write the id exactly; fix the generator and regenerate."
+                )
         atx = [r for r in refs if r.get("id") == "ATX"]
         if not atx:
             failures.append(f"{where}: carries no ATX citation")
@@ -229,12 +295,12 @@ def check(root: Path) -> list[str]:
             section = ref.get("section")
             if ref.get("ref") != CORE_REF:
                 failures.append(
-                    f"{where}: ATX citation points at {ref.get('ref')!r}, not {CORE_REF}. "
+                    f"{where}: ATX citation points at {_show(ref.get('ref'))}, not {CORE_REF}. "
                     f"Cite core.md at the pinned commit; fix the generator and regenerate."
                 )
             elif not isinstance(section, str) or section not in headings:
                 failures.append(
-                    f"{where}: ATX section {section!r} is not a heading of "
+                    f"{where}: ATX section {_show(section)} is not a heading of "
                     f"{CORE_MD}. Cite the heading text exactly; fix the generator "
                     f"and regenerate."
                 )
@@ -248,7 +314,7 @@ def report(root: Path = ROOT) -> int:
     if failures:
         print(f"{len(failures)} check failure(s)")
         return 1
-    print(f"every ATX citation names a heading of {CORE_MD}")
+    print(f"every ATX citation names a heading of {CORE_MD}, and every core.md link is pinned")
     return 0
 
 
@@ -261,13 +327,18 @@ RETIRED_SECTIONS = [
     "§1.1 Credential schema and §6 Threshold cosignature",
     "§1.3a ATX v1.1 TBS canonical form (JCS / RFC 8785)",
 ]
+# Deeper than json.loads accepts before Python 3.14, and than repr() accepts on
+# 3.14, which parses it.
+DEEP = 100_000
 
 
 @contextlib.contextmanager
 def _tree(fixture: object, vector: object = None, profile: object = None,
-          core_extra: str = "", workflow: str | None = None) -> Iterator[Path]:
-    """A temporary tree with one fixture and, when given, one JCS vector and a
-    conformance.json. A str is written verbatim, anything else as JSON."""
+          core_extra: str = "", workflow: str | None = None,
+          docs: dict[str, str] | None = None) -> Iterator[Path]:
+    """A temporary tree with one fixture and, when given, one JCS vector, a
+    conformance.json and prose files (path: text). A str is written verbatim,
+    anything else as JSON."""
     def write(path: Path, doc: object) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(doc if isinstance(doc, str) else json.dumps(doc), encoding="utf-8")
@@ -286,6 +357,8 @@ def _tree(fixture: object, vector: object = None, profile: object = None,
             write(tmp / "jcs-vectors" / "vectors" / "probe.json", vector)
         if profile is not None:
             write(tmp / "conformance.json", profile)
+        for rel, text in (docs or {}).items():
+            write(tmp / rel, text)
         yield tmp
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -299,6 +372,19 @@ def _probe(refs: object, **tree: object) -> list[str]:
 def _probe_doc(fixture: object, **tree: object) -> list[str]:
     with _tree(fixture, **tree) as root:
         return check(root)
+
+
+def _probe_path(make: Callable[[Path], object]) -> list[str]:
+    """check() on a tree whose probe fixture path is made by make(path)."""
+    with _tree({"spec": [_atx("1.1 ATX schema")]}) as root:
+        probe = root / "fixtures" / "probe.json"
+        probe.unlink()
+        make(probe)
+        return check(root)
+
+
+def _deep(n: int = DEEP) -> str:
+    return "[" * n + "]" * n
 
 
 def _names_probe(failures: list[str], where: str = "fixtures/probe.json") -> bool:
@@ -316,11 +402,21 @@ def _report_last_line(**tree: object) -> str:
     return out.getvalue().splitlines()[-1]
 
 
-def _main_output(argv: list[str]) -> tuple[int, str]:
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out):
+def _main_output(argv: list[str]) -> tuple[int, str, str]:
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         rc = main(argv)
-    return rc, out.getvalue()
+    return rc, out.getvalue(), err.getvalue()
+
+
+def _usage_under_oo() -> bool:
+    """`python -OO` strips docstrings; the module must still import and print
+    its usage."""
+    proc = subprocess.run(
+        [sys.executable, "-OO", str(Path(__file__).resolve()), "--help"],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    return proc.returncode == 0 and proc.stdout == USAGE
 
 
 def _linear_heading(n: int) -> bool:
@@ -340,7 +436,10 @@ def self_test() -> int:
         f"          repository: opena2a-standards/atx-spec\n          ref: {'0' * 40}\n"
         "          path: .spec-other\n"
     )
-    help_rc, help_out = _main_output(["--help"])
+    help_rc, help_out, _ = _main_output(["--help"])
+    h_rc, h_out, _ = _main_output(["-h"])
+    bad_rc, bad_out, bad_err = _main_output(["--bogus"])
+    stale = "https://github.com/opena2a-standards/atx-spec/blob/main/core.md"
     cases: list[tuple[str, bool]] = [(f"rejects retired string {s!r}", bool(_probe([_atx(s)])))
                                      for s in RETIRED_SECTIONS]
     cases += [
@@ -383,8 +482,41 @@ def self_test() -> int:
          _names_probe(_probe([good], profile={}), "conformance.json")),
         ("summarizes a digest failure as a check failure, not a citation failure",
          _report_last_line(core_extra="\nappended\n") == "1 check failure(s)"),
+        ("reports a conformance.json whose requirements is not a list",
+         _probe([good], profile={"requirements": {"specRefs": [good]}})
+         == ["conformance.json: 'requirements' is not a list"]),
+        ("reports a directory named like a fixture by name", _names_probe(_probe_path(Path.mkdir))),
+        ("reports a fixture nested too deeply to parse by name",
+         _names_probe(_probe_doc('{"spec": ' + _deep() + "}"))),
+        ("reports a deeply nested ATX ref by name",
+         _names_probe(_probe_doc('{"spec": [{"id": "ATX", "ref": ' + _deep()
+                                 + ', "section": "1.1 ATX schema"}]}'))),
+        ("reports a deeply nested ATX section by name",
+         _names_probe(_probe_doc('{"spec": [{"id": "ATX", "ref": "' + CORE_REF
+                                 + '", "section": ' + _deep() + "}]}"))),
+        ("rejects a citation id 'atx' beside an ATX citation",
+         _names_probe(_probe([good, {**_atx("not a heading"), "id": "atx"}]))),
+        ("rejects a citation id ' ATX' with a leading blank",
+         _names_probe(_probe([good, {**_atx("not a heading"), "id": " ATX"}]))),
+        ("rejects a citation id that is not a string",
+         _names_probe(_probe([good, {**_atx("not a heading"), "id": ["ATX"]}]))),
+        ("rejects a citation with no id", _names_probe(_probe([good, {"section": "x"}]))),
+        ("accepts a README link to core.md at the pinned commit, with a fragment",
+         not _probe([good], docs={"README.md": f"[core]({CORE_REF}#6-transparency-log)\n"})),
+        ("ignores a link to the atx-spec repository root",
+         not _probe([good], docs={"README.md": "[spec](https://github.com/opena2a-standards/atx-spec)\n"})),
+        ("rejects a README link to core.md at atx-spec main",
+         _names_probe(_probe([good], docs={"README.md": f"x\n[core]({stale})\n"}), "README.md:2:")),
+        ("rejects a Go comment linking core.md on the old host",
+         _names_probe(_probe([good], docs={"verifiers/go/verify.go": f"// ({stale.replace('-standards', '-org')})\n"}),
+                      "verifiers/go/verify.go:1:")),
         ("--help prints usage and runs no check",
-         help_rc == 0 and help_out.startswith("Usage:") and "every ATX citation" not in help_out),
+         help_rc == 0 and help_out == USAGE and "every ATX citation" not in help_out),
+        ("-h prints usage and runs no check", h_rc == 0 and h_out == USAGE),
+        ("an unknown argument prints usage to stderr, exits 2 and runs no check",
+         bad_rc == 2 and bad_err == USAGE and not bad_out),
+        ("the docstring's Usage block is USAGE", __doc__ is None or __doc__.endswith(USAGE)),
+        ("imports and prints usage under python -OO", _usage_under_oo()),
         ("skips fenced code when reading headings",
          core_headings("```\n# not a heading\n```\n## 1. Real\n") == {"1. Real"}),
         ("strips a closing # run", core_headings("## 2. Closed ##\n") == {"2. Closed"}),

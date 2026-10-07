@@ -84,13 +84,17 @@ README makes about them -- not every sentence below:
    `requirements[].specRefs` of `conformance.json` must link to atx-spec
    `core.md` at the pinned atx-spec commit and name one of its headings
    exactly ([`scripts/check_spec_refs.py`](./scripts/check_spec_refs.py)).
-   The prose of `notCovered[].item` and the top-level `spec` member of
-   `conformance.json` are not checked. Headings are read from the copy
-   vendored at `schemas/vendor/atx-spec/core.md` from the same pinned
-   atx-spec ref as the schema. That copy must carry the SHA-256 of `core.md`
-   at that ref, and the ref recorded with it must be the one the schema
-   drift gate checks out, so the copy cannot gain a heading by being edited
-   or fall behind a moved pin.
+   A citation id must be a string, and one that differs from `ATX` only in
+   case or surrounding blanks fails rather than being skipped. Every link to
+   atx-spec `core.md` in this README and in `verifiers/go/verify.go` must be
+   the same pinned link. The top-level `spec.ref` of
+   `conformance.json` is written from that link, so the staleness check holds
+   it to the pin; the prose of `notCovered[].item` is not checked. Headings
+   are read from the copy vendored at `schemas/vendor/atx-spec/core.md` from
+   the same pinned atx-spec ref as the schema. That copy must carry the
+   SHA-256 of `core.md` at that ref, and the ref recorded with it must be the
+   one the schema drift gate checks out, so the copy cannot gain a heading by
+   being edited or fall behind a moved pin.
 6. Schema validation
    ([`scripts/schema_validation.py`](./scripts/schema_validation.py)): every
    fixture's `atx` member must validate against the atx-spec machine-readable
@@ -107,7 +111,7 @@ A2A coordination-map readers should read before forming judgments.
 
 ATX v1.0 signs a pipe-delimited canonical string, not the JSON body. The
 signature covers exactly 11 fields, defined normatively in
-[`atx-spec/core.md`](https://github.com/opena2a-standards/atx-spec/blob/main/core.md)
+[`atx-spec/core.md`](https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md)
 §1.3a.1:
 
 ```
@@ -128,7 +132,7 @@ signature verification.
 of a projected to-be-signed object that includes `capabilities`, `scanSummary`,
 `issuerChain`, `publisher`, and `behavioralProfile`, so those fields become
 integrity-protected. The normative projection and determinism rules are in
-[`atx-spec/core.md`](https://github.com/opena2a-standards/atx-spec/blob/main/core.md)
+[`atx-spec/core.md`](https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md)
 §1.3a.2. The verifiers dispatch on `atcVersion`; the v1.0 pipe form is frozen and
 unchanged. Cross-language byte agreement on `JCS(TBS)` is proven by
 [`jcs-vectors/`](jcs-vectors/) (Go, Python, and TypeScript canonicalizers must
@@ -308,7 +312,7 @@ breaking change for downstream verifiers.
 
 | Component | Version | Source |
 |---|---|---|
-| ATX schema | v1.0 | [`opena2a-org/atx-spec/core.md`](https://github.com/opena2a-standards/atx-spec/blob/main/core.md) |
+| ATX schema | v1.0 | [`opena2a-standards/atx-spec/core.md`](https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md) |
 | AIP spec | v1.0 (in flight on PR 1496) | [`opena2a-org/agent-identity-protocol`](https://github.com/opena2a-standards/agent-identity-protocol) |
 | `did:opena2a` method | v0.1 (W3C registration filed, PR `w3c/did-extensions#717`) | [`opena2a-standards/did-method-opena2a`](https://github.com/opena2a-standards/did-method-opena2a/blob/main/did-method-opena2a.md) |
 | Ed25519 test vector source | RFC 8032 §7.1 Tests 1, 2, 3, 1024 | [datatracker.ietf.org/doc/html/rfc8032](https://datatracker.ietf.org/doc/html/rfc8032) |
@@ -371,12 +375,17 @@ scripts/generate-fixtures/       deterministic fixture generator (Go)
   credential, its signatures, the verifier state and the expected outcome.
   A fixture that needs to change in any of those ships under a new name.
   That is what makes `MANIFEST.sha256` a useful regression check.
-- A fixture's `description` is documentation, and may be corrected in
-  place. Doing so changes that fixture's hash and its manifest line, so a
-  consumer pinning this repository at a commit sees no change until they
-  bump deliberately. A description that is wrong and cannot be fixed
-  without minting a duplicate credential under a new name is the worse
-  outcome of the two.
+- A fixture's `description` and its `spec` citation list are
+  documentation, and may be corrected in place. Doing so changes that
+  fixture's hash and its manifest line, so a consumer pinning this
+  repository at a commit sees no change until they bump deliberately.
+  Documentation that is wrong and cannot be fixed without minting a
+  duplicate credential under a new name is the worse outcome of the two.
+- A citation correction usually touches every fixture at once: moving the
+  pinned atx-spec commit re-points every ATX citation, so every
+  `MANIFEST.sha256` line changes in that commit while each fixture's
+  credential, signatures, verifier state and expected outcome stay as they
+  were.
 
 ## Contributing
 

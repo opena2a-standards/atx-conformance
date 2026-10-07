@@ -8,7 +8,7 @@
 // reproduce ACCEPT / REJECT.
 //
 // Spec it implements:
-//   - ATX v1.0 §1.1 schema (https://github.com/opena2a-org/atx-spec/blob/main/core.md)
+//   - ATX v1.0 §1.1 schema (https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md)
 //   - AIP §3 Hybrid Ed25519 + ML-DSA-65 (mandate at v1)
 //   - Canonicalization: pipe-delimited 11-field string matching
 //     opena2a-registry/pkg/atcverify/verify.go canonicalPayload() VERBATIM
