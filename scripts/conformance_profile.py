@@ -86,9 +86,29 @@ SUITE = {
     ],
 }
 
+# The deepest a requirement may nest. A deeper one is refused before anything
+# is rendered: the text json.dumps(indent=2) writes grows with the square of
+# the depth, and how deep it can write at all depends on the Python version.
+MAX_DEPTH = 100
+
 
 def render(doc: object) -> str:
     return json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
+
+
+def _nests_deeper_than(limit: int, value: object) -> bool:
+    """Whether arrays and objects in a parsed JSON value nest more than limit
+    levels deep, counted with a stack so any depth json.loads returns can be
+    measured."""
+    stack: list[tuple[object, int]] = [(value, 1)]
+    while stack:
+        node, depth = stack.pop()
+        if isinstance(node, (dict, list)):
+            if depth > limit:
+                return True
+            children = node.values() if isinstance(node, dict) else node
+            stack.extend((child, depth + 1) for child in children)
+    return False
 
 
 def requirement(path: Path, failures: list[str]) -> dict | None:
@@ -134,9 +154,7 @@ def requirement(path: Path, failures: list[str]) -> dict | None:
         "description": fx["description"],
     }
     # A member that parsed can still be too deep to write back out.
-    try:
-        render(req)
-    except RecursionError:
+    if _nests_deeper_than(MAX_DEPTH, req):
         failures.append(f"{where}: is nested too deeply to write into conformance.json")
         return None
     return req
@@ -185,17 +203,22 @@ def _fails_by_name(make: object) -> bool:
             and not profile["requirements"])
 
 
-def _no_traceback(make: object) -> bool:
-    """Builds, or fails by name; which one depends on how deep the running
-    Python parses JSON."""
+def _builds(make: object) -> bool:
     with _fixtures(make) as root:
-        _, failures = build(root)
-    return all(f.startswith("fixtures/probe.json: ") for f in failures)
+        profile, failures = build(root)
+    return not failures and len(profile["requirements"]) == 1
+
+
+def _nested(depth: int) -> str:
+    """A fixture nested depth levels deep: its spec is arrays nested one level
+    less, so its requirement nests as deep as it does."""
+    n = depth - 1
+    return ('{"name": "p", "description": "d", "spec": ' + "[" * n + "]" * n
+            + ', "expected": {"verifyResult": "ACCEPT"}}')
 
 
 def self_test() -> int:
     good = {"name": "probe", "description": "d", "spec": [], "expected": {"verifyResult": "ACCEPT"}}
-    deep = "[" * check_spec_refs.DEEP + "]" * check_spec_refs.DEEP
     with _fixtures(good) as root:
         profile, failures = build(root)
     cases: list[tuple[str, bool]] = [
@@ -212,9 +235,13 @@ def self_test() -> int:
         ("reports a rejectCategory that is not a string by name",
          _fails_by_name({**good, "expected": {"verifyResult": "REJECT", "rejectCategory": ["x"]}})),
         ("reports a directory named like a fixture by name", _fails_by_name(Path.mkdir)),
-        ("reads a fixture nested too deeply without a traceback",
-         _no_traceback('{"name": "p", "description": "d", "spec": ' + deep
-                       + ', "expected": {"verifyResult": "ACCEPT"}}')),
+        (f"builds a fixture nested {MAX_DEPTH} levels deep", _builds(_nested(MAX_DEPTH))),
+        (f"reports a fixture nested {MAX_DEPTH + 1} levels deep by name",
+         _fails_by_name(_nested(MAX_DEPTH + 1))),
+        # Past what json.loads reads before Python 3.14; 3.14 reads it, and the
+        # depth limit refuses it before anything is rendered.
+        (f"reports a fixture nested {check_spec_refs.DEEP:,} levels deep by name",
+         _fails_by_name(_nested(check_spec_refs.DEEP))),
     ]
     failed = 0
     for label, ok in cases:
