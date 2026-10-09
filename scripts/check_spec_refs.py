@@ -49,6 +49,9 @@ exist by editing it:
     checks out for the vendored-schema drift gate, so moving that pin without
     re-vendoring core.md fails here.
 
+A core.md or workflow that cannot be read as UTF-8 text fails by name, and no
+citation is held to the headings of a core.md that cannot be read.
+
 Every link to atx-spec core.md in LINKED_DOCS (README.md and
 verifiers/go/verify.go) must also equal CORE_REF, apart from a query string, a
 #fragment, the punctuation a GitHub autolink drops after it (.,:!*_~) or a
@@ -87,6 +90,7 @@ import contextlib
 import hashlib
 import io
 import json
+import os
 import re
 import reprlib
 import shutil
@@ -144,7 +148,8 @@ URL_RE = re.compile(r"https?://[^\s<>()\[\]\"'`|]+", re.IGNORECASE)
 # How many links deep linked_urls() reads URLs carried in another URL's query
 # string or #fragment. Each level reads at most the whole line once, so the
 # cap bounds a line's cost however many `?` and `#` it holds; a line that
-# carries a URL deeper fails.
+# carries a URL deeper fails. The failure tells the author this number, so the
+# self-test pins its value.
 MAX_URL_DEPTH = 8
 # What link_base() strips from the end of a URL once its query and fragment are
 # split off: the trailing punctuation a GitHub autolink leaves out of the link
@@ -215,6 +220,18 @@ def _load(path: Path, where: str, failures: list[str]) -> object:
     return _UNREADABLE
 
 
+def _read_text(root: Path, rel: Path, what: str, failures: list[str]) -> str | None:
+    """The text of root/rel, or None with a failure that names rel and says
+    that `what` cannot be read."""
+    try:
+        return (root / rel).read_text(encoding="utf-8")
+    except ValueError as exc:
+        failures.append(f"{rel}: is not UTF-8 text ({exc}), so {what} cannot be read")
+    except OSError as exc:
+        failures.append(f"{rel}: cannot be read ({exc.strerror or type(exc).__name__})")
+    return None
+
+
 def _member(doc: object, key: str, where: str, failures: list[str]) -> object:
     if doc is _UNREADABLE:
         return _UNREADABLE
@@ -264,8 +281,10 @@ def pin_failures(root: Path) -> list[str]:
             f"{CORE_MD} has SHA-256 {digest}, not {CORE_MD_SHA256} (core.md at atx-spec "
             f"{CORE_MD_SPEC_REF}). Re-vendor it from the pinned commit; do not edit it."
         )
-    workflow = root / WORKFLOW
-    pins = set(SPEC_PIN_RE.findall(workflow.read_text(encoding="utf-8"))) if workflow.exists() else set()
+    text = _read_text(root, WORKFLOW, "its atx-spec pin", failures) if (root / WORKFLOW).exists() else ""
+    if text is None:
+        return failures
+    pins = set(SPEC_PIN_RE.findall(text))
     if pins != {CORE_MD_SPEC_REF}:
         failures.append(
             f"{WORKFLOW} pins atx-spec at {', '.join(sorted(pins)) or 'no commit'}, but {CORE_MD} "
@@ -311,13 +330,8 @@ def link_failures(root: Path) -> list[str]:
         path = root / rel
         if not path.is_file():
             continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except ValueError as exc:
-            failures.append(f"{rel}: is not UTF-8 text ({exc}), so its links cannot be read")
-            continue
-        except OSError as exc:
-            failures.append(f"{rel}: cannot be read ({exc.strerror or type(exc).__name__})")
+        text = _read_text(root, rel, "its links", failures)
+        if text is None:
             continue
         for n, line in enumerate(text.splitlines(), 1):
             for depth, url in linked_urls(line):
@@ -347,7 +361,10 @@ def check(root: Path) -> list[str]:
     if not core.exists():
         return [f"{CORE_MD} is missing; vendor core.md from the pinned atx-spec ref"]
     failures = pin_failures(root) + link_failures(root)
-    headings = core_headings(core.read_text(encoding="utf-8"))
+    core_text = _read_text(root, CORE_MD, "its headings", failures)
+    # None when core.md cannot be read: that has failed, and no section is
+    # held to headings that could not be read.
+    headings = None if core_text is None else core_headings(core_text)
     lists, unreadable = cited_files(root)
     failures += unreadable
     for where, refs in lists:
@@ -373,7 +390,7 @@ def check(root: Path) -> list[str]:
                     f"{where}: ATX citation points at {_show(ref.get('ref'))}, not {CORE_REF}. "
                     f"Cite core.md at the pinned commit; fix the generator and regenerate."
                 )
-            elif not isinstance(section, str) or section not in headings:
+            elif headings is not None and (not isinstance(section, str) or section not in headings):
                 failures.append(
                     f"{where}: ATX section {_show(section)} is not a heading of "
                     f"{CORE_MD}. Cite the heading text exactly; fix the generator "
@@ -409,11 +426,11 @@ DEEP = 100_000
 
 @contextlib.contextmanager
 def _tree(fixture: object, vector: object = None, profile: object = None,
-          core_extra: str = "", workflow: str | None = None,
-          docs: dict[str, str] | None = None) -> Iterator[Path]:
+          core_extra: str | bytes = "", workflow: str | bytes | None = None,
+          docs: dict[str, str | bytes] | None = None) -> Iterator[Path]:
     """A temporary tree with one fixture and, when given, one JCS vector, a
     conformance.json and prose files (path: text). A str or bytes is written
-    verbatim, anything else as JSON."""
+    verbatim, anything else as JSON; core_extra is appended to core.md."""
     def write(path: Path, doc: object) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         if isinstance(doc, bytes):
@@ -424,12 +441,13 @@ def _tree(fixture: object, vector: object = None, profile: object = None,
     tmp = Path(tempfile.mkdtemp(prefix="spec-refs-"))
     try:
         (tmp / CORE_MD).parent.mkdir(parents=True)
-        (tmp / CORE_MD).write_bytes((ROOT / CORE_MD).read_bytes() + core_extra.encode("utf-8"))
+        extra = core_extra if isinstance(core_extra, bytes) else core_extra.encode("utf-8")
+        (tmp / CORE_MD).write_bytes((ROOT / CORE_MD).read_bytes() + extra)
         (tmp / WORKFLOW).parent.mkdir(parents=True)
         if workflow is None:
             shutil.copyfile(ROOT / WORKFLOW, tmp / WORKFLOW)
         else:
-            (tmp / WORKFLOW).write_text(workflow, encoding="utf-8")
+            write(tmp / WORKFLOW, workflow)
         write(tmp / "fixtures" / "probe.json", fixture)
         if vector is not None:
             write(tmp / "jcs-vectors" / "vectors" / "probe.json", vector)
@@ -540,6 +558,16 @@ def _linear_links(sep: str, n: int = 20_000) -> bool:
     return ok and time.perf_counter() - start < 1.0
 
 
+def _unreadable_readme() -> bool | None:
+    """check() names a README.md with no read permission; None (skipped)
+    where permissions do not stop a read: as root, or without POSIX ids."""
+    if not hasattr(os, "geteuid") or os.geteuid() == 0:
+        return None
+    with _tree({"spec": [_atx("1.1 ATX schema")]}, docs={"README.md": "x\n"}) as root:
+        (root / "README.md").chmod(0)
+        return check(root) == ["README.md: cannot be read (Permission denied)"]
+
+
 class _Undecodable(type(Path())):
     """A path whose name, relative to the tree, is bad-<0xFF>.json in place of
     probe.json. On Linux pathlib reads a file name that is not valid UTF-8
@@ -580,7 +608,10 @@ def self_test() -> int:
     h_rc, h_out, _ = _main_output(["-h"])
     bad_rc, bad_out, bad_err = _main_output(["--bogus"])
     stale = "https://github.com/opena2a-standards/atx-spec/blob/main/core.md"
-    cases: list[tuple[str, bool]] = [(f"rejects retired string {s!r}", bool(_probe([_atx(s)])))
+    core_not_utf8 = _probe([good], core_extra=b"\xff")
+    workflow_not_utf8 = _probe([good], workflow=workflow.encode("utf-8") + b"\xff")
+    # None marks a case skipped where it cannot run.
+    cases: list[tuple[str, bool | None]] = [(f"rejects retired string {s!r}", bool(_probe([_atx(s)])))
                                      for s in RETIRED_SECTIONS]
     cases += [
         ("accepts heading '1.1 ATX schema'", not _probe([good])),
@@ -684,6 +715,11 @@ def self_test() -> int:
          not _readme(f"{redirect}#" * MAX_URL_DEPTH + f"{CORE_REF}\n")),
         (f"rejects, once, a line carrying a pinned core.md link {MAX_URL_DEPTH + 1} links deep",
          _too_deep(_readme(f"{redirect}#" * (MAX_URL_DEPTH + 1) + f"{CORE_REF}\n"))),
+        (f"rejects, once, a line carrying two URLs more than {MAX_URL_DEPTH} links deep",
+         _too_deep(_readme(f"{redirect}#" * (MAX_URL_DEPTH + 1) + f"{CORE_REF} "
+                           + f"{redirect}#" * (MAX_URL_DEPTH + 1) + f"{CORE_REF}\n"))),
+        (f"rejects, once and as too deep, a core.md link at atx-spec main {MAX_URL_DEPTH + 1} links deep",
+         _too_deep(_readme(f"{redirect}#" * (MAX_URL_DEPTH + 1) + f"{stale}\n"))),
         ("reads a line of 20,000 links, each in the last one's query string, in linear time",
          _linear_links("?")),
         ("reads a line of 20,000 links, each in the last one's #fragment, in linear time",
@@ -707,6 +743,12 @@ def self_test() -> int:
          [f.split(":", 1)[0] for f in _probe([good], docs={"README.md": b"x \xff y\n",
                                                           "verifiers/go/verify.go": b"// \xff\n"})]
          == ["README.md", "verifiers/go/verify.go"]),
+        ("reports a README.md it has no permission to read by name", _unreadable_readme()),
+        ("reports a vendored core.md that is not UTF-8 by name, after its digest failure",
+         len(core_not_utf8) == 2 and core_not_utf8[0].startswith(f"{CORE_MD} has SHA-256 ")
+         and core_not_utf8[1].startswith(f"{CORE_MD}: is not UTF-8 text")),
+        ("reports a workflow that is not UTF-8 by name, and no pin failure",
+         len(workflow_not_utf8) == 1 and workflow_not_utf8[0].startswith(f"{WORKFLOW}: is not UTF-8 text")),
         ("--help prints usage and runs no check",
          help_rc == 0 and help_out == USAGE and "every ATX citation" not in help_out),
         ("-h prints usage and runs no check", h_rc == 0 and h_out == USAGE),
@@ -726,11 +768,25 @@ def self_test() -> int:
         ("names a fixture and a JCS vector whose names are not valid UTF-8 as backslash escapes",
          _names_undecodable()),
     ]
-    failed = 0
+    # Written out here rather than read from MAX_URL_DEPTH: the failure tells
+    # the author the cap, so changing it turns this case red.
+    cases += [
+        ("reads a link 8 deep, and tells the author of a line carrying one 9 deep to link "
+         "it at most 8 deep",
+         not _readme("https://r/#" * 8 + f"{CORE_REF}\n")
+         and _readme("https://r/#" * 9 + f"{CORE_REF}\n") == [
+             "README.md:1: carries a URL more than 8 links deep in other links' query strings "
+             "or #fragments, deeper than the check reads. Link it at most 8 deep."]),
+    ]
+    failed = skipped = 0
     for label, ok in cases:
-        print(f"  [{'GREEN' if ok else 'RED  '}] {label}")
-        failed += not ok
-    print(f"self-test: {len(cases) - failed}/{len(cases)} cases green")
+        mark = "SKIP " if ok is None else "GREEN" if ok else "RED  "
+        print(f"  [{mark}] {label}")
+        failed += ok is not None and not ok
+        skipped += ok is None
+    run = len(cases) - skipped
+    print(f"self-test: {run - failed}/{run} cases green"
+          + (f", {skipped} skipped" if skipped else ""))
     return 1 if failed else 0
 
 
