@@ -23,7 +23,8 @@ control fixtures/v1_1-hybrid-mldsa-tampered.json.
 A verifier that exits non-zero has its stderr relayed in the report. One that
 exits non-zero before reporting any fixture (a missing dependency, a bad
 argument) is reported by that exit and stderr alone, not as a fixture set
-mismatch naming every fixture it never reached.
+mismatch naming every fixture it never reached, and has one line above the
+per-fixture table in place of a MISSING cell on every row.
 
 Every run starts with the self-test, which proves on stand-in verifiers that
 the gate reports a disagreement, a skipped fixture, a failed verifier and a
@@ -100,11 +101,16 @@ def run_verifier(name: str, spec: dict) -> tuple[int, dict[str, dict], str]:
 
 def compare(
     fixture_files: list[str], verifiers: dict[str, dict]
-) -> tuple[dict[str, dict], dict[str, int], list[str]]:
-    """Run every verifier over fixture_files; return (table, exit_codes, divergences)."""
+) -> tuple[dict[str, dict], dict[str, int], list[str], list[str]]:
+    """Run every verifier over fixture_files.
+
+    Return (table, exit_codes, divergences, unreported), where unreported
+    names each verifier that exited non-zero before reporting any fixture.
+    """
     results: dict[str, dict[str, dict]] = {}
     exit_codes: dict[str, int] = {}
     divergences: list[str] = []
+    unreported: list[str] = []
     for name, spec in verifiers.items():
         code, records, stderr = run_verifier(name, spec)
         exit_codes[name] = code
@@ -113,13 +119,14 @@ def compare(
             d = f"{name} verifier exited {code} (expected 0)"
             if not records:
                 d += " before reporting any fixture"
+                unreported.append(name)
             divergences.append(f"{d}: {stderr}" if stderr else d)
 
     for name, records in results.items():
         # A verifier that failed before reporting any fixture is already
         # reported by its exit code and stderr; listing every fixture as
         # missing would hide that cause behind a fixture set mismatch.
-        if exit_codes[name] != 0 and not records:
+        if name in unreported:
             continue
         seen = sorted(records)
         if seen != fixture_files:
@@ -139,7 +146,40 @@ def compare(
             vals = {n: row[n][field] for n in present}
             if len(set(vals.values())) > 1:
                 divergences.append(f"{fx}: {field} divergence {vals}")
-    return table, exit_codes, divergences
+    return table, exit_codes, divergences, unreported
+
+
+def render_table(
+    table: dict[str, dict], names: list[str],
+    exit_codes: dict[str, int], unreported: list[str],
+) -> list[str]:
+    """Return the lines of the per-fixture table.
+
+    A verifier that exited before reporting any fixture has no column: one
+    line names its exit instead of a MISSING cell on every row, since its
+    exit code and stderr are already in the summary below the table.
+    """
+    shown = [n for n in names if n not in unreported]
+    lines = [f"parity: {len(table)} fixtures x {len(names)} verifiers"]
+    for n in unreported:
+        lines.append(
+            f"  {n}: exited {exit_codes[n]} before reporting any fixture "
+            "(see PARITY: FAIL below)"
+        )
+    if not shown:
+        return lines
+    for fx, row in table.items():
+        cells = []
+        for n in shown:
+            r = row[n]
+            if r is None:
+                cells.append(f"{n}=MISSING")
+            else:
+                v = r["verdict"] or "?"
+                cat = f"[{r['category']}]" if r["category"] else ""
+                cells.append(f"{n}={r['gate']}:{v}{cat}")
+        lines.append(f"  {fx:44s} {'  '.join(cells)}")
+    return lines
 
 
 # --- self-test ---------------------------------------------------------------
@@ -166,9 +206,21 @@ def _block(fixture: str, observed: str) -> str:
     return f"PASS  fixtures/{fixture}\n  observed: {observed}\n"
 
 
-def _divergences(fixture_files: list[str], verifiers: dict[str, dict]) -> list[str]:
+def _run(
+    fixture_files: list[str], verifiers: dict[str, dict]
+) -> tuple[list[str], list[str]]:
+    """Return (divergences, table lines) for one run of the stand-ins."""
     with contextlib.redirect_stderr(io.StringIO()):
-        return compare(fixture_files, verifiers)[2]
+        table, exit_codes, divergences, unreported = compare(fixture_files, verifiers)
+    return divergences, render_table(table, list(verifiers), exit_codes, unreported)
+
+
+def _divergences(fixture_files: list[str], verifiers: dict[str, dict]) -> list[str]:
+    return _run(fixture_files, verifiers)[0]
+
+
+def _row(fixture: str, *cells: str) -> str:
+    return f"  {fixture:44s} {'  '.join(cells)}"
 
 
 def _usage_error(argv: list[str]) -> tuple[int, str] | None:
@@ -194,14 +246,18 @@ def self_test() -> int:
     skipped = _divergences(fx, {
         "one": _stand_in(both), "two": _stand_in(_block("a.json", "ACCEPT")),
     })
-    no_dep = _divergences(fx, {
+    no_dep, no_dep_table = _run(fx, {
         "one": _stand_in(both), "two": _stand_in("", MISSING_DEP + "\n", 2),
     })
-    crashed = _divergences(fx, {
+    crashed, crashed_table = _run(fx, {
         "one": _stand_in(both),
         "two": _stand_in(_block("a.json", "ACCEPT"), "Traceback: boom\n", 1),
     })
     silent = _divergences(fx, {"one": _stand_in(both), "two": _stand_in("")})
+    none_ran = _run(fx, {
+        "one": _stand_in("", MISSING_DEP + "\n", 2),
+        "two": _stand_in("", "", 1),
+    })[1]
     cases: list[tuple[str, bool]] = [
         ("verifiers that agree report no divergence", agree == []),
         ("a verdict divergence is reported by fixture",
@@ -226,6 +282,29 @@ def self_test() -> int:
          == (2, f"parity.py: error: {SELF_TEST_JSON_ERROR}")
          and _usage_error(["--self-test"]) is None
          and _usage_error(["--json", "out.json"]) is None),
+        ("a verifier that exits before reporting any fixture has one line above "
+         "the table, not a MISSING cell on every row",
+         no_dep_table == [
+             "parity: 2 fixtures x 2 verifiers",
+             "  two: exited 2 before reporting any fixture "
+             "(see PARITY: FAIL below)",
+             _row("a.json", "one=PASS:ACCEPT"),
+             _row("b.json", "one=PASS:REJECT[EXPIRED]"),
+         ]),
+        ("a verifier that fails partway keeps its column, MISSING where it stopped",
+         crashed_table == [
+             "parity: 2 fixtures x 2 verifiers",
+             _row("a.json", "one=PASS:ACCEPT", "two=PASS:ACCEPT"),
+             _row("b.json", "one=PASS:REJECT[EXPIRED]", "two=MISSING"),
+         ]),
+        ("when no verifier reports any fixture, the table has no fixture rows",
+         none_ran == [
+             "parity: 2 fixtures x 2 verifiers",
+             "  one: exited 2 before reporting any fixture "
+             "(see PARITY: FAIL below)",
+             "  two: exited 1 before reporting any fixture "
+             "(see PARITY: FAIL below)",
+         ]),
     ]
     failed = 0
     for label, ok in cases:
@@ -265,21 +344,10 @@ def main() -> int:
         sys.stderr.write("[parity] no fixtures found\n")
         return 1
 
-    table, exit_codes, divergences = compare(fixture_files, VERIFIERS)
-    names = list(VERIFIERS)
+    table, exit_codes, divergences, unreported = compare(fixture_files, VERIFIERS)
 
-    print(f"\nparity: {len(fixture_files)} fixtures x {len(names)} verifiers")
-    for fx, row in table.items():
-        cells = []
-        for n in names:
-            r = row[n]
-            if r is None:
-                cells.append(f"{n}=MISSING")
-            else:
-                v = r["verdict"] or "?"
-                cat = f"[{r['category']}]" if r["category"] else ""
-                cells.append(f"{n}={r['gate']}:{v}{cat}")
-        print(f"  {fx:44s} {'  '.join(cells)}")
+    print()
+    print("\n".join(render_table(table, list(VERIFIERS), exit_codes, unreported)))
 
     if args.json:
         Path(args.json).write_text(
