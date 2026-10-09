@@ -28,8 +28,9 @@ per-fixture table in place of a MISSING cell on every row.
 
 Every run starts with the self-test, which proves on stand-in verifiers that
 the gate reports a disagreement, a skipped fixture, a failed verifier and a
-verifier that exits 0 without reporting any fixture, and that --json is
-refused with --self-test.
+verifier that exits 0 without reporting any fixture, that a fixtures
+directory holding no *.json fails, and that --json is refused with
+--self-test.
 
 Usage:
     python3 scripts/parity/parity.py [--json parity-report.json]
@@ -38,8 +39,11 @@ Usage:
 --self-test writes no parity report, so it is refused with --json rather than
 leaving the report path unwritten.
 
-Exit codes: 0 = all implementations agree, 1 = divergence or verifier error,
-2 = usage error.
+Exit codes:
+    0  all implementations agree; with --self-test, every case is green
+    1  a divergence or verifier error, a red self-test case (every run
+       starts with the self-test), or no *.json in fixtures/
+    2  usage error
 """
 from __future__ import annotations
 
@@ -50,9 +54,22 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+# Not sliced from __doc__, which `python -OO` strips. The self-test holds the
+# docstring's Exit codes block equal to this text.
+EXIT_CODES = """\
+Exit codes:
+    0  all implementations agree; with --self-test, every case is green
+    1  a divergence or verifier error, a red self-test case (every run
+       starts with the self-test), or no *.json in fixtures/
+    2  usage error
+"""
+# The failure for a fixtures directory holding no *.json, in main and in the
+# self-test.
+NO_FIXTURES = "[parity] no fixtures found\n"
 
 VERIFIERS = {
     "go": {
@@ -235,6 +252,16 @@ def _usage_error(argv: list[str]) -> tuple[int, str] | None:
     return None
 
 
+def _gate_without_fixtures(verifiers: dict[str, dict]) -> tuple[int, str, str]:
+    """(exit code, stdout, stderr) of the gate over a directory with no *.json."""
+    out, err = io.StringIO(), io.StringIO()
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "README.md").write_text("not a fixture\n")
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = gate(Path(d), verifiers, None)
+    return code, out.getvalue(), err.getvalue()
+
+
 def self_test() -> int:
     fx = ["a.json", "b.json"]
     both = _block("a.json", "ACCEPT") + _block("b.json", "REJECT[EXPIRED: past expiry]")
@@ -258,6 +285,7 @@ def self_test() -> int:
         "one": _stand_in("", MISSING_DEP + "\n", 2),
         "two": _stand_in("", "", 1),
     })[1]
+    no_fixtures = _gate_without_fixtures({"one": _stand_in(both), "two": _stand_in(both)})
     cases: list[tuple[str, bool]] = [
         ("verifiers that agree report no divergence", agree == []),
         ("a verdict divergence is reported by fixture",
@@ -305,6 +333,11 @@ def self_test() -> int:
              "  two: exited 1 before reporting any fixture "
              "(see PARITY: FAIL below)",
          ]),
+        ("a fixtures directory holding no *.json exits 1 and says so, before "
+         "any verifier runs",
+         no_fixtures == (1, "", NO_FIXTURES)),
+        ("the docstring's Exit codes block is EXIT_CODES",
+         __doc__ is None or __doc__.endswith(EXIT_CODES)),
     ]
     failed = 0
     for label, ok in cases:
@@ -331,26 +364,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
-def main() -> int:
-    args = parse_args()
-
-    if self_test():
-        return 1
-    if args.self_test:
-        return 0
-
-    fixture_files = sorted(p.name for p in (REPO_ROOT / "fixtures").glob("*.json"))
+def gate(fixtures_dir: Path, verifiers: dict[str, dict], json_path: str | None) -> int:
+    """Run the verifiers over the *.json in fixtures_dir; return the exit code."""
+    fixture_files = sorted(p.name for p in fixtures_dir.glob("*.json"))
     if not fixture_files:
-        sys.stderr.write("[parity] no fixtures found\n")
+        sys.stderr.write(NO_FIXTURES)
         return 1
 
-    table, exit_codes, divergences, unreported = compare(fixture_files, VERIFIERS)
+    table, exit_codes, divergences, unreported = compare(fixture_files, verifiers)
 
     print()
-    print("\n".join(render_table(table, list(VERIFIERS), exit_codes, unreported)))
+    print("\n".join(render_table(table, list(verifiers), exit_codes, unreported)))
 
-    if args.json:
-        Path(args.json).write_text(
+    if json_path:
+        Path(json_path).write_text(
             json.dumps(
                 {
                     "fixtures": table,
@@ -372,6 +399,17 @@ def main() -> int:
         return 1
     print("\nPARITY: PASS (all implementations agree on gate, verdict, and category)")
     return 0
+
+
+def main() -> int:
+    args = parse_args()
+
+    if self_test():
+        return 1
+    if args.self_test:
+        return 0
+
+    return gate(REPO_ROOT / "fixtures", VERIFIERS, args.json)
 
 
 if __name__ == "__main__":
