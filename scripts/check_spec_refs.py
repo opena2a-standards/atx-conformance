@@ -1295,36 +1295,43 @@ _RED_HOLDING_LABEL = ("prints the case that runs --self-test where os.chmod rais
 
 
 def _red_holding_case(cases: list[tuple[str, bool | None]], refusing: int,
-                      held: Callable[..., list[tuple[str, bool | None]]] = _held_to_child
+                      held: Callable[..., list[tuple[str, bool | None]]] = _held_to_child,
+                      holds: Callable[..., list[str]] = _holds_red_in_child
                       ) -> tuple[str, bool]:
     """The case that holds cases[refusing], the case that runs the child of
     _self_test_where_chmod_refuses(), to made-up child output, holding cases
     with held, _held_to_child() unless a case gives another: its label,
-    naming each made-up output that _holds_red_in_child() finds printed
-    otherwise, and green where it finds none. A case list with no case
-    green here, for which no output is made up, is named as such, as
-    "(not matched: no case green here to mark red)", and makes the case
-    red."""
-    misprinted = _holds_red_in_child(cases, refusing, held)
+    naming each made-up output that holds, _holds_red_in_child() unless a
+    case gives another, finds printed otherwise, and green where it finds
+    none. A case list with no case green here, for which no output is made
+    up, is named as such, as "(not matched: no case green here to mark
+    red)", and makes the case red."""
+    misprinted = holds(cases, refusing, held)
     return (_RED_HOLDING_LABEL + "".join(f" (not matched: {output})" for output in misprinted),
             not misprinted)
 
 
-def _names_misprinted_child_output(cases: list[tuple[str, bool | None]], refusing: int) -> bool:
-    """_holds_red_in_child() names each made-up child output, and only those,
-    after which a report holding cases[refusing] to the child some other way
-    than _held_to_child() prints that case otherwise: one that leaves it as
-    it is misprints the outputs with one case red and one case left out; one
-    that turns it red, naming each case the child marks red, but no count,
-    the output with one case left out; and one that turns it red with its
-    label as it is, all three. One that names each case the child marks red
-    and the count it ran misprints none, and a report that prints as that
-    one holds but exits 0 misprints the outputs with one case red and one
-    case left out, the two that should exit 1. A case list with no case
-    green here is named as such. _red_holding_case() names the same outputs
-    in the label of the case it makes red, each as "(not matched:
-    <output>)". None of these holds calls _held_to_child(), so a defect
-    there turns red only the case that holds the real one."""
+def _misnamed_child_outputs(cases: list[tuple[str, bool | None]], refusing: int,
+                            holds: Callable[..., list[str]] = _holds_red_in_child) -> list[str]:
+    """Each way of holding cases[refusing] to the child some other way than
+    _held_to_child() after which holds, _holds_red_in_child() unless a case
+    gives another, names other made-up child outputs than those a report
+    holding that case that way prints otherwise, with the outputs it named
+    and those it should: one that leaves it as it is misprints the outputs
+    with one case red and one case left out; one that turns it red, naming
+    each case the child marks red, but no count, the output with one case
+    left out; and one that turns it red with its label as it is, all three.
+    One that names each case the child marks red and the count it ran
+    misprints none, and a report that prints as that one holds but exits 0
+    misprints the outputs with one case red and one case left out, the two
+    that should exit 1. A case list with no case green here should be named
+    as such. Each way after which _red_holding_case(), naming the outputs
+    holds names, does not name those it should in the label of the case it
+    makes red, each as "(not matched: <output>)", is named too, with the
+    end of the label it made and the one it should. Empty where holds and
+    _red_holding_case() name each as they should. None of these holds calls
+    _held_to_child(), so a defect there turns red only the case that holds
+    the real one."""
     def as_is(held: list[tuple[str, bool | None]], at: int,
               found: list[tuple[str, bool | None]] | None) -> list[tuple[str, bool | None]]:
         return list(held)
@@ -1359,24 +1366,67 @@ def _names_misprinted_child_output(cases: list[tuple[str, bool | None]], refusin
         return 0
 
     reds: list[tuple[str, bool | None]] = [(label, False) for label, _ in cases]
-    return (_holds_red_in_child(cases, refusing, as_is) == ["one case red", "one case left out"]
-            and _holds_red_in_child(cases, refusing, counted) == []
-            and _holds_red_in_child(cases, refusing, counted, exits_0)
-            == ["one case red", "one case left out"]
-            and _holds_red_in_child(cases, refusing, no_count) == ["one case left out"]
-            and _holds_red_in_child(cases, refusing, bare_red)
-            == ["no case red", "one case red", "one case left out"]
-            and _holds_red_in_child(reds, refusing) == ["no case green here to mark red"]
-            and _red_holding_case(cases, refusing, as_is)
-            == (_RED_HOLDING_LABEL + " (not matched: one case red)"
-                " (not matched: one case left out)", False)
-            and _red_holding_case(cases, refusing, no_count)
-            == (_RED_HOLDING_LABEL + " (not matched: one case left out)", False)
-            and _red_holding_case(cases, refusing, bare_red)
-            == (_RED_HOLDING_LABEL + " (not matched: no case red) (not matched: one case red)"
-                " (not matched: one case left out)", False)
-            and _red_holding_case(reds, refusing)
-            == (_RED_HOLDING_LABEL + " (not matched: no case green here to mark red)", False))
+    named = [("a report that leaves it as it is", holds(cases, refusing, as_is),
+              ["one case red", "one case left out"]),
+             ("a report that names each case the child marks red and the count it ran",
+              holds(cases, refusing, counted), []),
+             ("a report that names each case the child marks red and the count it ran but "
+              "exits 0", holds(cases, refusing, counted, exits_0),
+              ["one case red", "one case left out"]),
+             ("a report that names no count", holds(cases, refusing, no_count),
+              ["one case left out"]),
+             ("a report that turns it red with no evidence", holds(cases, refusing, bare_red),
+              ["no case red", "one case red", "one case left out"]),
+             ("a case list with no case green here", holds(reds, refusing),
+              ["no case green here to mark red"])]
+    labelled = [("a report that leaves it as it is",
+                 _red_holding_case(cases, refusing, as_is, holds),
+                 ["one case red", "one case left out"]),
+                ("a report that names no count",
+                 _red_holding_case(cases, refusing, no_count, holds), ["one case left out"]),
+                ("a report that turns it red with no evidence",
+                 _red_holding_case(cases, refusing, bare_red, holds),
+                 ["no case red", "one case red", "one case left out"]),
+                ("a case list with no case green here",
+                 _red_holding_case(reds, refusing, holds=holds),
+                 ["no case green here to mark red"])]
+    misnamed = [f"{way}: named {found}, not {should}" for way, found, should in named
+                if found != should]
+    for way, (label, ok), should in labelled:
+        end = "".join(f" (not matched: {output})" for output in should)
+        if (label, ok) != (_RED_HOLDING_LABEL + end, False):
+            misnamed.append(f"{way}, in the label of the case that holds it: ends "
+                            f"{label.removeprefix(_RED_HOLDING_LABEL)!r} and is "
+                            f"{'red' if ok is False else 'green'}, not {end!r} and red")
+    return misnamed
+
+
+def _names_misnamed_child_outputs() -> bool:
+    """_misnamed_child_outputs() names each way of holding the case that runs
+    the child to made-up child output after which its holds names other
+    outputs than it should, with the outputs named and those it should name,
+    and each after which the label of the case _red_holding_case() makes
+    from them ends otherwise, with both ends, and leaves out a way after
+    which each is as it should be: here a holds that names every output, as
+    one finding each misprinted would. That holds does not call
+    _holds_red_in_child(), so a defect there turns red only the case that
+    holds the real one."""
+    every = ["no case red", "one case red", "one case left out"]
+    named = f"named {every}, not"
+    ends = ("in the label of the case that holds it: ends '"
+            + "".join(f" (not matched: {output})" for output in every) + "' and is red, not")
+    return _misnamed_child_outputs([("runs the child", True)], 0, lambda *args: list(every)) == [
+        f"a report that leaves it as it is: {named} ['one case red', 'one case left out']",
+        f"a report that names each case the child marks red and the count it ran: {named} []",
+        "a report that names each case the child marks red and the count it ran but exits 0: "
+        f"{named} ['one case red', 'one case left out']",
+        f"a report that names no count: {named} ['one case left out']",
+        f"a case list with no case green here: {named} ['no case green here to mark red']",
+        f"a report that leaves it as it is, {ends} "
+        "' (not matched: one case red) (not matched: one case left out)' and red",
+        f"a report that names no count, {ends} ' (not matched: one case left out)' and red",
+        f"a case list with no case green here, {ends} "
+        "' (not matched: no case green here to mark red)' and red"]
 
 
 def _names_red_only_in_child() -> bool:
@@ -2153,12 +2203,19 @@ def self_test() -> int:
     # make up lists that case and every case before it, each skip of
     # _CHMOD_SKIPS among them.
     cases.append(_red_holding_case(cases, refusing))
+    misnamed = _misnamed_child_outputs(cases, refusing)
     cases.append(("names, in the label of the case that holds the case that runs --self-test "
                   "where os.chmod raises to made-up child output, each made-up output after "
                   "which the report prints that case otherwise or exits otherwise, here a "
                   "report that leaves it as it is, names no count, turns it red with no "
-                  "evidence or prints it as it should but exits 0",
-                  _names_misprinted_child_output(cases, refusing)))
+                  "evidence or prints it as it should but exits 0"
+                  + "".join(f" ({way})" for way in misnamed),
+                  not misnamed))
+    cases.append(("names, in the label of the case that holds the naming of made-up child "
+                  "output to each way of holding the case that runs --self-test where "
+                  "os.chmod raises, each way after which the outputs named are not those it "
+                  "should name, with both, and no way after which they are",
+                  _names_misnamed_child_outputs()))
     # Only now does the case that runs the child end its label with why that
     # child is not accepted: the two above make up output that skips it by
     # the label _CHMOD_SKIPS holds, so a child not accepted turns red that
