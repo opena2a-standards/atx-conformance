@@ -527,6 +527,9 @@ DEEP = 100_000
 # Every temporary tree a case built that _remove() could not remove; the last
 # case of the self-test fails when it holds any.
 _LEFT: list[Path] = []
+# What _check_unreadable() has caught, each as _raised() words it, since
+# _reasoned() last emptied it to run a case; that case's label ends with it.
+_RAISED: list[str] = []
 
 
 def _remove(tmp: Path) -> None:
@@ -831,13 +834,38 @@ def _workflow_dir_unsearchable() -> bool | None:
 def _check_unreadable(make: Callable[[Path], object], **tree: object) -> list[str] | None:
     """check() on a tree that cites one heading, after make(root) has left
     part of it unreadable; None, which fails the case, if either raises any
-    Exception, not only an OSError."""
+    Exception, not only an OSError. What it raised is kept in _RAISED, for
+    _reasoned() to end the case's label with."""
     with _tree({"spec": [_atx("1.1 ATX schema")]}, **tree) as root:
         try:
             make(root)
             return check(root)
-        except Exception:
+        except Exception as exc:
+            _RAISED.append(_raised(exc))
             return None
+
+
+def _raised(exc: Exception) -> str:
+    """exc's type and text, as the last line of a traceback gives them, then
+    the innermost line of this script it was raised through and the function
+    that line is in, which the traceback would have named."""
+    where, tb = "", exc.__traceback__
+    while tb is not None:
+        if tb.tb_frame.f_globals is globals():
+            where = f", at line {tb.tb_lineno} in {tb.tb_frame.f_code.co_name}"
+        tb = tb.tb_next
+    return printable(f"{type(exc).__name__}: {exc}{where}")
+
+
+def _reasoned(label: str, case: Callable[[], bool | None]) -> tuple[str, bool | None]:
+    """The case (label, case()), its label ended with what _check_unreadable()
+    caught while case() ran, so a case that is red because make() or check()
+    raised says what was raised, as the hung-child case carries its time.
+    _RAISED is emptied first, so the label carries nothing an earlier case
+    left there."""
+    _RAISED.clear()
+    ok = case()
+    return label + "".join(f" (raised {why})" for why in _RAISED), ok
 
 
 def _linked_as_directory(rel: Path) -> bool:
@@ -878,6 +906,21 @@ def _root_unsearchable() -> bool | None:
         return None
     failures = _check_unreadable(lambda root: root.chmod(0), profile={"requirements": []})
     return failures is not None and "conformance.json: cannot be read (Permission denied)" in failures
+
+
+def _unreadable_tree_cases() -> list[tuple[str, bool | None]]:
+    """Every case that runs check() through _check_unreadable(), each made by
+    _reasoned(), so one that is red because something raised says what."""
+    return [
+        *(_reasoned(f"reports a {rel}/ it has no permission to list by name, not as missing or empty",
+                    functools.partial(_citation_dir_unlistable, rel)) for rel in CITATION_DIRS),
+        *(_reasoned(f"reports, once, a directory named like {rel} by name, rather than skipping it "
+                    "as missing", functools.partial(_linked_as_directory, rel)) for rel in LINKED_DOCS),
+        _reasoned("reports a verify.go in a directory it cannot search as unreadable, rather than "
+                  "raising or skipping it", _linked_dir_unsearchable),
+        _reasoned("reports a conformance.json in a tree root it cannot search as unreadable, rather "
+                  "than raising or skipping it", _root_unsearchable),
+    ]
 
 
 def _self_test_core_dir_unsearchable() -> bool | None:
@@ -976,12 +1019,14 @@ def _unmade_core_raises() -> bool:
     return False
 
 
-def _unmade_tree_fails(make: Callable[[Path], object]) -> bool:
-    """A tree that _check_unreadable() could not make unreadable, as make(root)
-    raised, fails the case, as None, rather than raising out of the
-    self-test."""
+def _unmade_tree_fails(make: Callable[[Path], object],
+                       helper: Callable[..., list[str] | None] = _check_unreadable) -> bool:
+    """A tree that helper, _check_unreadable() unless a case gives another,
+    could not make unreadable, as make(root) raised, fails the case, as None,
+    rather than raising out of the self-test. False, not raised, where helper
+    lets any Exception out, not only an OSError."""
     try:
-        return _check_unreadable(make, docs={"README.md": "x\n"}) is None
+        return helper(make, docs={"README.md": "x\n"}) is None
     except Exception:
         return False
 
@@ -989,6 +1034,54 @@ def _unmade_tree_fails(make: Callable[[Path], object]) -> bool:
 def _refuse_not_os(root: Path) -> None:
     """A make that raises an exception other than an OSError."""
     raise ValueError(f"{root}: not made unreadable")
+
+
+def _check_unguarded(make: Callable[[Path], object], **tree: object) -> list[str]:
+    """_check_unreadable() with no handler: what make(root) raises comes out
+    of it."""
+    with _tree({"spec": [_atx("1.1 ATX schema")]}, **tree) as root:
+        make(root)
+        return check(root)
+
+
+@contextlib.contextmanager
+def _check_broken() -> Iterator[None]:
+    """check() raises a TypeError inside, on any tree, as a defect in it
+    would."""
+    global check
+    real = check
+
+    def broken(root: Path) -> list[str]:
+        raise TypeError("probe")
+
+    check = broken
+    try:
+        yield
+    finally:
+        check = real
+
+
+def _red_cases_say_why() -> bool:
+    """Every case of _unreadable_tree_cases() that is not skipped, run while
+    check() raises as a defect in it would, is red and ends its label with
+    what was raised: its type and text, then the line and the function of
+    this script, here the stand-in for check(), that raised it. The cases on
+    a directory named like a file in LINKED_DOCS are never skipped."""
+    with _check_broken():
+        ran = [(label, ok) for label, ok in _unreadable_tree_cases() if ok is not None]
+    said = re.compile(r" \(raised TypeError: probe, at line [1-9][0-9]* in broken\)\Z")
+    return len(ran) >= len(LINKED_DOCS) and all(
+        ok is False and said.search(label) is not None for label, ok in ran)
+
+
+def _says_only_its_own() -> bool:
+    """_reasoned() ends a label with what make(root) raised in its own case,
+    naming the function that raised it, and ends the label of a case in which
+    nothing raised with nothing, whatever an earlier case left in _RAISED."""
+    label, ok = _reasoned("label", lambda: _check_unreadable(_refuse_not_os) is not None)
+    said = r"label \(raised ValueError: .+: not made unreadable, at line [1-9][0-9]* in _refuse_not_os\)"
+    return (ok is False and re.fullmatch(said, label) is not None and len(_RAISED) == 1
+            and _reasoned("label", lambda: True) == ("label", True))
 
 
 class _Undecodable(type(Path())):
@@ -1164,8 +1257,6 @@ def self_test() -> int:
             (f"rejects a {rel}/ that holds no *.json file by name, as its one failure",
              _probe_tree(lambda root: (root / rel / "probe.json").rename(root / rel / "probe.txt"))
              == [f"{rel}/ holds no *.json file, so none of its citations is checked; regenerate it"]),
-            (f"reports a {rel}/ it has no permission to list by name, not as missing or empty",
-             _citation_dir_unlistable(rel)),
         ]
     # One case per character link_base() strips, written out here rather than
     # read from TRAILING, so dropping a character from TRAILING turns its case red.
@@ -1228,8 +1319,6 @@ def self_test() -> int:
                                                           "verifiers/go/verify.go": b"// \xff\n"})]
          == ["README.md", "verifiers/go/verify.go"]),
         ("reports a README.md it has no permission to read by name", _unreadable_readme()),
-        *((f"reports, once, a directory named like {rel} by name, rather than skipping it "
-           "as missing", _linked_as_directory(rel)) for rel in LINKED_DOCS),
         ("reports a vendored core.md that is not UTF-8 by name, after its digest failure",
          len(core_not_utf8) == 2 and core_not_utf8[0].startswith(f"{CORE_MD} has SHA-256 ")
          and core_not_utf8[1].startswith(f"{CORE_MD}: is not UTF-8 text")),
@@ -1246,10 +1335,7 @@ def self_test() -> int:
          "not missing", _core_dir_unsearchable()),
         ("reports a workflow in a directory it cannot search as unreadable, not as pinning "
          "no atx-spec commit", _workflow_dir_unsearchable()),
-        ("reports a verify.go in a directory it cannot search as unreadable, rather than "
-         "raising or skipping it", _linked_dir_unsearchable()),
-        ("reports a conformance.json in a tree root it cannot search as unreadable, rather "
-         "than raising or skipping it", _root_unsearchable()),
+        *_unreadable_tree_cases(),
         ("reports, once, a directory named like the vendored core.md by name",
          _unreadable_core(_as_directory)),
         ("reads the headings from the core.md bytes whose digest it took, not a second read",
@@ -1267,6 +1353,17 @@ def self_test() -> int:
          _unmade_tree_fails(lambda root: (root / "README.md").mkdir())),
         ("fails, with no traceback, a case whose tree it could not make unreadable by an "
          "exception other than an OSError", _unmade_tree_fails(_refuse_not_os)),
+        ("fails, with no traceback, the first of the two cases above where its helper lets "
+         "the mkdir's OSError out rather than returning None",
+         not _unmade_tree_fails(lambda root: (root / "README.md").mkdir(), _check_unguarded)),
+        ("fails, with no traceback, the second where its helper lets the exception other "
+         "than an OSError out rather than returning None",
+         not _unmade_tree_fails(_refuse_not_os, _check_unguarded)),
+        ("says, in the label of every case that is red because check() raised on its "
+         "unreadable tree, what was raised and the line and function that raised it",
+         _red_cases_say_why()),
+        ("says what a case's make() raised in that case's label, and nothing an earlier "
+         "case raised in the label of one in which nothing raised", _says_only_its_own()),
         ("--help prints usage and runs no check",
          help_rc == 0 and help_out == USAGE and "every ATX citation" not in help_out),
         ("-h prints usage and runs no check", h_rc == 0 and h_out == USAGE),
