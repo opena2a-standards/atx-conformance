@@ -50,11 +50,12 @@ exist by editing it:
     re-vendoring core.md fails here.
 
 A core.md or workflow that cannot be read as UTF-8 text fails by name, as does
-a core.md that cannot be opened (a directory, no read permission), once; no
-citation is held to the headings of a core.md that cannot be read. The
+a core.md that cannot be opened (a directory, no read permission, a directory
+that cannot be searched), once; no citation is held to the headings of a
+core.md that cannot be read. A missing workflow pins no atx-spec commit. The
 self-test copies core.md, and the workflow, into the trees its cases build, so
 a core.md or workflow it cannot read fails by name before any case runs; a
-missing core.md fails there in the words the check uses for it.
+missing core.md or workflow fails there in the words the check uses for it.
 
 Every link to atx-spec core.md in LINKED_DOCS (README.md and
 verifiers/go/verify.go) must also equal CORE_REF, apart from a query string, a
@@ -226,12 +227,24 @@ def _load(path: Path, where: str, failures: list[str]) -> object:
     return _UNREADABLE
 
 
-def _read_bytes(root: Path, rel: Path, failures: list[str]) -> bytes | None:
-    """The bytes of root/rel, or None with a failure that names rel."""
+def _unread(rel: Path, exc: OSError, missing: str | None) -> str:
+    """The failure for rel, which could not be opened: `missing` when given and
+    rel does not exist, else that rel cannot be read. Opening rel, rather than
+    asking Path.exists() first, is what tells the two apart: for a path in a
+    directory that cannot be searched, exists() raises on Python 3.12 and 3.13
+    and answers False on 3.14."""
+    if missing is not None and isinstance(exc, (FileNotFoundError, NotADirectoryError)):
+        return missing
+    return f"{rel}: cannot be read ({exc.strerror or type(exc).__name__})"
+
+
+def _read_bytes(root: Path, rel: Path, failures: list[str], missing: str | None = None) -> bytes | None:
+    """The bytes of root/rel, or None with a failure that names rel: `missing`
+    when given and rel does not exist."""
     try:
         return (root / rel).read_bytes()
     except OSError as exc:
-        failures.append(f"{rel}: cannot be read ({exc.strerror or type(exc).__name__})")
+        failures.append(_unread(rel, exc, missing))
     return None
 
 
@@ -249,15 +262,16 @@ def _decode(rel: Path, data: bytes, what: str, failures: list[str]) -> str | Non
     return None
 
 
-def _read_text(root: Path, rel: Path, what: str, failures: list[str]) -> str | None:
+def _read_text(root: Path, rel: Path, what: str, failures: list[str],
+               missing: str | None = None) -> str | None:
     """The text of root/rel, or None with a failure that names rel and says
-    that `what` cannot be read."""
+    that `what` cannot be read: `missing` when given and rel does not exist."""
     try:
         return (root / rel).read_text(encoding="utf-8")
     except ValueError as exc:
         failures.append(_not_utf8(rel, exc, what))
     except OSError as exc:
-        failures.append(f"{rel}: cannot be read ({exc.strerror or type(exc).__name__})")
+        failures.append(_unread(rel, exc, missing))
     return None
 
 
@@ -312,17 +326,24 @@ def pin_failures(root: Path, core: bytes | None) -> list[str]:
             f"{CORE_MD} has SHA-256 {digest}, not {CORE_MD_SHA256} (core.md at atx-spec "
             f"{CORE_MD_SPEC_REF}). Re-vendor it from the pinned commit; do not edit it."
         )
-    text = _read_text(root, WORKFLOW, "its atx-spec pin", failures) if (root / WORKFLOW).exists() else ""
+    # A missing workflow pins no commit.
+    text = _read_text(root, WORKFLOW, "its atx-spec pin", failures, missing=pin_mismatch(set()))
     if text is None:
         return failures
     pins = set(SPEC_PIN_RE.findall(text))
     if pins != {CORE_MD_SPEC_REF}:
-        failures.append(
-            f"{WORKFLOW} pins atx-spec at {', '.join(sorted(pins)) or 'no commit'}, but {CORE_MD} "
-            f"was vendored at {CORE_MD_SPEC_REF}. Re-vendor core.md from the pinned commit and "
-            f"update CORE_MD_SPEC_REF and CORE_MD_SHA256 in scripts/check_spec_refs.py."
-        )
+        failures.append(pin_mismatch(pins))
     return failures
+
+
+def pin_mismatch(pins: set[str]) -> str:
+    """The failure for a WORKFLOW whose atx-spec pins are pins, not the one
+    commit core.md was vendored at."""
+    return (
+        f"{WORKFLOW} pins atx-spec at {', '.join(sorted(pins)) or 'no commit'}, but {CORE_MD} "
+        f"was vendored at {CORE_MD_SPEC_REF}. Re-vendor core.md from the pinned commit and "
+        f"update CORE_MD_SPEC_REF and CORE_MD_SHA256 in scripts/check_spec_refs.py."
+    )
 
 
 def link_base(url: str) -> str:
@@ -388,11 +409,11 @@ def check(root: Path) -> list[str]:
     """Every check failure: the vendored core.md is not the pinned one, an
     ATX citation does not name a heading of it, or a prose link to core.md is
     not the pinned one."""
-    core = root / CORE_MD
-    if not core.exists():
-        return [CORE_MD_MISSING]
     failures: list[str] = []
-    core_bytes = _read_bytes(root, CORE_MD, failures)
+    core_bytes = _read_bytes(root, CORE_MD, failures, missing=CORE_MD_MISSING)
+    # A missing core.md is the one failure: there is nothing to check against.
+    if failures == [CORE_MD_MISSING]:
+        return failures
     failures += pin_failures(root, core_bytes) + link_failures(root)
     # The headings are decoded from the bytes whose digest was taken, so they
     # cannot come from a core.md changed after that read. A core.md that cannot
@@ -493,6 +514,11 @@ def _tree(fixture: object, vector: object = None, profile: object = None,
             write(tmp / rel, text)
         yield tmp
     finally:
+        # A case may leave the directory of core.md or of the workflow with no
+        # search permission; it is given back so the tree can be removed.
+        for rel in (CORE_MD, WORKFLOW):
+            with contextlib.suppress(OSError):
+                (tmp / rel).parent.chmod(0o755)
         shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -558,14 +584,16 @@ def _run(argv: list[str], timeout: float = 60) -> subprocess.CompletedProcess[st
         return None
 
 
-def _hung_child_fails() -> bool:
-    """_run() returns None for a child that outlives its timeout, rather than
-    raising TimeoutExpired out of the self-test. A timeout of a few hundredths
-    of a second proves that as well as a long one does, and the case is timed
-    so that a longer one does not quietly add to every self-test run."""
+def _hung_child() -> tuple[bool, float]:
+    """Whether _run() returns None for a child that outlives its timeout,
+    rather than raising TimeoutExpired out of the self-test, and the seconds
+    that took. A timeout of a few hundredths of a second proves that as well
+    as a long one does. The time is a case of its own, printed in its label,
+    so a longer one does not quietly add to every self-test run and a slow
+    run is not read as _run() returning a process."""
     start = time.perf_counter()
     hung = _run([sys.executable, "-c", "import time; time.sleep(60)"], timeout=0.05) is None
-    return hung and time.perf_counter() - start < 0.4
+    return hung, time.perf_counter() - start
 
 
 def _usage_under_oo() -> bool:
@@ -712,14 +740,55 @@ def _core_no_read_permission() -> bool | None:
     return _unreadable_core(lambda core: core.chmod(0))
 
 
+def _unsearchable(path: Path) -> None:
+    """Takes every permission from the directory path is in, so path cannot
+    be opened, nor stat()ed, through it. _tree() gives it back."""
+    path.parent.chmod(0)
+
+
+def _core_dir_unsearchable() -> bool | None:
+    """_unreadable_core() on a core.md in a directory with no search
+    permission; None (skipped) where permissions do not stop a read."""
+    if not _permissions_stop_reads():
+        return None
+    return _unreadable_core(_unsearchable)
+
+
+def _workflow_dir_unsearchable() -> bool | None:
+    """check() names a workflow in a directory with no search permission as
+    unreadable, not as one that pins no commit; None (skipped) where
+    permissions do not stop a read."""
+    if not _permissions_stop_reads():
+        return None
+    with _tree({"spec": [_atx("1.1 ATX schema")]}) as root:
+        _unsearchable(root / WORKFLOW)
+        try:
+            failures = check(root)
+        except OSError:
+            return False
+    return failures == [f"{WORKFLOW}: cannot be read (Permission denied)"]
+
+
+def _self_test_core_dir_unsearchable() -> bool | None:
+    """--self-test in a tree whose core.md is in a directory with no search
+    permission names core.md as unreadable, not as missing, and exits 1, with
+    no traceback; None (skipped) where permissions do not stop a read."""
+    if not _permissions_stop_reads():
+        return None
+    return _self_test_without(CORE_MD, _unsearchable,
+                              says=f"{CORE_MD}: cannot be read (Permission denied)")
+
+
 def _skips_where_reads_allowed() -> bool | None:
-    """Both no-read-permission cases skip, rather than fail, where a file with
-    no read permission can still be read. None (skipped) where
+    """Every no-read-permission case skips, rather than fails, where a file
+    with no read permission can still be read. None (skipped) where
     _mode_bits_ignored() cannot stop Path.chmod, which would fail it falsely."""
     with _mode_bits_ignored() as ignored:
         if not ignored:
             return None
-        return _unreadable_readme() is None and _core_no_read_permission() is None
+        return all(case() is None for case in (
+            _unreadable_readme, _core_no_read_permission, _core_dir_unsearchable,
+            _workflow_dir_unsearchable, _self_test_core_dir_unsearchable))
 
 
 @contextlib.contextmanager
@@ -841,13 +910,10 @@ def self_test() -> int:
     # unless it writes its own workflow text, the CI workflow; the cases that
     # edit the workflow start from its text. Both are read here, before any
     # case runs, so one that cannot be read fails by name, not in a traceback.
-    # A missing core.md fails in the words check() uses for it.
+    # A missing workflow or core.md fails in the words check() uses for it.
     unread: list[str] = []
-    workflow = _read_text(ROOT, WORKFLOW, "its atx-spec pin", unread)
-    if (ROOT / CORE_MD).exists():
-        _read_bytes(ROOT, CORE_MD, unread)
-    else:
-        unread.append(CORE_MD_MISSING)
+    workflow = _read_text(ROOT, WORKFLOW, "its atx-spec pin", unread, missing=pin_mismatch(set()))
+    _read_bytes(ROOT, CORE_MD, unread, missing=CORE_MD_MISSING)
     if workflow is None or unread:
         for f in unread:
             print(f"FAIL {f}")
@@ -865,6 +931,7 @@ def self_test() -> int:
     core_not_utf8 = _probe([good], core_extra=b"\xff")
     workflow_not_utf8 = _probe([good], workflow=workflow.encode("utf-8") + b"\xff")
     no_workflow = _probe_tree(lambda root: (root / WORKFLOW).unlink())
+    hung, hung_seconds = _hung_child()
     # None marks a case skipped where it cannot run.
     cases: list[tuple[str, bool | None]] = [(f"rejects retired string {s!r}", bool(_probe([_atx(s)])))
                                      for s in RETIRED_SECTIONS]
@@ -901,8 +968,12 @@ def self_test() -> int:
         ("rejects a workflow that pins no atx-spec commit", bool(_probe([good], workflow=""))),
         ("rejects a tree with no workflow, as one that pins no atx-spec commit",
          len(no_workflow) == 1 and no_workflow[0].startswith(f"{WORKFLOW} pins atx-spec at no commit, ")),
-        ("--self-test in a tree with no workflow names it and exits 1, with no traceback",
-         _self_test_without(WORKFLOW)),
+        ("--self-test in a tree with no workflow names it as pinning no atx-spec commit, in "
+         "the check's words, and exits 1, with no traceback",
+         _self_test_without(WORKFLOW, says=pin_mismatch(set()))),
+        ("--self-test in a tree whose vendored core.md is in a directory it cannot search "
+         "names core.md as unreadable, not missing, and exits 1, with no traceback",
+         _self_test_core_dir_unsearchable()),
         ("--self-test in a tree with no vendored core.md names it as missing, in the check's "
          "words, and exits 1, with no traceback", _self_test_without(CORE_MD, says=CORE_MD_MISSING)),
         ("--self-test in a tree with a directory named like the vendored core.md names it and "
@@ -1020,11 +1091,15 @@ def self_test() -> int:
          and CORE_MD_MISSING == f"{CORE_MD} is missing; vendor core.md from the pinned atx-spec ref"),
         ("reports, once, a vendored core.md it has no permission to read by name",
          _core_no_read_permission()),
+        ("reports, once, a vendored core.md in a directory it cannot search as unreadable, "
+         "not missing", _core_dir_unsearchable()),
+        ("reports a workflow in a directory it cannot search as unreadable, not as pinning "
+         "no atx-spec commit", _workflow_dir_unsearchable()),
         ("reports, once, a directory named like the vendored core.md by name",
          _unreadable_core(_as_directory)),
         ("reads the headings from the core.md bytes whose digest it took, not a second read",
          _reads_core_once()),
-        ("skips both no-read-permission cases, rather than failing them, where a file with "
+        ("skips every no-read-permission case, rather than failing it, where a file with "
          "no read permission can still be read", _skips_where_reads_allowed()),
         ("skips, rather than fails, the case above where Path.chmod does not call os.chmod "
          "through the module", _skips_where_chmod_bound()),
@@ -1039,9 +1114,9 @@ def self_test() -> int:
          bad_rc == 2 and bad_err == USAGE and not bad_out),
         ("the docstring's Usage block is USAGE", __doc__ is None or __doc__.endswith(USAGE)),
         ("imports and prints usage under python -OO", _usage_under_oo()),
-        ("fails, with no traceback and in under 0.4 s, a case whose child process outlives "
-         "its timeout",
-         _hung_child_fails()),
+        ("fails, with no traceback, a case whose child process outlives its timeout", hung),
+        (f"ends a child process that outlives its timeout in under 0.4 s (took {hung_seconds:.3f} s)",
+         hung_seconds < 0.4),
         ("skips fenced code when reading headings",
          core_headings("```\n# not a heading\n```\n## 1. Real\n") == {"1. Real"}),
         ("strips a closing # run", core_headings("## 2. Closed ##\n") == {"2. Closed"}),
