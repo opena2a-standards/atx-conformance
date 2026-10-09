@@ -1234,6 +1234,25 @@ def _holds_red_in_child(cases: list[tuple[str, bool | None]], refusing: int,
     return [name for name, made_up, line, code in outputs if not printed(made_up, line, code)]
 
 
+_RED_HOLDING_LABEL = ("prints the case that runs --self-test where os.chmod raises red, naming a "
+                      "case that child's output marks red where this process finds it green and "
+                      "the count of cases when that output leaves one out, and green when that "
+                      "output marks every case as a child finding no defect does")
+
+
+def _red_holding_case(cases: list[tuple[str, bool | None]], refusing: int,
+                      held: Callable[..., list[tuple[str, bool | None]]] = _held_to_child
+                      ) -> tuple[str, bool]:
+    """The case that holds cases[refusing], the case that runs the child of
+    _self_test_where_chmod_refuses(), to made-up child output, holding cases
+    with held, _held_to_child() unless a case gives another: its label,
+    naming each made-up output that _holds_red_in_child() finds printed
+    otherwise, and green where it finds none."""
+    misprinted = _holds_red_in_child(cases, refusing, held)
+    return (_RED_HOLDING_LABEL + "".join(f" (not matched: {output})" for output in misprinted),
+            not misprinted)
+
+
 def _names_misprinted_child_output(cases: list[tuple[str, bool | None]], refusing: int) -> bool:
     """_holds_red_in_child() names each made-up child output, and only those,
     after which a report holding cases[refusing] to the child some other way
@@ -1242,8 +1261,10 @@ def _names_misprinted_child_output(cases: list[tuple[str, bool | None]], refusin
     that turns it red, naming each case the child marks red, but no count,
     the output with one case left out; and one that turns it red with its
     label as it is, all three. A case list with no case green here is named
-    as such. None of these holds calls _held_to_child(), so a defect there
-    turns red only the case that holds the real one."""
+    as such. _red_holding_case() names the same outputs in the label of the
+    case it makes red, each as "(not matched: <output>)". None of these
+    holds calls _held_to_child(), so a defect there turns red only the case
+    that holds the real one."""
     def as_is(held: list[tuple[str, bool | None]], at: int,
               found: list[tuple[str, bool | None]] | None) -> list[tuple[str, bool | None]]:
         return list(held)
@@ -1261,12 +1282,22 @@ def _names_misprinted_child_output(cases: list[tuple[str, bool | None]], refusin
         held[at] = (held[at][0], False)
         return held
 
+    reds: list[tuple[str, bool | None]] = [(label, False) for label, _ in cases]
     return (_holds_red_in_child(cases, refusing, as_is) == ["one case red", "one case left out"]
             and _holds_red_in_child(cases, refusing, no_count) == ["one case left out"]
             and _holds_red_in_child(cases, refusing, bare_red)
             == ["no case red", "one case red", "one case left out"]
-            and _holds_red_in_child([(label, False) for label, _ in cases], refusing)
-            == ["no case green here to mark red"])
+            and _holds_red_in_child(reds, refusing) == ["no case green here to mark red"]
+            and _red_holding_case(cases, refusing, as_is)
+            == (_RED_HOLDING_LABEL + " (not matched: one case red)"
+                " (not matched: one case left out)", False)
+            and _red_holding_case(cases, refusing, no_count)
+            == (_RED_HOLDING_LABEL + " (not matched: one case left out)", False)
+            and _red_holding_case(cases, refusing, bare_red)
+            == (_RED_HOLDING_LABEL + " (not matched: no case red) (not matched: one case red)"
+                " (not matched: one case left out)", False)
+            and _red_holding_case(reds, refusing)
+            == (_RED_HOLDING_LABEL + " (not matched: no case green here to mark red)", False))
 
 
 def _names_red_only_in_child() -> bool:
@@ -1907,13 +1938,7 @@ def self_test() -> int:
     # These two follow the case that runs the child, so the child output they
     # make up lists that case and every case before it, each skip of
     # _CHMOD_SKIPS among them.
-    misprinted = _holds_red_in_child(cases, refusing)
-    cases.append(("prints the case that runs --self-test where os.chmod raises red, naming a "
-                  "case that child's output marks red where this process finds it green and "
-                  "the count of cases when that output leaves one out, and green when that "
-                  "output marks every case as a child finding no defect does"
-                  + "".join(f" (not matched: {output})" for output in misprinted),
-                  not misprinted))
+    cases.append(_red_holding_case(cases, refusing))
     cases.append(("names, in the label of the case that holds the case that runs --self-test "
                   "where os.chmod raises to made-up child output, each made-up output after "
                   "which the report prints that case otherwise, here a report that leaves it "
