@@ -540,6 +540,25 @@ def _remove(tmp: Path) -> None:
         _LEFT.append(tmp)
 
 
+_LEFT_LABEL = "removes every temporary tree it builds"
+
+
+def _left_case(left: list[Path]) -> tuple[str, bool]:
+    """The case that holds the self-test to removing every temporary tree it
+    builds, left being those _remove() could not remove: its label, naming
+    each, and green where left holds none."""
+    names = ", ".join(printable(str(tmp)) for tmp in left)
+    return (_LEFT_LABEL + (f" (left: {names})" if names else ""), not left)
+
+
+def _names_left_trees() -> bool:
+    """_left_case() names made-up trees left as "(left: <trees>)", a name
+    that is not valid UTF-8 as a backslash escape, and is green given none."""
+    return (_left_case([Path("/made-up/a"), Path("/made-up/bad-\udcff")])
+            == (_LEFT_LABEL + " (left: /made-up/a, /made-up/bad-\\udcff)", False)
+            and _left_case([]) == (_LEFT_LABEL, True))
+
+
 @contextlib.contextmanager
 def _tree(fixture: object, vector: object = None, profile: object = None,
           core_extra: str | bytes = "", workflow: str | bytes | None = None,
@@ -1575,12 +1594,78 @@ _NEEDED_ALONE_BY = (("rank", "final", ("the final case",)),
                     ("flag", "re.IGNORECASE", ("The Last Case",)))
 
 
-def _unfound_unneeded_words() -> list[str]:
-    """Each word of _NEEDED_ALONE_BY, after what it stands for, that
-    _unneeded_words() does not name once the wordings that alone need it
-    are taken out."""
-    return [f"{kind} {word}" for kind, word, taken in _NEEDED_ALONE_BY
+def _unfound_unneeded_words(needed_alone_by: tuple[tuple[str, str, tuple[str, ...]], ...]
+                            = _NEEDED_ALONE_BY) -> list[str]:
+    """Each word of needed_alone_by, _NEEDED_ALONE_BY unless a case gives
+    another, after what it stands for, that _unneeded_words() does not name
+    once the wordings that alone need it are taken out."""
+    return [f"{kind} {word}" for kind, word, taken in needed_alone_by
             if word not in _unneeded_without(*taken)]
+
+
+_UNFOUND_LABEL = ("finds a word read as a rank, one read as a count, one read after them and "
+                  "the re.IGNORECASE flag needed by no wording, each once the wordings that "
+                  "need it are taken out of those the by-rank label check is held to")
+
+
+def _unfound_case(needed_alone_by: tuple[tuple[str, str, tuple[str, ...]], ...]
+                  = _NEEDED_ALONE_BY) -> tuple[str, bool]:
+    """The case that holds _unneeded_words() to naming each word of
+    needed_alone_by, _NEEDED_ALONE_BY unless a case gives another: its
+    label, naming each word _unfound_unneeded_words() finds it does not
+    name, and green where it finds none."""
+    unfound = _unfound_unneeded_words(needed_alone_by)
+    return (_UNFOUND_LABEL + "".join(f" (not found: {word})" for word in unfound), not unfound)
+
+
+def _names_unfound_words() -> bool:
+    """_unfound_case() names, each as "(not found: <word>)" after what it
+    stands for, a word of a _NEEDED_ALONE_BY that gives no wording to take
+    out, here a rank and the flag, each of which some wording needs."""
+    return (_unfound_case((("rank", "final", ()), ("flag", "re.IGNORECASE", ())))
+            == (_UNFOUND_LABEL + " (not found: rank final) (not found: flag re.IGNORECASE)",
+                False))
+
+
+_BY_RANK_LABEL = ("names, in every label, another case by what it runs rather than by its rank "
+                  "among the cases")
+
+
+def _by_rank_case(labels: list[str], wordings: tuple[str, ...] = _BY_RANK_WORDINGS,
+                  not_wordings: tuple[str, ...] = _NOT_BY_RANK_WORDINGS) -> tuple[str, bool]:
+    """The case that holds labels to naming no case by rank, _by_rank() to
+    reading each of wordings, _BY_RANK_WORDINGS unless a case gives others,
+    as naming a case by rank and none of not_wordings, _NOT_BY_RANK_WORDINGS
+    unless a case gives others, and wordings to needing each word and piece
+    _by_rank_re() takes and its re.IGNORECASE flag: its label, naming each
+    label, wording and word that falls short, and green where none does."""
+    ranked = _by_rank(labels)
+    missed = [wording for wording in wordings if not _by_rank([wording])]
+    misread = _by_rank(list(not_wordings))
+    unneeded = _unneeded_words(wordings)
+    return (_BY_RANK_LABEL + "".join(f" (by rank: {label})" for label in ranked)
+            + "".join(f" (not read as by rank: {wording})" for wording in missed)
+            + "".join(f" (read as by rank: {wording})" for wording in misread)
+            + "".join(f" (needed by no wording: {word})" for word in unneeded),
+            not ranked and not missed and not misread and not unneeded)
+
+
+def _names_by_rank_shortfalls() -> bool:
+    """_by_rank_case() names a made-up label that names a case by rank as
+    "(by rank: <label>)", a made-up wording it must read as by rank that it
+    does not as "(not read as by rank: <wording>)" and one it must not that
+    it does as "(read as by rank: <wording>)". A wording read as no rank
+    leaves every word needed, so the flag is held apart: with the one
+    wording that needs it taken out, it is named as "(needed by no wording:
+    re.IGNORECASE)"."""
+    return (_by_rank_case(["runs the check", "does as the previous case does"],
+                          _BY_RANK_WORDINGS + ("the case that runs the check",),
+                          ("the last case",))
+            == (_BY_RANK_LABEL + " (by rank: does as the previous case does)"
+                " (not read as by rank: the case that runs the check)"
+                " (read as by rank: the last case)", False)
+            and _by_rank_case([], tuple(w for w in _BY_RANK_WORDINGS if w != "The Last Case"))
+            == (_BY_RANK_LABEL + " (needed by no wording: re.IGNORECASE)", False))
 
 
 class _Undecodable(type(Path())):
@@ -1659,7 +1744,6 @@ def self_test() -> int:
     workflow_not_utf8 = _probe([good], workflow=workflow.encode("utf-8") + b"\xff")
     no_workflow = _probe_tree(lambda root: (root / WORKFLOW).unlink())
     hung, hung_seconds = _hung_child()
-    unfound = _unfound_unneeded_words()
     # None marks a case skipped where it cannot run.
     cases: list[tuple[str, bool | None]] = [(f"rejects retired string {s!r}", bool(_probe([_atx(s)])))
                                      for s in RETIRED_SECTIONS]
@@ -1889,10 +1973,18 @@ def self_test() -> int:
          "and \"the\" with a count before \"cases\" needed by no wording, each once the "
          "wordings that need it are taken out of those the by-rank label check is held to",
          _finds_unneeded_pieces()),
-        ("finds a word read as a rank, one read as a count, one read after them and the "
-         "re.IGNORECASE flag needed by no wording, each once the wordings that need it are "
-         "taken out of those the by-rank label check is held to"
-         + "".join(f" (not found: {word})" for word in unfound), not unfound),
+        _unfound_case(),
+        ("names, in the label of the case that finds a word read as a rank, one read as a "
+         "count, one read after them and the re.IGNORECASE flag needed by no wording, each "
+         "such word it does not find, here a rank and the flag with no wording taken out",
+         _names_unfound_words()),
+        ("names, in the label of the case that holds every label to naming no case by rank, "
+         "a made-up label that names one by rank, a made-up wording read otherwise than it "
+         "should be either way, and the re.IGNORECASE flag once the wording that needs it is "
+         "taken out", _names_by_rank_shortfalls()),
+        ("names, in the label of the case that holds the self-test to removing every "
+         "temporary tree it builds, each made-up tree left, a name that is not valid UTF-8 "
+         "as a backslash escape", _names_left_trees()),
         ("--help prints usage and runs no check",
          help_rc == 0 and help_out == USAGE and "every ATX citation" not in help_out),
         ("-h prints usage and runs no check", h_rc == 0 and h_out == USAGE),
@@ -1949,20 +2041,9 @@ def self_test() -> int:
     # label once named two cases by among them, and to those that do not,
     # and holds those wordings to needing each word and piece _by_rank_re()
     # takes and its re.IGNORECASE flag.
-    ranked = _by_rank([label for label, _ in cases])
-    missed = [wording for wording in _BY_RANK_WORDINGS if not _by_rank([wording])]
-    misread = _by_rank(list(_NOT_BY_RANK_WORDINGS))
-    unneeded = _unneeded_words()
-    cases.append(("names, in every label, another case by what it runs rather than by its rank "
-                  "among the cases" + "".join(f" (by rank: {label})" for label in ranked)
-                  + "".join(f" (not read as by rank: {wording})" for wording in missed)
-                  + "".join(f" (read as by rank: {wording})" for wording in misread)
-                  + "".join(f" (needed by no wording: {word})" for word in unneeded),
-                  not ranked and not missed and not misread and not unneeded))
+    cases.append(_by_rank_case([label for label, _ in cases]))
     # Last, so it sees every temporary tree the cases above built.
-    left = ", ".join(printable(str(tmp)) for tmp in _LEFT)
-    cases.append(("removes every temporary tree it builds" + (f" (left: {left})" if left else ""),
-                  not _LEFT))
+    cases.append(_left_case(_LEFT))
     # After every other case, so each case the child of
     # _self_test_where_chmod_refuses() finds red is held to what this process
     # finds of it, the cases listed after the child's included. A case red in
