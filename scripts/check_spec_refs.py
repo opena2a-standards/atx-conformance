@@ -99,6 +99,7 @@ Usage:
 from __future__ import annotations
 
 import contextlib
+import errno
 import functools
 import hashlib
 import io
@@ -665,13 +666,15 @@ def _usage_under_oo() -> bool:
     return proc is not None and proc.returncode == 0 and proc.stdout == USAGE
 
 
-def _self_test_without(rel: Path, make: Callable[[Path], object] = Path.unlink,
-                       says: str | None = None) -> bool:
-    """--self-test in a tree where make(root / rel) has left rel unreadable
-    (by default, removed) names rel and exits 1, with no traceback. Its one
-    failure is `says` when given, else that rel cannot be read."""
+def _self_test_without(*rels: Path, make: Callable[[Path], object] = Path.unlink,
+                       says: tuple[str, ...] | None = None) -> bool:
+    """--self-test in a tree where make(root / rel) has left each of rels
+    unreadable (by default, removed) names each and exits 1, with no
+    traceback. Its failures, one per rel in the order given, are `says` when
+    given, else that each rel cannot be read."""
     with _tree({"spec": [_atx("1.1 ATX schema")]}) as root:
-        make(root / rel)
+        for rel in rels:
+            make(root / rel)
         script = root / "scripts" / Path(__file__).name
         script.parent.mkdir()
         shutil.copyfile(Path(__file__).resolve(), script)
@@ -679,10 +682,12 @@ def _self_test_without(rel: Path, make: Callable[[Path], object] = Path.unlink,
     if proc is None:
         return False
     lines = proc.stdout.splitlines()
-    return (proc.returncode == 1 and not proc.stderr and len(lines) == 2
-            and (lines[0] == f"FAIL {says}" if says is not None
-                 else lines[0].startswith(f"FAIL {rel}: cannot be read ("))
-            and lines[1] == "self-test: not run")
+    fails = lines[:-1]
+    return (proc.returncode == 1 and not proc.stderr and len(lines) == len(rels) + 1
+            and (fails == [f"FAIL {said}" for said in says] if says is not None
+                 else all(line.startswith(f"FAIL {rel}: cannot be read (")
+                          for line, rel in zip(fails, rels)))
+            and lines[-1] == "self-test: not run")
 
 
 def _shows_deep() -> bool:
@@ -723,12 +728,18 @@ def _permissions_stop_reads() -> bool:
     """Whether a file with no read permission, in a directory made as _tree()
     makes one, fails to open. Tried rather than read from the effective uid:
     root, a process holding CAP_DAC_OVERRIDE and a filesystem that ignores
-    mode bits all open it, so the cases that need it are skipped there."""
+    mode bits all open it, so the cases that need it are skipped there. False
+    too where the chmod that takes its read permission raises, as on a
+    filesystem that refuses it (EPERM, ENOTSUP), so those cases are skipped
+    there rather than ending the self-test in a traceback."""
     tmp = Path(tempfile.mkdtemp(prefix="spec-refs-"))
     try:
         probe = tmp / "probe"
         probe.write_bytes(b"")
-        probe.chmod(0)
+        try:
+            probe.chmod(0)
+        except OSError:
+            return False
         try:
             probe.open("rb").close()
         except PermissionError:
@@ -739,13 +750,18 @@ def _permissions_stop_reads() -> bool:
 
 
 def _chmod_does_nothing() -> bool:
-    """Whether Path.chmod leaves a file's mode as it was."""
+    """Whether Path.chmod leaves a file's mode as it was. False where it
+    raises instead, as where os.chmod refuses, so the case that reads this
+    skips rather than ending the self-test in a traceback."""
     tmp = Path(tempfile.mkdtemp(prefix="spec-refs-"))
     try:
         probe = tmp / "probe"
         probe.write_bytes(b"")
         mode = probe.stat().st_mode
-        probe.chmod(0)
+        try:
+            probe.chmod(0)
+        except OSError:
+            return False
         return probe.stat().st_mode == mode
     finally:
         _remove(tmp)
@@ -762,6 +778,38 @@ def _mode_bits_ignored() -> Iterator[bool]:
     os.chmod = lambda *args, **kwargs: None
     try:
         yield _chmod_does_nothing()
+    finally:
+        os.chmod = chmod
+
+
+def _chmod_raises() -> bool:
+    """Whether Path.chmod raises an OSError on a file it could create."""
+    tmp = Path(tempfile.mkdtemp(prefix="spec-refs-"))
+    try:
+        probe = tmp / "probe"
+        probe.write_bytes(b"")
+        try:
+            probe.chmod(0)
+        except OSError:
+            return True
+        return False
+    finally:
+        _remove(tmp)
+
+
+@contextlib.contextmanager
+def _chmod_refused() -> Iterator[bool]:
+    """os.chmod raises inside, as on a filesystem that refuses it. Yields
+    whether Path.chmod, which the cases call, raises too, as
+    _mode_bits_ignored() yields whether it does nothing."""
+    chmod = os.chmod
+
+    def refuse(path: object, *args: object, **kwargs: object) -> None:
+        raise OSError(errno.ENOTSUP, os.strerror(errno.ENOTSUP), str(path))
+
+    os.chmod = refuse
+    try:
+        yield _chmod_raises()
     finally:
         os.chmod = chmod
 
@@ -846,8 +894,9 @@ def _check_unreadable(make: Callable[[Path], object], **tree: object) -> list[st
 
 
 # Every control character, and every other character str.splitlines() ends a
-# line at, as the backslash escape repr() writes it.
-_ONE_LINE = {c: repr(chr(c))[1:-1] for c in (*range(0x20), *range(0x7F, 0xA0), 0x2028, 0x2029)}
+# line at, as the backslash escape repr() writes it, and a backslash doubled,
+# as repr() writes it, so an escape cannot be read as text that carried one.
+_ONE_LINE = {c: repr(chr(c))[1:-1] for c in (*range(0x20), *range(0x7F, 0xA0), 0x2028, 0x2029, 0x5C)}
 
 
 def _raised(exc: Exception) -> str:
@@ -855,13 +904,17 @@ def _raised(exc: Exception) -> str:
     the innermost line of this script it was raised through and the function
     that line is in, which the traceback would have named. A line break or
     other control character in the text is written as a backslash escape, so
-    the label this ends stays on one line."""
+    the label this ends stays on one line, and a backslash in the text is
+    doubled, so a newline and the two characters backslash and n are not
+    written alike. The text is escaped before printable() writes a character
+    that is not valid UTF-8 as a backslash escape, so that escape is not
+    doubled."""
     where, tb = "", exc.__traceback__
     while tb is not None:
         if tb.tb_frame.f_globals is globals():
             where = f", at line {tb.tb_lineno} in {tb.tb_frame.f_code.co_name}"
         tb = tb.tb_next
-    return printable(f"{type(exc).__name__}: {exc}{where}").translate(_ONE_LINE)
+    return printable(f"{type(exc).__name__}: {exc}{where}".translate(_ONE_LINE))
 
 
 def _reasoned(label: str, case: Callable[[], bool | None]) -> tuple[str, bool | None]:
@@ -936,8 +989,16 @@ def _self_test_core_dir_unsearchable() -> bool | None:
     no traceback; None (skipped) where permissions do not stop a read."""
     if not _permissions_stop_reads():
         return None
-    return _self_test_without(CORE_MD, _unsearchable,
-                              says=f"{CORE_MD}: cannot be read (Permission denied)")
+    return _self_test_without(CORE_MD, make=_unsearchable,
+                              says=(f"{CORE_MD}: cannot be read (Permission denied)",))
+
+
+def _no_read_permission_cases() -> tuple[Callable[[], bool | None], ...]:
+    """Every case that _permissions_stop_reads() skips."""
+    return (_unreadable_readme, _core_no_read_permission, _core_dir_unsearchable,
+            _workflow_dir_unsearchable, _self_test_core_dir_unsearchable,
+            _linked_dir_unsearchable, _root_unsearchable,
+            *(functools.partial(_citation_dir_unlistable, rel) for rel in CITATION_DIRS))
 
 
 def _skips_where_reads_allowed() -> bool | None:
@@ -947,11 +1008,20 @@ def _skips_where_reads_allowed() -> bool | None:
     with _mode_bits_ignored() as ignored:
         if not ignored:
             return None
-        return all(case() is None for case in (
-            _unreadable_readme, _core_no_read_permission, _core_dir_unsearchable,
-            _workflow_dir_unsearchable, _self_test_core_dir_unsearchable,
-            _linked_dir_unsearchable, _root_unsearchable,
-            *(functools.partial(_citation_dir_unlistable, rel) for rel in CITATION_DIRS)))
+        return all(case() is None for case in _no_read_permission_cases())
+
+
+def _skips_where_chmod_raises() -> bool | None:
+    """Every no-read-permission case skips, rather than raising out of the
+    self-test, where chmod raises. None (skipped) where _chmod_refused()
+    cannot make Path.chmod raise, which would fail it falsely."""
+    with _chmod_refused() as refused:
+        if not refused:
+            return None
+        try:
+            return all(case() is None for case in _no_read_permission_cases())
+        except OSError:
+            return False
 
 
 @contextlib.contextmanager
@@ -971,11 +1041,41 @@ def _chmod_bound_at_import() -> Iterator[None]:
             cls.chmod = own
 
 
-def _skips_where_chmod_bound() -> bool:
-    """_skips_where_reads_allowed() is skipped, not failed, where Path.chmod
-    does not call os.chmod through the module."""
+def _skips_where_chmod_bound() -> bool | None:
+    """_skips_where_reads_allowed() and _skips_where_chmod_raises() are
+    skipped, not failed, where Path.chmod does not call os.chmod through the
+    module. None (skipped) where Path.chmod already raises: a chmod bound at
+    import time cannot then be told from one that refuses, and the cases
+    inside would run under a chmod that raises either way."""
+    if _chmod_raises():
+        return None
     with _chmod_bound_at_import():
-        return _skips_where_reads_allowed() is None
+        return _skips_where_reads_allowed() is None and _skips_where_chmod_raises() is None
+
+
+def _self_test_where_chmod_refuses() -> bool | None:
+    """--self-test in a child whose os.chmod raises before the script runs,
+    as on a filesystem that refuses it, runs every case to the end and exits
+    0 with no traceback, skipping exactly the no-read-permission cases, the
+    case that binds Path.chmod at import time and this one. None (skipped)
+    where Path.chmod already raises, which is the child's own state."""
+    if _chmod_raises():
+        return None
+    refusing = ("import errno, os, runpy, sys\n"
+                "def refuse(path, *args, **kwargs):\n"
+                "    raise OSError(errno.ENOTSUP, os.strerror(errno.ENOTSUP), str(path))\n"
+                "os.chmod = refuse\n"
+                "sys.argv = [sys.argv[1], '--self-test']\n"
+                "runpy.run_path(sys.argv[0], run_name='__main__')\n")
+    proc = _run([sys.executable, "-c", refusing, str(Path(__file__).resolve())])
+    if proc is None:
+        return False
+    lines = proc.stdout.splitlines()
+    skipped = len(_no_read_permission_cases()) + 2
+    return (proc.returncode == 0 and not proc.stderr and bool(lines)
+            and not any(line.startswith("  [RED  ]") for line in lines)
+            and re.fullmatch(rf"self-test: (\d+)/\1 cases green, {skipped} skipped", lines[-1])
+            is not None)
 
 
 def _restores_chmod() -> bool:
@@ -1091,11 +1191,13 @@ def _red_labels_one_line() -> bool:
     """Every case of _unreadable_tree_cases() that is not skipped, run while
     check() raises with text that carries line breaks and other control
     characters, ends its label, still one line, with that text, each such
-    character written as a backslash escape."""
-    with _check_broken("line one\nline two\r\tthree\x00\x85\u2028four"):
+    character written as a backslash escape, each backslash the text carries
+    doubled, and a character that is not valid UTF-8 written as the one
+    backslash escape printable() writes."""
+    with _check_broken("line one\nline two\r\tthree\x00\x85\u2028four\\nfive\udcff\\udcffsix"):
         ran = [label for label, ok in _unreadable_tree_cases() if ok is not None]
-    said = re.compile(r" \(raised TypeError: line one\\nline two\\r\\tthree\\x00\\x85\\u2028four, "
-                      r"at line [1-9][0-9]* in broken\)\Z")
+    said = re.compile(r" \(raised TypeError: line one\\nline two\\r\\tthree\\x00\\x85\\u2028four"
+                      r"\\\\nfive\\udcff\\\\udcffsix, at line [1-9][0-9]* in broken\)\Z")
     return len(ran) >= len(LINKED_DOCS) and all(
         len(label.splitlines()) == 1 and said.search(label) is not None for label in ran)
 
@@ -1241,14 +1343,18 @@ def self_test() -> int:
          and WORKFLOW_MISSING == f"{WORKFLOW} is missing; restore it, as its atx-spec checkout "
                                  f"pins the commit {CORE_MD} was vendored at"),
         ("--self-test in a tree with no workflow names it as missing, in the check's words, "
-         "and exits 1, with no traceback", _self_test_without(WORKFLOW, says=WORKFLOW_MISSING)),
+         "and exits 1, with no traceback", _self_test_without(WORKFLOW, says=(WORKFLOW_MISSING,))),
         ("--self-test in a tree whose vendored core.md is in a directory it cannot search "
          "names core.md as unreadable, not missing, and exits 1, with no traceback",
          _self_test_core_dir_unsearchable()),
         ("--self-test in a tree with no vendored core.md names it as missing, in the check's "
-         "words, and exits 1, with no traceback", _self_test_without(CORE_MD, says=CORE_MD_MISSING)),
+         "words, and exits 1, with no traceback",
+         _self_test_without(CORE_MD, says=(CORE_MD_MISSING,))),
         ("--self-test in a tree with a directory named like the vendored core.md names it and "
-         "exits 1, with no traceback", _self_test_without(CORE_MD, _as_directory)),
+         "exits 1, with no traceback", _self_test_without(CORE_MD, make=_as_directory)),
+        ("--self-test in a tree with neither the workflow nor the vendored core.md names both "
+         "as missing, in the check's words, one failure each, and exits 1, with no traceback",
+         _self_test_without(WORKFLOW, CORE_MD, says=(WORKFLOW_MISSING, CORE_MD_MISSING))),
         ("reports a fixture with no spec member by name", _names_probe(_probe_doc({"name": "x"}))),
         ("reports a fixture that is not JSON by name", _names_probe(_probe_doc("{"))),
         ("reports a citation that is not an object by name", _names_probe(_probe(["ATX"]))),
@@ -1384,10 +1490,15 @@ def self_test() -> int:
          _reads_core_once()),
         ("skips every no-read-permission case, rather than failing it, where a file with "
          "no read permission can still be read", _skips_where_reads_allowed()),
-        ("skips, rather than fails, the case above where Path.chmod does not call os.chmod "
-         "through the module", _skips_where_chmod_bound()),
+        ("skips every no-read-permission case, with no traceback, where chmod raises",
+         _skips_where_chmod_raises()),
+        ("skips, rather than fails, the two cases above where Path.chmod does not call "
+         "os.chmod through the module", _skips_where_chmod_bound()),
         ("puts Path.chmod back as it found it on leaving the case above, normally or by an "
          "exception, whether or not the path class set its own", _restores_chmod()),
+        ("runs every case to the end and exits 0, with no traceback, where os.chmod raises "
+         "before --self-test starts, skipping only the no-read-permission cases, the case that "
+         "binds Path.chmod at import time and itself", _self_test_where_chmod_refuses()),
         ("raises, rather than reading as a check failure, a vendored core.md a case could not "
          "make unreadable", _unmade_core_raises()),
         ("fails, with no traceback, a case whose tree it could not make unreadable, here by "
@@ -1405,7 +1516,8 @@ def self_test() -> int:
          _red_cases_say_why()),
         ("keeps on one line the label of a case that is red because check() raised with "
          "text that carries a line break or other control character, written as a "
-         "backslash escape", _red_labels_one_line()),
+         "backslash escape, with each backslash the text carries doubled",
+         _red_labels_one_line()),
         ("says what a case's make() raised in that case's label, and nothing an earlier "
          "case raised in the label of one in which nothing raised", _says_only_its_own()),
         ("--help prints usage and runs no check",
