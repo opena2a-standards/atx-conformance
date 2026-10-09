@@ -1038,6 +1038,12 @@ def _unmade_tree_fails(make: Callable[[Path], object],
         return False
 
 
+def _mkdir_on_readme(root: Path) -> None:
+    """A make that raises an OSError: a mkdir on the README.md the tree
+    already holds."""
+    (root / "README.md").mkdir()
+
+
 def _refuse_not_os(root: Path) -> None:
     """A make that raises an exception other than an OSError."""
     raise ValueError(f"{root}: not made unreadable")
@@ -1102,6 +1108,22 @@ def _says_only_its_own() -> bool:
     said = r"label \(raised ValueError: .+: not made unreadable, at line [1-9][0-9]* in _refuse_not_os\)"
     return (ok is False and re.fullmatch(said, label) is not None and len(_RAISED) == 1
             and _reasoned("label", lambda: True) == ("label", True))
+
+
+# A label that picks out another case by where it stands among the cases, as
+# "the first of the two cases above" did, turns wrong when a case moves, and
+# nothing turns red. The rank word is read as naming a case where "case",
+# "of", "where", "above" or "below" follows it, so "the last one's query
+# string", which names a link, is not.
+_BY_RANK_RE = re.compile(
+    r"\bthe (?:first|second|third|fourth|last|former|latter) (?:case|of|where|above|below)\b",
+    re.IGNORECASE)
+
+
+def _by_rank(labels: list[str]) -> list[str]:
+    """The labels that name another case by its rank among the cases rather
+    than by what it runs."""
+    return [label for label in labels if _BY_RANK_RE.search(label)]
 
 
 class _Undecodable(type(Path())):
@@ -1369,15 +1391,14 @@ def self_test() -> int:
         ("raises, rather than reading as a check failure, a vendored core.md a case could not "
          "make unreadable", _unmade_core_raises()),
         ("fails, with no traceback, a case whose tree it could not make unreadable, here by "
-         "a mkdir on a README.md the tree already holds",
-         _unmade_tree_fails(lambda root: (root / "README.md").mkdir())),
+         "a mkdir on a README.md the tree already holds", _unmade_tree_fails(_mkdir_on_readme)),
         ("fails, with no traceback, a case whose tree it could not make unreadable by an "
          "exception other than an OSError", _unmade_tree_fails(_refuse_not_os)),
-        ("fails, with no traceback, the first of the two cases above where its helper lets "
-         "the mkdir's OSError out rather than returning None",
-         not _unmade_tree_fails(lambda root: (root / "README.md").mkdir(), _check_unguarded)),
-        ("fails, with no traceback, the second where its helper lets the exception other "
-         "than an OSError out rather than returning None",
+        ("fails, with no traceback, a case whose helper lets out, rather than returning None, "
+         "the OSError of a mkdir on a README.md the tree already holds",
+         not _unmade_tree_fails(_mkdir_on_readme, _check_unguarded)),
+        ("fails, with no traceback, a case whose helper lets out, rather than returning None, "
+         "an exception other than an OSError",
          not _unmade_tree_fails(_refuse_not_os, _check_unguarded)),
         ("says, in the label of every case that is red because check() raised on its "
          "unreadable tree, what was raised and the line and function that raised it",
@@ -1419,6 +1440,13 @@ def self_test() -> int:
              "README.md:1: carries a URL more than 8 links deep in other links' query strings "
              "or #fragments, deeper than the check reads. Link it at most 8 deep."]),
     ]
+    # After every other case but the last, so it reads their labels. It also
+    # holds _by_rank() to the wording a label once named two cases by.
+    ranked = _by_rank([label for label, _ in cases])
+    cases.append(("names, in every label, another case by what it runs rather than by its rank "
+                  "among the cases" + "".join(f" (by rank: {label})" for label in ranked),
+                  not ranked and len(_by_rank(["the first of the two cases above",
+                                               "the second where its helper lets"])) == 2))
     # Last, so it sees every temporary tree the cases above built.
     left = ", ".join(printable(str(tmp)) for tmp in _LEFT)
     cases.append(("removes every temporary tree it builds" + (f" (left: {left})" if left else ""),
