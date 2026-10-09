@@ -488,19 +488,11 @@ def _probe_doc(fixture: object, **tree: object) -> list[str]:
         return check(root)
 
 
-def _probe_path(make: Callable[[Path], object]) -> list[str]:
-    """check() on a tree whose probe fixture path is made by make(path)."""
+def _probe_tree(mutate: Callable[[Path], object]) -> list[str]:
+    """check() on a tree that cites one heading, after mutate(root) has
+    changed it."""
     with _tree({"spec": [_atx("1.1 ATX schema")]}) as root:
-        probe = root / "fixtures" / "probe.json"
-        probe.unlink()
-        make(probe)
-        return check(root)
-
-
-def _no_workflow() -> list[str]:
-    """check() on a tree that has no CI workflow."""
-    with _tree({"spec": [_atx("1.1 ATX schema")]}) as root:
-        (root / WORKFLOW).unlink()
+        mutate(root)
         return check(root)
 
 
@@ -625,12 +617,10 @@ def _as_directory(path: Path) -> None:
 def _unreadable_core(make: Callable[[Path], object]) -> bool:
     """check() names, once, a vendored core.md that make(path) has left
     unreadable. A read with no handler raises, which fails the case."""
-    with _tree({"spec": [_atx("1.1 ATX schema")]}) as root:
-        make(root / CORE_MD)
-        try:
-            failures = check(root)
-        except OSError:
-            return False
+    try:
+        failures = _probe_tree(lambda root: make(root / CORE_MD))
+    except OSError:
+        return False
     return _once(failures, f"{CORE_MD}: cannot be read (")
 
 
@@ -683,12 +673,13 @@ def self_test() -> int:
     stale = "https://github.com/opena2a-standards/atx-spec/blob/main/core.md"
     core_not_utf8 = _probe([good], core_extra=b"\xff")
     workflow_not_utf8 = _probe([good], workflow=workflow.encode("utf-8") + b"\xff")
-    no_workflow = _no_workflow()
+    no_workflow = _probe_tree(lambda root: (root / WORKFLOW).unlink())
     # None marks a case skipped where it cannot run.
     cases: list[tuple[str, bool | None]] = [(f"rejects retired string {s!r}", bool(_probe([_atx(s)])))
                                      for s in RETIRED_SECTIONS]
     cases += [
         ("accepts heading '1.1 ATX schema'", not _probe([good])),
+        ("accepts the tree that each _probe_tree() case changes", not _probe_tree(lambda root: None)),
         ("accepts heading '6. Transparency log'", not _probe([_atx("6. Transparency log")])),
         ("rejects a section sign added to a heading", bool(_probe([_atx("§1.1 ATX schema")]))),
         ("rejects a heading without its number", bool(_probe([_atx("Transparency log")]))),
@@ -734,7 +725,8 @@ def self_test() -> int:
         ("reports a conformance.json whose requirements is not a list",
          _probe([good], profile={"requirements": {"specRefs": [good]}})
          == ["conformance.json: 'requirements' is not a list"]),
-        ("reports a directory named like a fixture by name", _names_probe(_probe_path(Path.mkdir))),
+        ("reports a directory named like a fixture by name",
+         _names_probe(_probe_tree(lambda root: _as_directory(root / "fixtures" / "probe.json")))),
         ("reports a fixture nested too deeply to parse by name",
          _names_probe(_probe_doc('{"spec": ' + _deep() + "}"))),
         ("reports a deeply nested ATX ref by name",
