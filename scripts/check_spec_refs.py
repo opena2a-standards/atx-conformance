@@ -1465,13 +1465,17 @@ def _unneeded_words(wordings: tuple[str, ...] = _BY_RANK_WORDINGS) -> list[str]:
     return unneeded + (["re.IGNORECASE"] if all_read(_by_rank_re(flags=0)) else [])
 
 
+def _unneeded_without(*taken: str) -> list[str]:
+    """_unneeded_words() on the wordings _by_rank() is held to, with those in
+    taken left out."""
+    return _unneeded_words(tuple(w for w in _BY_RANK_WORDINGS if w not in taken))
+
+
 def _finds_unneeded_pieces() -> bool:
     """_unneeded_words() names "both", the words joined to a rank by a
     hyphen, the count after a rank and "the" with a count before "cases"
     alone, each once the wordings that need it are taken out."""
-    def without(*taken: str) -> list[str]:
-        return _unneeded_words(tuple(w for w in _BY_RANK_WORDINGS if w not in taken))
-
+    without = _unneeded_without
     return ("both" in without("both cases above")
             and "(?:[a-z]+-)*" in without("the twenty-first case", "the second-to-last case")
             and "(?: {count})?" in without("the last two cases", "the last three cases",
@@ -1480,6 +1484,25 @@ def _finds_unneeded_pieces() -> bool:
             and "the {count}" in without("the two cases above", "the five cases above",
                                          "the seven cases below", "the nine cases above",
                                          "the 11 cases above"))
+
+
+# A word _by_rank() reads as a rank, one it reads as a count, one it reads
+# after them and its re.IGNORECASE flag, each with what it stands for and
+# the wordings that alone need it. Taking out the sweep of _RANKS, _COUNTS
+# or _AFTER_RANKS, or of the flag, from _unneeded_words() leaves the word
+# unnamed once those wordings are taken out.
+_NEEDED_ALONE_BY = (("rank", "final", ("the final case",)),
+                    ("count", "[0-9]+", ("the 11 cases above",)),
+                    ("word after them", "below", ("the next below",)),
+                    ("flag", "re.IGNORECASE", ("The Last Case",)))
+
+
+def _unfound_unneeded_words() -> list[str]:
+    """Each word of _NEEDED_ALONE_BY, after what it stands for, that
+    _unneeded_words() does not name once the wordings that alone need it
+    are taken out."""
+    return [f"{kind} {word}" for kind, word, taken in _NEEDED_ALONE_BY
+            if word not in _unneeded_without(*taken)]
 
 
 class _Undecodable(type(Path())):
@@ -1558,6 +1581,7 @@ def self_test() -> int:
     workflow_not_utf8 = _probe([good], workflow=workflow.encode("utf-8") + b"\xff")
     no_workflow = _probe_tree(lambda root: (root / WORKFLOW).unlink())
     hung, hung_seconds = _hung_child()
+    unfound = _unfound_unneeded_words()
     # None marks a case skipped where it cannot run.
     cases: list[tuple[str, bool | None]] = [(f"rejects retired string {s!r}", bool(_probe([_atx(s)])))
                                      for s in RETIRED_SECTIONS]
@@ -1787,6 +1811,10 @@ def self_test() -> int:
          "and \"the\" with a count before \"cases\" needed by no wording, each once the "
          "wordings that need it are taken out of those the by-rank label check is held to",
          _finds_unneeded_pieces()),
+        ("finds a word read as a rank, one read as a count, one read after them and the "
+         "re.IGNORECASE flag needed by no wording, each once the wordings that need it are "
+         "taken out of those the by-rank label check is held to"
+         + "".join(f" (not found: {word})" for word in unfound), not unfound),
         ("--help prints usage and runs no check",
          help_rc == 0 and help_out == USAGE and "every ATX citation" not in help_out),
         ("-h prints usage and runs no check", h_rc == 0 and h_out == USAGE),
