@@ -232,13 +232,27 @@ def _read_bytes(root: Path, rel: Path, failures: list[str]) -> bytes | None:
     return None
 
 
+def _not_utf8(rel: Path, exc: ValueError, what: str) -> str:
+    return f"{rel}: is not UTF-8 text ({exc}), so {what} cannot be read"
+
+
+def _decode(rel: Path, data: bytes, what: str, failures: list[str]) -> str | None:
+    """data, the bytes already read from rel, as UTF-8 text, or None with a
+    failure that names rel and says that `what` cannot be read."""
+    try:
+        return data.decode("utf-8")
+    except ValueError as exc:
+        failures.append(_not_utf8(rel, exc, what))
+    return None
+
+
 def _read_text(root: Path, rel: Path, what: str, failures: list[str]) -> str | None:
     """The text of root/rel, or None with a failure that names rel and says
     that `what` cannot be read."""
     try:
         return (root / rel).read_text(encoding="utf-8")
     except ValueError as exc:
-        failures.append(f"{rel}: is not UTF-8 text ({exc}), so {what} cannot be read")
+        failures.append(_not_utf8(rel, exc, what))
     except OSError as exc:
         failures.append(f"{rel}: cannot be read ({exc.strerror or type(exc).__name__})")
     return None
@@ -377,9 +391,10 @@ def check(root: Path) -> list[str]:
     failures: list[str] = []
     core_bytes = _read_bytes(root, CORE_MD, failures)
     failures += pin_failures(root, core_bytes) + link_failures(root)
-    # A core.md that cannot be opened has failed above, once: its text is not
-    # read for a second failure that says the same.
-    core_text = None if core_bytes is None else _read_text(root, CORE_MD, "its headings", failures)
+    # The headings are decoded from the bytes whose digest was taken, so they
+    # cannot come from a core.md changed after that read. A core.md that cannot
+    # be opened has failed above, once, and has no text to decode.
+    core_text = None if core_bytes is None else _decode(CORE_MD, core_bytes, "its headings", failures)
     # None when core.md cannot be read: that has failed, and no section is
     # held to headings that could not be read.
     headings = None if core_text is None else core_headings(core_text)
@@ -635,6 +650,24 @@ class _Undecodable(type(Path())):
         return rel.with_name("bad-\udcff.json") if rel.name == "probe.json" else rel
 
 
+class _EmptiedAfterRead(type(Path())):
+    """A path whose core.md is emptied on disk as soon as its bytes are read,
+    as if it changed between two reads."""
+
+    def read_bytes(self) -> bytes:
+        data = super().read_bytes()
+        if self.name == CORE_MD.name:
+            self.write_bytes(b"")
+        return data
+
+
+def _reads_core_once() -> bool:
+    """check() takes the headings from the core.md bytes whose digest it took:
+    a core.md emptied after that read still has every heading cited."""
+    with _tree({"spec": [_atx("1.1 ATX schema")]}) as root:
+        return not check(_EmptiedAfterRead(root))
+
+
 def _names_undecodable() -> bool:
     """cited_files() names a fixture and a JCS vector called bad-<0xFF>.json
     by name, in a form that prints under a UTF-8 locale."""
@@ -823,6 +856,8 @@ def self_test() -> int:
          _unreadable_core(lambda core: core.chmod(0)) if _permissions_stop_reads() else None),
         ("reports, once, a directory named like the vendored core.md by name",
          _unreadable_core(_as_directory)),
+        ("reads the headings from the core.md bytes whose digest it took, not a second read",
+         _reads_core_once()),
         ("--help prints usage and runs no check",
          help_rc == 0 and help_out == USAGE and "every ATX citation" not in help_out),
         ("-h prints usage and runs no check", h_rc == 0 and h_out == USAGE),
