@@ -52,8 +52,8 @@ exist by editing it:
 A core.md or workflow that cannot be read as UTF-8 text fails by name, as does
 a core.md that cannot be opened (a directory, no read permission), once; no
 citation is held to the headings of a core.md that cannot be read. The
-self-test copies the workflow into each case's tree, so a workflow it cannot
-read fails by name before any case runs.
+self-test copies core.md, and the workflow, into the trees its cases build, so
+a core.md or workflow it cannot read fails by name before any case runs.
 
 Every link to atx-spec core.md in LINKED_DOCS (README.md and
 verifiers/go/verify.go) must also equal CORE_REF, apart from a query string, a
@@ -546,31 +546,42 @@ def _main_output(argv: list[str]) -> tuple[int, str, str]:
     return rc, out.getvalue(), err.getvalue()
 
 
+def _run(argv: list[str], timeout: float = 60) -> subprocess.CompletedProcess[str] | None:
+    """The finished child process, or None, which fails the case, when it has
+    not ended within timeout seconds; subprocess.run() has then killed it."""
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired:
+        return None
+
+
+def _hung_child_fails() -> bool:
+    """_run() returns None for a child that outlives its timeout, rather than
+    raising TimeoutExpired out of the self-test."""
+    return _run([sys.executable, "-c", "import time; time.sleep(60)"], timeout=0.5) is None
+
+
 def _usage_under_oo() -> bool:
     """`python -OO` strips docstrings; the module must still import and print
     its usage."""
-    proc = subprocess.run(
-        [sys.executable, "-OO", str(Path(__file__).resolve()), "--help"],
-        capture_output=True, text=True, timeout=60, check=False,
-    )
-    return proc.returncode == 0 and proc.stdout == USAGE
+    proc = _run([sys.executable, "-OO", str(Path(__file__).resolve()), "--help"])
+    return proc is not None and proc.returncode == 0 and proc.stdout == USAGE
 
 
-def _self_test_without_workflow() -> bool:
-    """--self-test in a tree with no CI workflow names the workflow and exits
-    1, with no traceback."""
+def _self_test_without(rel: Path, make: Callable[[Path], object] = Path.unlink) -> bool:
+    """--self-test in a tree where make(root / rel) has left rel unreadable
+    (by default, removed) names rel and exits 1, with no traceback."""
     with _tree({"spec": [_atx("1.1 ATX schema")]}) as root:
-        (root / WORKFLOW).unlink()
+        make(root / rel)
         script = root / "scripts" / Path(__file__).name
         script.parent.mkdir()
         shutil.copyfile(Path(__file__).resolve(), script)
-        proc = subprocess.run(
-            [sys.executable, str(script), "--self-test"],
-            capture_output=True, text=True, timeout=60, check=False,
-        )
+        proc = _run([sys.executable, str(script), "--self-test"])
+    if proc is None:
+        return False
     lines = proc.stdout.splitlines()
     return (proc.returncode == 1 and not proc.stderr and len(lines) == 2
-            and lines[0].startswith(f"FAIL {WORKFLOW}: cannot be read (")
+            and lines[0].startswith(f"FAIL {rel}: cannot be read (")
             and lines[1] == "self-test: not run")
 
 
@@ -656,11 +667,14 @@ def _as_directory(path: Path) -> None:
 
 def _unreadable_core(make: Callable[[Path], object]) -> bool:
     """check() names, once, a vendored core.md that make(path) has left
-    unreadable. A read with no handler raises, which fails the case."""
-    try:
-        failures = _probe_tree(lambda root: make(root / CORE_MD))
-    except OSError:
-        return False
+    unreadable. A read with no handler raises, which fails the case; make()
+    raising is not a check failure, and is raised."""
+    with _tree({"spec": [_atx("1.1 ATX schema")]}) as root:
+        make(root / CORE_MD)
+        try:
+            failures = check(root)
+        except OSError:
+            return False
     return _once(failures, f"{CORE_MD}: cannot be read (")
 
 
@@ -677,6 +691,18 @@ def _skips_where_reads_allowed() -> bool:
     no read permission can still be read."""
     with _mode_bits_ignored():
         return _unreadable_readme() is None and _core_no_read_permission() is None
+
+
+def _unmade_core_raises() -> bool:
+    """A core.md that _unreadable_core() could not make unreadable raises out
+    of it, rather than reading as check() failing on it."""
+    def refuse(path: Path) -> None:
+        raise PermissionError(13, "Permission denied", str(path))
+    try:
+        _unreadable_core(refuse)
+    except PermissionError:
+        return True
+    return False
 
 
 class _Undecodable(type(Path())):
@@ -727,12 +753,16 @@ def self_test() -> int:
     aip = {"id": "AIP", "ref": "https://example.org/AIP-SPEC.md", "section": "anything"}
     good = _atx("1.1 ATX schema")
     jcs = _atx('1.3a.2 JCS form (`atcVersion` = "1.1")')
-    # Every case's tree holds a copy of the CI workflow, so none can run
-    # without it.
+    # A case that builds a tree copies the vendored core.md into it and,
+    # unless it writes its own workflow text, the CI workflow; the cases that
+    # edit the workflow start from its text. Both are read here, before any
+    # case runs, so one that cannot be read fails by name, not in a traceback.
     unread: list[str] = []
     workflow = _read_text(ROOT, WORKFLOW, "its atx-spec pin", unread)
-    if workflow is None:
-        print(f"FAIL {unread[0]}")
+    _read_bytes(ROOT, CORE_MD, unread)
+    if workflow is None or unread:
+        for f in unread:
+            print(f"FAIL {f}")
         print("self-test: not run")
         return 1
     second_pin = workflow + (
@@ -784,7 +814,11 @@ def self_test() -> int:
         ("rejects a tree with no workflow, as one that pins no atx-spec commit",
          len(no_workflow) == 1 and no_workflow[0].startswith(f"{WORKFLOW} pins atx-spec at no commit, ")),
         ("--self-test in a tree with no workflow names it and exits 1, with no traceback",
-         _self_test_without_workflow()),
+         _self_test_without(WORKFLOW)),
+        ("--self-test in a tree with no vendored core.md names it and exits 1, with no traceback",
+         _self_test_without(CORE_MD)),
+        ("--self-test in a tree with a directory named like the vendored core.md names it and "
+         "exits 1, with no traceback", _self_test_without(CORE_MD, _as_directory)),
         ("reports a fixture with no spec member by name", _names_probe(_probe_doc({"name": "x"}))),
         ("reports a fixture that is not JSON by name", _names_probe(_probe_doc("{"))),
         ("reports a citation that is not an object by name", _names_probe(_probe(["ATX"]))),
@@ -904,6 +938,8 @@ def self_test() -> int:
          _reads_core_once()),
         ("skips both no-read-permission cases, rather than failing them, where a file with "
          "no read permission can still be read", _skips_where_reads_allowed()),
+        ("raises, rather than reading as a check failure, a vendored core.md a case could not "
+         "make unreadable", _unmade_core_raises()),
         ("--help prints usage and runs no check",
          help_rc == 0 and help_out == USAGE and "every ATX citation" not in help_out),
         ("-h prints usage and runs no check", h_rc == 0 and h_out == USAGE),
@@ -911,6 +947,8 @@ def self_test() -> int:
          bad_rc == 2 and bad_err == USAGE and not bad_out),
         ("the docstring's Usage block is USAGE", __doc__ is None or __doc__.endswith(USAGE)),
         ("imports and prints usage under python -OO", _usage_under_oo()),
+        ("fails, with no traceback, a case whose child process outlives its timeout",
+         _hung_child_fails()),
         ("skips fenced code when reading headings",
          core_headings("```\n# not a heading\n```\n## 1. Real\n") == {"1. Real"}),
         ("strips a closing # run", core_headings("## 2. Closed ##\n") == {"2. Closed"}),
