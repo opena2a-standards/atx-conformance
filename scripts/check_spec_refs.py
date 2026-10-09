@@ -1214,12 +1214,33 @@ def _says_only_its_own() -> bool:
 
 # A label that picks out another case by where it stands among the cases, as
 # "the first of the two cases above" did, turns wrong when a case moves, and
-# nothing turns red. The rank word is read as naming a case where "case",
-# "of", "where", "above" or "below" follows it, so "the last one's query
-# string", which names a link, is not.
+# nothing turns red. A rank word, an ordinal ("first", "fifth", "21st",
+# "second-to-last") or a word such as "last", "next", "previous" or
+# "latter", is read as naming a case where "case", "cases", "of", "where",
+# "above", "below" or "one" follows it, a count such as "two" allowed between
+# them; "both cases" and "the two cases" name cases by rank as well. A
+# possessive "one's" is not read as a case, so "the last one's query string",
+# which names a link, is not.
+_COUNT = r"(?:two|three|four|five|six|seven|eight|nine|ten|[0-9]+)"
+_RANK = (r"(?:[a-z]+-)*(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth"
+         r"|eleventh|twelfth|[a-z]+teenth|[a-z]+tieth|hundredth|[0-9]+(?:st|nd|rd|th)"
+         r"|last|final|penultimate|former|latter|next|previous|preceding|following"
+         r"|earlier|later|prior)")
 _BY_RANK_RE = re.compile(
-    r"\bthe (?:first|second|third|fourth|last|former|latter) (?:case|of|where|above|below)\b",
+    rf"\bthe {_RANK}(?: {_COUNT})? (?:cases?|of|where|above|below|one(?!['’]))\b"
+    rf"|\b(?:both|the {_COUNT}) cases\b",
     re.IGNORECASE)
+# Wordings _by_rank() must read as naming a case by rank, and wordings it
+# must not.
+_BY_RANK_WORDINGS = (
+    "the first of the two cases above", "the second where its helper lets",
+    "the OSError, as the next case above does", "the previous one", "the fifth case",
+    "both cases above", "the two cases above", "the preceding case", "the following case",
+    "the earlier case", "the later case", "the 12th case", "the twenty-first case",
+    "the second-to-last case", "the last two cases")
+_NOT_BY_RANK_WORDINGS = (
+    "each in the last one's query string", "each in the last one’s #fragment",
+    "nothing an earlier case raised")
 
 
 def _by_rank(labels: list[str]) -> list[str]:
@@ -1492,8 +1513,9 @@ def self_test() -> int:
          "no read permission can still be read", _skips_where_reads_allowed()),
         ("skips every no-read-permission case, with no traceback, where chmod raises",
          _skips_where_chmod_raises()),
-        ("skips, rather than fails, the two cases above where Path.chmod does not call "
-         "os.chmod through the module", _skips_where_chmod_bound()),
+        ("skips, rather than fails, where Path.chmod does not call os.chmod through the "
+         "module, the cases that skip the no-read-permission cases where a file with no read "
+         "permission can still be read and where chmod raises", _skips_where_chmod_bound()),
         ("puts Path.chmod back as it found it on leaving the case above, normally or by an "
          "exception, whether or not the path class set its own", _restores_chmod()),
         ("runs every case to the end and exits 0, with no traceback, where os.chmod raises "
@@ -1553,12 +1575,16 @@ def self_test() -> int:
              "or #fragments, deeper than the check reads. Link it at most 8 deep."]),
     ]
     # After every other case but the last, so it reads their labels. It also
-    # holds _by_rank() to the wording a label once named two cases by.
+    # holds _by_rank() to the wordings that name a case by rank, the two a
+    # label once named two cases by among them, and to those that do not.
     ranked = _by_rank([label for label, _ in cases])
+    missed = [wording for wording in _BY_RANK_WORDINGS if not _by_rank([wording])]
+    misread = _by_rank(list(_NOT_BY_RANK_WORDINGS))
     cases.append(("names, in every label, another case by what it runs rather than by its rank "
-                  "among the cases" + "".join(f" (by rank: {label})" for label in ranked),
-                  not ranked and len(_by_rank(["the first of the two cases above",
-                                               "the second where its helper lets"])) == 2))
+                  "among the cases" + "".join(f" (by rank: {label})" for label in ranked)
+                  + "".join(f" (not read as by rank: {wording})" for wording in missed)
+                  + "".join(f" (read as by rank: {wording})" for wording in misread),
+                  not ranked and not missed and not misread))
     # Last, so it sees every temporary tree the cases above built.
     left = ", ".join(printable(str(tmp)) for tmp in _LEFT)
     cases.append(("removes every temporary tree it builds" + (f" (left: {left})" if left else ""),
