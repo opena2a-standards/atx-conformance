@@ -892,6 +892,10 @@ def self_test() -> int:
          and core_not_utf8[1].startswith(f"{CORE_MD}: is not UTF-8 text")),
         ("reports a workflow that is not UTF-8 by name, and no pin failure",
          len(workflow_not_utf8) == 1 and workflow_not_utf8[0].startswith(f"{WORKFLOW}: is not UTF-8 text")),
+        ("reports a missing vendored core.md by name, as its one failure, and tells the "
+         "author to vendor it from the pinned atx-spec ref",
+         _probe_tree(lambda root: (root / CORE_MD).unlink())
+         == [f"{CORE_MD} is missing; vendor core.md from the pinned atx-spec ref"]),
         ("reports, once, a vendored core.md it has no permission to read by name",
          _core_no_read_permission()),
         ("reports, once, a directory named like the vendored core.md by name",
