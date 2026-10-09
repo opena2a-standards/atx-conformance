@@ -49,7 +49,8 @@ exist by editing it:
     checks out for the vendored-schema drift gate, so moving that pin without
     re-vendoring core.md fails here.
 
-A core.md or workflow that cannot be read as UTF-8 text fails by name, and no
+A core.md or workflow that cannot be read as UTF-8 text fails by name, as does
+a core.md that cannot be opened (a directory, no read permission), once; no
 citation is held to the headings of a core.md that cannot be read.
 
 Every link to atx-spec core.md in LINKED_DOCS (README.md and
@@ -220,6 +221,15 @@ def _load(path: Path, where: str, failures: list[str]) -> object:
     return _UNREADABLE
 
 
+def _read_bytes(root: Path, rel: Path, failures: list[str]) -> bytes | None:
+    """The bytes of root/rel, or None with a failure that names rel."""
+    try:
+        return (root / rel).read_bytes()
+    except OSError as exc:
+        failures.append(f"{rel}: cannot be read ({exc.strerror or type(exc).__name__})")
+    return None
+
+
 def _read_text(root: Path, rel: Path, what: str, failures: list[str]) -> str | None:
     """The text of root/rel, or None with a failure that names rel and says
     that `what` cannot be read."""
@@ -272,11 +282,13 @@ def cited_files(root: Path) -> tuple[list[tuple[str, object]], list[str]]:
     return lists, failures
 
 
-def pin_failures(root: Path) -> list[str]:
-    """Whether the vendored core.md is core.md at the atx-spec commit CI pins."""
+def pin_failures(root: Path, core: bytes | None) -> list[str]:
+    """Whether core, the bytes of the vendored core.md, is core.md at the
+    atx-spec commit CI pins. core is None when core.md cannot be read: that
+    has failed, and no digest is taken."""
     failures: list[str] = []
-    digest = hashlib.sha256((root / CORE_MD).read_bytes()).hexdigest()
-    if digest != CORE_MD_SHA256:
+    digest = None if core is None else hashlib.sha256(core).hexdigest()
+    if digest is not None and digest != CORE_MD_SHA256:
         failures.append(
             f"{CORE_MD} has SHA-256 {digest}, not {CORE_MD_SHA256} (core.md at atx-spec "
             f"{CORE_MD_SPEC_REF}). Re-vendor it from the pinned commit; do not edit it."
@@ -360,8 +372,12 @@ def check(root: Path) -> list[str]:
     core = root / CORE_MD
     if not core.exists():
         return [f"{CORE_MD} is missing; vendor core.md from the pinned atx-spec ref"]
-    failures = pin_failures(root) + link_failures(root)
-    core_text = _read_text(root, CORE_MD, "its headings", failures)
+    failures: list[str] = []
+    core_bytes = _read_bytes(root, CORE_MD, failures)
+    failures += pin_failures(root, core_bytes) + link_failures(root)
+    # A core.md that cannot be opened has failed above, once: its text is not
+    # read for a second failure that says the same.
+    core_text = None if core_bytes is None else _read_text(root, CORE_MD, "its headings", failures)
     # None when core.md cannot be read: that has failed, and no section is
     # held to headings that could not be read.
     headings = None if core_text is None else core_headings(core_text)
@@ -565,14 +581,37 @@ def _linear_links(sep: str, n: int = 20_000) -> bool:
     return ok and time.perf_counter() - start < 1.0
 
 
+def _permissions_stop_reads() -> bool:
+    """False where permissions do not stop a read: as root, or without POSIX
+    ids."""
+    return hasattr(os, "geteuid") and os.geteuid() != 0
+
+
 def _unreadable_readme() -> bool | None:
     """check() names a README.md with no read permission; None (skipped)
-    where permissions do not stop a read: as root, or without POSIX ids."""
-    if not hasattr(os, "geteuid") or os.geteuid() == 0:
+    where permissions do not stop a read."""
+    if not _permissions_stop_reads():
         return None
     with _tree({"spec": [_atx("1.1 ATX schema")]}, docs={"README.md": "x\n"}) as root:
         (root / "README.md").chmod(0)
         return check(root) == ["README.md: cannot be read (Permission denied)"]
+
+
+def _as_directory(path: Path) -> None:
+    path.unlink()
+    path.mkdir()
+
+
+def _unreadable_core(make: Callable[[Path], object]) -> bool:
+    """check() names, once, a vendored core.md that make(path) has left
+    unreadable. A read with no handler raises, which fails the case."""
+    with _tree({"spec": [_atx("1.1 ATX schema")]}) as root:
+        make(root / CORE_MD)
+        try:
+            failures = check(root)
+        except OSError:
+            return False
+    return _once(failures, f"{CORE_MD}: cannot be read (")
 
 
 class _Undecodable(type(Path())):
@@ -759,6 +798,10 @@ def self_test() -> int:
          and core_not_utf8[1].startswith(f"{CORE_MD}: is not UTF-8 text")),
         ("reports a workflow that is not UTF-8 by name, and no pin failure",
          len(workflow_not_utf8) == 1 and workflow_not_utf8[0].startswith(f"{WORKFLOW}: is not UTF-8 text")),
+        ("reports, once, a vendored core.md it has no permission to read by name",
+         _unreadable_core(lambda core: core.chmod(0)) if _permissions_stop_reads() else None),
+        ("reports, once, a directory named like the vendored core.md by name",
+         _unreadable_core(_as_directory)),
         ("--help prints usage and runs no check",
          help_rc == 0 and help_out == USAGE and "every ATX citation" not in help_out),
         ("-h prints usage and runs no check", h_rc == 0 and h_out == USAGE),
