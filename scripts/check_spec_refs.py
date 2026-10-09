@@ -657,7 +657,10 @@ def _main_output(argv: list[str]) -> tuple[int, str, str]:
     return rc, out.getvalue(), err.getvalue()
 
 
-def _run(argv: list[str], timeout: float = 60) -> subprocess.CompletedProcess[str] | None:
+_TIMEOUT = 60
+
+
+def _run(argv: list[str], timeout: float = _TIMEOUT) -> subprocess.CompletedProcess[str] | None:
     """The finished child process, or None, which fails the case, when it has
     not ended within timeout seconds; subprocess.run() has then killed it."""
     try:
@@ -1101,14 +1104,15 @@ def _skips_where_bound_chmod_raises() -> bool:
             return False
 
 
-def _self_test_where_chmod_refuses() -> list[tuple[str, bool | None]] | None:
+def _self_test_where_chmod_refuses() -> tuple[list[tuple[str, bool | None]], str] | None:
     """What --self-test finds of each case, in the order it runs them, in a
     child whose os.chmod raises before the script runs, as on a filesystem
-    that refuses it, read from its output by _child_findings(). Empty,
-    failing the case that reads this, when the child outlives its timeout or
-    that output does not read as a full run. _held_to_child() holds the cases the child finds red to what this
-    process finds of them. None (skipped) where Path.chmod already raises,
-    which is the child's own state."""
+    that refuses it, read from its output by _child_findings(), with an
+    empty string; or an empty list, failing the case that reads this, with
+    why the child is not accepted: it outlives its timeout or its output does
+    not read as a full run. _held_to_child() holds the cases the child finds
+    red to what this process finds of them. None (skipped) where Path.chmod
+    already raises, which is the child's own state."""
     if _chmod_raises():
         return None
     refusing = ("import errno, os, runpy, sys\n"
@@ -1118,31 +1122,61 @@ def _self_test_where_chmod_refuses() -> list[tuple[str, bool | None]] | None:
                 "sys.argv = [sys.argv[1], '--self-test']\n"
                 "runpy.run_path(sys.argv[0], run_name='__main__')\n")
     proc = _run([sys.executable, "-c", refusing, str(Path(__file__).resolve())])
-    return [] if proc is None else _child_findings(proc)
+    return _child_findings(proc)
 
 
-def _child_findings(proc: subprocess.CompletedProcess[str]) -> list[tuple[str, bool | None]]:
+def _child_findings(proc: subprocess.CompletedProcess[str] | None,
+                    must_skip: set[str] | None = None,
+                    skips: int | None = None) -> tuple[list[tuple[str, bool | None]], str]:
     """What the child of _self_test_where_chmod_refuses(), proc, finds of
     each case, read from its output in the order it runs them: the label
     the child printed for the case, with True for a case it finds green,
-    False for one red and None for one it skips. Empty,
-    failing the case that runs the child, unless the child runs every case
-    to the end with no traceback, reaching its summary line with nothing on
-    stderr and an exit code that agrees with it, and skips exactly the cases
-    in _CHMOD_SKIPS: the no-read-permission cases, the case that binds
-    Path.chmod at import time and the case that runs the child."""
+    False for one red and None for one it skips, and an empty string. proc
+    is the finished child, or None where it did not end within _TIMEOUT
+    seconds. Where proc is not accepted, an empty list, failing the case
+    that runs the child, and why not, in words that end that case's label,
+    as the hung-child case ends with its time. proc is accepted when the
+    child runs every case to the end with no traceback, reaching its summary
+    line with nothing on stderr and an exit code that agrees with it, and
+    skips exactly the cases labelled in must_skip, skips of them: unless a
+    case gives others, the cases in _CHMOD_SKIPS, the no-read-permission
+    cases, the case that binds Path.chmod at import time and the case that
+    runs the child. Text the child wrote is kept on one line, as _raised()
+    keeps the text of an exception."""
+    def shown(text: str) -> str:
+        return printable(text.translate(_ONE_LINE))
+
+    if must_skip is None:
+        must_skip = _CHMOD_SKIPS
+    if skips is None:
+        skips = len(_no_read_permission_cases()) + 2
+    if proc is None:
+        return [], f"did not end within {_TIMEOUT} s"
+    err = [line for line in proc.stderr.splitlines() if line.strip()]
+    if "Traceback (most recent call last):" in err:
+        return [], f"ended in a traceback: {shown(err[-1])}"
+    if proc.stderr:
+        return [], f"wrote to stderr: {shown((err or [proc.stderr])[0])}"
     lines = proc.stdout.splitlines()
-    summary = (re.fullmatch(r"self-test: (\d+)/(\d+) cases green, (\d+) skipped", lines[-1])
-               if lines else None)
-    if not summary or proc.stderr:
-        return []
+    if not lines:
+        return [], "printed nothing"
+    summary = re.fullmatch(r"self-test: (\d+)/(\d+) cases green(?:, (\d+) skipped)?", lines[-1])
+    if not summary:
+        return [], f"ended without its summary line, at: {shown(lines[-1])}"
+    if proc.returncode != (0 if summary[1] == summary[2] else 1):
+        return [], f"exited {proc.returncode} with {summary[1]}/{summary[2]} cases green"
     marks = [m for line in lines if (m := re.fullmatch(r"  \[(GREEN|RED  |SKIP )\] (.*)", line))]
     skipped = [m[2] for m in marks if m[1] == "SKIP "]
-    if not (proc.returncode == (0 if summary[1] == summary[2] else 1)
-            and int(summary[3]) == len(skipped) == len(_no_read_permission_cases()) + 2
-            and set(skipped) == _CHMOD_SKIPS):
-        return []
-    return [(m[2], None if m[1] == "SKIP " else m[1] == "GREEN") for m in marks]
+    whys = [f"skipped a case it must run: {shown(label)}" for label in skipped
+            if label not in must_skip]
+    whys += [f"did not skip: {shown(label)}" for label in sorted(must_skip.difference(skipped))]
+    counted = int(summary[3] or 0)
+    if not whys and not (counted == len(skipped) == skips):
+        whys.append(f"skipped {len(skipped)} cases, {counted} by its summary line, where it "
+                    f"must skip {skips}")
+    if whys:
+        return [], "; ".join(whys)
+    return [(m[2], None if m[1] == "SKIP " else m[1] == "GREEN") for m in marks], ""
 
 
 def _red_only_in_child(found: list[tuple[str, bool | None]],
@@ -1239,7 +1273,7 @@ def _holds_red_in_child(cases: list[tuple[str, bool | None]], refusing: int,
         run = len(marks) - skipped
         child = "".join(f"  [{mark}] {case}\n" for mark, case in marks)
         child += f"self-test: {run - failed}/{run} cases green, {skipped} skipped\n"
-        found = _child_findings(subprocess.CompletedProcess([], 1 if failed else 0, child, ""))
+        found, _ = _child_findings(subprocess.CompletedProcess([], 1 if failed else 0, child, ""))
         with contextlib.redirect_stdout(io.StringIO()) as out:
             exits = report(here, refusing, found, held)
         return line in out.getvalue().splitlines() and code in (None, exits)
@@ -1366,6 +1400,41 @@ def _names_red_only_in_child() -> bool:
             == ["green here", "skipped here", "took 0.9 s there"]
             and _red_only_in_child(shifted, cases)
             == ["ran there alone", "ran there too", "green here"])
+
+
+def _says_why_child_not_accepted() -> bool:
+    """_child_findings() gives a reason of its own for each way a child is
+    not accepted, so two children refused for different reasons do not end
+    the label alike, refuses a child that wrote to stderr no more than a
+    blank line, keeps on one line text the child wrote, and accepts, with no
+    reason, a child that skips exactly the cases it must, reading each
+    case's label and finding."""
+    def child(out: str, err: str = "", rc: int = 0) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess([], rc, out, err)
+
+    must = {"skips a", "skips b"}
+    good = ("  [GREEN] runs\n  [SKIP ] skips a\n  [RED  ] fails\n  [SKIP ] skips b\n"
+            "self-test: 1/2 cases green, 2 skipped\n")
+    traceback = "Traceback (most recent call last):\n  File \"x\", line 1\nRuntimeError: x\x1by\n"
+    refused = {
+        None: f"did not end within {_TIMEOUT} s",
+        child("  [GREEN] runs\n", traceback, 1): "ended in a traceback: RuntimeError: x\\x1by",
+        child(good, "warned\nagain\n", 1): "wrote to stderr: warned",
+        child(good, "\n", 1): "wrote to stderr: \\n",
+        child("", rc=1): "printed nothing",
+        child("  [GREEN] runs\nself-test: not run\n", rc=1):
+            "ended without its summary line, at: self-test: not run",
+        child(good): "exited 0 with 1/2 cases green",
+        child(good.replace("[GREEN] runs", "[SKIP ] runs").replace("1/2", "0/1")
+              .replace("2 skipped", "3 skipped"), rc=1): "skipped a case it must run: runs",
+        child(good.replace("[SKIP ] skips b", "[GREEN] skips b").replace("1/2", "2/3")
+              .replace("2 skipped", "1 skipped"), rc=1): "did not skip: skips b",
+        child(good.replace("2 skipped", "3 skipped"), rc=1):
+            "skipped 2 cases, 3 by its summary line, where it must skip 2",
+    }
+    return (_child_findings(child(good, rc=1), must, 2)
+            == ([("runs", True), ("skips a", None), ("fails", False), ("skips b", None)], "")
+            and all(_child_findings(proc, must, 2) == ([], why) for proc, why in refused.items()))
 
 
 def _restores_chmod() -> bool:
@@ -1987,6 +2056,11 @@ def self_test() -> int:
          "os.chmod raises, by the label the child printed for it rather than this process's "
          "label or a neighbouring case's, and leaves out a case red in this process too",
          _names_red_only_in_child()),
+        ("says, in the label of the case that runs --self-test where os.chmod raises, why "
+         "its child is not accepted, whether it did not end in time, ended in a traceback, "
+         "wrote to stderr, printed nothing or no summary line, exited with a code its summary "
+         "line disagrees with, or skipped a case it must run or ran one it must skip",
+         _says_why_child_not_accepted()),
         ("raises, rather than reading as a check failure, a vendored core.md a case could not "
          "make unreadable", _unmade_core_raises()),
         ("fails, with no traceback, a case whose tree it could not make unreadable, here by "
@@ -2072,8 +2146,9 @@ def self_test() -> int:
                          "before --self-test starts, skipping exactly the no-read-permission "
                          "cases, the case that binds Path.chmod at import time and itself, and "
                          "finding no case red that this process finds green or skips")
-    refusing, found = len(cases), _self_test_where_chmod_refuses()
-    cases.append((label, None if found is None else bool(found)))
+    refusing, child = len(cases), _self_test_where_chmod_refuses()
+    found, why = child or (None, "")
+    cases.append((label, None if child is None else not why))
     # These two follow the case that runs the child, so the child output they
     # make up lists that case and every case before it, each skip of
     # _CHMOD_SKIPS among them.
@@ -2084,6 +2159,12 @@ def self_test() -> int:
                   "report that leaves it as it is, names no count, turns it red with no "
                   "evidence or prints it as it should but exits 0",
                   _names_misprinted_child_output(cases, refusing)))
+    # Only now does the case that runs the child end its label with why that
+    # child is not accepted: the two above make up output that skips it by
+    # the label _CHMOD_SKIPS holds, so a child not accepted turns red that
+    # case alone.
+    if why:
+        cases[refusing] = (f"{label} (not accepted: {why})", False)
     # After every other case but the last, so it reads their labels. It also
     # holds _by_rank() to the wordings that name a case by rank, the two a
     # label once named two cases by among them, and to those that do not,
