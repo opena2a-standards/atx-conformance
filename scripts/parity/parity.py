@@ -27,13 +27,18 @@ mismatch naming every fixture it never reached.
 
 Every run starts with the self-test, which proves on stand-in verifiers that
 the gate reports a disagreement, a skipped fixture, a failed verifier and a
-verifier that exits 0 without reporting any fixture.
+verifier that exits 0 without reporting any fixture, and that --json is
+refused with --self-test.
 
 Usage:
     python3 scripts/parity/parity.py [--json parity-report.json]
     python3 scripts/parity/parity.py --self-test
 
-Exit codes: 0 = all implementations agree, 1 = divergence or verifier error.
+--self-test writes no parity report, so it is refused with --json rather than
+leaving the report path unwritten.
+
+Exit codes: 0 = all implementations agree, 1 = divergence or verifier error,
+2 = usage error.
 """
 from __future__ import annotations
 
@@ -166,6 +171,18 @@ def _divergences(fixture_files: list[str], verifiers: dict[str, dict]) -> list[s
         return compare(fixture_files, verifiers)[2]
 
 
+def _usage_error(argv: list[str]) -> tuple[int, str] | None:
+    """(exit code, last stderr line) when parse_args(argv) refuses argv, else None."""
+    err = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(err):
+            parse_args(argv)
+    except SystemExit as e:
+        lines = err.getvalue().strip().splitlines()
+        return e.code, lines[-1] if lines else ""
+    return None
+
+
 def self_test() -> int:
     fx = ["a.json", "b.json"]
     both = _block("a.json", "ACCEPT") + _block("b.json", "REJECT[EXPIRED: past expiry]")
@@ -203,6 +220,12 @@ def self_test() -> int:
         ("a verifier that exits 0 without reporting any fixture is reported as a "
          "fixture set mismatch naming every fixture",
          silent == ["two fixture set mismatch: missing=['a.json', 'b.json'] extra=[]"]),
+        ("--self-test with --json is refused as a usage error, since it writes no report, "
+         "and each flag alone is accepted",
+         _usage_error(["--self-test", "--json", "out.json"])
+         == (2, f"parity.py: error: {SELF_TEST_JSON_ERROR}")
+         and _usage_error(["--self-test"]) is None
+         and _usage_error(["--json", "out.json"]) is None),
     ]
     failed = 0
     for label, ok in cases:
@@ -212,14 +235,25 @@ def self_test() -> int:
     return 1 if failed else 0
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
+SELF_TEST_JSON_ERROR = "--json cannot be used with --self-test: --self-test writes no parity report"
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    ap = argparse.ArgumentParser(prog="parity.py")
     ap.add_argument("--json", metavar="PATH", help="write a JSON parity report")
     ap.add_argument(
         "--self-test", action="store_true",
-        help="prove on stand-in verifiers that the gate can fail, then stop",
+        help="prove on stand-in verifiers that the gate can fail, then stop "
+             "(writes no report; not accepted with --json)",
     )
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
+    if args.self_test and args.json is not None:
+        ap.error(SELF_TEST_JSON_ERROR)
+    return args
+
+
+def main() -> int:
+    args = parse_args()
 
     if self_test():
         return 1
