@@ -751,8 +751,9 @@ def _permissions_stop_reads() -> bool:
 
 def _chmod_does_nothing() -> bool:
     """Whether Path.chmod leaves a file's mode as it was. False where it
-    raises instead, as where os.chmod refuses, so the case that reads this
-    skips rather than ending the self-test in a traceback."""
+    raises instead, as where pathlib bound at import time an os.chmod that
+    refuses, so the case that reads this skips rather than ending the
+    self-test in a traceback."""
     tmp = Path(tempfile.mkdtemp(prefix="spec-refs-"))
     try:
         probe = tmp / "probe"
@@ -968,18 +969,34 @@ def _root_unsearchable() -> bool | None:
     return failures is not None and "conformance.json: cannot be read (Permission denied)" in failures
 
 
+# The label of every case that skips where Path.chmod raises: each
+# no-read-permission case, the case that binds Path.chmod at import time and
+# the case that runs --self-test where os.chmod raises. self_test() passes
+# each through _chmod_skips() where it lists the case, so
+# _self_test_where_chmod_refuses() can name the cases its child must skip.
+_CHMOD_SKIPS: set[str] = set()
+
+
+def _chmod_skips(label: str) -> str:
+    """label, kept in _CHMOD_SKIPS as that of a case that skips where
+    Path.chmod raises."""
+    _CHMOD_SKIPS.add(label)
+    return label
+
+
 def _unreadable_tree_cases() -> list[tuple[str, bool | None]]:
     """Every case that runs check() through _check_unreadable(), each made by
     _reasoned(), so one that is red because something raised says what."""
     return [
-        *(_reasoned(f"reports a {rel}/ it has no permission to list by name, not as missing or empty",
+        *(_reasoned(_chmod_skips(f"reports a {rel}/ it has no permission to list by name, not as "
+                                 "missing or empty"),
                     functools.partial(_citation_dir_unlistable, rel)) for rel in CITATION_DIRS),
         *(_reasoned(f"reports, once, a directory named like {rel} by name, rather than skipping it "
                     "as missing", functools.partial(_linked_as_directory, rel)) for rel in LINKED_DOCS),
-        _reasoned("reports a verify.go in a directory it cannot search as unreadable, rather than "
-                  "raising or skipping it", _linked_dir_unsearchable),
-        _reasoned("reports a conformance.json in a tree root it cannot search as unreadable, rather "
-                  "than raising or skipping it", _root_unsearchable),
+        _reasoned(_chmod_skips("reports a verify.go in a directory it cannot search as unreadable, "
+                               "rather than raising or skipping it"), _linked_dir_unsearchable),
+        _reasoned(_chmod_skips("reports a conformance.json in a tree root it cannot search as "
+                               "unreadable, rather than raising or skipping it"), _root_unsearchable),
     ]
 
 
@@ -1053,12 +1070,27 @@ def _skips_where_chmod_bound() -> bool | None:
         return _skips_where_reads_allowed() is None and _skips_where_chmod_raises() is None
 
 
+def _skips_where_bound_chmod_raises() -> bool:
+    """_skips_where_reads_allowed() is skipped, not ended in a traceback,
+    where Path.chmod calls an os.chmod bound at import time that raises, so
+    the os.chmod that does nothing in its place is never called: the OSError
+    reaches _chmod_does_nothing(), which reads it as False."""
+    with _chmod_refused(), _chmod_bound_at_import():
+        try:
+            return _skips_where_reads_allowed() is None
+        except OSError:
+            return False
+
+
 def _self_test_where_chmod_refuses() -> bool | None:
     """--self-test in a child whose os.chmod raises before the script runs,
-    as on a filesystem that refuses it, runs every case to the end and exits
-    0 with no traceback, skipping exactly the no-read-permission cases, the
-    case that binds Path.chmod at import time and this one. None (skipped)
-    where Path.chmod already raises, which is the child's own state."""
+    as on a filesystem that refuses it, runs every case to the end with no
+    traceback, reaching its summary line with nothing on stderr, and skips
+    exactly the cases in _CHMOD_SKIPS: the no-read-permission cases, the case
+    that binds Path.chmod at import time and this one. A case the child runs
+    and finds red is red in this process too, so it does not turn this one
+    red as well. None (skipped) where Path.chmod already raises, which is the
+    child's own state."""
     if _chmod_raises():
         return None
     refusing = ("import errno, os, runpy, sys\n"
@@ -1071,11 +1103,15 @@ def _self_test_where_chmod_refuses() -> bool | None:
     if proc is None:
         return False
     lines = proc.stdout.splitlines()
-    skipped = len(_no_read_permission_cases()) + 2
-    return (proc.returncode == 0 and not proc.stderr and bool(lines)
-            and not any(line.startswith("  [RED  ]") for line in lines)
-            and re.fullmatch(rf"self-test: (\d+)/\1 cases green, {skipped} skipped", lines[-1])
-            is not None)
+    summary = (re.fullmatch(r"self-test: (\d+)/(\d+) cases green, (\d+) skipped", lines[-1])
+               if lines else None)
+    if not summary or proc.stderr:
+        return False
+    skip = "  [SKIP ] "
+    skipped = [line[len(skip):] for line in lines if line.startswith(skip)]
+    return (proc.returncode == (0 if summary[1] == summary[2] else 1)
+            and int(summary[3]) == len(skipped) == len(_no_read_permission_cases()) + 2
+            and set(skipped) == _CHMOD_SKIPS)
 
 
 def _restores_chmod() -> bool:
@@ -1304,6 +1340,7 @@ def self_test() -> int:
     # A missing workflow or core.md fails in the words check() uses for it.
     unread: list[str] = []
     _LEFT.clear()
+    _CHMOD_SKIPS.clear()
     workflow = _read_text(ROOT, WORKFLOW, "its atx-spec pin", unread, missing=WORKFLOW_MISSING)
     _read_bytes(ROOT, CORE_MD, unread, missing=CORE_MD_MISSING)
     if workflow is None or unread:
@@ -1365,8 +1402,9 @@ def self_test() -> int:
                                  f"pins the commit {CORE_MD} was vendored at"),
         ("--self-test in a tree with no workflow names it as missing, in the check's words, "
          "and exits 1, with no traceback", _self_test_without(WORKFLOW, says=(WORKFLOW_MISSING,))),
-        ("--self-test in a tree whose vendored core.md is in a directory it cannot search "
-         "names core.md as unreadable, not missing, and exits 1, with no traceback",
+        (_chmod_skips("--self-test in a tree whose vendored core.md is in a directory it cannot "
+                      "search names core.md as unreadable, not missing, and exits 1, with no "
+                      "traceback"),
          _self_test_core_dir_unsearchable()),
         ("--self-test in a tree with no vendored core.md names it as missing, in the check's "
          "words, and exits 1, with no traceback",
@@ -1487,7 +1525,8 @@ def self_test() -> int:
          [f.split(":", 1)[0] for f in _probe([good], docs={"README.md": b"x \xff y\n",
                                                           "verifiers/go/verify.go": b"// \xff\n"})]
          == ["README.md", "verifiers/go/verify.go"]),
-        ("reports a README.md it has no permission to read by name", _unreadable_readme()),
+        (_chmod_skips("reports a README.md it has no permission to read by name"),
+         _unreadable_readme()),
         ("reports a vendored core.md that is not UTF-8 by name, after its digest failure",
          len(core_not_utf8) == 2 and core_not_utf8[0].startswith(f"{CORE_MD} has SHA-256 ")
          and core_not_utf8[1].startswith(f"{CORE_MD}: is not UTF-8 text")),
@@ -1498,12 +1537,12 @@ def self_test() -> int:
          _probe_tree(lambda root: (root / CORE_MD).unlink(), [_atx("1.1 ATX schema", ref=stale)])
          == [CORE_MD_MISSING]
          and CORE_MD_MISSING == f"{CORE_MD} is missing; vendor core.md from the pinned atx-spec ref"),
-        ("reports, once, a vendored core.md it has no permission to read by name",
+        (_chmod_skips("reports, once, a vendored core.md it has no permission to read by name"),
          _core_no_read_permission()),
-        ("reports, once, a vendored core.md in a directory it cannot search as unreadable, "
-         "not missing", _core_dir_unsearchable()),
-        ("reports a workflow in a directory it cannot search as unreadable, not as pinning "
-         "no atx-spec commit", _workflow_dir_unsearchable()),
+        (_chmod_skips("reports, once, a vendored core.md in a directory it cannot search as "
+                      "unreadable, not missing"), _core_dir_unsearchable()),
+        (_chmod_skips("reports a workflow in a directory it cannot search as unreadable, not as "
+                      "pinning no atx-spec commit"), _workflow_dir_unsearchable()),
         *_unreadable_tree_cases(),
         ("reports, once, a directory named like the vendored core.md by name",
          _unreadable_core(_as_directory)),
@@ -1513,14 +1552,15 @@ def self_test() -> int:
          "no read permission can still be read", _skips_where_reads_allowed()),
         ("skips every no-read-permission case, with no traceback, where chmod raises",
          _skips_where_chmod_raises()),
-        ("skips, rather than fails, where Path.chmod does not call os.chmod through the "
-         "module, the cases that skip the no-read-permission cases where a file with no read "
-         "permission can still be read and where chmod raises", _skips_where_chmod_bound()),
+        ("skips, with no traceback, the case that runs every no-read-permission case where a "
+         "file with no read permission can still be read, where Path.chmod calls an os.chmod "
+         "bound at import time that raises", _skips_where_bound_chmod_raises()),
+        (_chmod_skips("skips, rather than fails, the cases that run every no-read-permission "
+                      "case where a file with no read permission can still be read and where "
+                      "chmod raises, where Path.chmod does not call os.chmod through the module"),
+         _skips_where_chmod_bound()),
         ("puts Path.chmod back as it found it on leaving the case above, normally or by an "
          "exception, whether or not the path class set its own", _restores_chmod()),
-        ("runs every case to the end and exits 0, with no traceback, where os.chmod raises "
-         "before --self-test starts, skipping only the no-read-permission cases, the case that "
-         "binds Path.chmod at import time and itself", _self_test_where_chmod_refuses()),
         ("raises, rather than reading as a check failure, a vendored core.md a case could not "
          "make unreadable", _unmade_core_raises()),
         ("fails, with no traceback, a case whose tree it could not make unreadable, here by "
@@ -1574,6 +1614,13 @@ def self_test() -> int:
              "README.md:1: carries a URL more than 8 links deep in other links' query strings "
              "or #fragments, deeper than the check reads. Link it at most 8 deep."]),
     ]
+    # After every case that skips where Path.chmod raises, so _CHMOD_SKIPS
+    # holds each one's label, this one's included, by the time it compares.
+    cases.append((_chmod_skips("runs every case to the end, with no traceback, where os.chmod "
+                               "raises before --self-test starts, skipping exactly the "
+                               "no-read-permission cases, the case that binds Path.chmod at "
+                               "import time and itself"),
+                  _self_test_where_chmod_refuses()))
     # After every other case but the last, so it reads their labels. It also
     # holds _by_rank() to the wordings that name a case by rank, the two a
     # label once named two cases by among them, and to those that do not.
