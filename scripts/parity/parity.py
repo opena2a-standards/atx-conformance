@@ -26,7 +26,8 @@ argument) is reported by that exit and stderr alone, not as a fixture set
 mismatch naming every fixture it never reached.
 
 Every run starts with the self-test, which proves on stand-in verifiers that
-the gate reports a disagreement, a skipped fixture and a failed verifier.
+the gate reports a disagreement, a skipped fixture, a failed verifier and a
+verifier that exits 0 without reporting any fixture.
 
 Usage:
     python3 scripts/parity/parity.py [--json parity-report.json]
@@ -183,6 +184,7 @@ def self_test() -> int:
         "one": _stand_in(both),
         "two": _stand_in(_block("a.json", "ACCEPT"), "Traceback: boom\n", 1),
     })
+    silent = _divergences(fx, {"one": _stand_in(both), "two": _stand_in("")})
     cases: list[tuple[str, bool]] = [
         ("verifiers that agree report no divergence", agree == []),
         ("a verdict divergence is reported by fixture",
@@ -198,6 +200,9 @@ def self_test() -> int:
          "and by the fixtures it did not reach",
          crashed == ["two verifier exited 1 (expected 0): Traceback: boom",
                      "two fixture set mismatch: missing=['b.json'] extra=[]"]),
+        ("a verifier that exits 0 without reporting any fixture is reported as a "
+         "fixture set mismatch naming every fixture",
+         silent == ["two fixture set mismatch: missing=['a.json', 'b.json'] extra=[]"]),
     ]
     failed = 0
     for label, ok in cases:
