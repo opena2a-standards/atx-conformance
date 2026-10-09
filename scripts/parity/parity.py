@@ -32,7 +32,8 @@ the gate reports a disagreement, a skipped fixture, a failed verifier and a
 verifier that exits 0 without reporting any fixture, that a fixtures
 directory holding no *.json fails, that the --json report names a verifier
 that exited before reporting any fixture, and that --json is refused with
---self-test.
+--self-test by a usage message the self-test holds word for word, so
+rewording that message turns the self-test red.
 
 Usage:
     python3 scripts/parity/parity.py [--json parity-report.json]
@@ -287,6 +288,37 @@ def _gate_without_fixtures(verifiers: dict[str, dict]) -> tuple[int, str, str]:
     return code, out.getvalue(), err.getvalue()
 
 
+def _refuses_self_test_with_json() -> bool:
+    """The usage-error case: --self-test with --json is refused, and each flag
+    alone is accepted.
+
+    The refusal is held to its message written out here, not built from
+    SELF_TEST_JSON_ERROR: built from the constant parse_args() prints, it
+    would match whatever the constant says, so no change to the wording could
+    turn the case red.
+    """
+    return (
+        _usage_error(["--self-test", "--json", "out.json"])
+        == (2, "parity.py: error: --json cannot be used with --self-test: "
+               "--self-test writes no parity report")
+        and _usage_error(["--self-test"]) is None
+        and _usage_error(["--json", "out.json"]) is None
+    )
+
+
+def _reworded(message: str) -> tuple[tuple[int, str] | None, bool]:
+    """(the refusal of --self-test with --json, the usage-error case) while
+    parse_args() refuses it with message in place of SELF_TEST_JSON_ERROR."""
+    global SELF_TEST_JSON_ERROR
+    kept = SELF_TEST_JSON_ERROR
+    SELF_TEST_JSON_ERROR = message
+    try:
+        return (_usage_error(["--self-test", "--json", "out.json"]),
+                _refuses_self_test_with_json())
+    finally:
+        SELF_TEST_JSON_ERROR = kept
+
+
 def self_test() -> int:
     fx = ["a.json", "b.json"]
     both = _block("a.json", "ACCEPT") + _block("b.json", "REJECT[EXPIRED: past expiry]")
@@ -331,10 +363,11 @@ def self_test() -> int:
          silent == ["two fixture set mismatch: missing=['a.json', 'b.json'] extra=[]"]),
         ("--self-test with --json is refused as a usage error, since it writes no report, "
          "and each flag alone is accepted",
-         _usage_error(["--self-test", "--json", "out.json"])
-         == (2, f"parity.py: error: {SELF_TEST_JSON_ERROR}")
-         and _usage_error(["--self-test"]) is None
-         and _usage_error(["--json", "out.json"]) is None),
+         _refuses_self_test_with_json()),
+        ("a reworded usage message turns the usage-error case red, since the case holds "
+         "the message written out rather than reading it from the code that prints it",
+         _reworded("--json cannot be used with --self-test")
+         == ((2, "parity.py: error: --json cannot be used with --self-test"), False)),
         ("a verifier that exits before reporting any fixture has one line above "
          "the table, not a MISSING cell on every row",
          no_dep_table == [

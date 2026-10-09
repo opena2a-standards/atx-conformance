@@ -540,6 +540,25 @@ def _remove(tmp: Path) -> None:
         _LEFT.append(tmp)
 
 
+_LEFT_LABEL = "removes every temporary tree it builds"
+
+
+def _left_case(left: list[Path]) -> tuple[str, bool]:
+    """The case that holds the self-test to removing every temporary tree it
+    builds, left being those _remove() could not remove: its label, naming
+    each, and green where left holds none."""
+    names = ", ".join(printable(str(tmp)) for tmp in left)
+    return (_LEFT_LABEL + (f" (left: {names})" if names else ""), not left)
+
+
+def _names_left_trees() -> bool:
+    """_left_case() names made-up trees left as "(left: <trees>)", a name
+    that is not valid UTF-8 as a backslash escape, and is green given none."""
+    return (_left_case([Path("/made-up/a"), Path("/made-up/bad-\udcff")])
+            == (_LEFT_LABEL + " (left: /made-up/a, /made-up/bad-\\udcff)", False)
+            and _left_case([]) == (_LEFT_LABEL, True))
+
+
 @contextlib.contextmanager
 def _tree(fixture: object, vector: object = None, profile: object = None,
           core_extra: str | bytes = "", workflow: str | bytes | None = None,
@@ -1192,21 +1211,22 @@ def _report_cases(cases: list[tuple[str, bool | None]], refusing: int,
 
 
 def _holds_red_in_child(cases: list[tuple[str, bool | None]], refusing: int,
-                        held: Callable[..., list[tuple[str, bool | None]]] = _held_to_child
-                        ) -> list[str]:
-    """Each made-up child output, of the three below, after which
-    _report_cases(), holding cases with held, _held_to_child() unless a case
-    gives another, does not print cases[refusing], the case that runs the
-    child of _self_test_where_chmod_refuses(), as it should, once that output
-    is read by _child_findings() as self_test() reads the real child's. One
-    that marks red a case this process finds green, "one case red", should
-    print that case red, naming the case, and exit 1. One that leaves a case
-    out, "one case left out", should print it red, naming the count it ran,
-    and exit 1. One that marks each case as a child finding no defect does,
-    every case of _CHMOD_SKIPS skipped and every other green, "no case red",
-    should print it green with its label as it is. Empty where each prints
-    as it should; "no case green here to mark red" where cases holds no
-    case to mark red."""
+                        held: Callable[..., list[tuple[str, bool | None]]] = _held_to_child,
+                        report: Callable[..., int] = _report_cases) -> list[str]:
+    """Each made-up child output, of the three below, after which report,
+    _report_cases() unless a case gives another, holding cases with held,
+    _held_to_child() unless a case gives another, does not print
+    cases[refusing], the case that runs the child of
+    _self_test_where_chmod_refuses(), as it should, or does not return the
+    exit code it should, once that output is read by _child_findings() as
+    self_test() reads the real child's. One that marks red a case this
+    process finds green, "one case red", should print that case red, naming
+    the case, and exit 1. One that leaves a case out, "one case left out",
+    should print it red, naming the count it ran, and exit 1. One that marks
+    each case as a child finding no defect does, every case of _CHMOD_SKIPS
+    skipped and every other green, "no case red", should print it green with
+    its label as it is. Empty where each prints as it should; "no case green
+    here to mark red" where cases holds no case to mark red."""
     green = [label for label, ok in cases if ok and label not in _CHMOD_SKIPS]
     if not green:
         return ["no case green here to mark red"]
@@ -1221,7 +1241,7 @@ def _holds_red_in_child(cases: list[tuple[str, bool | None]], refusing: int,
         child += f"self-test: {run - failed}/{run} cases green, {skipped} skipped\n"
         found = _child_findings(subprocess.CompletedProcess([], 1 if failed else 0, child, ""))
         with contextlib.redirect_stdout(io.StringIO()) as out:
-            exits = _report_cases(here, refusing, found, held)
+            exits = report(here, refusing, found, held)
         return line in out.getvalue().splitlines() and code in (None, exits)
 
     marks = [("SKIP " if case in _CHMOD_SKIPS else "GREEN", case) for case, _ in cases]
@@ -1247,7 +1267,10 @@ def _red_holding_case(cases: list[tuple[str, bool | None]], refusing: int,
     _self_test_where_chmod_refuses(), to made-up child output, holding cases
     with held, _held_to_child() unless a case gives another: its label,
     naming each made-up output that _holds_red_in_child() finds printed
-    otherwise, and green where it finds none."""
+    otherwise, and green where it finds none. A case list with no case
+    green here, for which no output is made up, is named as such, as
+    "(not matched: no case green here to mark red)", and makes the case
+    red."""
     misprinted = _holds_red_in_child(cases, refusing, held)
     return (_RED_HOLDING_LABEL + "".join(f" (not matched: {output})" for output in misprinted),
             not misprinted)
@@ -1260,11 +1283,14 @@ def _names_misprinted_child_output(cases: list[tuple[str, bool | None]], refusin
     it is misprints the outputs with one case red and one case left out; one
     that turns it red, naming each case the child marks red, but no count,
     the output with one case left out; and one that turns it red with its
-    label as it is, all three. A case list with no case green here is named
-    as such. _red_holding_case() names the same outputs in the label of the
-    case it makes red, each as "(not matched: <output>)". None of these
-    holds calls _held_to_child(), so a defect there turns red only the case
-    that holds the real one."""
+    label as it is, all three. One that names each case the child marks red
+    and the count it ran misprints none, and a report that prints as that
+    one holds but exits 0 misprints the outputs with one case red and one
+    case left out, the two that should exit 1. A case list with no case
+    green here is named as such. _red_holding_case() names the same outputs
+    in the label of the case it makes red, each as "(not matched:
+    <output>)". None of these holds calls _held_to_child(), so a defect
+    there turns red only the case that holds the real one."""
     def as_is(held: list[tuple[str, bool | None]], at: int,
               found: list[tuple[str, bool | None]] | None) -> list[tuple[str, bool | None]]:
         return list(held)
@@ -1282,8 +1308,27 @@ def _names_misprinted_child_output(cases: list[tuple[str, bool | None]], refusin
         held[at] = (held[at][0], False)
         return held
 
+    def counted(held: list[tuple[str, bool | None]], at: int,
+                found: list[tuple[str, bool | None]] | None) -> list[tuple[str, bool | None]]:
+        found = found or []
+        reds = [name for name, ok in found if ok is False]
+        ran = "" if len(found) == len(held) else f" (ran {len(found)} cases, not {len(held)})"
+        held = list(held)
+        held[at] = (held[at][0] + ran + "".join(f" (red only there: {r})" for r in reds),
+                    not ran and not reds)
+        return held
+
+    def exits_0(held: list[tuple[str, bool | None]], at: int,
+                found: list[tuple[str, bool | None]] | None,
+                hold: Callable[..., list[tuple[str, bool | None]]]) -> int:
+        _report_cases(held, at, found, hold)
+        return 0
+
     reds: list[tuple[str, bool | None]] = [(label, False) for label, _ in cases]
     return (_holds_red_in_child(cases, refusing, as_is) == ["one case red", "one case left out"]
+            and _holds_red_in_child(cases, refusing, counted) == []
+            and _holds_red_in_child(cases, refusing, counted, exits_0)
+            == ["one case red", "one case left out"]
             and _holds_red_in_child(cases, refusing, no_count) == ["one case left out"]
             and _holds_red_in_child(cases, refusing, bare_red)
             == ["no case red", "one case red", "one case left out"]
@@ -1575,12 +1620,78 @@ _NEEDED_ALONE_BY = (("rank", "final", ("the final case",)),
                     ("flag", "re.IGNORECASE", ("The Last Case",)))
 
 
-def _unfound_unneeded_words() -> list[str]:
-    """Each word of _NEEDED_ALONE_BY, after what it stands for, that
-    _unneeded_words() does not name once the wordings that alone need it
-    are taken out."""
-    return [f"{kind} {word}" for kind, word, taken in _NEEDED_ALONE_BY
+def _unfound_unneeded_words(needed_alone_by: tuple[tuple[str, str, tuple[str, ...]], ...]
+                            = _NEEDED_ALONE_BY) -> list[str]:
+    """Each word of needed_alone_by, _NEEDED_ALONE_BY unless a case gives
+    another, after what it stands for, that _unneeded_words() does not name
+    once the wordings that alone need it are taken out."""
+    return [f"{kind} {word}" for kind, word, taken in needed_alone_by
             if word not in _unneeded_without(*taken)]
+
+
+_UNFOUND_LABEL = ("finds a word read as a rank, one read as a count, one read after them and "
+                  "the re.IGNORECASE flag needed by no wording, each once the wordings that "
+                  "need it are taken out of those the by-rank label check is held to")
+
+
+def _unfound_case(needed_alone_by: tuple[tuple[str, str, tuple[str, ...]], ...]
+                  = _NEEDED_ALONE_BY) -> tuple[str, bool]:
+    """The case that holds _unneeded_words() to naming each word of
+    needed_alone_by, _NEEDED_ALONE_BY unless a case gives another: its
+    label, naming each word _unfound_unneeded_words() finds it does not
+    name, and green where it finds none."""
+    unfound = _unfound_unneeded_words(needed_alone_by)
+    return (_UNFOUND_LABEL + "".join(f" (not found: {word})" for word in unfound), not unfound)
+
+
+def _names_unfound_words() -> bool:
+    """_unfound_case() names, each as "(not found: <word>)" after what it
+    stands for, a word of a _NEEDED_ALONE_BY that gives no wording to take
+    out, here a rank and the flag, each of which some wording needs."""
+    return (_unfound_case((("rank", "final", ()), ("flag", "re.IGNORECASE", ())))
+            == (_UNFOUND_LABEL + " (not found: rank final) (not found: flag re.IGNORECASE)",
+                False))
+
+
+_BY_RANK_LABEL = ("names, in every label, another case by what it runs rather than by its rank "
+                  "among the cases")
+
+
+def _by_rank_case(labels: list[str], wordings: tuple[str, ...] = _BY_RANK_WORDINGS,
+                  not_wordings: tuple[str, ...] = _NOT_BY_RANK_WORDINGS) -> tuple[str, bool]:
+    """The case that holds labels to naming no case by rank, _by_rank() to
+    reading each of wordings, _BY_RANK_WORDINGS unless a case gives others,
+    as naming a case by rank and none of not_wordings, _NOT_BY_RANK_WORDINGS
+    unless a case gives others, and wordings to needing each word and piece
+    _by_rank_re() takes and its re.IGNORECASE flag: its label, naming each
+    label, wording and word that falls short, and green where none does."""
+    ranked = _by_rank(labels)
+    missed = [wording for wording in wordings if not _by_rank([wording])]
+    misread = _by_rank(list(not_wordings))
+    unneeded = _unneeded_words(wordings)
+    return (_BY_RANK_LABEL + "".join(f" (by rank: {label})" for label in ranked)
+            + "".join(f" (not read as by rank: {wording})" for wording in missed)
+            + "".join(f" (read as by rank: {wording})" for wording in misread)
+            + "".join(f" (needed by no wording: {word})" for word in unneeded),
+            not ranked and not missed and not misread and not unneeded)
+
+
+def _names_by_rank_shortfalls() -> bool:
+    """_by_rank_case() names a made-up label that names a case by rank as
+    "(by rank: <label>)", a made-up wording it must read as by rank that it
+    does not as "(not read as by rank: <wording>)" and one it must not that
+    it does as "(read as by rank: <wording>)". A wording read as no rank
+    leaves every word needed, so the flag is held apart: with the one
+    wording that needs it taken out, it is named as "(needed by no wording:
+    re.IGNORECASE)"."""
+    return (_by_rank_case(["runs the check", "does as the previous case does"],
+                          _BY_RANK_WORDINGS + ("the case that runs the check",),
+                          ("the last case",))
+            == (_BY_RANK_LABEL + " (by rank: does as the previous case does)"
+                " (not read as by rank: the case that runs the check)"
+                " (read as by rank: the last case)", False)
+            and _by_rank_case([], tuple(w for w in _BY_RANK_WORDINGS if w != "The Last Case"))
+            == (_BY_RANK_LABEL + " (needed by no wording: re.IGNORECASE)", False))
 
 
 class _Undecodable(type(Path())):
@@ -1659,7 +1770,6 @@ def self_test() -> int:
     workflow_not_utf8 = _probe([good], workflow=workflow.encode("utf-8") + b"\xff")
     no_workflow = _probe_tree(lambda root: (root / WORKFLOW).unlink())
     hung, hung_seconds = _hung_child()
-    unfound = _unfound_unneeded_words()
     # None marks a case skipped where it cannot run.
     cases: list[tuple[str, bool | None]] = [(f"rejects retired string {s!r}", bool(_probe([_atx(s)])))
                                      for s in RETIRED_SECTIONS]
@@ -1889,16 +1999,31 @@ def self_test() -> int:
          "and \"the\" with a count before \"cases\" needed by no wording, each once the "
          "wordings that need it are taken out of those the by-rank label check is held to",
          _finds_unneeded_pieces()),
-        ("finds a word read as a rank, one read as a count, one read after them and the "
-         "re.IGNORECASE flag needed by no wording, each once the wordings that need it are "
-         "taken out of those the by-rank label check is held to"
-         + "".join(f" (not found: {word})" for word in unfound), not unfound),
+        _unfound_case(),
+        ("names, in the label of the case that finds a word read as a rank, one read as a "
+         "count, one read after them and the re.IGNORECASE flag needed by no wording, each "
+         "such word it does not find, here a rank and the flag with no wording taken out",
+         _names_unfound_words()),
+        ("names, in the label of the case that holds every label to naming no case by rank, "
+         "a made-up label that names one by rank, a made-up wording read otherwise than it "
+         "should be either way, and the re.IGNORECASE flag once the wording that needs it is "
+         "taken out", _names_by_rank_shortfalls()),
+        ("names, in the label of the case that holds the self-test to removing every "
+         "temporary tree it builds, each made-up tree left, a name that is not valid UTF-8 "
+         "as a backslash escape", _names_left_trees()),
         ("--help prints usage and runs no check",
          help_rc == 0 and help_out == USAGE and "every ATX citation" not in help_out),
         ("-h prints usage and runs no check", h_rc == 0 and h_out == USAGE),
         ("an unknown argument prints usage to stderr, exits 2 and runs no check",
          bad_rc == 2 and bad_err == USAGE and not bad_out),
         ("the docstring's Usage block is USAGE", __doc__ is None or __doc__.endswith(USAGE)),
+        ("the docstring of the helper that makes the case holding the case that runs "
+         "--self-test where os.chmod raises to made-up child output says that a case list "
+         "with no case green here is named as such, in the words that case's label uses, and "
+         "makes that case red",
+         _red_holding_case.__doc__ is None
+         or f'"(not matched: {_holds_red_in_child([], 0)[0]})", and makes the case red'
+         in " ".join(_red_holding_case.__doc__.split())),
         ("imports and prints usage under python -OO", _usage_under_oo()),
         ("fails, with no traceback, a case whose child process outlives its timeout", hung),
         (f"ends a child process that outlives its timeout in under 0.4 s (took {hung_seconds:.3f} s)",
@@ -1941,28 +2066,18 @@ def self_test() -> int:
     cases.append(_red_holding_case(cases, refusing))
     cases.append(("names, in the label of the case that holds the case that runs --self-test "
                   "where os.chmod raises to made-up child output, each made-up output after "
-                  "which the report prints that case otherwise, here a report that leaves it "
-                  "as it is, names no count or turns it red with no evidence",
+                  "which the report prints that case otherwise or exits otherwise, here a "
+                  "report that leaves it as it is, names no count, turns it red with no "
+                  "evidence or prints it as it should but exits 0",
                   _names_misprinted_child_output(cases, refusing)))
     # After every other case but the last, so it reads their labels. It also
     # holds _by_rank() to the wordings that name a case by rank, the two a
     # label once named two cases by among them, and to those that do not,
     # and holds those wordings to needing each word and piece _by_rank_re()
     # takes and its re.IGNORECASE flag.
-    ranked = _by_rank([label for label, _ in cases])
-    missed = [wording for wording in _BY_RANK_WORDINGS if not _by_rank([wording])]
-    misread = _by_rank(list(_NOT_BY_RANK_WORDINGS))
-    unneeded = _unneeded_words()
-    cases.append(("names, in every label, another case by what it runs rather than by its rank "
-                  "among the cases" + "".join(f" (by rank: {label})" for label in ranked)
-                  + "".join(f" (not read as by rank: {wording})" for wording in missed)
-                  + "".join(f" (read as by rank: {wording})" for wording in misread)
-                  + "".join(f" (needed by no wording: {word})" for word in unneeded),
-                  not ranked and not missed and not misread and not unneeded))
+    cases.append(_by_rank_case([label for label, _ in cases]))
     # Last, so it sees every temporary tree the cases above built.
-    left = ", ".join(printable(str(tmp)) for tmp in _LEFT)
-    cases.append(("removes every temporary tree it builds" + (f" (left: {left})" if left else ""),
-                  not _LEFT))
+    cases.append(_left_case(_LEFT))
     # After every other case, so each case the child of
     # _self_test_where_chmod_refuses() finds red is held to what this process
     # finds of it, the cases listed after the child's included. A case red in
