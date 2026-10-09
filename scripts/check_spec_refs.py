@@ -1267,7 +1267,10 @@ def _red_holding_case(cases: list[tuple[str, bool | None]], refusing: int,
     _self_test_where_chmod_refuses(), to made-up child output, holding cases
     with held, _held_to_child() unless a case gives another: its label,
     naming each made-up output that _holds_red_in_child() finds printed
-    otherwise, and green where it finds none."""
+    otherwise, and green where it finds none. A case list with no case
+    green here, for which no output is made up, is named as such, as
+    "(not matched: no case green here to mark red)", and makes the case
+    red."""
     misprinted = _holds_red_in_child(cases, refusing, held)
     return (_RED_HOLDING_LABEL + "".join(f" (not matched: {output})" for output in misprinted),
             not misprinted)
@@ -2014,6 +2017,13 @@ def self_test() -> int:
         ("an unknown argument prints usage to stderr, exits 2 and runs no check",
          bad_rc == 2 and bad_err == USAGE and not bad_out),
         ("the docstring's Usage block is USAGE", __doc__ is None or __doc__.endswith(USAGE)),
+        ("the docstring of the helper that makes the case holding the case that runs "
+         "--self-test where os.chmod raises to made-up child output says that a case list "
+         "with no case green here is named as such, in the words that case's label uses, and "
+         "makes that case red",
+         _red_holding_case.__doc__ is None
+         or f'"(not matched: {_holds_red_in_child([], 0)[0]})", and makes the case red'
+         in " ".join(_red_holding_case.__doc__.split())),
         ("imports and prints usage under python -OO", _usage_under_oo()),
         ("fails, with no traceback, a case whose child process outlives its timeout", hung),
         (f"ends a child process that outlives its timeout in under 0.4 s (took {hung_seconds:.3f} s)",
