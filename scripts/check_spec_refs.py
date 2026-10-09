@@ -1082,14 +1082,15 @@ def _skips_where_bound_chmod_raises() -> bool:
             return False
 
 
-def _self_test_where_chmod_refuses() -> list[bool | None] | None:
+def _self_test_where_chmod_refuses() -> list[tuple[str, bool | None]] | None:
     """What --self-test finds of each case, in the order it runs them, in a
     child whose os.chmod raises before the script runs, as on a filesystem
-    that refuses it: True for a case it finds green, False for one red and
-    None for one it skips. Empty, failing the case that reads this, unless
-    the child runs every case to the end with no traceback, reaching its
-    summary line with nothing on stderr and an exit code that agrees with it,
-    and skips exactly the cases in _CHMOD_SKIPS: the no-read-permission
+    that refuses it: the label the child printed for the case, with True for
+    a case it finds green, False for one red and None for one it skips.
+    Empty, failing the case that reads this, unless the child runs every
+    case to the end with no traceback, reaching its summary line with
+    nothing on stderr and an exit code that agrees with it, and skips
+    exactly the cases in _CHMOD_SKIPS: the no-read-permission
     cases, the case that binds Path.chmod at import time and the case that
     reads this. self_test() holds the cases the child finds red to
     _red_only_in_child(). None (skipped) where Path.chmod already raises,
@@ -1116,27 +1117,57 @@ def _self_test_where_chmod_refuses() -> list[bool | None] | None:
             and int(summary[3]) == len(skipped) == len(_no_read_permission_cases()) + 2
             and set(skipped) == _CHMOD_SKIPS):
         return []
-    return [None if m[1] == "SKIP " else m[1] == "GREEN" for m in marks]
+    return [(m[2], None if m[1] == "SKIP " else m[1] == "GREEN") for m in marks]
 
 
-def _red_only_in_child(found: list[bool | None],
+def _red_only_in_child(found: list[tuple[str, bool | None]],
                        cases: list[tuple[str, bool | None]]) -> list[str]:
-    """The label of each of cases that the child of
-    _self_test_where_chmod_refuses() finds red where this process finds it
-    green or skips it: a defect only an os.chmod that raises shows. found is
-    what the child finds of each case, in the order of cases. A case red in
-    both is left out, as that case reports it already."""
-    return [label for (label, ok), child in zip(cases, found) if child is False and ok is not False]
+    """The label the child of _self_test_where_chmod_refuses() printed for
+    each case it finds red where this process finds that case green, skips
+    it or has no such case: a defect only an os.chmod that raises shows.
+    found is the label and finding of each case the child ran, in its order.
+    A case the child ran is the case here with its label; one whose label
+    carries evidence each process took for itself, such as a time or what
+    raised, is the case in its place here where the child ran as many cases
+    as this process, and has none here where it did not, as the places then
+    do not line up. A case red in both is left out, as that case reports it
+    already."""
+    known = {label for label, _ in cases}
+    red_here = {label for label, ok in cases if ok is False}
+    in_step = len(found) == len(cases)
+    only = []
+    for place, (label, child) in enumerate(found):
+        if child is not False:
+            continue
+        if label in known:
+            red = label in red_here
+        else:
+            red = in_step and cases[place][1] is False
+        if not red:
+            only.append(label)
+    return only
 
 
 def _names_red_only_in_child() -> bool:
     """_red_only_in_child() names a case the child finds red where this
-    process finds it green or skips it, and leaves out a case red in both and
-    one the child finds green or skips, wherever each stands."""
+    process finds it green or skips it, by the label the child printed for
+    it, and leaves out a case red in both and one the child finds green or
+    skips, wherever each stands: by its label, by its place where its label
+    differs here and the child ran as many cases, and by its label alone
+    where the child ran another number of cases, so it names no neighbouring
+    case."""
     cases = [("green here", True), ("red in both", False), ("skipped here", None),
-             ("red only here", False), ("green in both", True), ("skipped in the child", True)]
-    return (_red_only_in_child([False, False, False, True, True, None], cases)
-            == ["green here", "skipped here"])
+             ("red only here", False), ("green in both", True), ("skipped in the child", True),
+             ("took 0.1 s here", True), ("raised here", False)]
+    found = [("green here", False), ("red in both", False), ("skipped here", False),
+             ("red only here", True), ("green in both", True), ("skipped in the child", None),
+             ("took 0.9 s there", False), ("raised there", False)]
+    shifted: list[tuple[str, bool | None]] = [
+        ("ran there alone", False), ("green here", False), ("red in both", False),
+        ("took 0.9 s there", True)]
+    return (_red_only_in_child(found, cases)
+            == ["green here", "skipped here", "took 0.9 s there"]
+            and _red_only_in_child(shifted, cases) == ["ran there alone", "green here"])
 
 
 def _restores_chmod() -> bool:
@@ -1653,7 +1684,8 @@ def self_test() -> int:
         ("puts Path.chmod back as it found it on leaving the case above, normally or by an "
          "exception, whether or not the path class set its own", _restores_chmod()),
         ("names, in the case that runs --self-test where os.chmod raises, a case red only where "
-         "os.chmod raises, and leaves out a case red in this process too",
+         "os.chmod raises, by the label the child printed for it rather than this process's "
+         "label or a neighbouring case's, and leaves out a case red in this process too",
          _names_red_only_in_child()),
         ("raises, rather than reading as a check failure, a vendored core.md a case could not "
          "make unreadable", _unmade_core_raises()),
@@ -1745,7 +1777,8 @@ def self_test() -> int:
     # _self_test_where_chmod_refuses() finds red is held to what this process
     # finds of it, the cases listed after the child's included. A case red in
     # both is reported once, by itself; one red only in the child turns the
-    # case that runs the child red, which names it.
+    # case that runs the child red, which names it by the label the child
+    # printed for it, so the evidence shown is the child's.
     if found:
         label, only = cases[refusing][0], _red_only_in_child(found, cases)
         ran = "" if len(found) == len(cases) else f" (ran {len(found)} cases, not {len(cases)})"
