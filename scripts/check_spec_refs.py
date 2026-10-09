@@ -750,13 +750,18 @@ def _permissions_stop_reads() -> bool:
 
 
 def _chmod_does_nothing() -> bool:
-    """Whether Path.chmod leaves a file's mode as it was."""
+    """Whether Path.chmod leaves a file's mode as it was. False where it
+    raises instead, as where os.chmod refuses, so the case that reads this
+    skips rather than ending the self-test in a traceback."""
     tmp = Path(tempfile.mkdtemp(prefix="spec-refs-"))
     try:
         probe = tmp / "probe"
         probe.write_bytes(b"")
         mode = probe.stat().st_mode
-        probe.chmod(0)
+        try:
+            probe.chmod(0)
+        except OSError:
+            return False
         return probe.stat().st_mode == mode
     finally:
         _remove(tmp)
@@ -1036,12 +1041,41 @@ def _chmod_bound_at_import() -> Iterator[None]:
             cls.chmod = own
 
 
-def _skips_where_chmod_bound() -> bool:
+def _skips_where_chmod_bound() -> bool | None:
     """_skips_where_reads_allowed() and _skips_where_chmod_raises() are
     skipped, not failed, where Path.chmod does not call os.chmod through the
-    module."""
+    module. None (skipped) where Path.chmod already raises: a chmod bound at
+    import time cannot then be told from one that refuses, and the cases
+    inside would run under a chmod that raises either way."""
+    if _chmod_raises():
+        return None
     with _chmod_bound_at_import():
         return _skips_where_reads_allowed() is None and _skips_where_chmod_raises() is None
+
+
+def _self_test_where_chmod_refuses() -> bool | None:
+    """--self-test in a child whose os.chmod raises before the script runs,
+    as on a filesystem that refuses it, runs every case to the end and exits
+    0 with no traceback, skipping exactly the no-read-permission cases, the
+    case that binds Path.chmod at import time and this one. None (skipped)
+    where Path.chmod already raises, which is the child's own state."""
+    if _chmod_raises():
+        return None
+    refusing = ("import errno, os, runpy, sys\n"
+                "def refuse(path, *args, **kwargs):\n"
+                "    raise OSError(errno.ENOTSUP, os.strerror(errno.ENOTSUP), str(path))\n"
+                "os.chmod = refuse\n"
+                "sys.argv = [sys.argv[1], '--self-test']\n"
+                "runpy.run_path(sys.argv[0], run_name='__main__')\n")
+    proc = _run([sys.executable, "-c", refusing, str(Path(__file__).resolve())])
+    if proc is None:
+        return False
+    lines = proc.stdout.splitlines()
+    skipped = len(_no_read_permission_cases()) + 2
+    return (proc.returncode == 0 and not proc.stderr and bool(lines)
+            and not any(line.startswith("  [RED  ]") for line in lines)
+            and re.fullmatch(rf"self-test: (\d+)/\1 cases green, {skipped} skipped", lines[-1])
+            is not None)
 
 
 def _restores_chmod() -> bool:
@@ -1462,6 +1496,9 @@ def self_test() -> int:
          "os.chmod through the module", _skips_where_chmod_bound()),
         ("puts Path.chmod back as it found it on leaving the case above, normally or by an "
          "exception, whether or not the path class set its own", _restores_chmod()),
+        ("runs every case to the end and exits 0, with no traceback, where os.chmod raises "
+         "before --self-test starts, skipping only the no-read-permission cases, the case that "
+         "binds Path.chmod at import time and itself", _self_test_where_chmod_refuses()),
         ("raises, rather than reading as a check failure, a vendored core.md a case could not "
          "make unreadable", _unmade_core_raises()),
         ("fails, with no traceback, a case whose tree it could not make unreadable, here by "
