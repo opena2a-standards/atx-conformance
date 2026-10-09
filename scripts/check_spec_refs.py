@@ -830,10 +830,10 @@ def _workflow_dir_unsearchable() -> bool | None:
 
 def _check_unreadable(make: Callable[[Path], object], **tree: object) -> list[str] | None:
     """check() on a tree that cites one heading, after make(root) has left
-    part of it unreadable; None, which fails the case, if it raises."""
+    part of it unreadable; None, which fails the case, if either raises."""
     with _tree({"spec": [_atx("1.1 ATX schema")]}, **tree) as root:
-        make(root)
         try:
+            make(root)
             return check(root)
         except OSError:
             return None
@@ -973,6 +973,17 @@ def _unmade_core_raises() -> bool:
     except PermissionError:
         return True
     return False
+
+
+def _unmade_tree_fails() -> bool:
+    """A tree that _check_unreadable() could not make unreadable, here by a
+    mkdir on a README.md the tree already holds, fails the case, as None,
+    rather than raising out of the self-test."""
+    try:
+        return _check_unreadable(lambda root: (root / "README.md").mkdir(),
+                                 docs={"README.md": "x\n"}) is None
+    except OSError:
+        return False
 
 
 class _Undecodable(type(Path())):
@@ -1246,6 +1257,8 @@ def self_test() -> int:
          "exception, whether or not the path class set its own", _restores_chmod()),
         ("raises, rather than reading as a check failure, a vendored core.md a case could not "
          "make unreadable", _unmade_core_raises()),
+        ("fails, with no traceback, a case whose tree it could not make unreadable",
+         _unmade_tree_fails()),
         ("--help prints usage and runs no check",
          help_rc == 0 and help_out == USAGE and "every ATX citation" not in help_out),
         ("-h prints usage and runs no check", h_rc == 0 and h_out == USAGE),
