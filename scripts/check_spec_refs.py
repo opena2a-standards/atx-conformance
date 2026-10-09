@@ -1019,12 +1019,14 @@ def _unmade_core_raises() -> bool:
     return False
 
 
-def _unmade_tree_fails(make: Callable[[Path], object]) -> bool:
-    """A tree that _check_unreadable() could not make unreadable, as make(root)
-    raised, fails the case, as None, rather than raising out of the
-    self-test."""
+def _unmade_tree_fails(make: Callable[[Path], object],
+                       helper: Callable[..., list[str] | None] = _check_unreadable) -> bool:
+    """A tree that helper, _check_unreadable() unless a case gives another,
+    could not make unreadable, as make(root) raised, fails the case, as None,
+    rather than raising out of the self-test. False, not raised, where helper
+    lets any Exception out, not only an OSError."""
     try:
-        return _check_unreadable(make, docs={"README.md": "x\n"}) is None
+        return helper(make, docs={"README.md": "x\n"}) is None
     except Exception:
         return False
 
@@ -1032,6 +1034,14 @@ def _unmade_tree_fails(make: Callable[[Path], object]) -> bool:
 def _refuse_not_os(root: Path) -> None:
     """A make that raises an exception other than an OSError."""
     raise ValueError(f"{root}: not made unreadable")
+
+
+def _check_unguarded(make: Callable[[Path], object], **tree: object) -> list[str]:
+    """_check_unreadable() with no handler: what make(root) raises comes out
+    of it."""
+    with _tree({"spec": [_atx("1.1 ATX schema")]}, **tree) as root:
+        make(root)
+        return check(root)
 
 
 @contextlib.contextmanager
@@ -1343,6 +1353,12 @@ def self_test() -> int:
          _unmade_tree_fails(lambda root: (root / "README.md").mkdir())),
         ("fails, with no traceback, a case whose tree it could not make unreadable by an "
          "exception other than an OSError", _unmade_tree_fails(_refuse_not_os)),
+        ("fails, with no traceback, the first of the two cases above where its helper lets "
+         "the mkdir's OSError out rather than returning None",
+         not _unmade_tree_fails(lambda root: (root / "README.md").mkdir(), _check_unguarded)),
+        ("fails, with no traceback, the second where its helper lets the exception other "
+         "than an OSError out rather than returning None",
+         not _unmade_tree_fails(_refuse_not_os, _check_unguarded)),
         ("says, in the label of every case that is red because check() raised on its "
          "unreadable tree, what was raised and the line and function that raised it",
          _red_cases_say_why()),
