@@ -32,9 +32,13 @@ another document and is not checked. Each citation with id "ATX":
     vendored at that commit in schemas/vendor/atx-spec/core.md.
 
 Each list must carry at least one ATX citation, so a file that drops its
-citation cannot pass by having nothing to check. A file or member that cannot
-be read as a citation list fails by name: one that is not JSON, cannot be
-opened (a directory, no read permission) or is nested too deeply to parse.
+citation cannot pass by having nothing to check. For the same reason
+fixtures/ and jcs-vectors/vectors/ must each hold at least one *.json file: a
+directory that is missing, holds none or cannot be listed fails by name. A
+file or member that cannot be read as a citation list fails by name: one that
+is not JSON, cannot be opened (a directory, no read permission, a directory
+that cannot be searched) or is nested too deeply to parse. A conformance.json
+that does not exist is not read.
 
 Equality is exact on purpose: "1.1 ATX schema" passes, "§1.1 ATX schema" and
 "ATX schema" do not. A citation that must name two sections carries two ATX
@@ -52,10 +56,11 @@ exist by editing it:
 A core.md or workflow that cannot be read as UTF-8 text fails by name, as does
 a core.md that cannot be opened (a directory, no read permission, a directory
 that cannot be searched), once; no citation is held to the headings of a
-core.md that cannot be read. A missing workflow pins no atx-spec commit. The
-self-test copies core.md, and the workflow, into the trees its cases build, so
-a core.md or workflow it cannot read fails by name before any case runs; a
-missing core.md or workflow fails there in the words the check uses for it.
+core.md that cannot be read. A missing workflow fails by name, as one to
+restore. The self-test copies core.md, and the workflow, into the trees its
+cases build, so a core.md or workflow it cannot read fails by name before any
+case runs; a missing core.md or workflow fails there in the words the check
+uses for it. The self-test also fails a temporary tree it could not remove.
 
 Every link to atx-spec core.md in LINKED_DOCS (README.md and
 verifiers/go/verify.go) must also equal CORE_REF, apart from a query string, a
@@ -68,7 +73,9 @@ another link, such as a redirect target, is checked the same way, each query
 parameter on its own; a percent-encoded one is not read. A line that carries
 a URL more than MAX_URL_DEPTH links deep fails rather than being read to any
 depth, so a line costs a bounded number of reads however many `?` and `#` it
-holds. A file in LINKED_DOCS that cannot be read as UTF-8 fails by name.
+holds. A file in LINKED_DOCS that cannot be opened (a directory, no read
+permission, a directory that cannot be searched) or read as UTF-8 fails by
+name; one that does not exist is not read.
 
 CORE_REF carries CORE_MD_SPEC_REF, so moving the pin also fails every citation
 until the generators cite the new commit (atxCoreRef in
@@ -92,6 +99,7 @@ Usage:
 from __future__ import annotations
 
 import contextlib
+import functools
 import hashlib
 import io
 import json
@@ -112,6 +120,13 @@ CORE_MD = Path("schemas/vendor/atx-spec/core.md")
 # The failure for a tree with no core.md, in the check and in the self-test.
 CORE_MD_MISSING = f"{CORE_MD} is missing; vendor core.md from the pinned atx-spec ref"
 WORKFLOW = Path(".github/workflows/conformance.yml")
+# The failure for a tree with no workflow, in the check and in the self-test.
+WORKFLOW_MISSING = (
+    f"{WORKFLOW} is missing; restore it, as its atx-spec checkout pins the commit "
+    f"{CORE_MD} was vendored at"
+)
+# The directories of the generated files whose `spec` the check reads.
+CITATION_DIRS = (Path("fixtures"), Path("jcs-vectors/vectors"))
 # Not sliced from __doc__: `python -OO` strips docstrings, and this module is
 # imported by scripts/conformance_profile.py. The self-test holds the
 # docstring's Usage block equal to this text.
@@ -215,13 +230,17 @@ def _show(value: object) -> str:
     return reprlib.repr(value)
 
 
-def _load(path: Path, where: str, failures: list[str]) -> object:
+def _load(path: Path, where: str, failures: list[str], missing_ok: bool = False) -> object:
+    """The JSON value in path, or _UNREADABLE with a failure that names where.
+    A path that does not exist is no failure when missing_ok: see _unread()
+    for why it is opened rather than asked whether it exists."""
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except ValueError as exc:
         failures.append(f"{where}: is not JSON ({exc})")
     except OSError as exc:
-        failures.append(f"{where}: cannot be read ({exc.strerror or type(exc).__name__})")
+        if not (missing_ok and isinstance(exc, (FileNotFoundError, NotADirectoryError))):
+            failures.append(f"{where}: cannot be read ({exc.strerror or type(exc).__name__})")
     except RecursionError:
         failures.append(f"{where}: is nested too deeply to read as JSON")
     return _UNREADABLE
@@ -284,26 +303,46 @@ def _member(doc: object, key: str, where: str, failures: list[str]) -> object:
     return _UNREADABLE
 
 
+def citation_files(root: Path, rel: Path, failures: list[str]) -> list[Path]:
+    """Every *.json file in root/rel, sorted, with a failure that names rel
+    when it is missing, holds none or cannot be listed: a directory with no
+    file has no citation to check, so it must not pass. Path.glob() yields
+    nothing for each of those, so the directory is listed instead."""
+    try:
+        paths = sorted(p for p in (root / rel).iterdir() if p.name.endswith(".json"))
+    except FileNotFoundError:
+        failures.append(f"{rel}/ is missing, so none of its citations is checked; regenerate it")
+        return []
+    except OSError as exc:
+        failures.append(f"{rel}/: cannot be listed ({exc.strerror or type(exc).__name__})")
+        return []
+    if not paths:
+        failures.append(f"{rel}/ holds no *.json file, so none of its citations is checked; "
+                        f"regenerate it")
+    return paths
+
+
 def cited_files(root: Path) -> tuple[list[tuple[str, object]], list[str]]:
     """(where, citations) for every citation list the check reads, and a
-    failure for each file or member that cannot be read as one."""
+    failure for each directory, file or member that cannot be read as one."""
     lists: list[tuple[str, object]] = []
     failures: list[str] = []
-    for path in sorted((root / "fixtures").glob("*.json")):
+    fixtures, vectors = CITATION_DIRS
+    for path in citation_files(root, fixtures, failures):
         where = printable(str(path.relative_to(root)))
         spec = _member(_load(path, where, failures), "spec", where, failures)
         if spec is not _UNREADABLE:
             lists.append((where, spec))
-    for path in sorted((root / "jcs-vectors" / "vectors").glob("*.json")):
+    for path in citation_files(root, vectors, failures):
         where = printable(str(path.relative_to(root)))
         spec = _member(_load(path, where, failures), "spec", where, failures)
         if spec is not _UNREADABLE:
             # A vector carries one citation object, not a list.
             lists.append((where, [spec]))
-    profile = root / "conformance.json"
-    if profile.exists():
-        where = "conformance.json"
-        reqs = _member(_load(profile, where, failures), "requirements", where, failures)
+    where = "conformance.json"
+    doc = _load(root / where, where, failures, missing_ok=True)
+    if doc is not _UNREADABLE:
+        reqs = _member(doc, "requirements", where, failures)
         if reqs is not _UNREADABLE and not isinstance(reqs, list):
             failures.append(f"{where}: 'requirements' is not a list")
         elif reqs is not _UNREADABLE:
@@ -326,8 +365,8 @@ def pin_failures(root: Path, core: bytes | None) -> list[str]:
             f"{CORE_MD} has SHA-256 {digest}, not {CORE_MD_SHA256} (core.md at atx-spec "
             f"{CORE_MD_SPEC_REF}). Re-vendor it from the pinned commit; do not edit it."
         )
-    # A missing workflow pins no commit.
-    text = _read_text(root, WORKFLOW, "its atx-spec pin", failures, missing=pin_mismatch(set()))
+    # A missing workflow pins no commit; it is to be restored, not re-pinned.
+    text = _read_text(root, WORKFLOW, "its atx-spec pin", failures, missing=WORKFLOW_MISSING)
     if text is None:
         return failures
     pins = set(SPEC_PIN_RE.findall(text))
@@ -376,13 +415,19 @@ def linked_urls(text: str) -> Iterator[tuple[int, str]]:
 def link_failures(root: Path) -> list[str]:
     """Every link to atx-spec core.md in LINKED_DOCS that is not CORE_REF,
     every line that carries a URL deeper than MAX_URL_DEPTH, and every file in
-    LINKED_DOCS that cannot be read as UTF-8."""
+    LINKED_DOCS that cannot be opened or read as UTF-8. A file that does not
+    exist is not read: see _unread() for why it is opened rather than asked
+    whether it is a file."""
     failures: list[str] = []
     for rel in LINKED_DOCS:
-        path = root / rel
-        if not path.is_file():
+        try:
+            data = (root / rel).read_bytes()
+        except (FileNotFoundError, NotADirectoryError):
             continue
-        text = _read_text(root, rel, "its links", failures)
+        except OSError as exc:
+            failures.append(_unread(rel, exc, None))
+            continue
+        text = _decode(rel, data, "its links", failures)
         if text is None:
             continue
         for n, line in enumerate(text.splitlines(), 1):
@@ -479,15 +524,26 @@ RETIRED_SECTIONS = [
 # Deeper than json.loads accepts before Python 3.14, and than repr() accepts on
 # 3.14, which parses it.
 DEEP = 100_000
+# Every temporary tree a case built that _remove() could not remove; the last
+# case of the self-test fails when it holds any.
+_LEFT: list[Path] = []
+
+
+def _remove(tmp: Path) -> None:
+    """Removes tmp, a temporary tree, recording it in _LEFT if it remains."""
+    shutil.rmtree(tmp, ignore_errors=True)
+    if os.path.lexists(tmp):
+        _LEFT.append(tmp)
 
 
 @contextlib.contextmanager
 def _tree(fixture: object, vector: object = None, profile: object = None,
           core_extra: str | bytes = "", workflow: str | bytes | None = None,
           docs: dict[str, str | bytes] | None = None) -> Iterator[Path]:
-    """A temporary tree with one fixture and, when given, one JCS vector, a
-    conformance.json and prose files (path: text). A str or bytes is written
-    verbatim, anything else as JSON; core_extra is appended to core.md."""
+    """A temporary tree with one fixture, one JCS vector (by default one that
+    cites a heading) and, when given, a conformance.json and prose files
+    (path: text). A str or bytes is written verbatim, anything else as JSON;
+    core_extra is appended to core.md."""
     def write(path: Path, doc: object) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         if isinstance(doc, bytes):
@@ -505,21 +561,24 @@ def _tree(fixture: object, vector: object = None, profile: object = None,
             shutil.copyfile(ROOT / WORKFLOW, tmp / WORKFLOW)
         else:
             write(tmp / WORKFLOW, workflow)
-        write(tmp / "fixtures" / "probe.json", fixture)
-        if vector is not None:
-            write(tmp / "jcs-vectors" / "vectors" / "probe.json", vector)
+        fixtures, vectors = CITATION_DIRS
+        write(tmp / fixtures / "probe.json", fixture)
+        write(tmp / vectors / "probe.json", {"spec": _atx("1.1 ATX schema")} if vector is None else vector)
         if profile is not None:
             write(tmp / "conformance.json", profile)
         for rel, text in (docs or {}).items():
             write(tmp / rel, text)
         yield tmp
     finally:
-        # A case may leave the directory of core.md or of the workflow with no
-        # search permission; it is given back so the tree can be removed.
-        for rel in (CORE_MD, WORKFLOW):
+        # A case may leave the tree's root, a citation directory or the
+        # directory of core.md, of the workflow or of a linked file with no
+        # permissions; each is given back, the root first, so the tree can be
+        # removed. A directory left out here fails the self-test's last case.
+        parents = (rel.parent for rel in (CORE_MD, WORKFLOW, *LINKED_DOCS))
+        for rel in (Path(), *CITATION_DIRS, *parents):
             with contextlib.suppress(OSError):
-                (tmp / rel).parent.chmod(0o755)
-        shutil.rmtree(tmp, ignore_errors=True)
+                (tmp / rel).chmod(0o700)
+        _remove(tmp)
 
 
 def _probe(refs: object, **tree: object) -> list[str]:
@@ -532,10 +591,10 @@ def _probe_doc(fixture: object, **tree: object) -> list[str]:
         return check(root)
 
 
-def _probe_tree(mutate: Callable[[Path], object]) -> list[str]:
-    """check() on a tree that cites one heading, after mutate(root) has
-    changed it."""
-    with _tree({"spec": [_atx("1.1 ATX schema")]}) as root:
+def _probe_tree(mutate: Callable[[Path], object], refs: object = None) -> list[str]:
+    """check() on a tree whose fixture cites refs, by default one heading,
+    after mutate(root) has changed it."""
+    with _tree({"spec": [_atx("1.1 ATX schema")] if refs is None else refs}) as root:
         mutate(root)
         return check(root)
 
@@ -673,7 +732,7 @@ def _permissions_stop_reads() -> bool:
             return True
         return False
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        _remove(tmp)
 
 
 def _chmod_does_nothing() -> bool:
@@ -686,7 +745,7 @@ def _chmod_does_nothing() -> bool:
         probe.chmod(0)
         return probe.stat().st_mode == mode
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        _remove(tmp)
 
 
 @contextlib.contextmanager
@@ -769,6 +828,49 @@ def _workflow_dir_unsearchable() -> bool | None:
     return failures == [f"{WORKFLOW}: cannot be read (Permission denied)"]
 
 
+def _check_unreadable(make: Callable[[Path], object], **tree: object) -> list[str] | None:
+    """check() on a tree that cites one heading, after make(root) has taken
+    permissions from part of it; None, which fails the case, if it raises."""
+    with _tree({"spec": [_atx("1.1 ATX schema")]}, **tree) as root:
+        make(root)
+        try:
+            return check(root)
+        except OSError:
+            return None
+
+
+def _linked_dir_unsearchable() -> bool | None:
+    """check() names a verify.go in a directory with no search permission as
+    unreadable, rather than raising on Python 3.12 and 3.13 or skipping it on
+    3.14; None (skipped) where permissions do not stop a read."""
+    if not _permissions_stop_reads():
+        return None
+    rel = Path("verifiers/go/verify.go")
+    return (_check_unreadable(lambda root: _unsearchable(root / rel), docs={str(rel): f"// {CORE_REF}\n"})
+            == [f"{rel}: cannot be read (Permission denied)"])
+
+
+def _citation_dir_unlistable(rel: Path) -> bool | None:
+    """check() names rel, a citation directory with no permissions, as one it
+    cannot list, not as missing or empty; None (skipped) where permissions do
+    not stop a read."""
+    if not _permissions_stop_reads():
+        return None
+    return (_check_unreadable(lambda root: (root / rel).chmod(0))
+            == [f"{rel}/: cannot be listed (Permission denied)"])
+
+
+def _root_unsearchable() -> bool | None:
+    """check() names a conformance.json in a tree root with no permissions,
+    which it cannot tell from a missing one, as unreadable, rather than
+    raising on Python 3.12 and 3.13 or skipping it on 3.14; None (skipped)
+    where permissions do not stop a read."""
+    if not _permissions_stop_reads():
+        return None
+    failures = _check_unreadable(lambda root: root.chmod(0), profile={"requirements": []})
+    return failures is not None and "conformance.json: cannot be read (Permission denied)" in failures
+
+
 def _self_test_core_dir_unsearchable() -> bool | None:
     """--self-test in a tree whose core.md is in a directory with no search
     permission names core.md as unreadable, not as missing, and exits 1, with
@@ -788,7 +890,9 @@ def _skips_where_reads_allowed() -> bool | None:
             return None
         return all(case() is None for case in (
             _unreadable_readme, _core_no_read_permission, _core_dir_unsearchable,
-            _workflow_dir_unsearchable, _self_test_core_dir_unsearchable))
+            _workflow_dir_unsearchable, _self_test_core_dir_unsearchable,
+            _linked_dir_unsearchable, _root_unsearchable,
+            *(functools.partial(_citation_dir_unlistable, rel) for rel in CITATION_DIRS)))
 
 
 @contextlib.contextmanager
@@ -917,7 +1021,8 @@ def self_test() -> int:
     # case runs, so one that cannot be read fails by name, not in a traceback.
     # A missing workflow or core.md fails in the words check() uses for it.
     unread: list[str] = []
-    workflow = _read_text(ROOT, WORKFLOW, "its atx-spec pin", unread, missing=pin_mismatch(set()))
+    _LEFT.clear()
+    workflow = _read_text(ROOT, WORKFLOW, "its atx-spec pin", unread, missing=WORKFLOW_MISSING)
     _read_bytes(ROOT, CORE_MD, unread, missing=CORE_MD_MISSING)
     if workflow is None or unread:
         for f in unread:
@@ -971,11 +1076,13 @@ def self_test() -> int:
         ("rejects a workflow that adds a second, different atx-spec pin",
          bool(_probe([good], workflow=second_pin))),
         ("rejects a workflow that pins no atx-spec commit", bool(_probe([good], workflow=""))),
-        ("rejects a tree with no workflow, as one that pins no atx-spec commit",
-         len(no_workflow) == 1 and no_workflow[0].startswith(f"{WORKFLOW} pins atx-spec at no commit, ")),
-        ("--self-test in a tree with no workflow names it as pinning no atx-spec commit, in "
-         "the check's words, and exits 1, with no traceback",
-         _self_test_without(WORKFLOW, says=pin_mismatch(set()))),
+        ("rejects a tree with no workflow by name, as its one failure, and tells the author to "
+         "restore it, not to re-vendor core.md",
+         no_workflow == [WORKFLOW_MISSING]
+         and WORKFLOW_MISSING == f"{WORKFLOW} is missing; restore it, as its atx-spec checkout "
+                                 f"pins the commit {CORE_MD} was vendored at"),
+        ("--self-test in a tree with no workflow names it as missing, in the check's words, "
+         "and exits 1, with no traceback", _self_test_without(WORKFLOW, says=WORKFLOW_MISSING)),
         ("--self-test in a tree whose vendored core.md is in a directory it cannot search "
          "names core.md as unreadable, not missing, and exits 1, with no traceback",
          _self_test_core_dir_unsearchable()),
@@ -1024,6 +1131,18 @@ def self_test() -> int:
          _names_probe(_probe([good], docs={"README.md": f"[core]({stale}#6-transparency-log)\n"}),
                       "README.md:1:")),
     ]
+    # A citation directory with no file to read has no citation to check.
+    for rel in CITATION_DIRS:
+        cases += [
+            (f"rejects a tree with no {rel}/ by name, as its one failure",
+             _probe_tree(lambda root: shutil.rmtree(root / rel))
+             == [f"{rel}/ is missing, so none of its citations is checked; regenerate it"]),
+            (f"rejects a {rel}/ that holds no *.json file by name, as its one failure",
+             _probe_tree(lambda root: (root / rel / "probe.json").rename(root / rel / "probe.txt"))
+             == [f"{rel}/ holds no *.json file, so none of its citations is checked; regenerate it"]),
+            (f"reports a {rel}/ it has no permission to list by name, not as missing or empty",
+             _citation_dir_unlistable(rel)),
+        ]
     # One case per character link_base() strips, written out here rather than
     # read from TRAILING, so dropping a character from TRAILING turns its case red.
     cases += [(f"rejects a core.md link at atx-spec main followed by {c!r}",
@@ -1090,9 +1209,10 @@ def self_test() -> int:
          and core_not_utf8[1].startswith(f"{CORE_MD}: is not UTF-8 text")),
         ("reports a workflow that is not UTF-8 by name, and no pin failure",
          len(workflow_not_utf8) == 1 and workflow_not_utf8[0].startswith(f"{WORKFLOW}: is not UTF-8 text")),
-        ("reports a missing vendored core.md by name, as its one failure, and tells the "
-         "author to vendor it from the pinned atx-spec ref",
-         _probe_tree(lambda root: (root / CORE_MD).unlink()) == [CORE_MD_MISSING]
+        ("reports a missing vendored core.md by name, as its one failure even beside a "
+         "citation that would fail, and tells the author to vendor it from the pinned atx-spec ref",
+         _probe_tree(lambda root: (root / CORE_MD).unlink(), [_atx("1.1 ATX schema", ref=stale)])
+         == [CORE_MD_MISSING]
          and CORE_MD_MISSING == f"{CORE_MD} is missing; vendor core.md from the pinned atx-spec ref"),
         ("reports, once, a vendored core.md it has no permission to read by name",
          _core_no_read_permission()),
@@ -1100,6 +1220,10 @@ def self_test() -> int:
          "not missing", _core_dir_unsearchable()),
         ("reports a workflow in a directory it cannot search as unreadable, not as pinning "
          "no atx-spec commit", _workflow_dir_unsearchable()),
+        ("reports a verify.go in a directory it cannot search as unreadable, rather than "
+         "raising or skipping it", _linked_dir_unsearchable()),
+        ("reports a conformance.json in a tree root it cannot search as unreadable, rather "
+         "than raising or skipping it", _root_unsearchable()),
         ("reports, once, a directory named like the vendored core.md by name",
          _unreadable_core(_as_directory)),
         ("reads the headings from the core.md bytes whose digest it took, not a second read",
@@ -1144,6 +1268,10 @@ def self_test() -> int:
              "README.md:1: carries a URL more than 8 links deep in other links' query strings "
              "or #fragments, deeper than the check reads. Link it at most 8 deep."]),
     ]
+    # Last, so it sees every temporary tree the cases above built.
+    left = ", ".join(printable(str(tmp)) for tmp in _LEFT)
+    cases.append(("removes every temporary tree it builds" + (f" (left: {left})" if left else ""),
+                  not _LEFT))
     failed = skipped = 0
     for label, ok in cases:
         mark = "SKIP " if ok is None else "GREEN" if ok else "RED  "
