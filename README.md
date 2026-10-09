@@ -313,7 +313,7 @@ breaking change for downstream verifiers.
 | Component | Version | Source |
 |---|---|---|
 | ATX schema | v1.0 | [`opena2a-standards/atx-spec/core.md`](https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md) |
-| AIP spec | v1.0 (in flight on PR 1496) | [`opena2a-org/agent-identity-protocol`](https://github.com/opena2a-standards/agent-identity-protocol) |
+| AIP spec | v1.0 (in flight on PR 1496) | [`opena2a-standards/agent-identity-protocol`](https://github.com/opena2a-standards/agent-identity-protocol) |
 | `did:opena2a` method | v0.1 (W3C registration filed, PR `w3c/did-extensions#717`) | [`opena2a-standards/did-method-opena2a`](https://github.com/opena2a-standards/did-method-opena2a/blob/main/did-method-opena2a.md) |
 | Ed25519 test vector source | RFC 8032 §7.1 Tests 1, 2, 3, 1024 | [datatracker.ietf.org/doc/html/rfc8032](https://datatracker.ietf.org/doc/html/rfc8032) |
 | ML-DSA-65 | FIPS 204 final | [csrc.nist.gov/pubs/fips/204/final](https://csrc.nist.gov/pubs/fips/204/final) |
