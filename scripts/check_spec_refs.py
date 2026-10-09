@@ -821,7 +821,12 @@ def _restores_chmod() -> bool:
     did not set it, and the class's own function when it did. The class is
     put back as this found it either way."""
     cls, absent = type(Path()), object()
-    found, stand_in = vars(cls).get("chmod", absent), cls.chmod
+    found = vars(cls).get("chmod", absent)
+
+    def stand_in(self: Path, mode: int, *, follow_symlinks: bool = True) -> None:
+        """The class's own chmod: a function of its own, so that one put back
+        as Path.chmod, the function the class inherits, does not match it."""
+        os.chmod(self, mode, follow_symlinks=follow_symlinks)
 
     def left_as_found(own: object) -> bool:
         with _chmod_bound_at_import():
