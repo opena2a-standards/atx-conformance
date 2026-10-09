@@ -51,8 +51,12 @@ exist by editing it:
 
 Every link to atx-spec core.md in LINKED_DOCS (README.md and
 verifiers/go/verify.go) must also equal CORE_REF, apart from a query string, a
-#fragment, sentence punctuation after it (.,;:!?) and the case of its scheme,
-so the prose links open the text the citations were checked against.
+#fragment, the punctuation a GitHub autolink drops after it (.,:!*_~) or a
+semicolon, trailing slashes, and the case of everything before the file name,
+so the prose links open the text the citations were checked against. A URL
+carried in the query string or #fragment of another link, such as a redirect
+target, is checked the same way, each query parameter on its own; a
+percent-encoded one is not read.
 
 CORE_REF carries CORE_MD_SPEC_REF, so moving the pin also fails every citation
 until the generators cite the new commit (atxCoreRef in
@@ -86,6 +90,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import deque
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -130,6 +135,10 @@ SPEC_PIN_RE = re.compile(
 # A URL in prose, its scheme in any case: it ends at a blank, a quote or a
 # bracket, so a markdown link's closing parenthesis is not part of it.
 URL_RE = re.compile(r"https?://[^\s<>()\[\]\"'`]+", re.IGNORECASE)
+# What link_base() strips from the end of a URL once its query and fragment are
+# split off: the trailing punctuation a GitHub autolink leaves out of the link
+# (`?` cannot remain after the split) and a semicolon.
+TRAILING = ".,;:!*_~"
 
 # Returned in place of a value that could not be read; its failure is recorded.
 _UNREADABLE = object()
@@ -168,6 +177,13 @@ def core_headings(text: str) -> set[str]:
     return headings
 
 
+def printable(name: str) -> str:
+    """A file name as a failure names it. pathlib reads a name that is not
+    valid UTF-8 with a lone surrogate per undecodable byte, which cannot be
+    printed under a UTF-8 locale; it is written as a backslash escape."""
+    return name.encode("utf-8", "backslashreplace").decode("utf-8")
+
+
 def _show(value: object) -> str:
     """repr() of a value read from a citation file. A container is shown to a
     bounded depth, so a deeply nested one cannot exhaust the stack."""
@@ -203,12 +219,12 @@ def cited_files(root: Path) -> tuple[list[tuple[str, object]], list[str]]:
     lists: list[tuple[str, object]] = []
     failures: list[str] = []
     for path in sorted((root / "fixtures").glob("*.json")):
-        where = str(path.relative_to(root))
+        where = printable(str(path.relative_to(root)))
         spec = _member(_load(path, where, failures), "spec", where, failures)
         if spec is not _UNREADABLE:
             lists.append((where, spec))
     for path in sorted((root / "jcs-vectors" / "vectors").glob("*.json")):
-        where = str(path.relative_to(root))
+        where = printable(str(path.relative_to(root)))
         spec = _member(_load(path, where, failures), "spec", where, failures)
         if spec is not _UNREADABLE:
             # A vector carries one citation object, not a list.
@@ -250,10 +266,24 @@ def pin_failures(root: Path) -> list[str]:
 
 def link_base(url: str) -> str:
     """A URL as the link check compares it with CORE_REF: without its query,
-    its #fragment or the sentence punctuation after it, scheme in lower case."""
-    base = re.split(r"[?#]", url, maxsplit=1)[0].rstrip(".,;:!?")
-    scheme, sep, rest = base.partition("://")
-    return scheme.lower() + sep + rest
+    its #fragment, the TRAILING punctuation after it or trailing slashes, and
+    in lower case up to its file name. GitHub serves an owner or repository
+    name in any case, and core.md with a trailing slash."""
+    base = re.split(r"[?#]", url, maxsplit=1)[0].rstrip(TRAILING).rstrip("/")
+    head, sep, name = base.rpartition("/")
+    return head.lower() + sep + name
+
+
+def linked_urls(text: str) -> Iterator[str]:
+    """Every URL in text, then every URL carried in the query string or
+    #fragment of one, each query parameter read on its own."""
+    pending = deque([text])
+    while pending:
+        for url in URL_RE.findall(pending.popleft()):
+            yield url
+            rest = re.split(r"[?#]", url, maxsplit=1)[1:]
+            if rest:
+                pending.extend(rest[0].split("&"))
 
 
 def link_failures(root: Path) -> list[str]:
@@ -264,7 +294,7 @@ def link_failures(root: Path) -> list[str]:
         if not path.is_file():
             continue
         for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            for url in URL_RE.findall(line):
+            for url in linked_urls(line):
                 base = link_base(url)
                 if "/atx-spec/" in base and base.endswith("/core.md") and base != CORE_REF:
                     failures.append(
@@ -405,6 +435,15 @@ def _atx(section: object, ref: str = CORE_REF) -> dict:
     return {"id": "ATX", "ref": ref, "section": section}
 
 
+def _readme(text: str) -> list[str]:
+    """check() on a tree whose README.md is text."""
+    return _probe([_atx("1.1 ATX schema")], docs={"README.md": text})
+
+
+def _once(failures: list[str], where: str) -> bool:
+    return len(failures) == 1 and _names_probe(failures, where)
+
+
 def _report_last_line(**tree: object) -> str:
     out = io.StringIO()
     with _tree({"spec": [_atx("1.1 ATX schema")]}, **tree) as root, contextlib.redirect_stdout(out):
@@ -533,8 +572,32 @@ def self_test() -> int:
         ("rejects a core.md link at atx-spec main that carries a #fragment",
          _names_probe(_probe([good], docs={"README.md": f"[core]({stale}#6-transparency-log)\n"}),
                       "README.md:1:")),
-        ("rejects a core.md link at atx-spec main followed by a period",
-         _names_probe(_probe([good], docs={"README.md": f"See {stale}.\n"}), "README.md:1:")),
+    ]
+    # One case per character link_base() strips, written out here rather than
+    # read from TRAILING, so dropping a character from TRAILING turns its case red.
+    cases += [(f"rejects a core.md link at atx-spec main followed by {c!r}",
+               _names_probe(_readme(f"See {stale}{c}\n"), "README.md:1:"))
+              for c in ".,;:!*_~"]
+    redirect = "https://example.com/r"
+    cases += [
+        ("rejects a core.md link at atx-spec main wrapped in ** emphasis",
+         _names_probe(_readme(f"**{stale}**\n"), "README.md:1:")),
+        ("rejects a core.md link at atx-spec main ending in a slash",
+         _names_probe(_readme(f"{stale}/\n"), "README.md:1:")),
+        ("rejects a core.md link at atx-spec main naming the repository in upper case",
+         _names_probe(_readme(stale.replace("/atx-spec/", "/ATX-SPEC/") + "\n"), "README.md:1:")),
+        ("rejects, once, a core.md link at atx-spec main carried in another link's query string",
+         _once(_readme(f"{redirect}?u={stale}\n"), "README.md:1:")),
+        ("rejects a core.md link at atx-spec main carried in another link's #fragment",
+         _once(_readme(f"{redirect}#{stale}\n"), "README.md:1:")),
+        ("rejects a core.md link at atx-spec main carried in a query parameter before another",
+         _once(_readme(f"{redirect}?u={stale}&v=1\n"), "README.md:1:")),
+        ("rejects a core.md link at atx-spec main carried two links deep",
+         _once(_readme(f"{redirect}?u={redirect}?v={stale}\n"), "README.md:1:")),
+        ("accepts a pinned core.md link in emphasis, ending in a slash, naming the repository "
+         "in upper case or carried in a query parameter",
+         not _readme(f"**{CORE_REF}**\n{CORE_REF}/\n{CORE_REF.replace('/atx-spec/', '/ATX-SPEC/')}\n"
+                     f"{redirect}?u={CORE_REF}&v=1\n")),
         ("rejects a core.md link at atx-spec main that carries a query string",
          _names_probe(_probe([good], docs={"README.md": f"See {stale}?plain=1\n"}), "README.md:1:")),
         ("rejects a core.md link at atx-spec main with an upper-case scheme",
@@ -559,6 +622,9 @@ def self_test() -> int:
         ("strips a closing # run followed by blanks", core_headings("## 2. Closed ## \t\n") == {"2. Closed"}),
         ("keeps a # that no blank precedes", core_headings("## 2. C#\n") == {"2. C#"}),
         ("reads a heading with a long run of blanks in linear time", _linear_heading(16000)),
+        ("writes a file name that is not valid UTF-8 as a backslash escape",
+         printable("fixtures/bad-\udcff.json") == "fixtures/bad-\\udcff.json"),
+        ("leaves a UTF-8 file name unchanged", printable("fixtures/café.json") == "fixtures/café.json"),
     ]
     failed = 0
     for label, ok in cases:

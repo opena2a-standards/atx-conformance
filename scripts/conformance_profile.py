@@ -125,7 +125,11 @@ def _nests_deeper_than(limit: int, value: object) -> bool:
 
 def requirement(path: Path, failures: list[str]) -> dict | None:
     """The requirement a fixture defines, or None with its failure recorded."""
-    where = f"fixtures/{path.name}"
+    name = f"fixtures/{path.name}"
+    # A failure names the fixture in a form that prints under a UTF-8 locale;
+    # the requirement keeps the name as read, so one that has no UTF-8 form
+    # fails the encoding check below.
+    where = check_spec_refs.printable(name)
     try:
         fx = json.loads(path.read_text(encoding="utf-8"))
     except ValueError as exc:
@@ -157,7 +161,7 @@ def requirement(path: Path, failures: list[str]) -> dict | None:
             return None
         outcome = f"REJECT[{category}]"
     req = {
-        "fixture": where,
+        "fixture": name,
         "name": fx["name"],
         "fixtureType": fx.get("fixtureType", "atx-credential"),
         "level": "MUST",
@@ -240,6 +244,32 @@ def _builds(make: object) -> bool:
     return built is not None and not built[1] and len(built[0]["requirements"]) == 1
 
 
+class _Renamed:
+    """A fixture read from path under another file name. On Linux pathlib
+    reads a name that is not valid UTF-8 with a lone surrogate per
+    undecodable byte; macOS refuses to create such a file."""
+
+    def __init__(self, path: Path, name: str) -> None:
+        self.path, self.name = path, name
+
+    def read_text(self, encoding: str) -> str:
+        return self.path.read_text(encoding=encoding)
+
+
+def _names_undecodable(fixture: object) -> bool:
+    """requirement() on a fixture named bad-<0xFF>.json fails by name, and the
+    failure prints under a UTF-8 locale."""
+    failures: list[str] = []
+    with _fixtures(fixture) as root:
+        req = requirement(_Renamed(root / "fixtures" / "probe.json", "bad-\udcff.json"), failures)
+    try:
+        "".join(failures).encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return (req is None and len(failures) == 1
+            and failures[0].startswith("fixtures/bad-\\udcff.json: "))
+
+
 def _nested(depth: int) -> str:
     """A fixture nested depth levels deep: its spec is arrays nested one level
     less, so its requirement nests as deep as it does."""
@@ -296,6 +326,8 @@ def self_test() -> int:
         ("reports a fixture carrying a lone surrogate escape by name",
          _fails_by_name('{"name": "p", "description": "\\ud800", "spec": [],'
                         ' "expected": {"verifyResult": "ACCEPT"}}')),
+        ("reports a fixture whose file name is not valid UTF-8 by name, in printable form",
+         _names_undecodable(good)),
         ("writes conformance.json for a well-formed fixture", write_rc == 0 and not write_unchanged),
         ("refuses to write conformance.json when a fixture is broken",
          broken_rc == 1 and broken_unchanged),
