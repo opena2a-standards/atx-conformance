@@ -1288,16 +1288,31 @@ _RANKS = ("first", "second", "third", "fourth", "fifth", "sixth", "seventh", "ei
           "[0-9]+(?:st|nd|rd|th)", "last", "final", "penultimate", "former", "latter", "next",
           "previous", "preceding", "following", "earlier", "later", "prior")
 _AFTER_RANKS = ("cases?", "of", "where", "above", "below", "one(?!['’])")
+# The pieces read around a rank, each of which some wording must need as
+# well: words joined to it by a hyphen, as in "twenty-first" and
+# "second-to-last", and a count after it, as in "the last two cases". Then
+# the words read before "cases" alone, as in "both cases" and "the two
+# cases". "{count}" stands for any of _COUNTS.
+_JOINED = ("(?:[a-z]+-)*",)
+_COUNTED = ("(?: {count})?",)
+_BEFORE_CASES = ("both", "the {count}")
 
 
 def _by_rank_re(ranks: tuple[str, ...] = _RANKS, counts: tuple[str, ...] = _COUNTS,
-                after: tuple[str, ...] = _AFTER_RANKS,
+                after: tuple[str, ...] = _AFTER_RANKS, joined: tuple[str, ...] = _JOINED,
+                counted: tuple[str, ...] = _COUNTED,
+                before_cases: tuple[str, ...] = _BEFORE_CASES,
                 flags: int = re.IGNORECASE) -> re.Pattern[str]:
     """The pattern _by_rank() reads a label with, built from the words it
-    reads as a rank, as a count and after them."""
+    reads as a rank, as a count and after them, the pieces it reads around a
+    rank and the words it reads before "cases" alone."""
     count = f"(?:{'|'.join(counts)})"
-    return re.compile(rf"\bthe (?:[a-z]+-)*(?:{'|'.join(ranks)})(?: {count})?"
-                      rf" (?:{'|'.join(after)})\b|\b(?:both|the {count}) cases\b", flags)
+
+    def read(words: tuple[str, ...], between: str) -> str:
+        return between.join(word.replace("{count}", count) for word in words)
+
+    return re.compile(rf"\bthe {read(joined, '')}(?:{read(ranks, '|')}){read(counted, '')}"
+                      rf" (?:{read(after, '|')})\b|\b(?:{read(before_cases, '|')}) cases\b", flags)
 
 
 _BY_RANK_RE = _by_rank_re()
@@ -1327,19 +1342,38 @@ def _by_rank(labels: list[str]) -> list[str]:
     return [label for label in labels if _BY_RANK_RE.search(label)]
 
 
-def _unneeded_words() -> list[str]:
-    """Each word _by_rank() reads as a rank, as a count or after them, and its
-    re.IGNORECASE flag, that no wording in _BY_RANK_WORDINGS needs: with it
-    taken out, every one of them still reads as naming a case by rank, so
-    taking it out would leave the self-test green."""
+def _unneeded_words(wordings: tuple[str, ...] = _BY_RANK_WORDINGS) -> list[str]:
+    """Each word _by_rank() reads as a rank, as a count, after them or before
+    "cases" alone, each piece it reads around a rank, and its re.IGNORECASE
+    flag, that no wording in wordings needs: with it taken out, every one
+    of them still reads as naming a case by rank, so taking it out would leave
+    the self-test green."""
     def all_read(pattern: re.Pattern[str]) -> bool:
-        return all(pattern.search(wording) for wording in _BY_RANK_WORDINGS)
+        return all(pattern.search(wording) for wording in wordings)
 
     unneeded = [word for name, words in (("ranks", _RANKS), ("counts", _COUNTS),
-                                         ("after", _AFTER_RANKS))
+                                         ("after", _AFTER_RANKS), ("joined", _JOINED),
+                                         ("counted", _COUNTED), ("before_cases", _BEFORE_CASES))
                 for word in words
                 if all_read(_by_rank_re(**{name: tuple(w for w in words if w != word)}))]
     return unneeded + (["re.IGNORECASE"] if all_read(_by_rank_re(flags=0)) else [])
+
+
+def _finds_unneeded_pieces() -> bool:
+    """_unneeded_words() names "both", the words joined to a rank by a
+    hyphen, the count after a rank and "the" with a count before "cases"
+    alone, each once the wordings that need it are taken out."""
+    def without(*taken: str) -> list[str]:
+        return _unneeded_words(tuple(w for w in _BY_RANK_WORDINGS if w not in taken))
+
+    return ("both" in without("both cases above")
+            and "(?:[a-z]+-)*" in without("the twenty-first case", "the second-to-last case")
+            and "(?: {count})?" in without("the last two cases", "the last three cases",
+                                           "the first four cases", "the next six cases",
+                                           "the last eight cases", "the first ten cases")
+            and "the {count}" in without("the two cases above", "the five cases above",
+                                         "the seven cases below", "the nine cases above",
+                                         "the 11 cases above"))
 
 
 class _Undecodable(type(Path())):
@@ -1642,6 +1676,10 @@ def self_test() -> int:
          _red_labels_one_line()),
         ("says what a case's make() raised in that case's label, and nothing an earlier "
          "case raised in the label of one in which nothing raised", _says_only_its_own()),
+        ("finds \"both\", the words joined to a rank by a hyphen, the count after a rank "
+         "and \"the\" with a count before \"cases\" needed by no wording, each once the "
+         "wordings that need it are taken out of those the by-rank label check is held to",
+         _finds_unneeded_pieces()),
         ("--help prints usage and runs no check",
          help_rc == 0 and help_out == USAGE and "every ATX citation" not in help_out),
         ("-h prints usage and runs no check", h_rc == 0 and h_out == USAGE),
@@ -1687,7 +1725,8 @@ def self_test() -> int:
     # After every other case but the last, so it reads their labels. It also
     # holds _by_rank() to the wordings that name a case by rank, the two a
     # label once named two cases by among them, and to those that do not,
-    # and holds those wordings to needing every word _by_rank() reads.
+    # and holds those wordings to needing each word and piece _by_rank_re()
+    # takes and its re.IGNORECASE flag.
     ranked = _by_rank([label for label, _ in cases])
     missed = [wording for wording in _BY_RANK_WORDINGS if not _by_rank([wording])]
     misread = _by_rank(list(_NOT_BY_RANK_WORDINGS))
