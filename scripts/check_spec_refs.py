@@ -746,6 +746,37 @@ def _skips_where_chmod_bound() -> bool:
         return _skips_where_reads_allowed() is None
 
 
+def _restores_chmod() -> bool:
+    """_chmod_bound_at_import() leaves Path.chmod as it found it, whether it
+    exits normally or by an exception: not set on the class when the class
+    did not set it, and the class's own function when it did. The class is
+    put back as this found it either way."""
+    cls, absent = type(Path()), object()
+    found, stand_in = vars(cls).get("chmod", absent), cls.chmod
+
+    def left_as_found(own: object) -> bool:
+        with _chmod_bound_at_import():
+            pass
+        if vars(cls).get("chmod", absent) is not own:
+            return False
+        with contextlib.suppress(LookupError), _chmod_bound_at_import():
+            raise LookupError
+        return vars(cls).get("chmod", absent) is own
+
+    try:
+        if found is not absent:
+            del cls.chmod
+        if not left_as_found(absent):
+            return False
+        cls.chmod = stand_in
+        return left_as_found(stand_in)
+    finally:
+        if found is not absent:
+            cls.chmod = found
+        elif "chmod" in vars(cls):
+            del cls.chmod
+
+
 def _unmade_core_raises() -> bool:
     """A core.md that _unreadable_core() could not make unreadable raises out
     of it, rather than reading as check() failing on it."""
@@ -997,6 +1028,8 @@ def self_test() -> int:
          "no read permission can still be read", _skips_where_reads_allowed()),
         ("skips, rather than fails, the case above where Path.chmod does not call os.chmod "
          "through the module", _skips_where_chmod_bound()),
+        ("puts Path.chmod back as it found it on leaving the case above, normally or by an "
+         "exception, whether or not the path class set its own", _restores_chmod()),
         ("raises, rather than reading as a check failure, a vendored core.md a case could not "
          "make unreadable", _unmade_core_raises()),
         ("--help prints usage and runs no check",
