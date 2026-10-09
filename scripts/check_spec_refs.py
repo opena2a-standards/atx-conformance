@@ -1257,15 +1257,25 @@ def _says_only_its_own() -> bool:
 # them; "both cases" and "the two cases" name cases by rank as well. A
 # possessive "one's" is not read as a case, so "the last one's query string",
 # which names a link, is not.
-_COUNT = r"(?:two|three|four|five|six|seven|eight|nine|ten|[0-9]+)"
-_RANK = (r"(?:[a-z]+-)*(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth"
-         r"|eleventh|twelfth|[a-z]+teenth|[a-z]+tieth|hundredth|[0-9]+(?:st|nd|rd|th)"
-         r"|last|final|penultimate|former|latter|next|previous|preceding|following"
-         r"|earlier|later|prior)")
-_BY_RANK_RE = re.compile(
-    rf"\bthe {_RANK}(?: {_COUNT})? (?:cases?|of|where|above|below|one(?!['’]))\b"
-    rf"|\b(?:both|the {_COUNT}) cases\b",
-    re.IGNORECASE)
+_COUNTS = ("two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "[0-9]+")
+_RANKS = ("first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth",
+          "tenth", "eleventh", "twelfth", "[a-z]+teenth", "[a-z]+tieth", "hundredth",
+          "[0-9]+(?:st|nd|rd|th)", "last", "final", "penultimate", "former", "latter", "next",
+          "previous", "preceding", "following", "earlier", "later", "prior")
+_AFTER_RANKS = ("cases?", "of", "where", "above", "below", "one(?!['’])")
+
+
+def _by_rank_re(ranks: tuple[str, ...] = _RANKS, counts: tuple[str, ...] = _COUNTS,
+                after: tuple[str, ...] = _AFTER_RANKS,
+                flags: int = re.IGNORECASE) -> re.Pattern[str]:
+    """The pattern _by_rank() reads a label with, built from the words it
+    reads as a rank, as a count and after them."""
+    count = f"(?:{'|'.join(counts)})"
+    return re.compile(rf"\bthe (?:[a-z]+-)*(?:{'|'.join(ranks)})(?: {count})?"
+                      rf" (?:{'|'.join(after)})\b|\b(?:both|the {count}) cases\b", flags)
+
+
+_BY_RANK_RE = _by_rank_re()
 # Wordings _by_rank() must read as naming a case by rank, and wordings it
 # must not.
 _BY_RANK_WORDINGS = (
@@ -1273,7 +1283,14 @@ _BY_RANK_WORDINGS = (
     "the OSError, as the next case above does", "the previous one", "the fifth case",
     "both cases above", "the two cases above", "the preceding case", "the following case",
     "the earlier case", "the later case", "the 12th case", "the twenty-first case",
-    "the second-to-last case", "the last two cases")
+    "the second-to-last case", "the last two cases", "the third case", "the fourth case",
+    "the sixth case", "the seventh case", "the eighth case", "the ninth case", "the tenth case",
+    "the eleventh case", "the twelfth case", "the thirteenth case", "the twentieth case",
+    "the hundredth case", "the final case", "the penultimate case", "the former case",
+    "the latter case", "the prior case", "The Last Case", "the last three cases",
+    "the first four cases", "the five cases above", "the next six cases", "the seven cases below",
+    "the last eight cases", "the nine cases above", "the first ten cases", "the 11 cases above",
+    "as the first above does", "the next below", "the last of them")
 _NOT_BY_RANK_WORDINGS = (
     "each in the last one's query string", "each in the last one’s #fragment",
     "nothing an earlier case raised")
@@ -1283,6 +1300,21 @@ def _by_rank(labels: list[str]) -> list[str]:
     """The labels that name another case by its rank among the cases rather
     than by what it runs."""
     return [label for label in labels if _BY_RANK_RE.search(label)]
+
+
+def _unneeded_words() -> list[str]:
+    """Each word _by_rank() reads as a rank, as a count or after them, and its
+    re.IGNORECASE flag, that no wording in _BY_RANK_WORDINGS needs: with it
+    taken out, every one of them still reads as naming a case by rank, so
+    taking it out would leave the self-test green."""
+    def all_read(pattern: re.Pattern[str]) -> bool:
+        return all(pattern.search(wording) for wording in _BY_RANK_WORDINGS)
+
+    unneeded = [word for name, words in (("ranks", _RANKS), ("counts", _COUNTS),
+                                         ("after", _AFTER_RANKS))
+                for word in words
+                if all_read(_by_rank_re(**{name: tuple(w for w in words if w != word)}))]
+    return unneeded + (["re.IGNORECASE"] if all_read(_by_rank_re(flags=0)) else [])
 
 
 class _Undecodable(type(Path())):
@@ -1623,15 +1655,18 @@ def self_test() -> int:
                   _self_test_where_chmod_refuses()))
     # After every other case but the last, so it reads their labels. It also
     # holds _by_rank() to the wordings that name a case by rank, the two a
-    # label once named two cases by among them, and to those that do not.
+    # label once named two cases by among them, and to those that do not,
+    # and holds those wordings to needing every word _by_rank() reads.
     ranked = _by_rank([label for label, _ in cases])
     missed = [wording for wording in _BY_RANK_WORDINGS if not _by_rank([wording])]
     misread = _by_rank(list(_NOT_BY_RANK_WORDINGS))
+    unneeded = _unneeded_words()
     cases.append(("names, in every label, another case by what it runs rather than by its rank "
                   "among the cases" + "".join(f" (by rank: {label})" for label in ranked)
                   + "".join(f" (not read as by rank: {wording})" for wording in missed)
-                  + "".join(f" (read as by rank: {wording})" for wording in misread),
-                  not ranked and not missed and not misread))
+                  + "".join(f" (read as by rank: {wording})" for wording in misread)
+                  + "".join(f" (needed by no wording: {word})" for word in unneeded),
+                  not ranked and not missed and not misread and not unneeded))
     # Last, so it sees every temporary tree the cases above built.
     left = ", ".join(printable(str(tmp)) for tmp in _LEFT)
     cases.append(("removes every temporary tree it builds" + (f" (left: {left})" if left else ""),
