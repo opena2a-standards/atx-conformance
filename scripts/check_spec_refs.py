@@ -1085,15 +1085,10 @@ def _skips_where_bound_chmod_raises() -> bool:
 def _self_test_where_chmod_refuses() -> list[tuple[str, bool | None]] | None:
     """What --self-test finds of each case, in the order it runs them, in a
     child whose os.chmod raises before the script runs, as on a filesystem
-    that refuses it: the label the child printed for the case, with True for
-    a case it finds green, False for one red and None for one it skips.
-    Empty, failing the case that reads this, unless the child runs every
-    case to the end with no traceback, reaching its summary line with
-    nothing on stderr and an exit code that agrees with it, and skips
-    exactly the cases in _CHMOD_SKIPS: the no-read-permission
-    cases, the case that binds Path.chmod at import time and the case that
-    reads this. self_test() holds the cases the child finds red to
-    _red_only_in_child(). None (skipped) where Path.chmod already raises,
+    that refuses it, read from its output by _child_findings(). Empty,
+    failing the case that reads this, when the child outlives its timeout or
+    that output does not read as a full run. _held_to_child() holds the cases the child finds red to what this
+    process finds of them. None (skipped) where Path.chmod already raises,
     which is the child's own state."""
     if _chmod_raises():
         return None
@@ -1104,8 +1099,19 @@ def _self_test_where_chmod_refuses() -> list[tuple[str, bool | None]] | None:
                 "sys.argv = [sys.argv[1], '--self-test']\n"
                 "runpy.run_path(sys.argv[0], run_name='__main__')\n")
     proc = _run([sys.executable, "-c", refusing, str(Path(__file__).resolve())])
-    if proc is None:
-        return []
+    return [] if proc is None else _child_findings(proc)
+
+
+def _child_findings(proc: subprocess.CompletedProcess[str]) -> list[tuple[str, bool | None]]:
+    """What the child of _self_test_where_chmod_refuses(), proc, finds of
+    each case, read from its output in the order it runs them: the label
+    the child printed for the case, with True for a case it finds green,
+    False for one red and None for one it skips. Empty,
+    failing the case that runs the child, unless the child runs every case
+    to the end with no traceback, reaching its summary line with nothing on
+    stderr and an exit code that agrees with it, and skips exactly the cases
+    in _CHMOD_SKIPS: the no-read-permission cases, the case that binds
+    Path.chmod at import time and the case that runs the child."""
     lines = proc.stdout.splitlines()
     summary = (re.fullmatch(r"self-test: (\d+)/(\d+) cases green, (\d+) skipped", lines[-1])
                if lines else None)
@@ -1146,6 +1152,75 @@ def _red_only_in_child(found: list[tuple[str, bool | None]],
         if not red:
             only.append(label)
     return only
+
+
+def _held_to_child(cases: list[tuple[str, bool | None]], refusing: int,
+                   found: list[tuple[str, bool | None]] | None) -> list[tuple[str, bool | None]]:
+    """cases, with cases[refusing], the case that runs the child of
+    _self_test_where_chmod_refuses(), held to found, what that child finds of
+    each case: red, naming each case red only in the child, from
+    _red_only_in_child(), and the count of cases the child ran when it is not
+    that of cases. A case red in both is reported once, by itself. cases as
+    they are when found is None, the case that runs the child skipped, or
+    empty, that case red already."""
+    held = list(cases)
+    if found:
+        label, only = cases[refusing][0], _red_only_in_child(found, cases)
+        ran = "" if len(found) == len(cases) else f" (ran {len(found)} cases, not {len(cases)})"
+        held[refusing] = (label + ran + "".join(f" (red only there: {o})" for o in only),
+                          not ran and not only)
+    return held
+
+
+def _report_cases(cases: list[tuple[str, bool | None]], refusing: int,
+                  found: list[tuple[str, bool | None]] | None) -> int:
+    """Prints each of cases, once _held_to_child() has held cases[refusing]
+    to found, as a mark and its label, then the summary line, and returns
+    the exit code of --self-test: 1 when a case is red, else 0."""
+    failed = skipped = 0
+    for label, ok in _held_to_child(cases, refusing, found):
+        mark = "SKIP " if ok is None else "GREEN" if ok else "RED  "
+        print(f"  [{mark}] {label}")
+        failed += ok is not None and not ok
+        skipped += ok is None
+    run = len(cases) - skipped
+    print(f"self-test: {run - failed}/{run} cases green"
+          + (f", {skipped} skipped" if skipped else ""))
+    return 1 if failed else 0
+
+
+def _holds_red_in_child(cases: list[tuple[str, bool | None]], refusing: int) -> bool:
+    """A child output that marks red a case this process finds green prints
+    cases[refusing], the case that runs the child of
+    _self_test_where_chmod_refuses(), red, naming that case, once read by
+    _child_findings() and printed by _report_cases(), as self_test() does
+    with the real child's output, and exits 1. So does one that leaves a
+    case out, naming the count it ran; one that marks each case as a child
+    finding no defect does, every case of _CHMOD_SKIPS skipped and every
+    other green, prints that case green with its label as it is."""
+    green = [label for label, ok in cases if ok and label not in _CHMOD_SKIPS]
+    if not green:
+        return False
+    red, label = green[0], cases[refusing][0]
+    here = [*cases[:refusing], (label, True), *cases[refusing + 1:]]
+
+    def printed(marks: list[tuple[str, str]], line: str, code: int | None = None) -> bool:
+        skipped = sum(mark == "SKIP " for mark, _ in marks)
+        failed = sum(mark == "RED  " for mark, _ in marks)
+        run = len(marks) - skipped
+        child = "".join(f"  [{mark}] {case}\n" for mark, case in marks)
+        child += f"self-test: {run - failed}/{run} cases green, {skipped} skipped\n"
+        found = _child_findings(subprocess.CompletedProcess([], 1 if failed else 0, child, ""))
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            exits = _report_cases(here, refusing, found)
+        return line in out.getvalue().splitlines() and code in (None, exits)
+
+    marks = [("SKIP " if case in _CHMOD_SKIPS else "GREEN", case) for case, _ in cases]
+    return (printed(marks, f"  [GREEN] {label}")
+            and printed([("RED  " if case == red else mark, case) for mark, case in marks],
+                        f"  [RED  ] {label} (red only there: {red})", 1)
+            and printed([(mark, case) for mark, case in marks if case != red],
+                        f"  [RED  ] {label} (ran {len(cases) - 1} cases, not {len(cases)})", 1))
 
 
 def _names_red_only_in_child() -> bool:
@@ -1390,13 +1465,17 @@ def _unneeded_words(wordings: tuple[str, ...] = _BY_RANK_WORDINGS) -> list[str]:
     return unneeded + (["re.IGNORECASE"] if all_read(_by_rank_re(flags=0)) else [])
 
 
+def _unneeded_without(*taken: str) -> list[str]:
+    """_unneeded_words() on the wordings _by_rank() is held to, with those in
+    taken left out."""
+    return _unneeded_words(tuple(w for w in _BY_RANK_WORDINGS if w not in taken))
+
+
 def _finds_unneeded_pieces() -> bool:
     """_unneeded_words() names "both", the words joined to a rank by a
     hyphen, the count after a rank and "the" with a count before "cases"
     alone, each once the wordings that need it are taken out."""
-    def without(*taken: str) -> list[str]:
-        return _unneeded_words(tuple(w for w in _BY_RANK_WORDINGS if w not in taken))
-
+    without = _unneeded_without
     return ("both" in without("both cases above")
             and "(?:[a-z]+-)*" in without("the twenty-first case", "the second-to-last case")
             and "(?: {count})?" in without("the last two cases", "the last three cases",
@@ -1405,6 +1484,25 @@ def _finds_unneeded_pieces() -> bool:
             and "the {count}" in without("the two cases above", "the five cases above",
                                          "the seven cases below", "the nine cases above",
                                          "the 11 cases above"))
+
+
+# A word _by_rank() reads as a rank, one it reads as a count, one it reads
+# after them and its re.IGNORECASE flag, each with what it stands for and
+# the wordings that alone need it. Taking out the sweep of _RANKS, _COUNTS
+# or _AFTER_RANKS, or of the flag, from _unneeded_words() leaves the word
+# unnamed once those wordings are taken out.
+_NEEDED_ALONE_BY = (("rank", "final", ("the final case",)),
+                    ("count", "[0-9]+", ("the 11 cases above",)),
+                    ("word after them", "below", ("the next below",)),
+                    ("flag", "re.IGNORECASE", ("The Last Case",)))
+
+
+def _unfound_unneeded_words() -> list[str]:
+    """Each word of _NEEDED_ALONE_BY, after what it stands for, that
+    _unneeded_words() does not name once the wordings that alone need it
+    are taken out."""
+    return [f"{kind} {word}" for kind, word, taken in _NEEDED_ALONE_BY
+            if word not in _unneeded_without(*taken)]
 
 
 class _Undecodable(type(Path())):
@@ -1483,6 +1581,7 @@ def self_test() -> int:
     workflow_not_utf8 = _probe([good], workflow=workflow.encode("utf-8") + b"\xff")
     no_workflow = _probe_tree(lambda root: (root / WORKFLOW).unlink())
     hung, hung_seconds = _hung_child()
+    unfound = _unfound_unneeded_words()
     # None marks a case skipped where it cannot run.
     cases: list[tuple[str, bool | None]] = [(f"rejects retired string {s!r}", bool(_probe([_atx(s)])))
                                      for s in RETIRED_SECTIONS]
@@ -1712,6 +1811,10 @@ def self_test() -> int:
          "and \"the\" with a count before \"cases\" needed by no wording, each once the "
          "wordings that need it are taken out of those the by-rank label check is held to",
          _finds_unneeded_pieces()),
+        ("finds a word read as a rank, one read as a count, one read after them and the "
+         "re.IGNORECASE flag needed by no wording, each once the wordings that need it are "
+         "taken out of those the by-rank label check is held to"
+         + "".join(f" (not found: {word})" for word in unfound), not unfound),
         ("--help prints usage and runs no check",
          help_rc == 0 and help_out == USAGE and "every ATX citation" not in help_out),
         ("-h prints usage and runs no check", h_rc == 0 and h_out == USAGE),
@@ -1754,6 +1857,14 @@ def self_test() -> int:
                          "finding no case red that this process finds green or skips")
     refusing, found = len(cases), _self_test_where_chmod_refuses()
     cases.append((label, None if found is None else bool(found)))
+    # After the case that runs the child, so the child output it makes up
+    # lists that case and every case before it, each skip of _CHMOD_SKIPS
+    # among them.
+    cases.append(("prints the case that runs --self-test where os.chmod raises red, naming a "
+                  "case that child's output marks red where this process finds it green and "
+                  "the count of cases when that output leaves one out, and green when that "
+                  "output marks every case as a child finding no defect does",
+                  _holds_red_in_child(cases, refusing)))
     # After every other case but the last, so it reads their labels. It also
     # holds _by_rank() to the wordings that name a case by rank, the two a
     # label once named two cases by among them, and to those that do not,
@@ -1779,21 +1890,7 @@ def self_test() -> int:
     # both is reported once, by itself; one red only in the child turns the
     # case that runs the child red, which names it by the label the child
     # printed for it, so the evidence shown is the child's.
-    if found:
-        label, only = cases[refusing][0], _red_only_in_child(found, cases)
-        ran = "" if len(found) == len(cases) else f" (ran {len(found)} cases, not {len(cases)})"
-        cases[refusing] = (label + ran + "".join(f" (red only there: {o})" for o in only),
-                           not ran and not only)
-    failed = skipped = 0
-    for label, ok in cases:
-        mark = "SKIP " if ok is None else "GREEN" if ok else "RED  "
-        print(f"  [{mark}] {label}")
-        failed += ok is not None and not ok
-        skipped += ok is None
-    run = len(cases) - skipped
-    print(f"self-test: {run - failed}/{run} cases green"
-          + (f", {skipped} skipped" if skipped else ""))
-    return 1 if failed else 0
+    return _report_cases(cases, refusing, found)
 
 
 def main(argv: list[str]) -> int:
