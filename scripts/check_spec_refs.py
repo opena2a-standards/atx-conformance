@@ -1230,7 +1230,7 @@ def _names_red_only_in_child() -> bool:
     skips, wherever each stands: by its label, by its place where its label
     differs here and the child ran as many cases, and by its label alone
     where the child ran another number of cases, so it names no neighbouring
-    case."""
+    case and drops none whose place here holds a case red here."""
     cases = [("green here", True), ("red in both", False), ("skipped here", None),
              ("red only here", False), ("green in both", True), ("skipped in the child", True),
              ("took 0.1 s here", True), ("raised here", False)]
@@ -1238,11 +1238,12 @@ def _names_red_only_in_child() -> bool:
              ("red only here", True), ("green in both", True), ("skipped in the child", None),
              ("took 0.9 s there", False), ("raised there", False)]
     shifted: list[tuple[str, bool | None]] = [
-        ("ran there alone", False), ("green here", False), ("red in both", False),
-        ("took 0.9 s there", True)]
+        ("ran there alone", False), ("ran there too", False), ("green here", False),
+        ("red in both", False), ("took 0.9 s there", True)]
     return (_red_only_in_child(found, cases)
             == ["green here", "skipped here", "took 0.9 s there"]
-            and _red_only_in_child(shifted, cases) == ["ran there alone", "green here"])
+            and _red_only_in_child(shifted, cases)
+            == ["ran there alone", "ran there too", "green here"])
 
 
 def _restores_chmod() -> bool:
