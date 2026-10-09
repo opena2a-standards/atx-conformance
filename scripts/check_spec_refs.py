@@ -829,14 +829,22 @@ def _workflow_dir_unsearchable() -> bool | None:
 
 
 def _check_unreadable(make: Callable[[Path], object], **tree: object) -> list[str] | None:
-    """check() on a tree that cites one heading, after make(root) has taken
-    permissions from part of it; None, which fails the case, if it raises."""
+    """check() on a tree that cites one heading, after make(root) has left
+    part of it unreadable; None, which fails the case, if it raises."""
     with _tree({"spec": [_atx("1.1 ATX schema")]}, **tree) as root:
         make(root)
         try:
             return check(root)
         except OSError:
             return None
+
+
+def _linked_as_directory(rel: Path) -> bool:
+    """check() names, once, a directory named like rel, a file in LINKED_DOCS,
+    as unreadable, rather than skipping it as it does one that does not
+    exist."""
+    failures = _check_unreadable(lambda root: (root / rel).mkdir(parents=True))
+    return failures is not None and _once(failures, f"{rel}: cannot be read (")
 
 
 def _linked_dir_unsearchable() -> bool | None:
@@ -1204,6 +1212,8 @@ def self_test() -> int:
                                                           "verifiers/go/verify.go": b"// \xff\n"})]
          == ["README.md", "verifiers/go/verify.go"]),
         ("reports a README.md it has no permission to read by name", _unreadable_readme()),
+        *((f"reports, once, a directory named like {rel} by name, rather than skipping it "
+           "as missing", _linked_as_directory(rel)) for rel in LINKED_DOCS),
         ("reports a vendored core.md that is not UTF-8 by name, after its digest failure",
          len(core_not_utf8) == 2 and core_not_utf8[0].startswith(f"{CORE_MD} has SHA-256 ")
          and core_not_utf8[1].startswith(f"{CORE_MD}: is not UTF-8 text")),
