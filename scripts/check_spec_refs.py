@@ -666,13 +666,15 @@ def _usage_under_oo() -> bool:
     return proc is not None and proc.returncode == 0 and proc.stdout == USAGE
 
 
-def _self_test_without(rel: Path, make: Callable[[Path], object] = Path.unlink,
-                       says: str | None = None) -> bool:
-    """--self-test in a tree where make(root / rel) has left rel unreadable
-    (by default, removed) names rel and exits 1, with no traceback. Its one
-    failure is `says` when given, else that rel cannot be read."""
+def _self_test_without(*rels: Path, make: Callable[[Path], object] = Path.unlink,
+                       says: tuple[str, ...] | None = None) -> bool:
+    """--self-test in a tree where make(root / rel) has left each of rels
+    unreadable (by default, removed) names each and exits 1, with no
+    traceback. Its failures, one per rel in the order given, are `says` when
+    given, else that each rel cannot be read."""
     with _tree({"spec": [_atx("1.1 ATX schema")]}) as root:
-        make(root / rel)
+        for rel in rels:
+            make(root / rel)
         script = root / "scripts" / Path(__file__).name
         script.parent.mkdir()
         shutil.copyfile(Path(__file__).resolve(), script)
@@ -680,10 +682,12 @@ def _self_test_without(rel: Path, make: Callable[[Path], object] = Path.unlink,
     if proc is None:
         return False
     lines = proc.stdout.splitlines()
-    return (proc.returncode == 1 and not proc.stderr and len(lines) == 2
-            and (lines[0] == f"FAIL {says}" if says is not None
-                 else lines[0].startswith(f"FAIL {rel}: cannot be read ("))
-            and lines[1] == "self-test: not run")
+    fails = lines[:-1]
+    return (proc.returncode == 1 and not proc.stderr and len(lines) == len(rels) + 1
+            and (fails == [f"FAIL {said}" for said in says] if says is not None
+                 else all(line.startswith(f"FAIL {rel}: cannot be read (")
+                          for line, rel in zip(fails, rels)))
+            and lines[-1] == "self-test: not run")
 
 
 def _shows_deep() -> bool:
@@ -975,8 +979,8 @@ def _self_test_core_dir_unsearchable() -> bool | None:
     no traceback; None (skipped) where permissions do not stop a read."""
     if not _permissions_stop_reads():
         return None
-    return _self_test_without(CORE_MD, _unsearchable,
-                              says=f"{CORE_MD}: cannot be read (Permission denied)")
+    return _self_test_without(CORE_MD, make=_unsearchable,
+                              says=(f"{CORE_MD}: cannot be read (Permission denied)",))
 
 
 def _no_read_permission_cases() -> tuple[Callable[[], bool | None], ...]:
@@ -1298,14 +1302,18 @@ def self_test() -> int:
          and WORKFLOW_MISSING == f"{WORKFLOW} is missing; restore it, as its atx-spec checkout "
                                  f"pins the commit {CORE_MD} was vendored at"),
         ("--self-test in a tree with no workflow names it as missing, in the check's words, "
-         "and exits 1, with no traceback", _self_test_without(WORKFLOW, says=WORKFLOW_MISSING)),
+         "and exits 1, with no traceback", _self_test_without(WORKFLOW, says=(WORKFLOW_MISSING,))),
         ("--self-test in a tree whose vendored core.md is in a directory it cannot search "
          "names core.md as unreadable, not missing, and exits 1, with no traceback",
          _self_test_core_dir_unsearchable()),
         ("--self-test in a tree with no vendored core.md names it as missing, in the check's "
-         "words, and exits 1, with no traceback", _self_test_without(CORE_MD, says=CORE_MD_MISSING)),
+         "words, and exits 1, with no traceback",
+         _self_test_without(CORE_MD, says=(CORE_MD_MISSING,))),
         ("--self-test in a tree with a directory named like the vendored core.md names it and "
-         "exits 1, with no traceback", _self_test_without(CORE_MD, _as_directory)),
+         "exits 1, with no traceback", _self_test_without(CORE_MD, make=_as_directory)),
+        ("--self-test in a tree with neither the workflow nor the vendored core.md names both "
+         "as missing, in the check's words, one failure each, and exits 1, with no traceback",
+         _self_test_without(WORKFLOW, CORE_MD, says=(WORKFLOW_MISSING, CORE_MD_MISSING))),
         ("reports a fixture with no spec member by name", _names_probe(_probe_doc({"name": "x"}))),
         ("reports a fixture that is not JSON by name", _names_probe(_probe_doc("{"))),
         ("reports a citation that is not an object by name", _names_probe(_probe(["ATX"]))),
