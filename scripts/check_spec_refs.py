@@ -54,9 +54,13 @@ verifiers/go/verify.go) must also equal CORE_REF, apart from a query string, a
 #fragment, the punctuation a GitHub autolink drops after it (.,:!*_~) or a
 semicolon, trailing slashes, and the case of everything before the file name,
 so the prose links open the text the citations were checked against. A URL
-carried in the query string or #fragment of another link, such as a redirect
-target, is checked the same way, each query parameter on its own; a
-percent-encoded one is not read.
+ends at a blank, a quote, a bracket or a `|`, so a link in a table cell ends
+at the cell's border. A URL carried in the query string or #fragment of
+another link, such as a redirect target, is checked the same way, each query
+parameter on its own; a percent-encoded one is not read. A line that carries
+a URL more than MAX_URL_DEPTH links deep fails rather than being read to any
+depth, so a line costs a bounded number of reads however many `?` and `#` it
+holds. A file in LINKED_DOCS that cannot be read as UTF-8 fails by name.
 
 CORE_REF carries CORE_MD_SPEC_REF, so moving the pin also fails every citation
 until the generators cite the new commit (atxCoreRef in
@@ -132,9 +136,16 @@ SPEC_PIN_RE = re.compile(
     r"repository:[ \t]*opena2a-standards/atx-spec[ \t]*\r?\n[ \t]*ref:[ \t]*([0-9a-f]{40})\b"
 )
 
-# A URL in prose, its scheme in any case: it ends at a blank, a quote or a
-# bracket, so a markdown link's closing parenthesis is not part of it.
-URL_RE = re.compile(r"https?://[^\s<>()\[\]\"'`]+", re.IGNORECASE)
+# A URL in prose, its scheme in any case: it ends at a blank, a quote, a
+# bracket or a `|`, so a markdown link's closing parenthesis is not part of it,
+# nor is the border of a table cell, which GitHub splits on before it reads
+# the cell's link.
+URL_RE = re.compile(r"https?://[^\s<>()\[\]\"'`|]+", re.IGNORECASE)
+# How many links deep linked_urls() reads URLs carried in another URL's query
+# string or #fragment. Each level reads at most the whole line once, so the
+# cap bounds a line's cost however many `?` and `#` it holds; a line that
+# carries a URL deeper fails.
+MAX_URL_DEPTH = 8
 # What link_base() strips from the end of a URL once its query and fragment are
 # split off: the trailing punctuation a GitHub autolink leaves out of the link
 # (`?` cannot remain after the split) and a semicolon.
@@ -274,27 +285,51 @@ def link_base(url: str) -> str:
     return head.lower() + sep + name
 
 
-def linked_urls(text: str) -> Iterator[str]:
-    """Every URL in text, then every URL carried in the query string or
-    #fragment of one, each query parameter read on its own."""
-    pending = deque([text])
+def linked_urls(text: str) -> Iterator[tuple[int, str]]:
+    """(depth, url) for every URL in text (depth 0), then for every URL
+    carried in the query string or #fragment of one (depth 1), and so on, each
+    query parameter read on its own, shallower URLs first. The URLs of one
+    depth are disjoint parts of text, so each depth reads text at most once;
+    a URL deeper than MAX_URL_DEPTH is yielded, but what it carries is not
+    read."""
+    pending = deque([(text, 0)])
     while pending:
-        for url in URL_RE.findall(pending.popleft()):
-            yield url
+        segment, depth = pending.popleft()
+        for url in URL_RE.findall(segment):
+            yield depth, url
             rest = re.split(r"[?#]", url, maxsplit=1)[1:]
-            if rest:
-                pending.extend(rest[0].split("&"))
+            if rest and depth <= MAX_URL_DEPTH:
+                pending.extend((part, depth + 1) for part in rest[0].split("&"))
 
 
 def link_failures(root: Path) -> list[str]:
-    """Every link to atx-spec core.md in LINKED_DOCS that is not CORE_REF."""
+    """Every link to atx-spec core.md in LINKED_DOCS that is not CORE_REF,
+    every line that carries a URL deeper than MAX_URL_DEPTH, and every file in
+    LINKED_DOCS that cannot be read as UTF-8."""
     failures: list[str] = []
     for rel in LINKED_DOCS:
         path = root / rel
         if not path.is_file():
             continue
-        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            for url in linked_urls(line):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except ValueError as exc:
+            failures.append(f"{rel}: is not UTF-8 text ({exc}), so its links cannot be read")
+            continue
+        except OSError as exc:
+            failures.append(f"{rel}: cannot be read ({exc.strerror or type(exc).__name__})")
+            continue
+        for n, line in enumerate(text.splitlines(), 1):
+            for depth, url in linked_urls(line):
+                if depth > MAX_URL_DEPTH:
+                    # linked_urls() yields shallower URLs first, so every URL
+                    # the check reads on this line has been checked.
+                    failures.append(
+                        f"{rel}:{n}: carries a URL more than {MAX_URL_DEPTH} links deep in "
+                        f"other links' query strings or #fragments, deeper than the check "
+                        f"reads. Link it at most {MAX_URL_DEPTH} deep."
+                    )
+                    break
                 base = link_base(url)
                 if "/atx-spec/" in base and base.endswith("/core.md") and base != CORE_REF:
                     failures.append(
@@ -377,11 +412,14 @@ def _tree(fixture: object, vector: object = None, profile: object = None,
           core_extra: str = "", workflow: str | None = None,
           docs: dict[str, str] | None = None) -> Iterator[Path]:
     """A temporary tree with one fixture and, when given, one JCS vector, a
-    conformance.json and prose files (path: text). A str is written verbatim,
-    anything else as JSON."""
+    conformance.json and prose files (path: text). A str or bytes is written
+    verbatim, anything else as JSON."""
     def write(path: Path, doc: object) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(doc if isinstance(doc, str) else json.dumps(doc), encoding="utf-8")
+        if isinstance(doc, bytes):
+            path.write_bytes(doc)
+        else:
+            path.write_text(doc if isinstance(doc, str) else json.dumps(doc), encoding="utf-8")
 
     tmp = Path(tempfile.mkdtemp(prefix="spec-refs-"))
     try:
@@ -487,6 +525,47 @@ def _linear_heading(n: int) -> bool:
     return ok and time.perf_counter() - start < 1.0
 
 
+def _too_deep(failures: list[str]) -> bool:
+    return _once(failures, "README.md:1:") and f"more than {MAX_URL_DEPTH} links deep" in failures[0]
+
+
+def _linear_links(sep: str, n: int = 20_000) -> bool:
+    """A line of n links, each carried in the query string or #fragment (sep)
+    of the one before, is read to the end by linked_urls() and fails once in
+    a README, as too deep, in linear time."""
+    line = f"https://a/{sep}" * n
+    start = time.perf_counter()
+    read = deque(linked_urls(line), maxlen=1)
+    ok = read[0][0] == MAX_URL_DEPTH + 1 and _too_deep(_readme(line + "\n"))
+    return ok and time.perf_counter() - start < 1.0
+
+
+class _Undecodable(type(Path())):
+    """A path whose name, relative to the tree, is bad-<0xFF>.json in place of
+    probe.json. On Linux pathlib reads a file name that is not valid UTF-8
+    with a lone surrogate per undecodable byte; macOS refuses to create such a
+    file."""
+
+    def relative_to(self, *args: object, **kwargs: object) -> Path:
+        rel = super().relative_to(*args, **kwargs)
+        return rel.with_name("bad-\udcff.json") if rel.name == "probe.json" else rel
+
+
+def _names_undecodable() -> bool:
+    """cited_files() names a fixture and a JCS vector called bad-<0xFF>.json
+    by name, in a form that prints under a UTF-8 locale."""
+    with _tree({"name": "x"}, vector={"name": "x"}) as root:
+        _, failures = cited_files(_Undecodable(root))
+    try:
+        "".join(failures).encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return failures == [
+        "fixtures/bad-\\udcff.json: has no 'spec' member",
+        "jcs-vectors/vectors/bad-\\udcff.json: has no 'spec' member",
+    ]
+
+
 def self_test() -> int:
     aip = {"id": "AIP", "ref": "https://example.org/AIP-SPEC.md", "section": "anything"}
     good = _atx("1.1 ATX schema")
@@ -579,11 +658,16 @@ def self_test() -> int:
                _names_probe(_readme(f"See {stale}{c}\n"), "README.md:1:"))
               for c in ".,;:!*_~"]
     redirect = "https://example.com/r"
+    deepest = _readme(f"{redirect}?u=" * MAX_URL_DEPTH + f"{stale}\n")
     cases += [
         ("rejects a core.md link at atx-spec main wrapped in ** emphasis",
          _names_probe(_readme(f"**{stale}**\n"), "README.md:1:")),
         ("rejects a core.md link at atx-spec main ending in a slash",
          _names_probe(_readme(f"{stale}/\n"), "README.md:1:")),
+        ("rejects a core.md link at atx-spec main ending in a slash and a period",
+         _names_probe(_readme(f"{stale}/.\n"), "README.md:1:")),
+        ("rejects a core.md link at atx-spec main in a table cell with no blank around it",
+         _once(_readme(f"| a |{stale}|b|\n"), "README.md:1:")),
         ("rejects a core.md link at atx-spec main naming the repository in upper case",
          _names_probe(_readme(stale.replace("/atx-spec/", "/ATX-SPEC/") + "\n"), "README.md:1:")),
         ("rejects, once, a core.md link at atx-spec main carried in another link's query string",
@@ -594,10 +678,20 @@ def self_test() -> int:
          _once(_readme(f"{redirect}?u={stale}&v=1\n"), "README.md:1:")),
         ("rejects a core.md link at atx-spec main carried two links deep",
          _once(_readme(f"{redirect}?u={redirect}?v={stale}\n"), "README.md:1:")),
+        (f"rejects a core.md link at atx-spec main carried {MAX_URL_DEPTH} links deep",
+         _once(deepest, "README.md:1:") and f"links {stale}," in deepest[0]),
+        (f"accepts a pinned core.md link carried {MAX_URL_DEPTH} links deep",
+         not _readme(f"{redirect}#" * MAX_URL_DEPTH + f"{CORE_REF}\n")),
+        (f"rejects, once, a line carrying a pinned core.md link {MAX_URL_DEPTH + 1} links deep",
+         _too_deep(_readme(f"{redirect}#" * (MAX_URL_DEPTH + 1) + f"{CORE_REF}\n"))),
+        ("reads a line of 20,000 links, each in the last one's query string, in linear time",
+         _linear_links("?")),
+        ("reads a line of 20,000 links, each in the last one's #fragment, in linear time",
+         _linear_links("#")),
         ("accepts a pinned core.md link in emphasis, ending in a slash, naming the repository "
-         "in upper case or carried in a query parameter",
+         "in upper case, carried in a query parameter or in a table cell",
          not _readme(f"**{CORE_REF}**\n{CORE_REF}/\n{CORE_REF.replace('/atx-spec/', '/ATX-SPEC/')}\n"
-                     f"{redirect}?u={CORE_REF}&v=1\n")),
+                     f"{redirect}?u={CORE_REF}&v=1\n| a |{CORE_REF}|b|\n")),
         ("rejects a core.md link at atx-spec main that carries a query string",
          _names_probe(_probe([good], docs={"README.md": f"See {stale}?plain=1\n"}), "README.md:1:")),
         ("rejects a core.md link at atx-spec main with an upper-case scheme",
@@ -609,6 +703,10 @@ def self_test() -> int:
         ("rejects a Go comment linking core.md on the old host",
          _names_probe(_probe([good], docs={"verifiers/go/verify.go": f"// ({stale.replace('-standards', '-org')})\n"}),
                       "verifiers/go/verify.go:1:")),
+        ("reports a README.md and a verify.go that are not UTF-8 by name",
+         [f.split(":", 1)[0] for f in _probe([good], docs={"README.md": b"x \xff y\n",
+                                                          "verifiers/go/verify.go": b"// \xff\n"})]
+         == ["README.md", "verifiers/go/verify.go"]),
         ("--help prints usage and runs no check",
          help_rc == 0 and help_out == USAGE and "every ATX citation" not in help_out),
         ("-h prints usage and runs no check", h_rc == 0 and h_out == USAGE),
@@ -625,6 +723,8 @@ def self_test() -> int:
         ("writes a file name that is not valid UTF-8 as a backslash escape",
          printable("fixtures/bad-\udcff.json") == "fixtures/bad-\\udcff.json"),
         ("leaves a UTF-8 file name unchanged", printable("fixtures/café.json") == "fixtures/café.json"),
+        ("names a fixture and a JCS vector whose names are not valid UTF-8 as backslash escapes",
+         _names_undecodable()),
     ]
     failed = 0
     for label, ok in cases:
