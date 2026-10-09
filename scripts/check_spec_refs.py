@@ -1510,7 +1510,9 @@ def _says_only_its_own() -> bool:
 # "above", "below" or "one" follows it, a count such as "two" allowed between
 # them; "both cases" and "the two cases" name cases by rank as well. A
 # possessive "one's" is not read as a case, so "the last one's query string",
-# which names a link, is not.
+# which names a link, is not. A case named by where it stands beside this
+# one, as "the case above" or "the cases below", is read the same way:
+# inserting a case between the two turns it wrong too.
 _COUNTS = ("two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "[0-9]+")
 _RANKS = ("first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth",
           "tenth", "eleventh", "twelfth", "[a-z]+teenth", "[a-z]+tieth", "hundredth",
@@ -1521,27 +1523,32 @@ _AFTER_RANKS = ("cases?", "of", "where", "above", "below", "one(?!['’])")
 # well: words joined to it by a hyphen, as in "twenty-first" and
 # "second-to-last", and a count after it, as in "the last two cases". Then
 # the words read before "cases" alone, as in "both cases" and "the two
-# cases". "{count}" stands for any of _COUNTS.
+# cases", and those that name a case beside this one with no rank, as in
+# "the case above". "{count}" stands for any of _COUNTS.
 _JOINED = ("(?:[a-z]+-)*",)
 _COUNTED = ("(?: {count})?",)
 _BEFORE_CASES = ("both", "the {count}")
+_BESIDE = ("the cases? above", "the cases? below")
 
 
 def _by_rank_re(ranks: tuple[str, ...] = _RANKS, counts: tuple[str, ...] = _COUNTS,
                 after: tuple[str, ...] = _AFTER_RANKS, joined: tuple[str, ...] = _JOINED,
                 counted: tuple[str, ...] = _COUNTED,
                 before_cases: tuple[str, ...] = _BEFORE_CASES,
+                beside: tuple[str, ...] = _BESIDE,
                 flags: int = re.IGNORECASE) -> re.Pattern[str]:
     """The pattern _by_rank() reads a label with, built from the words it
     reads as a rank, as a count and after them, the pieces it reads around a
-    rank and the words it reads before "cases" alone."""
+    rank, the words it reads before "cases" alone and those it reads as
+    naming a case beside this one."""
     count = f"(?:{'|'.join(counts)})"
 
     def read(words: tuple[str, ...], between: str) -> str:
         return between.join(word.replace("{count}", count) for word in words)
 
     return re.compile(rf"\bthe {read(joined, '')}(?:{read(ranks, '|')}){read(counted, '')}"
-                      rf" (?:{read(after, '|')})\b|\b(?:{read(before_cases, '|')}) cases\b", flags)
+                      rf" (?:{read(after, '|')})\b|\b(?:{read(before_cases, '|')}) cases\b"
+                      rf"|\b(?:{read(beside, '|')})\b", flags)
 
 
 _BY_RANK_RE = _by_rank_re()
@@ -1559,7 +1566,8 @@ _BY_RANK_WORDINGS = (
     "the latter case", "the prior case", "The Last Case", "the last three cases",
     "the first four cases", "the five cases above", "the next six cases", "the seven cases below",
     "the last eight cases", "the nine cases above", "the first ten cases", "the 11 cases above",
-    "as the first above does", "the next below", "the last of them")
+    "as the first above does", "the next below", "the last of them", "on leaving the case above",
+    "the cases below")
 _NOT_BY_RANK_WORDINGS = (
     "each in the last one's query string", "each in the last one’s #fragment",
     "nothing an earlier case raised")
@@ -1573,16 +1581,17 @@ def _by_rank(labels: list[str]) -> list[str]:
 
 def _unneeded_words(wordings: tuple[str, ...] = _BY_RANK_WORDINGS) -> list[str]:
     """Each word _by_rank() reads as a rank, as a count, after them or before
-    "cases" alone, each piece it reads around a rank, and its re.IGNORECASE
-    flag, that no wording in wordings needs: with it taken out, every one
-    of them still reads as naming a case by rank, so taking it out would leave
-    the self-test green."""
+    "cases" alone, each piece it reads around a rank or as naming a case
+    beside this one, and its re.IGNORECASE flag, that no wording in wordings
+    needs: with it taken out, every one of them still reads as naming a case
+    by rank, so taking it out would leave the self-test green."""
     def all_read(pattern: re.Pattern[str]) -> bool:
         return all(pattern.search(wording) for wording in wordings)
 
     unneeded = [word for name, words in (("ranks", _RANKS), ("counts", _COUNTS),
                                          ("after", _AFTER_RANKS), ("joined", _JOINED),
-                                         ("counted", _COUNTED), ("before_cases", _BEFORE_CASES))
+                                         ("counted", _COUNTED), ("before_cases", _BEFORE_CASES),
+                                         ("beside", _BESIDE))
                 for word in words
                 if all_read(_by_rank_re(**{name: tuple(w for w in words if w != word)}))]
     return unneeded + (["re.IGNORECASE"] if all_read(_by_rank_re(flags=0)) else [])
@@ -1596,8 +1605,9 @@ def _unneeded_without(*taken: str) -> list[str]:
 
 def _finds_unneeded_pieces() -> bool:
     """_unneeded_words() names "both", the words joined to a rank by a
-    hyphen, the count after a rank and "the" with a count before "cases"
-    alone, each once the wordings that need it are taken out."""
+    hyphen, the count after a rank, "the" with a count before "cases" alone
+    and each piece read as naming a case beside this one, each once the
+    wordings that need it are taken out."""
     without = _unneeded_without
     return ("both" in without("both cases above")
             and "(?:[a-z]+-)*" in without("the twenty-first case", "the second-to-last case")
@@ -1606,7 +1616,9 @@ def _finds_unneeded_pieces() -> bool:
                                            "the last eight cases", "the first ten cases")
             and "the {count}" in without("the two cases above", "the five cases above",
                                          "the seven cases below", "the nine cases above",
-                                         "the 11 cases above"))
+                                         "the 11 cases above")
+            and "the cases? above" in without("on leaving the case above")
+            and "the cases? below" in without("the cases below"))
 
 
 # A word _by_rank() reads as a rank, one it reads as a count, one it reads
@@ -1968,8 +1980,9 @@ def self_test() -> int:
                       "case where a file with no read permission can still be read and where "
                       "chmod raises, where Path.chmod does not call os.chmod through the module"),
          _skips_where_chmod_bound()),
-        ("puts Path.chmod back as it found it on leaving the case above, normally or by an "
-         "exception, whether or not the path class set its own", _restores_chmod()),
+        ("puts Path.chmod back as it found it after binding it at import time, on leaving "
+         "normally or by an exception, whether or not the path class set its own",
+         _restores_chmod()),
         ("names, in the case that runs --self-test where os.chmod raises, a case red only where "
          "os.chmod raises, by the label the child printed for it rather than this process's "
          "label or a neighbouring case's, and leaves out a case red in this process too",
@@ -1995,9 +2008,10 @@ def self_test() -> int:
          _red_labels_one_line()),
         ("says what a case's make() raised in that case's label, and nothing an earlier "
          "case raised in the label of one in which nothing raised", _says_only_its_own()),
-        ("finds \"both\", the words joined to a rank by a hyphen, the count after a rank "
-         "and \"the\" with a count before \"cases\" needed by no wording, each once the "
-         "wordings that need it are taken out of those the by-rank label check is held to",
+        ("finds \"both\", the words joined to a rank by a hyphen, the count after a rank, "
+         "\"the\" with a count before \"cases\" and each piece read as naming a case beside "
+         "this one needed by no wording, each once the wordings that need it are taken out of "
+         "those the by-rank label check is held to",
          _finds_unneeded_pieces()),
         _unfound_case(),
         ("names, in the label of the case that finds a word read as a rank, one read as a "
