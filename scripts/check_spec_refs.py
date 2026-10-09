@@ -845,16 +845,23 @@ def _check_unreadable(make: Callable[[Path], object], **tree: object) -> list[st
             return None
 
 
+# Every control character, and every other character str.splitlines() ends a
+# line at, as the backslash escape repr() writes it.
+_ONE_LINE = {c: repr(chr(c))[1:-1] for c in (*range(0x20), *range(0x7F, 0xA0), 0x2028, 0x2029)}
+
+
 def _raised(exc: Exception) -> str:
     """exc's type and text, as the last line of a traceback gives them, then
     the innermost line of this script it was raised through and the function
-    that line is in, which the traceback would have named."""
+    that line is in, which the traceback would have named. A line break or
+    other control character in the text is written as a backslash escape, so
+    the label this ends stays on one line."""
     where, tb = "", exc.__traceback__
     while tb is not None:
         if tb.tb_frame.f_globals is globals():
             where = f", at line {tb.tb_lineno} in {tb.tb_frame.f_code.co_name}"
         tb = tb.tb_next
-    return printable(f"{type(exc).__name__}: {exc}{where}")
+    return printable(f"{type(exc).__name__}: {exc}{where}").translate(_ONE_LINE)
 
 
 def _reasoned(label: str, case: Callable[[], bool | None]) -> tuple[str, bool | None]:
@@ -1031,6 +1038,12 @@ def _unmade_tree_fails(make: Callable[[Path], object],
         return False
 
 
+def _mkdir_on_readme(root: Path) -> None:
+    """A make that raises an OSError: a mkdir on the README.md the tree
+    already holds."""
+    (root / "README.md").mkdir()
+
+
 def _refuse_not_os(root: Path) -> None:
     """A make that raises an exception other than an OSError."""
     raise ValueError(f"{root}: not made unreadable")
@@ -1045,14 +1058,14 @@ def _check_unguarded(make: Callable[[Path], object], **tree: object) -> list[str
 
 
 @contextlib.contextmanager
-def _check_broken() -> Iterator[None]:
-    """check() raises a TypeError inside, on any tree, as a defect in it
-    would."""
+def _check_broken(text: str = "probe") -> Iterator[None]:
+    """check() raises a TypeError with text inside, on any tree, as a defect
+    in it would."""
     global check
     real = check
 
     def broken(root: Path) -> list[str]:
-        raise TypeError("probe")
+        raise TypeError(text)
 
     check = broken
     try:
@@ -1074,6 +1087,19 @@ def _red_cases_say_why() -> bool:
         ok is False and said.search(label) is not None for label, ok in ran)
 
 
+def _red_labels_one_line() -> bool:
+    """Every case of _unreadable_tree_cases() that is not skipped, run while
+    check() raises with text that carries line breaks and other control
+    characters, ends its label, still one line, with that text, each such
+    character written as a backslash escape."""
+    with _check_broken("line one\nline two\r\tthree\x00\x85\u2028four"):
+        ran = [label for label, ok in _unreadable_tree_cases() if ok is not None]
+    said = re.compile(r" \(raised TypeError: line one\\nline two\\r\\tthree\\x00\\x85\\u2028four, "
+                      r"at line [1-9][0-9]* in broken\)\Z")
+    return len(ran) >= len(LINKED_DOCS) and all(
+        len(label.splitlines()) == 1 and said.search(label) is not None for label in ran)
+
+
 def _says_only_its_own() -> bool:
     """_reasoned() ends a label with what make(root) raised in its own case,
     naming the function that raised it, and ends the label of a case in which
@@ -1082,6 +1108,22 @@ def _says_only_its_own() -> bool:
     said = r"label \(raised ValueError: .+: not made unreadable, at line [1-9][0-9]* in _refuse_not_os\)"
     return (ok is False and re.fullmatch(said, label) is not None and len(_RAISED) == 1
             and _reasoned("label", lambda: True) == ("label", True))
+
+
+# A label that picks out another case by where it stands among the cases, as
+# "the first of the two cases above" did, turns wrong when a case moves, and
+# nothing turns red. The rank word is read as naming a case where "case",
+# "of", "where", "above" or "below" follows it, so "the last one's query
+# string", which names a link, is not.
+_BY_RANK_RE = re.compile(
+    r"\bthe (?:first|second|third|fourth|last|former|latter) (?:case|of|where|above|below)\b",
+    re.IGNORECASE)
+
+
+def _by_rank(labels: list[str]) -> list[str]:
+    """The labels that name another case by its rank among the cases rather
+    than by what it runs."""
+    return [label for label in labels if _BY_RANK_RE.search(label)]
 
 
 class _Undecodable(type(Path())):
@@ -1349,19 +1391,21 @@ def self_test() -> int:
         ("raises, rather than reading as a check failure, a vendored core.md a case could not "
          "make unreadable", _unmade_core_raises()),
         ("fails, with no traceback, a case whose tree it could not make unreadable, here by "
-         "a mkdir on a README.md the tree already holds",
-         _unmade_tree_fails(lambda root: (root / "README.md").mkdir())),
+         "a mkdir on a README.md the tree already holds", _unmade_tree_fails(_mkdir_on_readme)),
         ("fails, with no traceback, a case whose tree it could not make unreadable by an "
          "exception other than an OSError", _unmade_tree_fails(_refuse_not_os)),
-        ("fails, with no traceback, the first of the two cases above where its helper lets "
-         "the mkdir's OSError out rather than returning None",
-         not _unmade_tree_fails(lambda root: (root / "README.md").mkdir(), _check_unguarded)),
-        ("fails, with no traceback, the second where its helper lets the exception other "
-         "than an OSError out rather than returning None",
+        ("fails, with no traceback, a case whose helper lets out, rather than returning None, "
+         "the OSError of a mkdir on a README.md the tree already holds",
+         not _unmade_tree_fails(_mkdir_on_readme, _check_unguarded)),
+        ("fails, with no traceback, a case whose helper lets out, rather than returning None, "
+         "an exception other than an OSError",
          not _unmade_tree_fails(_refuse_not_os, _check_unguarded)),
         ("says, in the label of every case that is red because check() raised on its "
          "unreadable tree, what was raised and the line and function that raised it",
          _red_cases_say_why()),
+        ("keeps on one line the label of a case that is red because check() raised with "
+         "text that carries a line break or other control character, written as a "
+         "backslash escape", _red_labels_one_line()),
         ("says what a case's make() raised in that case's label, and nothing an earlier "
          "case raised in the label of one in which nothing raised", _says_only_its_own()),
         ("--help prints usage and runs no check",
@@ -1396,6 +1440,13 @@ def self_test() -> int:
              "README.md:1: carries a URL more than 8 links deep in other links' query strings "
              "or #fragments, deeper than the check reads. Link it at most 8 deep."]),
     ]
+    # After every other case but the last, so it reads their labels. It also
+    # holds _by_rank() to the wording a label once named two cases by.
+    ranked = _by_rank([label for label, _ in cases])
+    cases.append(("names, in every label, another case by what it runs rather than by its rank "
+                  "among the cases" + "".join(f" (by rank: {label})" for label in ranked),
+                  not ranked and len(_by_rank(["the first of the two cases above",
+                                               "the second where its helper lets"])) == 2))
     # Last, so it sees every temporary tree the cases above built.
     left = ", ".join(printable(str(tmp)) for tmp in _LEFT)
     cases.append(("removes every temporary tree it builds" + (f" (left: {left})" if left else ""),
