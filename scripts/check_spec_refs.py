@@ -638,14 +638,30 @@ def _permissions_stop_reads() -> bool:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _chmod_does_nothing() -> bool:
+    """Whether Path.chmod leaves a file's mode as it was."""
+    tmp = Path(tempfile.mkdtemp(prefix="spec-refs-"))
+    try:
+        probe = tmp / "probe"
+        probe.write_bytes(b"")
+        mode = probe.stat().st_mode
+        probe.chmod(0)
+        return probe.stat().st_mode == mode
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 @contextlib.contextmanager
-def _mode_bits_ignored() -> Iterator[None]:
+def _mode_bits_ignored() -> Iterator[bool]:
     """os.chmod does nothing inside, as on a filesystem that ignores mode
-    bits, so a file left with no read permission can still be read."""
+    bits, so a file left with no read permission can still be read. Yields
+    whether Path.chmod, which the cases call, does nothing too: it does while
+    pathlib calls os.chmod through the module, as CPython 3.12 to 3.14 do,
+    and not where pathlib bound the function at import time."""
     chmod = os.chmod
     os.chmod = lambda *args, **kwargs: None
     try:
-        yield
+        yield _chmod_does_nothing()
     finally:
         os.chmod = chmod
 
@@ -686,11 +702,38 @@ def _core_no_read_permission() -> bool | None:
     return _unreadable_core(lambda core: core.chmod(0))
 
 
-def _skips_where_reads_allowed() -> bool:
+def _skips_where_reads_allowed() -> bool | None:
     """Both no-read-permission cases skip, rather than fail, where a file with
-    no read permission can still be read."""
-    with _mode_bits_ignored():
+    no read permission can still be read. None (skipped) where
+    _mode_bits_ignored() cannot stop Path.chmod, which would fail it falsely."""
+    with _mode_bits_ignored() as ignored:
+        if not ignored:
+            return None
         return _unreadable_readme() is None and _core_no_read_permission() is None
+
+
+@contextlib.contextmanager
+def _chmod_bound_at_import() -> Iterator[None]:
+    """Path.chmod calls the os.chmod in place on entry, not the module's, as a
+    pathlib that bound the function at import time would."""
+    cls, chmod = type(Path()), os.chmod
+    own = vars(cls).get("chmod")
+    cls.chmod = lambda self, mode, *, follow_symlinks=True: chmod(
+        self, mode, follow_symlinks=follow_symlinks)
+    try:
+        yield
+    finally:
+        if own is None:
+            del cls.chmod
+        else:
+            cls.chmod = own
+
+
+def _skips_where_chmod_bound() -> bool:
+    """_skips_where_reads_allowed() is skipped, not failed, where Path.chmod
+    does not call os.chmod through the module."""
+    with _chmod_bound_at_import():
+        return _skips_where_reads_allowed() is None
 
 
 def _unmade_core_raises() -> bool:
@@ -938,6 +981,8 @@ def self_test() -> int:
          _reads_core_once()),
         ("skips both no-read-permission cases, rather than failing them, where a file with "
          "no read permission can still be read", _skips_where_reads_allowed()),
+        ("skips, rather than fails, the case above where Path.chmod does not call os.chmod "
+         "through the module", _skips_where_chmod_bound()),
         ("raises, rather than reading as a check failure, a vendored core.md a case could not "
          "make unreadable", _unmade_core_raises()),
         ("--help prints usage and runs no check",
