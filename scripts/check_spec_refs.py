@@ -51,7 +51,9 @@ exist by editing it:
 
 A core.md or workflow that cannot be read as UTF-8 text fails by name, as does
 a core.md that cannot be opened (a directory, no read permission), once; no
-citation is held to the headings of a core.md that cannot be read.
+citation is held to the headings of a core.md that cannot be read. The
+self-test copies the workflow into each case's tree, so a workflow it cannot
+read fails by name before any case runs.
 
 Every link to atx-spec core.md in LINKED_DOCS (README.md and
 verifiers/go/verify.go) must also equal CORE_REF, apart from a query string, a
@@ -547,6 +549,24 @@ def _usage_under_oo() -> bool:
     return proc.returncode == 0 and proc.stdout == USAGE
 
 
+def _self_test_without_workflow() -> bool:
+    """--self-test in a tree with no CI workflow names the workflow and exits
+    1, with no traceback."""
+    with _tree({"spec": [_atx("1.1 ATX schema")]}) as root:
+        (root / WORKFLOW).unlink()
+        script = root / "scripts" / Path(__file__).name
+        script.parent.mkdir()
+        shutil.copyfile(Path(__file__).resolve(), script)
+        proc = subprocess.run(
+            [sys.executable, str(script), "--self-test"],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+    lines = proc.stdout.splitlines()
+    return (proc.returncode == 1 and not proc.stderr and len(lines) == 2
+            and lines[0].startswith(f"FAIL {WORKFLOW}: cannot be read (")
+            and lines[1] == "self-test: not run")
+
+
 def _shows_deep() -> bool:
     """_show() on a list nested DEEP levels, built in Python so no parser
     limit stops it first; plain repr() raises RecursionError on it."""
@@ -644,7 +664,14 @@ def self_test() -> int:
     aip = {"id": "AIP", "ref": "https://example.org/AIP-SPEC.md", "section": "anything"}
     good = _atx("1.1 ATX schema")
     jcs = _atx('1.3a.2 JCS form (`atcVersion` = "1.1")')
-    workflow = (ROOT / WORKFLOW).read_text(encoding="utf-8")
+    # Every case's tree holds a copy of the CI workflow, so none can run
+    # without it.
+    unread: list[str] = []
+    workflow = _read_text(ROOT, WORKFLOW, "its atx-spec pin", unread)
+    if workflow is None:
+        print(f"FAIL {unread[0]}")
+        print("self-test: not run")
+        return 1
     second_pin = workflow + (
         "\n      - uses: actions/checkout@v4\n        with:\n"
         f"          repository: opena2a-standards/atx-spec\n          ref: {'0' * 40}\n"
@@ -692,6 +719,8 @@ def self_test() -> int:
         ("rejects a workflow that pins no atx-spec commit", bool(_probe([good], workflow=""))),
         ("rejects a tree with no workflow, as one that pins no atx-spec commit",
          len(no_workflow) == 1 and no_workflow[0].startswith(f"{WORKFLOW} pins atx-spec at no commit, ")),
+        ("--self-test in a tree with no workflow names it and exits 1, with no traceback",
+         _self_test_without_workflow()),
         ("reports a fixture with no spec member by name", _names_probe(_probe_doc({"name": "x"}))),
         ("reports a fixture that is not JSON by name", _names_probe(_probe_doc("{"))),
         ("reports a citation that is not an object by name", _names_probe(_probe(["ATX"]))),
