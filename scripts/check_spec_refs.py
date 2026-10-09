@@ -53,7 +53,8 @@ A core.md or workflow that cannot be read as UTF-8 text fails by name, as does
 a core.md that cannot be opened (a directory, no read permission), once; no
 citation is held to the headings of a core.md that cannot be read. The
 self-test copies core.md, and the workflow, into the trees its cases build, so
-a core.md or workflow it cannot read fails by name before any case runs.
+a core.md or workflow it cannot read fails by name before any case runs; a
+missing core.md fails there in the words the check uses for it.
 
 Every link to atx-spec core.md in LINKED_DOCS (README.md and
 verifiers/go/verify.go) must also equal CORE_REF, apart from a query string, a
@@ -107,6 +108,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CORE_MD = Path("schemas/vendor/atx-spec/core.md")
+# The failure for a tree with no core.md, in the check and in the self-test.
+CORE_MD_MISSING = f"{CORE_MD} is missing; vendor core.md from the pinned atx-spec ref"
 WORKFLOW = Path(".github/workflows/conformance.yml")
 # Not sliced from __doc__: `python -OO` strips docstrings, and this module is
 # imported by scripts/conformance_profile.py. The self-test holds the
@@ -387,7 +390,7 @@ def check(root: Path) -> list[str]:
     not the pinned one."""
     core = root / CORE_MD
     if not core.exists():
-        return [f"{CORE_MD} is missing; vendor core.md from the pinned atx-spec ref"]
+        return [CORE_MD_MISSING]
     failures: list[str] = []
     core_bytes = _read_bytes(root, CORE_MD, failures)
     failures += pin_failures(root, core_bytes) + link_failures(root)
@@ -557,8 +560,12 @@ def _run(argv: list[str], timeout: float = 60) -> subprocess.CompletedProcess[st
 
 def _hung_child_fails() -> bool:
     """_run() returns None for a child that outlives its timeout, rather than
-    raising TimeoutExpired out of the self-test."""
-    return _run([sys.executable, "-c", "import time; time.sleep(60)"], timeout=0.5) is None
+    raising TimeoutExpired out of the self-test. A timeout of a few hundredths
+    of a second proves that as well as a long one does, and the case is timed
+    so that a longer one does not quietly add to every self-test run."""
+    start = time.perf_counter()
+    hung = _run([sys.executable, "-c", "import time; time.sleep(60)"], timeout=0.05) is None
+    return hung and time.perf_counter() - start < 0.4
 
 
 def _usage_under_oo() -> bool:
@@ -568,9 +575,11 @@ def _usage_under_oo() -> bool:
     return proc is not None and proc.returncode == 0 and proc.stdout == USAGE
 
 
-def _self_test_without(rel: Path, make: Callable[[Path], object] = Path.unlink) -> bool:
+def _self_test_without(rel: Path, make: Callable[[Path], object] = Path.unlink,
+                       says: str | None = None) -> bool:
     """--self-test in a tree where make(root / rel) has left rel unreadable
-    (by default, removed) names rel and exits 1, with no traceback."""
+    (by default, removed) names rel and exits 1, with no traceback. Its one
+    failure is `says` when given, else that rel cannot be read."""
     with _tree({"spec": [_atx("1.1 ATX schema")]}) as root:
         make(root / rel)
         script = root / "scripts" / Path(__file__).name
@@ -581,7 +590,8 @@ def _self_test_without(rel: Path, make: Callable[[Path], object] = Path.unlink) 
         return False
     lines = proc.stdout.splitlines()
     return (proc.returncode == 1 and not proc.stderr and len(lines) == 2
-            and lines[0].startswith(f"FAIL {rel}: cannot be read (")
+            and (lines[0] == f"FAIL {says}" if says is not None
+                 else lines[0].startswith(f"FAIL {rel}: cannot be read ("))
             and lines[1] == "self-test: not run")
 
 
@@ -800,9 +810,13 @@ def self_test() -> int:
     # unless it writes its own workflow text, the CI workflow; the cases that
     # edit the workflow start from its text. Both are read here, before any
     # case runs, so one that cannot be read fails by name, not in a traceback.
+    # A missing core.md fails in the words check() uses for it.
     unread: list[str] = []
     workflow = _read_text(ROOT, WORKFLOW, "its atx-spec pin", unread)
-    _read_bytes(ROOT, CORE_MD, unread)
+    if (ROOT / CORE_MD).exists():
+        _read_bytes(ROOT, CORE_MD, unread)
+    else:
+        unread.append(CORE_MD_MISSING)
     if workflow is None or unread:
         for f in unread:
             print(f"FAIL {f}")
@@ -858,8 +872,8 @@ def self_test() -> int:
          len(no_workflow) == 1 and no_workflow[0].startswith(f"{WORKFLOW} pins atx-spec at no commit, ")),
         ("--self-test in a tree with no workflow names it and exits 1, with no traceback",
          _self_test_without(WORKFLOW)),
-        ("--self-test in a tree with no vendored core.md names it and exits 1, with no traceback",
-         _self_test_without(CORE_MD)),
+        ("--self-test in a tree with no vendored core.md names it as missing, in the check's "
+         "words, and exits 1, with no traceback", _self_test_without(CORE_MD, says=CORE_MD_MISSING)),
         ("--self-test in a tree with a directory named like the vendored core.md names it and "
          "exits 1, with no traceback", _self_test_without(CORE_MD, _as_directory)),
         ("reports a fixture with no spec member by name", _names_probe(_probe_doc({"name": "x"}))),
@@ -971,8 +985,8 @@ def self_test() -> int:
          len(workflow_not_utf8) == 1 and workflow_not_utf8[0].startswith(f"{WORKFLOW}: is not UTF-8 text")),
         ("reports a missing vendored core.md by name, as its one failure, and tells the "
          "author to vendor it from the pinned atx-spec ref",
-         _probe_tree(lambda root: (root / CORE_MD).unlink())
-         == [f"{CORE_MD} is missing; vendor core.md from the pinned atx-spec ref"]),
+         _probe_tree(lambda root: (root / CORE_MD).unlink()) == [CORE_MD_MISSING]
+         and CORE_MD_MISSING == f"{CORE_MD} is missing; vendor core.md from the pinned atx-spec ref"),
         ("reports, once, a vendored core.md it has no permission to read by name",
          _core_no_read_permission()),
         ("reports, once, a directory named like the vendored core.md by name",
@@ -992,7 +1006,8 @@ def self_test() -> int:
          bad_rc == 2 and bad_err == USAGE and not bad_out),
         ("the docstring's Usage block is USAGE", __doc__ is None or __doc__.endswith(USAGE)),
         ("imports and prints usage under python -OO", _usage_under_oo()),
-        ("fails, with no traceback, a case whose child process outlives its timeout",
+        ("fails, with no traceback and in under 0.4 s, a case whose child process outlives "
+         "its timeout",
          _hung_child_fails()),
         ("skips fenced code when reading headings",
          core_headings("```\n# not a heading\n```\n## 1. Real\n") == {"1. Real"}),
