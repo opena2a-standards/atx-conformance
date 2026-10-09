@@ -560,8 +560,12 @@ def _run(argv: list[str], timeout: float = 60) -> subprocess.CompletedProcess[st
 
 def _hung_child_fails() -> bool:
     """_run() returns None for a child that outlives its timeout, rather than
-    raising TimeoutExpired out of the self-test."""
-    return _run([sys.executable, "-c", "import time; time.sleep(60)"], timeout=0.5) is None
+    raising TimeoutExpired out of the self-test. A timeout of a few hundredths
+    of a second proves that as well as a long one does, and the case is timed
+    so that a longer one does not quietly add to every self-test run."""
+    start = time.perf_counter()
+    hung = _run([sys.executable, "-c", "import time; time.sleep(60)"], timeout=0.05) is None
+    return hung and time.perf_counter() - start < 0.4
 
 
 def _usage_under_oo() -> bool:
@@ -1002,7 +1006,8 @@ def self_test() -> int:
          bad_rc == 2 and bad_err == USAGE and not bad_out),
         ("the docstring's Usage block is USAGE", __doc__ is None or __doc__.endswith(USAGE)),
         ("imports and prints usage under python -OO", _usage_under_oo()),
-        ("fails, with no traceback, a case whose child process outlives its timeout",
+        ("fails, with no traceback and in under 0.4 s, a case whose child process outlives "
+         "its timeout",
          _hung_child_fails()),
         ("skips fenced code when reading headings",
          core_headings("```\n# not a heading\n```\n## 1. Real\n") == {"1. Real"}),
