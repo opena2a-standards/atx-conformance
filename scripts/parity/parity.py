@@ -20,14 +20,25 @@ form). Per-fixture agreement on verdict and category is therefore fully
 cryptographic on the hybrid fixtures, including the forged-post-quantum
 control fixtures/v1_1-hybrid-mldsa-tampered.json.
 
+A verifier that exits non-zero has its stderr relayed in the report. One that
+exits non-zero before reporting any fixture (a missing dependency, a bad
+argument) is reported by that exit and stderr alone, not as a fixture set
+mismatch naming every fixture it never reached.
+
+Every run starts with the self-test, which proves on stand-in verifiers that
+the gate reports a disagreement, a skipped fixture and a failed verifier.
+
 Usage:
     python3 scripts/parity/parity.py [--json parity-report.json]
+    python3 scripts/parity/parity.py --self-test
 
 Exit codes: 0 = all implementations agree, 1 = divergence or verifier error.
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import re
 import subprocess
@@ -53,8 +64,8 @@ BLOCK_RE = re.compile(r"^(PASS|FAIL)\s+(\S+)")
 OBSERVED_RE = re.compile(r"^\s*observed:\s+(ACCEPT|REJECT\[([A-Z_]+))")
 
 
-def run_verifier(name: str, spec: dict) -> tuple[int, dict[str, dict]]:
-    """Run one verifier; return (exit_code, {fixture_basename: record})."""
+def run_verifier(name: str, spec: dict) -> tuple[int, dict[str, dict], str]:
+    """Run one verifier; return (exit_code, {fixture_basename: record}, stderr)."""
     proc = subprocess.run(
         spec["cmd"], cwd=spec["cwd"], capture_output=True, text=True
     )
@@ -78,33 +89,32 @@ def run_verifier(name: str, spec: dict) -> tuple[int, dict[str, dict]]:
     if proc.returncode != 0:
         sys.stderr.write(f"[parity] {name} verifier exited {proc.returncode}\n")
         sys.stderr.write(proc.stdout[-2000:] + proc.stderr[-2000:] + "\n")
-    return proc.returncode, records
+    return proc.returncode, records, proc.stderr.strip()[-2000:]
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--json", metavar="PATH", help="write a JSON parity report")
-    args = ap.parse_args()
-
-    fixture_files = sorted(p.name for p in (REPO_ROOT / "fixtures").glob("*.json"))
-    if not fixture_files:
-        sys.stderr.write("[parity] no fixtures found\n")
-        return 1
-
+def compare(
+    fixture_files: list[str], verifiers: dict[str, dict]
+) -> tuple[dict[str, dict], dict[str, int], list[str]]:
+    """Run every verifier over fixture_files; return (table, exit_codes, divergences)."""
     results: dict[str, dict[str, dict]] = {}
     exit_codes: dict[str, int] = {}
-    for name, spec in VERIFIERS.items():
-        code, records = run_verifier(name, spec)
+    divergences: list[str] = []
+    for name, spec in verifiers.items():
+        code, records, stderr = run_verifier(name, spec)
         exit_codes[name] = code
         results[name] = records
-
-    divergences: list[str] = []
-
-    for name, code in exit_codes.items():
         if code != 0:
-            divergences.append(f"{name} verifier exited {code} (expected 0)")
+            d = f"{name} verifier exited {code} (expected 0)"
+            if not records:
+                d += " before reporting any fixture"
+            divergences.append(f"{d}: {stderr}" if stderr else d)
 
     for name, records in results.items():
+        # A verifier that failed before reporting any fixture is already
+        # reported by its exit code and stderr; listing every fixture as
+        # missing would hide that cause behind a fixture set mismatch.
+        if exit_codes[name] != 0 and not records:
+            continue
         seen = sorted(records)
         if seen != fixture_files:
             missing = set(fixture_files) - set(seen)
@@ -113,7 +123,7 @@ def main() -> int:
                 f"{name} fixture set mismatch: missing={sorted(missing)} extra={sorted(extra)}"
             )
 
-    names = list(VERIFIERS)
+    names = list(verifiers)
     table: dict[str, dict] = {}
     for fx in fixture_files:
         row = {n: results[n].get(fx) for n in names}
@@ -123,8 +133,103 @@ def main() -> int:
             vals = {n: row[n][field] for n in present}
             if len(set(vals.values())) > 1:
                 divergences.append(f"{fx}: {field} divergence {vals}")
+    return table, exit_codes, divergences
 
-    print(f"parity: {len(fixture_files)} fixtures x {len(names)} verifiers")
+
+# --- self-test ---------------------------------------------------------------
+# Stand-in verifiers print the PASS/FAIL block format the real ones print, so
+# the self-test drives compare() through run_verifier() without Go, the
+# fixtures or the Python verifier's dependencies.
+
+MISSING_DEP = (
+    "missing dependency: dilithium-py. install with `pip install -r requirements.txt`"
+)
+
+
+def _stand_in(stdout: str, stderr: str = "", code: int = 0) -> dict:
+    src = (
+        "import sys\n"
+        f"sys.stdout.write({stdout!r})\n"
+        f"sys.stderr.write({stderr!r})\n"
+        f"sys.exit({code})\n"
+    )
+    return {"cwd": REPO_ROOT, "cmd": [sys.executable, "-c", src]}
+
+
+def _block(fixture: str, observed: str) -> str:
+    return f"PASS  fixtures/{fixture}\n  observed: {observed}\n"
+
+
+def _divergences(fixture_files: list[str], verifiers: dict[str, dict]) -> list[str]:
+    with contextlib.redirect_stderr(io.StringIO()):
+        return compare(fixture_files, verifiers)[2]
+
+
+def self_test() -> int:
+    fx = ["a.json", "b.json"]
+    both = _block("a.json", "ACCEPT") + _block("b.json", "REJECT[EXPIRED: past expiry]")
+    agree = _divergences(fx, {"one": _stand_in(both), "two": _stand_in(both)})
+    flipped = _divergences(fx, {
+        "one": _stand_in(both),
+        "two": _stand_in(_block("a.json", "ACCEPT") + _block("b.json", "ACCEPT")),
+    })
+    skipped = _divergences(fx, {
+        "one": _stand_in(both), "two": _stand_in(_block("a.json", "ACCEPT")),
+    })
+    no_dep = _divergences(fx, {
+        "one": _stand_in(both), "two": _stand_in("", MISSING_DEP + "\n", 2),
+    })
+    crashed = _divergences(fx, {
+        "one": _stand_in(both),
+        "two": _stand_in(_block("a.json", "ACCEPT"), "Traceback: boom\n", 1),
+    })
+    cases: list[tuple[str, bool]] = [
+        ("verifiers that agree report no divergence", agree == []),
+        ("a verdict divergence is reported by fixture",
+         flipped == ["b.json: verdict divergence {'one': 'REJECT', 'two': 'ACCEPT'}",
+                     "b.json: category divergence {'one': 'EXPIRED', 'two': None}"]),
+        ("a fixture a verifier skipped is reported as a fixture set mismatch",
+         skipped == ["two fixture set mismatch: missing=['b.json'] extra=[]"]),
+        ("a verifier that exits 2 before reporting any fixture is reported by its "
+         "exit code and stderr, not as a fixture set mismatch",
+         no_dep == [f"two verifier exited 2 (expected 0) before reporting any fixture: "
+                    f"{MISSING_DEP}"]),
+        ("a verifier that fails partway is reported by its exit code and stderr "
+         "and by the fixtures it did not reach",
+         crashed == ["two verifier exited 1 (expected 0): Traceback: boom",
+                     "two fixture set mismatch: missing=['b.json'] extra=[]"]),
+    ]
+    failed = 0
+    for label, ok in cases:
+        print(f"  [{'GREEN' if ok else 'RED  '}] {label}")
+        failed += not ok
+    print(f"parity self-test: {len(cases) - failed}/{len(cases)} cases green")
+    return 1 if failed else 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--json", metavar="PATH", help="write a JSON parity report")
+    ap.add_argument(
+        "--self-test", action="store_true",
+        help="prove on stand-in verifiers that the gate can fail, then stop",
+    )
+    args = ap.parse_args()
+
+    if self_test():
+        return 1
+    if args.self_test:
+        return 0
+
+    fixture_files = sorted(p.name for p in (REPO_ROOT / "fixtures").glob("*.json"))
+    if not fixture_files:
+        sys.stderr.write("[parity] no fixtures found\n")
+        return 1
+
+    table, exit_codes, divergences = compare(fixture_files, VERIFIERS)
+    names = list(VERIFIERS)
+
+    print(f"\nparity: {len(fixture_files)} fixtures x {len(names)} verifiers")
     for fx, row in table.items():
         cells = []
         for n in names:
@@ -155,7 +260,8 @@ def main() -> int:
     if divergences:
         print("\nPARITY: FAIL")
         for d in divergences:
-            print(f"  - {d}")
+            # Relayed stderr can span lines; keep them under their bullet.
+            print("  - " + d.replace("\n", "\n    "))
         return 1
     print("\nPARITY: PASS (all implementations agree on gate, verdict, and category)")
     return 0
