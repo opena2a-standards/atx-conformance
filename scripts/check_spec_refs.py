@@ -609,9 +609,34 @@ def _linear_links(sep: str, n: int = 20_000) -> bool:
 
 
 def _permissions_stop_reads() -> bool:
-    """False where permissions do not stop a read: as root, or without POSIX
-    ids."""
-    return hasattr(os, "geteuid") and os.geteuid() != 0
+    """Whether a file with no read permission, in a directory made as _tree()
+    makes one, fails to open. Tried rather than read from the effective uid:
+    root, a process holding CAP_DAC_OVERRIDE and a filesystem that ignores
+    mode bits all open it, so the cases that need it are skipped there."""
+    tmp = Path(tempfile.mkdtemp(prefix="spec-refs-"))
+    try:
+        probe = tmp / "probe"
+        probe.write_bytes(b"")
+        probe.chmod(0)
+        try:
+            probe.open("rb").close()
+        except PermissionError:
+            return True
+        return False
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@contextlib.contextmanager
+def _mode_bits_ignored() -> Iterator[None]:
+    """os.chmod does nothing inside, as on a filesystem that ignores mode
+    bits, so a file left with no read permission can still be read."""
+    chmod = os.chmod
+    os.chmod = lambda *args, **kwargs: None
+    try:
+        yield
+    finally:
+        os.chmod = chmod
 
 
 def _unreadable_readme() -> bool | None:
@@ -637,6 +662,21 @@ def _unreadable_core(make: Callable[[Path], object]) -> bool:
     except OSError:
         return False
     return _once(failures, f"{CORE_MD}: cannot be read (")
+
+
+def _core_no_read_permission() -> bool | None:
+    """_unreadable_core() on a core.md with no read permission; None (skipped)
+    where permissions do not stop a read."""
+    if not _permissions_stop_reads():
+        return None
+    return _unreadable_core(lambda core: core.chmod(0))
+
+
+def _skips_where_reads_allowed() -> bool:
+    """Both no-read-permission cases skip, rather than fail, where a file with
+    no read permission can still be read."""
+    with _mode_bits_ignored():
+        return _unreadable_readme() is None and _core_no_read_permission() is None
 
 
 class _Undecodable(type(Path())):
@@ -853,11 +893,13 @@ def self_test() -> int:
         ("reports a workflow that is not UTF-8 by name, and no pin failure",
          len(workflow_not_utf8) == 1 and workflow_not_utf8[0].startswith(f"{WORKFLOW}: is not UTF-8 text")),
         ("reports, once, a vendored core.md it has no permission to read by name",
-         _unreadable_core(lambda core: core.chmod(0)) if _permissions_stop_reads() else None),
+         _core_no_read_permission()),
         ("reports, once, a directory named like the vendored core.md by name",
          _unreadable_core(_as_directory)),
         ("reads the headings from the core.md bytes whose digest it took, not a second read",
          _reads_core_once()),
+        ("skips both no-read-permission cases, rather than failing them, where a file with "
+         "no read permission can still be read", _skips_where_reads_allowed()),
         ("--help prints usage and runs no check",
          help_rc == 0 and help_out == USAGE and "every ATX citation" not in help_out),
         ("-h prints usage and runs no check", h_rc == 0 and h_out == USAGE),
