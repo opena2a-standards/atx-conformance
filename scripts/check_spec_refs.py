@@ -99,6 +99,7 @@ Usage:
 from __future__ import annotations
 
 import contextlib
+import errno
 import functools
 import hashlib
 import io
@@ -723,12 +724,18 @@ def _permissions_stop_reads() -> bool:
     """Whether a file with no read permission, in a directory made as _tree()
     makes one, fails to open. Tried rather than read from the effective uid:
     root, a process holding CAP_DAC_OVERRIDE and a filesystem that ignores
-    mode bits all open it, so the cases that need it are skipped there."""
+    mode bits all open it, so the cases that need it are skipped there. False
+    too where the chmod that takes its read permission raises, as on a
+    filesystem that refuses it (EPERM, ENOTSUP), so those cases are skipped
+    there rather than ending the self-test in a traceback."""
     tmp = Path(tempfile.mkdtemp(prefix="spec-refs-"))
     try:
         probe = tmp / "probe"
         probe.write_bytes(b"")
-        probe.chmod(0)
+        try:
+            probe.chmod(0)
+        except OSError:
+            return False
         try:
             probe.open("rb").close()
         except PermissionError:
@@ -762,6 +769,38 @@ def _mode_bits_ignored() -> Iterator[bool]:
     os.chmod = lambda *args, **kwargs: None
     try:
         yield _chmod_does_nothing()
+    finally:
+        os.chmod = chmod
+
+
+def _chmod_raises() -> bool:
+    """Whether Path.chmod raises an OSError on a file it could create."""
+    tmp = Path(tempfile.mkdtemp(prefix="spec-refs-"))
+    try:
+        probe = tmp / "probe"
+        probe.write_bytes(b"")
+        try:
+            probe.chmod(0)
+        except OSError:
+            return True
+        return False
+    finally:
+        _remove(tmp)
+
+
+@contextlib.contextmanager
+def _chmod_refused() -> Iterator[bool]:
+    """os.chmod raises inside, as on a filesystem that refuses it. Yields
+    whether Path.chmod, which the cases call, raises too, as
+    _mode_bits_ignored() yields whether it does nothing."""
+    chmod = os.chmod
+
+    def refuse(path: object, *args: object, **kwargs: object) -> None:
+        raise OSError(errno.ENOTSUP, os.strerror(errno.ENOTSUP), str(path))
+
+    os.chmod = refuse
+    try:
+        yield _chmod_raises()
     finally:
         os.chmod = chmod
 
@@ -940,6 +979,14 @@ def _self_test_core_dir_unsearchable() -> bool | None:
                               says=f"{CORE_MD}: cannot be read (Permission denied)")
 
 
+def _no_read_permission_cases() -> tuple[Callable[[], bool | None], ...]:
+    """Every case that _permissions_stop_reads() skips."""
+    return (_unreadable_readme, _core_no_read_permission, _core_dir_unsearchable,
+            _workflow_dir_unsearchable, _self_test_core_dir_unsearchable,
+            _linked_dir_unsearchable, _root_unsearchable,
+            *(functools.partial(_citation_dir_unlistable, rel) for rel in CITATION_DIRS))
+
+
 def _skips_where_reads_allowed() -> bool | None:
     """Every no-read-permission case skips, rather than fails, where a file
     with no read permission can still be read. None (skipped) where
@@ -947,11 +994,20 @@ def _skips_where_reads_allowed() -> bool | None:
     with _mode_bits_ignored() as ignored:
         if not ignored:
             return None
-        return all(case() is None for case in (
-            _unreadable_readme, _core_no_read_permission, _core_dir_unsearchable,
-            _workflow_dir_unsearchable, _self_test_core_dir_unsearchable,
-            _linked_dir_unsearchable, _root_unsearchable,
-            *(functools.partial(_citation_dir_unlistable, rel) for rel in CITATION_DIRS)))
+        return all(case() is None for case in _no_read_permission_cases())
+
+
+def _skips_where_chmod_raises() -> bool | None:
+    """Every no-read-permission case skips, rather than raising out of the
+    self-test, where chmod raises. None (skipped) where _chmod_refused()
+    cannot make Path.chmod raise, which would fail it falsely."""
+    with _chmod_refused() as refused:
+        if not refused:
+            return None
+        try:
+            return all(case() is None for case in _no_read_permission_cases())
+        except OSError:
+            return False
 
 
 @contextlib.contextmanager
@@ -972,10 +1028,11 @@ def _chmod_bound_at_import() -> Iterator[None]:
 
 
 def _skips_where_chmod_bound() -> bool:
-    """_skips_where_reads_allowed() is skipped, not failed, where Path.chmod
-    does not call os.chmod through the module."""
+    """_skips_where_reads_allowed() and _skips_where_chmod_raises() are
+    skipped, not failed, where Path.chmod does not call os.chmod through the
+    module."""
     with _chmod_bound_at_import():
-        return _skips_where_reads_allowed() is None
+        return _skips_where_reads_allowed() is None and _skips_where_chmod_raises() is None
 
 
 def _restores_chmod() -> bool:
@@ -1384,8 +1441,10 @@ def self_test() -> int:
          _reads_core_once()),
         ("skips every no-read-permission case, rather than failing it, where a file with "
          "no read permission can still be read", _skips_where_reads_allowed()),
-        ("skips, rather than fails, the case above where Path.chmod does not call os.chmod "
-         "through the module", _skips_where_chmod_bound()),
+        ("skips every no-read-permission case, with no traceback, where chmod raises",
+         _skips_where_chmod_raises()),
+        ("skips, rather than fails, the two cases above where Path.chmod does not call "
+         "os.chmod through the module", _skips_where_chmod_bound()),
         ("puts Path.chmod back as it found it on leaving the case above, normally or by an "
          "exception, whether or not the path class set its own", _restores_chmod()),
         ("raises, rather than reading as a check failure, a vendored core.md a case could not "
