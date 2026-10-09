@@ -479,6 +479,13 @@ def _probe_path(make: Callable[[Path], object]) -> list[str]:
         return check(root)
 
 
+def _no_workflow() -> list[str]:
+    """check() on a tree that has no CI workflow."""
+    with _tree({"spec": [_atx("1.1 ATX schema")]}) as root:
+        (root / WORKFLOW).unlink()
+        return check(root)
+
+
 def _deep(n: int = DEEP) -> str:
     return "[" * n + "]" * n
 
@@ -610,6 +617,7 @@ def self_test() -> int:
     stale = "https://github.com/opena2a-standards/atx-spec/blob/main/core.md"
     core_not_utf8 = _probe([good], core_extra=b"\xff")
     workflow_not_utf8 = _probe([good], workflow=workflow.encode("utf-8") + b"\xff")
+    no_workflow = _no_workflow()
     # None marks a case skipped where it cannot run.
     cases: list[tuple[str, bool | None]] = [(f"rejects retired string {s!r}", bool(_probe([_atx(s)])))
                                      for s in RETIRED_SECTIONS]
@@ -643,6 +651,8 @@ def self_test() -> int:
         ("rejects a workflow that adds a second, different atx-spec pin",
          bool(_probe([good], workflow=second_pin))),
         ("rejects a workflow that pins no atx-spec commit", bool(_probe([good], workflow=""))),
+        ("rejects a tree with no workflow, as one that pins no atx-spec commit",
+         len(no_workflow) == 1 and no_workflow[0].startswith(f"{WORKFLOW} pins atx-spec at no commit, ")),
         ("reports a fixture with no spec member by name", _names_probe(_probe_doc({"name": "x"}))),
         ("reports a fixture that is not JSON by name", _names_probe(_probe_doc("{"))),
         ("reports a citation that is not an object by name", _names_probe(_probe(["ATX"]))),
