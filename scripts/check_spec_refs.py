@@ -889,8 +889,9 @@ def _check_unreadable(make: Callable[[Path], object], **tree: object) -> list[st
 
 
 # Every control character, and every other character str.splitlines() ends a
-# line at, as the backslash escape repr() writes it.
-_ONE_LINE = {c: repr(chr(c))[1:-1] for c in (*range(0x20), *range(0x7F, 0xA0), 0x2028, 0x2029)}
+# line at, as the backslash escape repr() writes it, and a backslash doubled,
+# as repr() writes it, so an escape cannot be read as text that carried one.
+_ONE_LINE = {c: repr(chr(c))[1:-1] for c in (*range(0x20), *range(0x7F, 0xA0), 0x2028, 0x2029, 0x5C)}
 
 
 def _raised(exc: Exception) -> str:
@@ -898,13 +899,17 @@ def _raised(exc: Exception) -> str:
     the innermost line of this script it was raised through and the function
     that line is in, which the traceback would have named. A line break or
     other control character in the text is written as a backslash escape, so
-    the label this ends stays on one line."""
+    the label this ends stays on one line, and a backslash in the text is
+    doubled, so a newline and the two characters backslash and n are not
+    written alike. The text is escaped before printable() writes a character
+    that is not valid UTF-8 as a backslash escape, so that escape is not
+    doubled."""
     where, tb = "", exc.__traceback__
     while tb is not None:
         if tb.tb_frame.f_globals is globals():
             where = f", at line {tb.tb_lineno} in {tb.tb_frame.f_code.co_name}"
         tb = tb.tb_next
-    return printable(f"{type(exc).__name__}: {exc}{where}").translate(_ONE_LINE)
+    return printable(f"{type(exc).__name__}: {exc}{where}".translate(_ONE_LINE))
 
 
 def _reasoned(label: str, case: Callable[[], bool | None]) -> tuple[str, bool | None]:
@@ -1152,11 +1157,13 @@ def _red_labels_one_line() -> bool:
     """Every case of _unreadable_tree_cases() that is not skipped, run while
     check() raises with text that carries line breaks and other control
     characters, ends its label, still one line, with that text, each such
-    character written as a backslash escape."""
-    with _check_broken("line one\nline two\r\tthree\x00\x85\u2028four"):
+    character written as a backslash escape, each backslash the text carries
+    doubled, and a character that is not valid UTF-8 written as the one
+    backslash escape printable() writes."""
+    with _check_broken("line one\nline two\r\tthree\x00\x85\u2028four\\nfive\udcff\\udcffsix"):
         ran = [label for label, ok in _unreadable_tree_cases() if ok is not None]
-    said = re.compile(r" \(raised TypeError: line one\\nline two\\r\\tthree\\x00\\x85\\u2028four, "
-                      r"at line [1-9][0-9]* in broken\)\Z")
+    said = re.compile(r" \(raised TypeError: line one\\nline two\\r\\tthree\\x00\\x85\\u2028four"
+                      r"\\\\nfive\\udcff\\\\udcffsix, at line [1-9][0-9]* in broken\)\Z")
     return len(ran) >= len(LINKED_DOCS) and all(
         len(label.splitlines()) == 1 and said.search(label) is not None for label in ran)
 
@@ -1472,7 +1479,8 @@ def self_test() -> int:
          _red_cases_say_why()),
         ("keeps on one line the label of a case that is red because check() raised with "
          "text that carries a line break or other control character, written as a "
-         "backslash escape", _red_labels_one_line()),
+         "backslash escape, with each backslash the text carries doubled",
+         _red_labels_one_line()),
         ("says what a case's make() raised in that case's label, and nothing an earlier "
          "case raised in the label of one in which nothing raised", _says_only_its_own()),
         ("--help prints usage and runs no check",
