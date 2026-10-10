@@ -1106,8 +1106,9 @@ def _self_test_where_chmod_refuses() -> list[tuple[str, bool | None]] | None:
     child whose os.chmod raises before the script runs, as on a filesystem
     that refuses it, read from its output by _child_findings(). Empty,
     failing the case that reads this, when the child outlives its timeout or
-    that output does not read as a full run. _held_to_child() holds the cases the child finds red to what this
-    process finds of them. None (skipped) where Path.chmod already raises,
+    that output does not read as a full run. _held_to_child() holds the cases
+    the child finds red to what this process finds of them.
+    None (skipped) where Path.chmod already raises,
     which is the child's own state."""
     if _chmod_raises():
         return None
