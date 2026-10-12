@@ -53,7 +53,8 @@ What this suite does NOT verify:
 - Build attestation predicate verification. `buildAttestation` is a string
   field in ATX v1.0 (not a structured SLSA v1 predicate inline); verifiers
   do not parse it.
-- Behavioral profile validation. Field is omitted from these fixtures.
+- Behavioral profile validation. The `behavioralProfile` field is carried and
+  signed in the v1.1 fixtures, but not validated.
 
 The full requirement-to-fixture mapping is machine-readable in
 [`conformance.json`](./conformance.json), regenerated from the fixtures by

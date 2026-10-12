@@ -30,9 +30,14 @@ Usage:
 The Scope table may name a k-of-n signature threshold as covered only when a
 fixture's verifierState declares the count it requires (THRESHOLD_FIELD).
 
+It also holds the README's scope note on `behavioralProfile` to the fixtures.
+That note said the field was omitted from the fixtures while every v1.1
+fixture carried it inside its signed bytes.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
-byte check is named and the Scope table claims no threshold that no fixture
-declares, 1 otherwise, 2 on an unknown argument.
+byte check is named, the Scope table claims no threshold that no fixture
+declares and the behavioralProfile note matches the fixtures, 1 otherwise,
+2 on an unknown argument.
 """
 
 import collections
@@ -65,6 +70,59 @@ BYTE_CHECK = "shasum -a 256 -c MANIFEST.sha256"
 # claim with no fixture behind it until some verifierState carries this field.
 THRESHOLD_FIELD = "requiredSignatures"
 THRESHOLD_CLAIM = re.compile(r"threshold|\b(?:\d+|k)-of-(?:\d+|n)\b", re.IGNORECASE)
+
+# The "What this suite does NOT verify" bullet on behavioral profiles. It runs
+# from its lead-in to the next bullet or blank line.
+BEHAVIORAL_BULLET = re.compile(
+    r"^- Behavioral profile validation\.(.*?)(?=\n- |\n\s*\n|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+# The sentence that bullet must carry while exactly the v1.1 fixtures hold the
+# field. v1.1 signs JCS(TBS), whose projection includes behavioralProfile.
+BEHAVIORAL_V11_CLAIM = "carried and signed in the v1.1 fixtures"
+
+
+def behavioral_profile_failures(readme, fixtures):
+    """Check the README's behavioralProfile scope note against fixtures/."""
+    carriers, v11 = set(), set()
+    for path in fixtures:
+        atx = json.loads(path.read_text(encoding="utf-8")).get("atx", {})
+        if "behavioralProfile" in atx:
+            carriers.add(path.name)
+        if atx.get("atcVersion") == "1.1":
+            v11.add(path.name)
+
+    found = BEHAVIORAL_BULLET.search(readme)
+    if not found:
+        return ["no `- Behavioral profile validation.` scope note found in README"]
+    note = re.sub(r"\s+", " ", found.group(1)).strip()
+
+    failures = []
+    if carriers and "omitted" in note:
+        failures.append(
+            f"README says behavioralProfile is omitted from the fixtures, but "
+            f"{len(carriers)} of {len(fixtures)} carry it"
+        )
+    if not carriers:
+        if "omitted" not in note:
+            failures.append(
+                "no fixture carries behavioralProfile, but the README scope note "
+                "does not say it is omitted"
+            )
+    elif carriers == v11:
+        if BEHAVIORAL_V11_CLAIM not in note:
+            failures.append(
+                f"exactly the {len(v11)} v1.1 fixtures carry behavioralProfile, "
+                f"but the README scope note does not say "
+                f"`{BEHAVIORAL_V11_CLAIM}`"
+            )
+    else:
+        failures.append(
+            "behavioralProfile is carried by a fixture set other than the v1.1 "
+            "fixtures; restate the README scope note. Carried but not v1.1: "
+            f"{sorted(carriers - v11)}; v1.1 but not carried: {sorted(v11 - carriers)}"
+        )
+    return failures
 
 
 def declares_threshold(path):
@@ -447,7 +505,9 @@ def main():
     # The check runs even when the self-test failed: a site the self-test
     # cannot find is often a count the README dropped, and the check names it.
     failures += check(readme, cosigners, fixtures, vectors)
-    failures.extend(threshold_claims(readme, sorted(FIXTURES.glob("*.json"))))
+    fixture_paths = sorted(FIXTURES.glob("*.json"))
+    failures.extend(threshold_claims(readme, fixture_paths))
+    failures.extend(behavioral_profile_failures(readme, fixture_paths))
 
     if failures:
         sys.stdout.flush()
@@ -460,7 +520,8 @@ def main():
 
     print(f"README and COSIGNERS counts match the tree: {len(fixtures)} fixtures "
           f"(each with one fixture-table row), {vectors} JCS vectors, all stated "
-          f"as passing; README names the MANIFEST.sha256 byte check")
+          f"as passing; README names the MANIFEST.sha256 byte check; "
+          f"behavioralProfile scope note matches")
     return 0
 
 
