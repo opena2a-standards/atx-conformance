@@ -477,8 +477,10 @@ class _DecodeError(ValueError):
 
 
 def _decode_member(name: str, go_type: str, value: Any) -> Any:
-    """Decode one member into the value its Go field holds, or raise
-    _DecodeError. A null leaves the Go field at its zero value."""
+    """Type-check one member against go_type, its type in the Go reference
+    verifier, and return its decoded value, or raise _DecodeError. A null
+    takes the Go zero value. The decoded value is not always the one the Go
+    field holds; see _decode_credential."""
     if go_type == "string":
         if value is None or isinstance(value, str):
             return value or ""
@@ -528,17 +530,22 @@ def _decode_signature(name: str, value: Any) -> dict[str, Any]:
 
 
 def _decode_credential(atx: Any) -> dict[str, Any]:
-    """The credential with each member in _MEMBER_TYPES decoded into the value
-    the Go reference verifier's atx struct field holds, or raise _DecodeError.
-    A member is looked up by its exact name, where Go's json.Unmarshal also
-    matches a name that differs only in case, and a timestamp is parsed after
-    json.loads has decoded its escapes, where Go parses the raw bytes.
+    """The credential with each member in _MEMBER_TYPES type-checked against
+    its field in the Go reference verifier's atx struct, or raise
+    _DecodeError. A member is looked up by its exact name, where Go's
+    json.Unmarshal also matches a name that differs only in case, and a
+    timestamp is parsed after json.loads has decoded its escapes, where Go
+    parses the raw bytes.
 
     Each member in _MEMBER_TYPES holds its decoded value: the Go zero value
-    when it is absent or null, an _Instant for a timestamp. Other members are
-    copied unchanged. The Go reference verifier rejects a member outside its
-    type as PARSE_ERROR before interpreting any field, and so does this one,
-    instead of raising from float(), int() or iteration later.
+    when it is absent or null, an _Instant for a timestamp. That value is not
+    always the one the Go field holds. For example, Go's encoding/json decodes
+    an unpaired UTF-16 surrogate escape in a string to U+FFFD, where json.loads
+    keeps the surrogate, and keeps the sign of a trustScore written as -0,
+    where this verifier holds 0.0. Other members are copied unchanged. The Go
+    reference verifier rejects a member outside its type as PARSE_ERROR before
+    interpreting any field, and so does this one, instead of raising from
+    float(), int() or iteration later.
     """
     if atx is None:
         atx = {}
