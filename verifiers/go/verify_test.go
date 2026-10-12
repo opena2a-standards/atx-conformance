@@ -255,9 +255,12 @@ func mustHexDecode(t *testing.T, s string) []byte {
 // TestTimestampDecode pins what the time.Time decoder behind issuedAt and
 // expiresAt accepts. The Python reference verifier ports this grammar
 // (_parse_rfc3339 in ../python/verify.py) and test_verify.py carries the same
-// table, so a Go release that changes the decoder, for example by enabling the
-// strict RFC 3339 checks the standard library has disabled (golang/go#54580),
-// fails here before the two verifiers drift apart.
+// table, so a Go release that changes how the decoder treats one of these
+// inputs, for example by enabling the strict RFC 3339 checks the standard
+// library has disabled (golang/go#54580), fails here before the two verifiers
+// drift apart. An offset hour above 24 or an offset minute above 60 is in
+// neither table: Go 1.22, which CI builds with, decodes it, and Go 1.23 and
+// later reject it.
 func TestTimestampDecode(t *testing.T) {
 	accepted := []struct {
 		in, utc     string
@@ -293,8 +296,6 @@ func TestTimestampDecode(t *testing.T) {
 		"2099-12-31T24:00:00Z",
 		"2099-12-31T23:60:00Z",
 		"2099-12-31T23:59:60Z",
-		"2099-12-31T23:59:59+23:61",
-		"2099-12-31T23:59:59+25:00",
 		"2099-13-01T00:00:00Z",
 		"2099-12-00T00:00:00Z",
 		"1900-02-29T00:00:00Z",

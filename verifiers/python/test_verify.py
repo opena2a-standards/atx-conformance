@@ -173,7 +173,6 @@ MALFORMED_MEMBERS = (
     ("revoked", "1"),
     ("expiresAt", '"2099-12-31T24:00:00Z"'),
     ("issuedAt", '"2026-05-23T24:00:00Z"'),
-    ("expiresAt", '"2099-12-31T23:59:59+25:00"'),
     ("trustScore", '"abc"'),
     ("trustScore", '"87.5"'),
     ("trustScore", "true"),
@@ -259,8 +258,6 @@ GO_REJECTED_TIMESTAMPS = (
     "2099-12-31T24:00:00Z",
     "2099-12-31T23:60:00Z",
     "2099-12-31T23:59:60Z",
-    "2099-12-31T23:59:59+23:61",
-    "2099-12-31T23:59:59+25:00",
     "2099-13-01T00:00:00Z",
     "2099-12-00T00:00:00Z",
     "1900-02-29T00:00:00Z",
@@ -270,6 +267,29 @@ GO_REJECTED_TIMESTAMPS = (
     "2099-12-31T23:59:59",
     "2099-12-31T23:59:59+0100",
     "+999-12-31T23:59:59Z",
+)
+
+# Offsets past +24:00 or +23:60. Go 1.22, which CI builds the Go reference
+# verifier with, decodes them, and Go 1.23 and later reject them, so
+# TestTimestampDecode pins neither outcome; this verifier follows Go 1.22.
+# Recorded from Go 1.22.12.
+GO122_OFFSET_TIMESTAMPS = (
+    ("2099-12-31T23:59:59+25:00", "2099-12-30T22:59:59Z", 4102354799, 0),
+    ("2099-12-31T23:59:59+23:61", "2099-12-30T23:58:59Z", 4102358339, 0),
+    ("2099-12-31T23:59:59-99:99", "2100-01-05T04:38:59Z", 4102807139, 0),
+    ("2026-05-23T00:00:00+00:61", "2026-05-22T22:59:00Z", 1779490740, 0),
+)
+
+# The verdict `go run .` in ../go reaches with Go 1.22.12 on the v1.0 and v1.1
+# baselines when atx[member] holds one of those offsets: the timestamp decodes,
+# it no longer matches the signed value, and the signature rejects. Built with
+# Go 1.23 or later, the Go verifier reaches PARSE_ERROR instead.
+GO122_OFFSET_VERDICTS = (
+    ("expiresAt", '"2099-12-31T23:59:59+25:00"', "SIGNATURE_INVALID"),
+    ("expiresAt", '"2099-12-31T23:59:59+00:61"', "SIGNATURE_INVALID"),
+    ("expiresAt", '"2099-12-31T23:59:59-99:99"', "SIGNATURE_INVALID"),
+    ("issuedAt", '"2026-05-23T00:00:00+00:61"', "SIGNATURE_INVALID"),
+    ("issuedAt", '"2026-05-23T00:00:00+25:00"', "SIGNATURE_INVALID"),
 )
 
 # The verdict the Go reference verifier reaches when atx[member] holds the raw
@@ -328,6 +348,13 @@ class GoTimestampGrammar(unittest.TestCase):
             with self.subTest(timestamp=text), self.assertRaises(ValueError):
                 verify._parse_rfc3339(text)
 
+    def test_offsets_past_24_hours_decode_as_go_1_22_does(self):
+        for text, utc, seconds, nanos in GO122_OFFSET_TIMESTAMPS:
+            with self.subTest(timestamp=text):
+                instant = verify._parse_rfc3339(text)
+                self.assertEqual(instant, verify._Instant(seconds, nanos))
+                self.assertEqual(verify._format_rfc3339(instant), utc)
+
     def test_zero_time_is_go_zero_time(self):
         self.assertEqual(verify._GO_ZERO_TIME, verify._Instant(-62135596800, 0))
         self.assertEqual(verify._format_rfc3339(verify._GO_ZERO_TIME), "0001-01-01T00:00:00Z")
@@ -350,6 +377,13 @@ class GoDecodedVerdict(unittest.TestCase):
                     got = _member_verdict(baseline, member, literal)
                     self.assertEqual(_outcome(got), outcome, got.reason)
                     self.assertIn(fragment, got.reason)
+
+    def test_offset_past_24_hours_reaches_the_go_1_22_verdict(self):
+        for baseline in (BASELINE_V10, BASELINE_V11):
+            for member, literal, outcome in GO122_OFFSET_VERDICTS:
+                with self.subTest(baseline=baseline.name, member=member, value=literal):
+                    got = _member_verdict(baseline, member, literal)
+                    self.assertEqual(_outcome(got), outcome, got.reason)
 
     def test_directory_run_reaches_the_summary_line(self):
         # Each of these used to end the run with a traceback, or reach a

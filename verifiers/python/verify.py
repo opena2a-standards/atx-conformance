@@ -146,10 +146,12 @@ _GO_ZERO_TIME = _Instant(_days_from_civil(1, 1, 1) * 86400, 0)
 
 
 def _parse_rfc3339(value: Any) -> _Instant:
-    """Parse a timestamp as Go's time.Parse(time.RFC3339, value) does, or raise
-    ValueError. The ranges are Go's: year 0000-9999, hour 0-23, minute and
-    second 0-59, an offset of up to 24 hours and 60 minutes; a fraction keeps
-    nine digits."""
+    """Parse a timestamp as Go 1.22's time.Parse(time.RFC3339, value) does, or
+    raise ValueError. The ranges are Go's: year 0000-9999, hour 0-23, minute
+    and second 0-59, and any two-digit offset hour and minute; a fraction keeps
+    nine digits. Go 1.23 and later also reject an offset hour above 24 or an
+    offset minute above 60; CI builds the Go reference verifier with Go 1.22,
+    which does not."""
     if not isinstance(value, str):
         raise ValueError("not a JSON string")
     m = _RFC3339.fullmatch(value)
@@ -167,10 +169,6 @@ def _parse_rfc3339(value: Any) -> _Instant:
         raise ValueError("second out of range")
     offset = 0
     if sign is not None:
-        if int(offset_hour) > 24:
-            raise ValueError("time zone offset hour out of range")
-        if int(offset_minute) > 60:
-            raise ValueError("time zone offset minute out of range")
         offset = (int(offset_hour) * 60 + int(offset_minute)) * 60
         if sign == "-":
             offset = -offset
