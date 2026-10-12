@@ -2040,6 +2040,16 @@ def _wiring_cases(tree):
              py_dependency_texts={**tree.py_dependency_texts,
                                   site: (tree.py_dependency_texts[site]
                                          + "\n\nThe Python verifier is zero-dependency.\n")})
+    path, retracted = JCS_LIBRARY_SITES[0]
+    case("RFC 8785 library", f"{path} calls canonicalize",
+         jcs_sites={**tree.jcs_sites,
+                    path: tree.jcs_sites.get(path, "") + "\n" + retracted + "\n"})
+    site, retracted = TBS_NUMBER_SITES[0]
+    case("TBS number", f"{site} says `trustLevel` is the only JSON number",
+         tbs_sites={**tree.tbs_sites,
+                    site: (tree.tbs_sites.get(site) or "") + "\n" + retracted + "\n"})
+    case("signing scope", "is signed, but the TBS is an explicit projection",
+         jcs_readme=(tree.jcs_readme or "") + "\n" + RETRACTED_FUTURE_CLAIM + ".\n")
     return cases
 
 
