@@ -188,9 +188,9 @@ This suite uses the canonical post-consolidation DID method
 the 2026-05-23 unification across AIP-SPEC and ATX-SPEC. The `did:opena2a`
 method itself is formally documented at
 [`opena2a-standards/did-method-opena2a`](https://github.com/opena2a-standards/did-method-opena2a)
-(Apache-2.0) and is filed for registration with the W3C DID Extensions
-registry on
-[`w3c/did-extensions#717`](https://github.com/w3c/did-extensions/pull/717).
+(Apache-2.0) and is registered in the W3C DID Extensions registry
+([`w3c/did-extensions#717`](https://github.com/w3c/did-extensions/pull/717),
+merged 2026-07-04).
 Because the suite must run without any external trust configuration, the
 conformance verifiers take their trusted-issuer set from each fixture's
 `verifierState.trustedIssuers`; running the suite requires no issuer
@@ -355,8 +355,8 @@ breaking change for downstream verifiers.
 | Component | Version | Source |
 |---|---|---|
 | ATX schema | v1.0 and v1.1 | [`opena2a-standards/atx-spec/core.md`](https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md) |
-| AIP spec | v1.0 (in flight on PR 1496) | [`opena2a-standards/agent-identity-protocol`](https://github.com/opena2a-standards/agent-identity-protocol) |
-| `did:opena2a` method | v0.1 (W3C registration filed, PR `w3c/did-extensions#717`) | [`opena2a-standards/did-method-opena2a`](https://github.com/opena2a-standards/did-method-opena2a/blob/main/did-method-opena2a.md) |
+| AIP spec | v1.2.0-draft | [`opena2a-standards/agent-identity-protocol/AIP-SPEC.md`](https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md) |
+| `did:opena2a` method | v0.2 (draft), registered in the W3C DID Extensions registry (`w3c/did-extensions#717`, merged 2026-07-04) | [`opena2a-standards/did-method-opena2a/did-method-opena2a.md`](https://github.com/opena2a-standards/did-method-opena2a/blob/c160d50d0f90d809bb60ccfae0b5ca9d7fda2ab2/did-method-opena2a.md) |
 | Ed25519 keypair sources | RFC 8032 §7.1 Tests 1, 2, 3, 1024; secondary issuer seed `SHA-256("opena2a-atx-conformance/issuer-secondary/key-1/v1")` (not an RFC vector) | [datatracker.ietf.org/doc/html/rfc8032](https://datatracker.ietf.org/doc/html/rfc8032) |
 | ML-DSA-65 | FIPS 204 final | [csrc.nist.gov/pubs/fips/204/final](https://csrc.nist.gov/pubs/fips/204/final) |
 | CIRCL (ML-DSA-65 implementation) | v1.6.2 | [github.com/cloudflare/circl](https://github.com/cloudflare/circl) |

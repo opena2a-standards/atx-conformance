@@ -67,13 +67,22 @@ list under the README's Go heading, the version-pinning table and the header
 comment of verifiers/go/verify.go. All three named cloudflare/circl alone
 while go.mod also required gowebpki/jcs.
 
+It also holds every link to an opena2a-standards document in the README's
+Version pinning table to a commit. The AIP row linked the repository and the
+did:opena2a row linked the document on its default branch, so both stated
+versions the documents had moved past: v1.0 while AIP-SPEC.md read
+1.2.0-draft, and v0.1 with registration "filed" after the method reached 0.2
+and was registered. A link at a commit names the bytes the stated version is
+read from.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
 declares, the behavioralProfile note matches the fixtures, no criterion (c)
 claim outruns the registry, the trustScore is called illustrative, the
 trigger sentence matches the workflow, both key-source lists name every
-Ed25519 key, both version labels name exactly the accepted versions and each
-Go dependency site names every direct requirement at its pinned version, 1
+Ed25519 key, both version labels name exactly the accepted versions, each
+Go dependency site names every direct requirement at its pinned version and
+every Version pinning link names a commit, 1
 otherwise, 2 on an unknown argument.
 """
 
@@ -750,6 +759,46 @@ def section(text, heading):
         body.append(line)
     return "\n".join(body)
 
+
+VERSION_PINNING = "## Version pinning"
+# A link to anything in an opena2a-standards repository, and the same link
+# naming a file at a full commit id, optionally with a #fragment.
+STANDARDS_LINK = re.compile(r"https://github\.com/opena2a-standards/[^\s()<>\[\]|]*")
+PINNED_LINK = re.compile(
+    r"https://github\.com/opena2a-standards/[^/\s]+/blob/[0-9a-f]{40}/[^\s()<>\[\]|#?]+"
+    r"(?:#[^\s()<>\[\]|]*)?"
+)
+
+
+def version_pin_failures(readme):
+    """Every opena2a-standards link in the Version pinning table that does
+    not name a file at a commit, and the table missing or carrying no such
+    link at all."""
+    body = section(readme, VERSION_PINNING)
+    if body is None:
+        return [f"no `{VERSION_PINNING}` section found in README"]
+    failures = []
+    linked = 0
+    for line in body.splitlines():
+        if not line.startswith("|"):
+            continue
+        component = line.strip("|").split("|")[0].strip()
+        for url in STANDARDS_LINK.findall(line):
+            linked += 1
+            if not PINNED_LINK.fullmatch(url):
+                failures.append(
+                    f"README Version pinning row {component!r} links {url} at no "
+                    f"commit; link the document at the commit whose text states the "
+                    f"version (.../blob/<40-hex commit>/<file>)"
+                )
+    if not linked:
+        failures.append(
+            f"README `{VERSION_PINNING}` links no opena2a-standards document; "
+            f"refusing to pass vacuously"
+        )
+    return failures
+
+
 # The sibling-repositories table row that describes this repository.
 THIS_REPO_ROW = re.compile(r"^\| `atx-conformance` \(this repo\) \|.*$", re.M)
 # A row of the README fixture table: "| `fixtures/<name>` | <expected> | ...".
@@ -932,6 +981,7 @@ def check(readme, cosigners, fixtures, vectors):
     for name in sorted(set(fixtures) - set(listed)):
         failures.append(f"README fixture table has no row for fixtures/{name}")
 
+    failures.extend(version_pin_failures(readme))
     return failures
 
 
@@ -1226,6 +1276,26 @@ def _go_dependency_cases(readme, go_mod, verify_go):
     return cases
 
 
+def _pin_case(label, texts, run, edit, expect):
+    """Alter the first link at a commit in the Version pinning table."""
+    readme = texts["README.md"]
+    start = readme.find(VERSION_PINNING + "\n")
+    if start < 0:
+        return False, label, f"no `{VERSION_PINNING}` section found in README.md"
+    end = re.compile(r"^#{1,6} ", re.M).search(readme, start + len(VERSION_PINNING))
+    link = PINNED_LINK.search(readme, start, end.start() if end else len(readme))
+    if link is None:
+        return False, label, f"no link at a commit found under `{VERSION_PINNING}` in README.md"
+    url = edit(link.group(0))
+    altered = dict(texts)
+    altered["README.md"] = readme[:link.start()] + url + readme[link.end():]
+    new = run(altered)
+    want = expect(url)
+    if any(want in f for f in new):
+        return True, label, ""
+    return False, label, f"expected a failure containing {want!r}, got {new}"
+
+
 def self_test(readme, cosigners, fixtures, vectors, versions, go_mod, verify_go,
               verbose, workflow, key_vectors, used_key_ids):
     texts = {"README.md": readme, "COSIGNERS.md": cosigners or ""}
@@ -1305,6 +1375,21 @@ def self_test(readme, cosigners, fixtures, vectors, versions, go_mod, verify_go,
     cases.extend(_version_cases(readme, versions))
     cases.extend(_go_dependency_cases(readme, go_mod, verify_go))
 
+    cases.append(_pin_case(
+        "version pinning link on a branch instead of a commit", texts, run,
+        lambda url: re.sub(r"/blob/[0-9a-f]{40}/", "/blob/main/", url),
+        lambda url: f"links {url} at no commit"))
+    cases.append(_pin_case(
+        "version pinning link to a repository instead of a document", texts, run,
+        lambda url: url.split("/blob/")[0],
+        lambda url: f"links {url} at no commit"))
+    altered = dict(texts)
+    altered["README.md"] = readme.replace(VERSION_PINNING + "\n", "## Versions\n", 1)
+    new = run(altered)
+    cases.append((any(f"no `{VERSION_PINNING}` section" in f for f in new),
+                  "version pinning section removed",
+                  f"a README without the section still passes: {new}"))
+
     failed = 0
     for ok, label, detail in cases:
         if verbose or not ok:
@@ -1376,7 +1461,8 @@ def main():
           f"both README key-source lists name every Ed25519 key in vectors/; "
           f"intro and version-pinning row name ATX {_versions(versions)}; "
           f"Go verifier dependency list, version-pinning rows and verify.go "
-          f"header name every direct requirement of {GO_MOD_NAME}")
+          f"header name every direct requirement of {GO_MOD_NAME}; "
+          f"every Version pinning link names a commit")
     return 0
 
 
