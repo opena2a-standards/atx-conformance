@@ -282,12 +282,18 @@ go run . ../../fixtures
 
 Depends on:
 
-- Go 1.22 or later. The verdict on one input depends on the release, and no
-  fixture carries it: an `issuedAt` or `expiresAt` whose time zone offset has
-  an hour above 24 or a minute above 60 (`+25:00`, `+23:61`). Go 1.22, which
-  CI builds this verifier with and which the Python verifier follows, decodes
-  the timestamp; Go 1.23 and later reject the credential as `PARSE_ERROR`. To
-  build with the release CI uses, run
+- Go 1.22 or later. The release can change a fixture's result when one of its
+  timestamps has a time zone offset with an hour above 24 or a minute above 60
+  (`+25:00`, `+23:61`); no fixture carries one. Go 1.22, which CI builds this
+  verifier with and which the Python verifier follows, decodes such a
+  timestamp. Go 1.23 and later reject it where the verifier decodes it: in a
+  CRL's `issuedAt` or `nextUpdate` or a CRL entry's `revokedAt` the fixture
+  fails to load, in the credential's `issuedAt` or `expiresAt` the rejection
+  is a `PARSE_ERROR`, in the verifier clock `clockRfc3339` it is a
+  `VERIFIER_CONFIG_ERROR`, and in a v1.1 credential's
+  `behavioralProfile.generatedAt` the signed payload carries
+  `behavioralProfile` as null, so a signature made over the profile fails as
+  `SIGNATURE_INVALID`. To build with the release CI uses, run
   `GOTOOLCHAIN=go1.22.12 go run . ../../fixtures`.
 - `github.com/cloudflare/circl v1.6.2` (resolved by `go mod tidy`)
 - `github.com/gowebpki/jcs v1.0.1` (RFC 8785 canonicalization of the v1.1

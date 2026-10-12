@@ -126,6 +126,16 @@ whenever one lands; README "Versioning and stability" says they should not.
   schemas, one altered document each (#165). No fixture changes.
 - `verifiers/python/verify.py` no longer imports `os` and
   `dataclasses.field`, which it did not use (#165). No fixture changes.
+- README's dependency list for the Go verifier says the Go release can change
+  a fixture's result when one of its timestamps has a time zone offset with
+  an hour above 24 or a minute above 60 (`+25:00`, `+23:61`), where it said
+  only "Go 1.22 or later". Go 1.22, which CI builds the verifier with and
+  which the Python verifier follows, decodes such a timestamp. Go 1.23 and
+  later reject it where the Go verifier decodes it: a CRL's `issuedAt` or
+  `nextUpdate`, a CRL entry's `revokedAt`, the credential's `issuedAt` or
+  `expiresAt`, the verifier clock `clockRfc3339`, and a v1.1 credential's
+  `behavioralProfile.generatedAt`. No fixture carries such a timestamp
+  (#167). No fixture changes.
 
 ## e2f9dc4 (#26, 2026-09-09): capabilities rewritten in 22 existing fixtures
 
