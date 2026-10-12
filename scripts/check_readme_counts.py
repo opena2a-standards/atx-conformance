@@ -34,10 +34,16 @@ It also holds the README's scope note on `behavioralProfile` to the fixtures.
 That note said the field was omitted from the fixtures while every v1.1
 fixture carried it inside its signed bytes.
 
+It also gates the README's criterion (c) claim against the cosignature
+registry in COSIGNERS.md. The README said the suite "closes criterion (c)"
+(peer-cosigned conformance fixtures) while the registry's only row was the CI
+self-cosignature. Criterion (c) is closed by a second-party row, so the README
+may state it as closed only once such a row is recorded.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
-declares and the behavioralProfile note matches the fixtures, 1 otherwise,
-2 on an unknown argument.
+declares, the behavioralProfile note matches the fixtures and no criterion (c)
+claim outruns the registry, 1 otherwise, 2 on an unknown argument.
 """
 
 import collections
@@ -80,6 +86,77 @@ BEHAVIORAL_BULLET = re.compile(
 # The sentence that bullet must carry while exactly the v1.1 fixtures hold the
 # field. v1.1 signs JCS(TBS), whose projection includes behavioralProfile.
 BEHAVIORAL_V11_CLAIM = "carried and signed in the v1.1 fixtures"
+
+# A present-tense statement that criterion (c) is closed, matched over
+# whitespace-collapsed text so a line wrap cannot hide it. The conditional
+# form ("designed to close criterion (c) ... once") does not match.
+CRITERION_C_CLAIM = re.compile(
+    r"\b(?:closes|closed|satisfies|meets)\s+criterion\s+\(c\)"
+    r"|\bcriterion\s+\(c\)\s+(?:is|has\s+been)\s+(?:closed|satisfied|met)\b",
+    re.IGNORECASE,
+)
+# The sentence README.md published before a second-party cosignature existed,
+# with its original line wrap. The claim pattern must keep matching it, or the
+# gate has stopped being able to fire on the text it was written for.
+RETRACTED_CLAIM = "It closes criterion (c)\non the OpenA2A maturity bar"
+REGISTRY_HEADING = "## Cosignature registry"
+
+
+def registry_cosigners(cosigners):
+    """Return the Cosigner cell of every data row in the registry table, or
+    None when the heading or the table header row cannot be found."""
+    lines = cosigners.splitlines()
+    try:
+        start = [l.strip() for l in lines].index(REGISTRY_HEADING)
+    except ValueError:
+        return None
+    rows = []
+    in_table = False
+    for line in lines[start + 1:]:
+        if not line.startswith("|"):
+            if in_table:
+                break
+            continue
+        in_table = True
+        rows.append(line)
+    if not rows or rows[0].split("|")[1].strip() != "Cosigner":
+        return None
+    return [
+        r.split("|")[1].strip()
+        for r in rows[1:]
+        if not re.match(r"^\|\s*:?-", r)
+    ]
+
+
+def is_self_cosignature(cosigner):
+    name = cosigner.lower()
+    return name.startswith("opena2a") or "self-cosigned" in name
+
+
+def criterion_c_failures(readme, cosigners):
+    failures = []
+    if not CRITERION_C_CLAIM.search(" ".join(RETRACTED_CLAIM.split())):
+        failures.append(
+            "criterion (c) claim pattern no longer matches the sentence it was "
+            "written for; the gate cannot fire"
+        )
+    rows = registry_cosigners(cosigners)
+    if rows is None:
+        failures.append(
+            f"COSIGNERS.md has no `{REGISTRY_HEADING}` table with a Cosigner "
+            "column; the criterion (c) claim cannot be checked"
+        )
+        return failures
+    second_party = [r for r in rows if not is_self_cosignature(r)]
+    claim = CRITERION_C_CLAIM.search(" ".join(readme.split()))
+    if claim and not second_party:
+        failures.append(
+            f"README states \"{claim.group(0)}\" but the COSIGNERS.md registry "
+            "records no second-party cosignature (self-cosignatures do not "
+            "count); state it as designed to close criterion (c) once one is "
+            "recorded"
+        )
+    return failures
 
 
 def behavioral_profile_failures(readme, fixtures):
@@ -252,6 +329,7 @@ def check(readme, cosigners, fixtures, vectors):
                 failures.append(
                     f"COSIGNERS.md claims ({n} fixtures) but fixtures/ holds {actual}"
                 )
+        failures.extend(criterion_c_failures(readme, cosigners))
 
     # "must report `24 pass, 0 fail`" in the continuous-verification list and
     # "summary: 24 pass, 0 fail (24 fixtures)" under Expected output. Matching
@@ -521,7 +599,8 @@ def main():
     print(f"README and COSIGNERS counts match the tree: {len(fixtures)} fixtures "
           f"(each with one fixture-table row), {vectors} JCS vectors, all stated "
           f"as passing; README names the MANIFEST.sha256 byte check; "
-          f"behavioralProfile scope note matches")
+          f"behavioralProfile scope note matches; criterion (c) claim matches "
+          f"the cosignature registry")
     return 0
 
 
