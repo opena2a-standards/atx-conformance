@@ -566,6 +566,17 @@ func verify(f fixture) result {
 		return result{RejectCategory: "SIGNATURE_INVALID", Reason: "no valid signatures"}
 	}
 
+	// Ed25519 companion (core.md section 13, Cryptographic agility): a
+	// credential that declares an ML-DSA-65 entry MUST also carry a verifying
+	// Ed25519 entry, so a post-quantum signature alone never verifies a
+	// credential (fixtures/v1_1-hybrid-pq-only.json).
+	if res.MLDSA65Valid && !res.Ed25519Valid {
+		return result{
+			RejectCategory: "SIGNATURE_INVALID",
+			Reason:         "ML-DSA-65 signature declared without a verifying Ed25519 signature (an ML-DSA-65 entry requires an Ed25519 companion)",
+		}
+	}
+
 	// Step 6: content hash. Content not supplied to this verifier; skipped.
 
 	// Step 7 (distinct signer-authority count for trust level 3+) is NOT
@@ -689,20 +700,7 @@ func main() {
 			continue
 		}
 		got := verify(f)
-		wantAccept := strings.EqualFold(f.Expected.VerifyResult, "ACCEPT")
-
-		ok := (wantAccept && got.Accepted) || (!wantAccept && !got.Accepted)
-		// For REJECT fixtures, also verify the category matches if declared.
-		if ok && !wantAccept && f.Expected.RejectCategory != "" {
-			if got.RejectCategory != f.Expected.RejectCategory {
-				ok = false
-			}
-		}
-		if ok && !wantAccept && f.Expected.ReasonContains != "" {
-			if !strings.Contains(strings.ToLower(got.Reason), strings.ToLower(f.Expected.ReasonContains)) {
-				ok = false
-			}
-		}
+		ok := matchesExpected(f.Expected, got)
 
 		status := "PASS"
 		if !ok {
@@ -732,6 +730,27 @@ func main() {
 	if totalFail > 0 {
 		os.Exit(1)
 	}
+}
+
+// matchesExpected reports whether an observed result is the outcome a fixture
+// pins: the verdict, and for a REJECT fixture the category and the reason
+// substring where the fixture declares them.
+func matchesExpected(want expectedOutcome, got result) bool {
+	wantAccept := strings.EqualFold(want.VerifyResult, "ACCEPT")
+	if wantAccept != got.Accepted {
+		return false
+	}
+	if wantAccept {
+		return true
+	}
+	if want.RejectCategory != "" && got.RejectCategory != want.RejectCategory {
+		return false
+	}
+	if want.ReasonContains != "" &&
+		!strings.Contains(strings.ToLower(got.Reason), strings.ToLower(want.ReasonContains)) {
+		return false
+	}
+	return true
 }
 
 func loadFixture(path string) (fixture, error) {

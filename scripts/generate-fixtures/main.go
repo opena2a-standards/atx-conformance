@@ -473,6 +473,22 @@ func main() {
 		defaultVerifierState.PublicKeys...),
 		keypairRefFor(untrusted, "vectors/issuer-untrusted.json"))
 
+	// Revoking verifier state: the default state plus a CRL whose one entry
+	// names the test agent, issued before the pinned clock and not yet due for
+	// its next update. Used by both revocation fixtures.
+	revokingVerifierState := defaultVerifierState
+	revokingVerifierState.CRL = &CRL{
+		Version:    1,
+		IssuedAt:   mustParseTime("2026-05-23T12:00:00Z"),
+		NextUpdate: mustParseTime("2026-05-30T12:00:00Z"),
+		Entries: []CRLEntry{{
+			AgentID:   testAgentID,
+			RevokedAt: revokedTime,
+			Reason:    "key compromise (test)",
+		}},
+		Signature: "TEST_ONLY_UNSIGNED_CRL",
+	}
+
 	type fixtureSpec struct {
 		writePath string
 		build     func() Fixture
@@ -508,30 +524,35 @@ func main() {
 		{"fixtures/revoked.json", func() Fixture {
 			atx := newBaselineATX()
 			atx.Signatures = []ATCSignature{signWithKey(primary, atx)}
-			// The fixture populates both the revoked flag and a CRL entry so
-			// that both rejection paths are exercised regardless of the order
-			// in which a verifier checks them.
+			// The fixture populates both the revoked flag and a CRL entry, but
+			// it pins the flag only: both reference verifiers read the flag
+			// first and return, and reasonContains "revoked" is not met by a
+			// rejection that names the CRL. fixtures/revoked-crl-only.json is
+			// the fixture whose verdict depends on the CRL.
 			atx.Revoked = true
 			rt := revokedTime
 			atx.RevokedAt = &rt
 			atx.RevocationReason = "key compromise (test)"
-			vs := defaultVerifierState
-			vs.CRL = &CRL{
-				Version:    1,
-				IssuedAt:   mustParseTime("2026-05-23T12:00:00Z"),
-				NextUpdate: mustParseTime("2026-05-30T12:00:00Z"),
-				Entries: []CRLEntry{{
-					AgentID:   atx.AgentID,
-					RevokedAt: rt,
-					Reason:    "key compromise (test)",
-				}},
-				Signature: "TEST_ONLY_UNSIGNED_CRL",
-			}
 			return wrap("atx-v1/revoked",
 				"A previously-valid ATX whose credential-level Revoked flag is set and whose AgentID also appears in the verifier's CRL. Verifier MUST REJECT with revocation reason. Both rejection paths are exercised.",
 				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
-				vs,
+				revokingVerifierState,
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "REVOKED", ReasonContains: "revoked"},
+				atx)
+		}},
+		{"fixtures/revoked-crl-only.json", func() Fixture {
+			// The credential is the accepted baseline, byte for byte: revoked
+			// is false and it carries no revokedAt or revocationReason. Its
+			// agentId on the verifier's CRL is the only thing that revokes it
+			// (core.md §1.3 step 6), so a verifier that reads the credential's
+			// own flag and never consults the CRL accepts it.
+			atx := newBaselineATX()
+			atx.Signatures = []ATCSignature{signWithKey(primary, atx)}
+			return wrap("atx-v1/revoked-crl-only",
+				"An ATX v1.0 credential whose own revoked flag is false and whose AgentID appears in the verifier's CRL. It is the accepted baseline in every other respect: a trusted issuer, unexpired, one Ed25519 signature that verifies. CRL membership is the only thing that revokes it, so a verifier that reads the credential's revoked flag and never consults the CRL wrongly accepts. The flag is outside the signed bytes of both signing forms, so it can be cleared on a revoked credential without breaking the signature; the CRL entry cannot. Verifier MUST REJECT with a revocation reason that names the CRL.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				revokingVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "REVOKED", ReasonContains: "CRL"},
 				atx)
 		}},
 		{"fixtures/threshold-2of3-cosignature.json", func() Fixture {
@@ -669,6 +690,27 @@ func main() {
 				"An ATX v1.1 hybrid credential whose Ed25519 signature is intact and whose ML-DSA-65 signature has been flipped by one bit after signing. The spec mandates that every declared signature verifies, so the forged post-quantum entry MUST fail verification even though the classical entry is valid. Verifier MUST REJECT with a signature-validation reason. A verifier that records ML-DSA-65 signatures as present without verifying them wrongly ACCEPTs.",
 				[]KeypairRef{
 					keypairRefFor(primary, "vectors/issuer-primary.json"),
+					{Role: mldsa.Role, Path: "vectors/mldsa65-seed.json", Algorithm: mldsa.Algorithm, PublicKeyHex: mldsa.PublicKeyHex, KeyID: mldsa.KeyID},
+				},
+				hybridVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
+		{"fixtures/v1_1-hybrid-pq-only.json", func() Fixture {
+			// The missing-classical-companion control. The hybrid baseline
+			// with the Ed25519 entry removed, so the credential carries one
+			// ML-DSA-65 signature that verifies. core.md section 13
+			// (Cryptographic agility) requires a credential that declares an
+			// ML-DSA-65 entry to also carry a verifying Ed25519 entry. A
+			// verifier that checks only that every declared signature verifies
+			// wrongly ACCEPTs.
+			atx := newBaselineV11ATX()
+			pq, _ := signMLDSA65(mldsa.SeedHex, canonicalPayloadV11(&atx))
+			pq.KeyID = mldsa.KeyID
+			atx.Signatures = []ATCSignature{pq}
+			return wrap("atx-v1_1/hybrid-pq-only",
+				"An ATX v1.1 credential carrying a single ML-DSA-65 signature that verifies over JCS(TBS), and no Ed25519 signature. The spec requires a credential that declares an ML-DSA-65 entry to also carry a verifying Ed25519 entry, so a post-quantum signature alone cannot verify a credential. Verifier MUST REJECT with a signature-validation reason. A verifier that checks only that every declared signature verifies wrongly ACCEPTs.",
+				[]KeypairRef{
 					{Role: mldsa.Role, Path: "vectors/mldsa65-seed.json", Algorithm: mldsa.Algorithm, PublicKeyHex: mldsa.PublicKeyHex, KeyID: mldsa.KeyID},
 				},
 				hybridVerifierState,
@@ -1036,6 +1078,7 @@ const (
 	secSignedFields    = "1.3a.4 Authorization on signed fields requires v1.1"
 	secDeclaredPurpose = "1.5 Declared purpose (optional)"
 	secRevocation      = "3.3 Revocation flow"
+	secSecurity        = "13. Security considerations"
 )
 
 // fixtureSections names the core.md sections a fixture exercises beyond the
@@ -1043,6 +1086,8 @@ const (
 // entry that names no fixture, so a renamed fixture cannot drop its citation.
 var fixtureSections = map[string][]string{
 	"atx-v1/revoked":                             {secRevocation},
+	"atx-v1/revoked-crl-only":                    {secRevocation},
+	"atx-v1_1/hybrid-pq-only":                    {secSecurity},
 	"atx-v1_1/tampered-capabilities":             {secSignedFields},
 	"atx-v1_1/declared-purpose-valid":            {secDeclaredPurpose},
 	"atx-v1_1/tampered-declared-purpose":         {secDeclaredPurpose},

@@ -60,8 +60,8 @@ def _serialize_number(n: Any) -> str:
         return str(n)
     raise NotImplementedError(
         "ATX v1.1 TBS must not contain JSON floating-point numbers "
-        "(trustScore is string-encoded as %.6f). Got float %r. RFC 8785 ES6 "
-        "number formatting is intentionally never exercised by this suite." % n
+        "(trustScore is string-encoded as %%.6f). Got float %r. RFC 8785 ES6 "
+        "number formatting is intentionally never exercised by this suite." % (n,)
     )
 
 

@@ -12,7 +12,8 @@ Spec coverage:
   - Canonicalization: pipe-delimited 11-field string matching
     opena2a-registry/pkg/atcverify/verify.go canonicalPayload() VERBATIM
   - Ed25519 and ML-DSA-65 (FIPS 204) hybrid signature verification over the
-    same canonical payload, threshold (>=1 valid), trust level 3+ chain
+    same canonical payload (every declared signature must verify and at
+    least one must be present; no k-of-n threshold is read), trust level 3+ chain
     check, expiry, revocation, issuer-trust.
 
 Parsing rule (strict parse, ported from the aap-conformance protected-header
@@ -363,7 +364,24 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
 
     # Step 5: signature verification.
     # Spec mandate: every declared signature MUST verify.
-    payload = canonical_payload_v11(atx) if version == SUPPORTED_ATC_VERSION_V11 else canonical_payload(atx)
+    if version == SUPPORTED_ATC_VERSION_V11:
+        try:
+            payload = canonical_payload_v11(atx)
+        except NotImplementedError as exc:
+            # The vendored JCS serializer refuses non-integer numbers
+            # (rfc8785.py); a schema-valid v1.1 TBS carries none. One can still
+            # arrive in content the signer never signed, e.g. a number
+            # injected into declaredPurpose, which enters the TBS verbatim.
+            # Without the canonical bytes no declared signature can verify, so
+            # reject in the category a verifier that does canonicalize the
+            # number reaches (the Go reference) instead of raising out of the
+            # run.
+            return VerifyResult(
+                reject_category="SIGNATURE_INVALID",
+                reason=f"no signature can be verified: the to-be-signed object cannot be canonicalized ({exc})",
+            )
+    else:
+        payload = canonical_payload(atx)
     eds, pqs = index_public_keys(
         vs["publicKeys"], _authority_set_for(atx, vs.get("trustedIssuers", []))
     )
@@ -415,6 +433,16 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
 
     if result.sigs_valid == 0:
         return VerifyResult(reject_category="SIGNATURE_INVALID", reason="no valid signatures")
+
+    # Ed25519 companion (core.md section 13, Cryptographic agility): a
+    # credential that declares an ML-DSA-65 entry MUST also carry a verifying
+    # Ed25519 entry, so a post-quantum signature alone never verifies a
+    # credential (fixtures/v1_1-hybrid-pq-only.json).
+    if result.mldsa65_valid and not result.ed25519_valid:
+        return VerifyResult(
+            reject_category="SIGNATURE_INVALID",
+            reason="ML-DSA-65 signature declared without a verifying Ed25519 signature (an ML-DSA-65 entry requires an Ed25519 companion)",
+        )
 
     # Step 7 (distinct signer-authority count for trust level 3+) is NOT
     # performed by this verifier: no fixture carries verified signatures from

@@ -66,6 +66,88 @@ func TestRawDuplicateMember(t *testing.T) {
 	}
 }
 
+// TestSuiteCatchesCRLBlindVerifier pins that the shipped fixture set depends
+// on CRL membership (atx-spec core.md §1.3 step 6). It runs every fixture
+// twice: as shipped, where the reference verifier must report the pinned
+// outcome, and with the CRL dropped from the verifier state, which is what a
+// verifier with no CRL support sees. At least one fixture must then miss its
+// pinned outcome. Without one, the revocation coverage this suite claims is
+// met by a verifier that reads the credential's own revoked flag and stops.
+//
+// Mutation-verified: with fixtures/revoked-crl-only.json removed, the CRL-blind
+// run matches every remaining fixture and this test fails.
+func TestSuiteCatchesCRLBlindVerifier(t *testing.T) {
+	paths, err := expandFixturePaths([]string{"../../fixtures"})
+	if err != nil {
+		t.Fatalf("cannot list the shipped fixtures: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("no shipped fixtures found; refusing to pass vacuously")
+	}
+
+	var caughtBy []string
+	for _, p := range paths {
+		f, err := loadFixture(p)
+		if err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+		if got := verify(f); !matchesExpected(f.Expected, got) {
+			t.Errorf("%s: reference verifier observed %s, not the pinned outcome", p, got)
+			continue
+		}
+		crlBlind := f
+		crlBlind.VerifierState.CRL = nil
+		if !matchesExpected(f.Expected, verify(crlBlind)) {
+			caughtBy = append(caughtBy, f.Name)
+		}
+	}
+	if len(caughtBy) == 0 {
+		t.Fatalf("a verifier that never consults the CRL matches all %d fixtures: no fixture's verdict depends on CRL membership", len(paths))
+	}
+	t.Logf("a CRL-blind verifier misses the pinned outcome of: %s", strings.Join(caughtBy, ", "))
+}
+
+// TestMLDSA65RequiresEd25519Companion pins core.md section 13 (Cryptographic
+// agility): a credential that declares an ML-DSA-65 entry MUST also carry a
+// verifying Ed25519 entry. The hybrid baseline ACCEPTs; the same credential
+// with its Ed25519 entry removed carries one ML-DSA-65 signature that verifies
+// and MUST REJECT as SIGNATURE_INVALID. atx-conformance#133.
+func TestMLDSA65RequiresEd25519Companion(t *testing.T) {
+	f, err := loadFixture("../../fixtures/v1_1-baseline-valid-hybrid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := verify(f); !got.Accepted || !got.Ed25519Valid || !got.MLDSA65Valid {
+		t.Fatalf("hybrid baseline: got %s (ed25519=%v mldsa65=%v), want ACCEPT with both suites valid", got, got.Ed25519Valid, got.MLDSA65Valid)
+	}
+
+	var atx map[string]any
+	if err := json.Unmarshal(f.ATX, &atx); err != nil {
+		t.Fatal(err)
+	}
+	var pqOnly []any
+	for _, s := range atx["signatures"].([]any) {
+		if s.(map[string]any)["algorithm"] == "ML-DSA-65" {
+			pqOnly = append(pqOnly, s)
+		}
+	}
+	if len(pqOnly) != 1 {
+		t.Fatalf("hybrid baseline carries %d ML-DSA-65 signatures, want 1", len(pqOnly))
+	}
+	atx["signatures"] = pqOnly
+	if f.ATX, err = json.Marshal(atx); err != nil {
+		t.Fatal(err)
+	}
+
+	got := verify(f)
+	if got.Accepted {
+		t.Fatal("credential with an ML-DSA-65 signature and no Ed25519 signature must not be accepted")
+	}
+	if got.RejectCategory != "SIGNATURE_INVALID" || !strings.Contains(got.Reason, "Ed25519") {
+		t.Errorf("got %s, want REJECT[SIGNATURE_INVALID] naming the missing Ed25519 companion", got)
+	}
+}
+
 // TestStrictParseDepthGuard is the regression for the unbounded-recursion DoS.
 // A credential nested past encoding/json's own depth limit (10000) must be
 // rejected without crashing. The strict-parse scan aborts at maxScanDepth and
