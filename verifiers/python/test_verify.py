@@ -3,9 +3,10 @@
 
 These pin behaviour on inputs that no shipped fixture carries: a credential
 whose unsigned declaredPurpose holds a non-integer JSON number, a malformed
-trustScore, trustLevel, issuedAt or expiresAt, a NaN or Infinity literal, and a
-path that does not exist. Needs the same dependencies as verify.py. Run from
-this directory:
+trustScore, trustLevel, issuedAt or expiresAt, a NaN or Infinity literal, a
+path that does not exist, and the verifier's own v1.1 projection over every
+jcs-vectors vector. Needs the same dependencies as verify.py. Run from this
+directory:
 
     python3 -m unittest -v test_verify
 """
@@ -29,6 +30,7 @@ import verify  # noqa: E402
 
 BASELINE_V11 = ROOT / "fixtures" / "v1_1-baseline-valid.json"
 BASELINE_V10 = ROOT / "fixtures" / "baseline-valid.json"
+JCS_VECTORS = ROOT / "jcs-vectors" / "vectors"
 
 # The outcome the Go reference verifier reaches on a malformed typed member.
 PARSE_ERROR_EXPECTED = {"verifyResult": "REJECT", "rejectCategory": "PARSE_ERROR"}
@@ -245,6 +247,25 @@ class SerializerRefusal(unittest.TestCase):
                 message = str(raised.exception)
                 self.assertIn("Got float 0.5.", message)
                 self.assertIn("string-encoded as %.6f", message)
+
+
+class JCSVectorsThroughVerifierProjection(unittest.TestCase):
+    # The byte-agreement gate runs this class, so the gate covers this
+    # verifier's code (TBS projection, then JCS) and not only the serializer
+    # it vendors. atx-conformance#156.
+    def test_every_vector_reproduces_its_pinned_bytes(self):
+        paths = sorted(JCS_VECTORS.glob("*.json"))
+        self.assertTrue(paths, f"no vectors found in {JCS_VECTORS}")
+        for path in paths:
+            with self.subTest(vector=path.name):
+                vector = json.loads(path.read_text(encoding="utf-8"))
+                # The TBS carries trustScore as its %.6f string; the credential
+                # carries the same value as a JSON number. Every other TBS
+                # member is already in its wire form.
+                credential = dict(vector["tbs"])
+                credential["trustScore"] = json.loads(credential["trustScore"])
+                got = verify.canonical_payload_v11(credential)
+                self.assertEqual(got.hex(), vector["expected"]["canonicalHex"])
 
 
 if __name__ == "__main__":

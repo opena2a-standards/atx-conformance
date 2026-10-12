@@ -67,6 +67,14 @@ whenever one lands; README "Versioning and stability" says they should not.
   member as the only JSON number while the vectors carry another, when the
   README stops stating the integer rule, or when a vector's TBS carries a
   non-integer number (#155). No fixture or vector changes.
+- `jcs-vectors/run-agreement.sh` also runs both conformance verifiers' own
+  v1.1 projection and JCS call (`canonicalPayloadV11`,
+  `canonical_payload_v11`) over every vector and fails unless each reproduces
+  `expected.canonicalHex`; before, it ran only three standalone RFC 8785
+  libraries. The gate now needs the Python verifier's dependencies.
+  `jcs-vectors/README.md` says the gate runs no issuer, offline-verifier or
+  broker code, where it said the directory proved agreement for all of them
+  (#156). No fixture or vector changes.
 
 ## e2f9dc4 (#26, 2026-09-09): capabilities rewritten in 22 existing fixtures
 

@@ -10,7 +10,11 @@ The single hard requirement of that design is **cross-language byte agreement**:
 the registry issuer (Go), the offline verifier (Go), the conformance verifiers
 (Go + Python), and the Secretless broker (TypeScript) must each canonicalize the
 same TBS to the same bytes, or a credential signed by one fails to verify under
-another. This directory is the gate that proves it.
+another. This directory pins those bytes. Its gate proves agreement for the two
+conformance verifiers in this repository and for three standalone RFC 8785
+libraries. The issuer, offline verifier and broker live in other repositories;
+this gate runs none of their code, and they are held to these bytes only when
+their own CI runs `vectors/` (see [Scope](#scope)).
 
 ## What the gate proves
 
@@ -24,6 +28,16 @@ vector and fails unless all three reproduce the vector's pinned
 | Python | vendored `python/rfc8785.py` (stdlib only) | adds no dependency to the Python verifier |
 | TS/JS | [`canonicalize`](https://www.npmjs.com/package/canonicalize) (erdtman, listed in RFC 8785 Appendix G) | the library the Secretless broker verifier uses |
 
+It then runs each conformance verifier's own v1.1 path over every vector: the
+vector's `tbs` is read as a credential (`trustScore` as a JSON number), passed
+through the verifier's TBS projection and JCS call, and the result must equal
+`expected.canonicalHex` byte-for-byte:
+
+| Verifier | Test the gate runs | Code under test |
+|----------|--------------------|-----------------|
+| `verifiers/go` | `TestJCSVectorsThroughVerifierProjection` | `canonicalPayloadV11` |
+| `verifiers/python` | `test_verify.JCSVectorsThroughVerifierProjection` | `canonical_payload_v11` |
+
 The libraries are an implementation detail behind the vectors. The vectors are
 the guarantee. **The jcs-vectors set may merge only when `run-agreement.sh`
 exits 0.**
@@ -32,8 +46,9 @@ exits 0.**
 ./run-agreement.sh
 ```
 
-Requires Go, Python 3, and Node (the script installs the pinned `canonicalize`
-into `ts/node_modules` on first run).
+Requires Go, Python 3 with the Python verifier's dependencies
+(`pip install -r ../verifiers/python/requirements.txt`), and Node (the script
+installs the pinned `canonicalize` into `ts/node_modules` on first run).
 
 ## The TBS construction rule (normative)
 
@@ -114,7 +129,14 @@ hide behind itself.
 ## Scope
 
 This directory proves canonicalization byte-agreement and provides signing
-known-answer tests. It does not exercise the credential-to-TBS projection (that
-lives in each verifier and is tested by the v1.1 conformance fixtures) or the
-verification algorithm (the fixtures cover that). It is the foundation the
-Phase 1 verifier work is built on.
+known-answer tests. It runs the two conformance verifiers' credential-to-TBS
+projection over the vectors' TBS values, which are already fully populated;
+the rest of that projection and the verification algorithm are tested by the
+v1.1 conformance fixtures. It is the foundation the Phase 1 verifier work is
+built on.
+
+It runs no code from another repository. The registry issuer, the offline
+verifier and the Secretless broker are covered only when their own CI
+canonicalizes each `vectors/*.json` `tbs` through their own projection and
+compares the result with `expected.canonicalHex`; this gate cannot report on
+them. The TypeScript leg runs the `canonicalize` library, not the broker.

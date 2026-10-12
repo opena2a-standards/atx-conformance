@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -176,4 +179,74 @@ func TestStrictParseDepthGuard(t *testing.T) {
 	if got.RejectCategory != "PARSE_ERROR" {
 		t.Errorf("over-deep credential rejected with category %q, want PARSE_ERROR", got.RejectCategory)
 	}
+}
+
+// TestJCSVectorsThroughVerifierProjection runs this verifier's own v1.1 path
+// (credential parse, TBS projection, JCS) over every jcs-vectors vector and
+// requires the pinned expected.canonicalHex byte-for-byte. The byte-agreement
+// gate runs this test, so the gate covers this verifier's code and not only the
+// library it calls. atx-conformance#156.
+func TestJCSVectorsThroughVerifierProjection(t *testing.T) {
+	dir := filepath.Join("..", "..", "jcs-vectors", "vectors")
+	paths, err := filepath.Glob(filepath.Join(dir, "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) == 0 {
+		t.Fatalf("no vectors found in %s", dir)
+	}
+	for _, path := range paths {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			raw, err := os.ReadFile(path) //nolint:gosec // G304: globbed from the repository's own jcs-vectors/vectors
+			if err != nil {
+				t.Fatal(err)
+			}
+			var v struct {
+				TBS      map[string]json.RawMessage `json:"tbs"`
+				Expected struct {
+					CanonicalHex string `json:"canonicalHex"`
+				} `json:"expected"`
+			}
+			if err := json.Unmarshal(raw, &v); err != nil {
+				t.Fatal(err)
+			}
+			if v.Expected.CanonicalHex == "" {
+				t.Fatal("vector has no expected.canonicalHex")
+			}
+
+			// The TBS carries trustScore as its %.6f string; the credential
+			// carries the same value as a JSON number. Every other TBS member
+			// is already in its wire form.
+			var score string
+			if err := json.Unmarshal(v.TBS["trustScore"], &score); err != nil {
+				t.Fatalf("tbs.trustScore is not a string: %v", err)
+			}
+			v.TBS["trustScore"] = json.RawMessage(score)
+			credential, err := json.Marshal(v.TBS)
+			if err != nil {
+				t.Fatalf("build credential from tbs: %v", err)
+			}
+
+			var a atx
+			if err := json.Unmarshal(credential, &a); err != nil {
+				t.Fatalf("parse credential: %v", err)
+			}
+			got, err := canonicalPayloadV11(&a)
+			if err != nil {
+				t.Fatalf("canonicalPayloadV11: %v", err)
+			}
+			if gotHex := hex.EncodeToString(got); gotHex != v.Expected.CanonicalHex {
+				t.Errorf("verifier canonical bytes differ from the pinned vector\n got  %s\n want %s", got, mustHexDecode(t, v.Expected.CanonicalHex))
+			}
+		})
+	}
+}
+
+func mustHexDecode(t *testing.T, s string) []byte {
+	t.Helper()
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		t.Fatalf("expected.canonicalHex is not hex: %v", err)
+	}
+	return b
 }
