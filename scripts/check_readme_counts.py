@@ -56,12 +56,18 @@ fixtures name must be a vector's keyId, every Ed25519 vector's source must be
 named in both lists, and an RFC 8032 source must cite the section its own ref
 links (issuer-untrusted.json cited Test 1024 under §7.3; it is in §7.1).
 
+It also holds the ATX versions the README says the suite covers, in the intro
+paragraph and the `ATX schema` row of the version-pinning table, to the
+versions the fixtures expect to ACCEPT. Both said "v1.0" alone while most
+fixtures were v1.1 and the vendored schema was the v1.1 schema.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
 declares, the behavioralProfile note matches the fixtures, no criterion (c)
 claim outruns the registry, the trustScore is called illustrative, the
-trigger sentence matches the workflow and both key-source lists name every
-Ed25519 key, 1 otherwise, 2 on an unknown argument.
+trigger sentence matches the workflow, both key-source lists name every
+Ed25519 key and both version labels name exactly the accepted versions, 1
+otherwise, 2 on an unknown argument.
 """
 
 import collections
@@ -263,6 +269,85 @@ def key_source_failures(readme, vectors, used_key_ids):
             if not named:
                 failures.append(f"{label} does not name the key source of "
                                 f"{where} ({v['keyId']}): {want}")
+    return failures
+
+
+# The two places a reader learns which ATX versions this suite covers. Both
+# read "v1.0" while the fixtures, the vendored schema and the pinned spec were
+# also v1.1. A version is covered when some fixture expects a credential of
+# that atcVersion to ACCEPT: malformed-schema.json carries "2.0" only so that
+# it is rejected as unsupported.
+VERSION_PINNING = "## Version pinning"
+SCHEMA_PIN_ROW = re.compile(r"^\| ATX schema \| ([^|\n]*) \|", re.M)
+INTRO_SITE = "README intro paragraph"
+PIN_SITE = f"README `{VERSION_PINNING}` `ATX schema` row"
+ATX_VERSION = re.compile(r"\bv(\d+\.\d+)\b")
+
+
+def accepted_versions(paths):
+    """The atcVersion of every fixture whose expected verifyResult is ACCEPT."""
+    versions = set()
+    for path in paths:
+        try:
+            fx = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        atx = fx.get("atx") if isinstance(fx, dict) else None
+        expected = fx.get("expected") if isinstance(fx, dict) else None
+        if (isinstance(atx, dict) and isinstance(expected, dict)
+                and expected.get("verifyResult") == "ACCEPT"
+                and isinstance(atx.get("atcVersion"), str)):
+            versions.add(atx["atcVersion"])
+    return versions
+
+
+def intro_paragraph(readme):
+    """The first paragraph after the title, whitespace-collapsed, or None."""
+    lines = readme.splitlines()
+    starts = [i for i, l in enumerate(lines) if l.startswith("# ")]
+    if not starts:
+        return None
+    para = []
+    for line in lines[starts[0] + 1:]:
+        if not line.strip():
+            if para:
+                break
+            continue
+        if line.startswith("#"):
+            break
+        para.append(line.strip())
+    return " ".join(para) or None
+
+
+def _versions(names):
+    return " and ".join(f"v{v}" for v in sorted(names))
+
+
+def version_label_failures(readme, versions):
+    """Each README version label must name exactly the accepted versions."""
+    if not versions:
+        return ["no fixture expects a credential to ACCEPT; refusing to pass "
+                "the README version labels vacuously"]
+    pinning = section(readme, VERSION_PINNING)
+    row = SCHEMA_PIN_ROW.search(pinning) if pinning is not None else None
+    sites = ((INTRO_SITE, intro_paragraph(readme)),
+             (PIN_SITE, row.group(1) if row else None))
+    failures = []
+    for where, text in sites:
+        if text is None:
+            failures.append(f"{where} not found; the ATX versions it names "
+                            f"cannot be checked")
+            continue
+        named = set(ATX_VERSION.findall(text))
+        problems = []
+        if versions - named:
+            problems.append(f"omits {_versions(versions - named)}")
+        if named - versions:
+            problems.append(f"names {_versions(named - versions)}, which no "
+                            f"fixture expects to ACCEPT")
+        if problems:
+            failures.append(f"{where} {' and '.join(problems)}; the fixtures "
+                            f"accept ATX {_versions(versions)}")
     return failures
 
 
@@ -909,7 +994,43 @@ def _key_source_cases(readme, vectors, used_key_ids):
     return cases
 
 
-def self_test(readme, cosigners, fixtures, vectors, verbose, workflow,
+# (site name, pattern locating the site; group 1 is the text naming versions)
+VERSION_SITES = (
+    (INTRO_SITE, r"\A# [^\n]*\n+(.+?)(?=\n\s*\n)"),
+    (PIN_SITE, r"^\| ATX schema \| ([^|\n]*) \|"),
+)
+
+
+def _version_cases(readme, versions):
+    """Narrow each version label to its first version, then widen it with a
+    version no fixture accepts; each must add a failure naming the site."""
+    baseline = set(version_label_failures(readme, versions))
+    cases = []
+    for where, pattern in VERSION_SITES:
+        match = re.search(pattern, readme, re.M | re.S)
+        tokens = list(ATX_VERSION.finditer(match.group(1))) if match else []
+        edits = (
+            ("names only its first version",
+             lambda s, t: s[:t[0].end()] + s[t[-1].end():]),
+            ("names a version no fixture accepts",
+             lambda s, t: s[:t[-1].end()] + ", v9.9" + s[t[-1].end():]),
+        )
+        for what, edit in edits:
+            label = f"{where} {what}"
+            if not tokens:
+                cases.append((False, label, "site not found in README.md, or "
+                              "it names no ATX version"))
+                continue
+            site = edit(match.group(1), tokens)
+            altered = readme[:match.start(1)] + site + readme[match.end(1):]
+            new = [f for f in version_label_failures(altered, versions)
+                   if f not in baseline]
+            cases.append((any(f.startswith(where) for f in new), label,
+                          f"README.md reading {site!r} there still passes"))
+    return cases
+
+
+def self_test(readme, cosigners, fixtures, vectors, versions, verbose, workflow,
               key_vectors, used_key_ids):
     texts = {"README.md": readme, "COSIGNERS.md": cosigners or ""}
     baseline = set(check(readme, cosigners, fixtures, vectors))
@@ -985,6 +1106,7 @@ def self_test(readme, cosigners, fixtures, vectors, verbose, workflow,
 
     cases.extend(_trigger_cases(readme, workflow))
     cases.extend(_key_source_cases(readme, key_vectors, used_key_ids))
+    cases.extend(_version_cases(readme, versions))
 
     failed = 0
     for ok, label, detail in cases:
@@ -1014,9 +1136,10 @@ def main():
     failures += vector_failures
     fixture_paths = sorted(FIXTURES.glob("*.json"))
     used_key_ids = fixture_key_ids(fixture_paths)
+    versions = accepted_versions(fixture_paths)
 
-    failed, total = self_test(readme, cosigners, fixtures, vectors, only_self_test,
-                              workflow, key_vectors, used_key_ids)
+    failed, total = self_test(readme, cosigners, fixtures, vectors, versions,
+                              only_self_test, workflow, key_vectors, used_key_ids)
     if failed:
         print(f"self-test FAILED: {failed} of {total} case(s) not caught by the check",
               file=sys.stderr)
@@ -1032,6 +1155,7 @@ def main():
     failures.extend(behavioral_profile_failures(readme, fixture_paths))
     failures.extend(ci_trigger_failures(readme, workflow))
     failures.extend(key_source_failures(readme, key_vectors, used_key_ids))
+    failures.extend(version_label_failures(readme, versions))
 
     if failures:
         sys.stdout.flush()
@@ -1048,7 +1172,8 @@ def main():
           f"behavioralProfile scope note matches; criterion (c) claim matches "
           f"the cosignature registry; trustScore is called illustrative; "
           f"CI trigger sentence matches {WORKFLOW_NAME}; "
-          f"both README key-source lists name every Ed25519 key in vectors/")
+          f"both README key-source lists name every Ed25519 key in vectors/; "
+          f"intro and version-pinning row name ATX {_versions(versions)}")
     return 0
 
 

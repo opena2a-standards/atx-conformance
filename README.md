@@ -1,7 +1,7 @@
 # atx-conformance
 
 Conformance fixtures and reference verifiers for the
-[ATX v1.0 credential schema](https://github.com/opena2a-standards/atx-spec).
+[ATX v1.0 and v1.1 credential schema](https://github.com/opena2a-standards/atx-spec).
 
 Each fixture is a byte-stable JSON file that bundles an Agent Trust Credential
 with verifier configuration and an expected outcome (ACCEPT or REJECT). Two
@@ -352,7 +352,7 @@ breaking change for downstream verifiers.
 
 | Component | Version | Source |
 |---|---|---|
-| ATX schema | v1.0 | [`opena2a-standards/atx-spec/core.md`](https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md) |
+| ATX schema | v1.0 and v1.1 | [`opena2a-standards/atx-spec/core.md`](https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md) |
 | AIP spec | v1.0 (in flight on PR 1496) | [`opena2a-standards/agent-identity-protocol`](https://github.com/opena2a-standards/agent-identity-protocol) |
 | `did:opena2a` method | v0.1 (W3C registration filed, PR `w3c/did-extensions#717`) | [`opena2a-standards/did-method-opena2a`](https://github.com/opena2a-standards/did-method-opena2a/blob/main/did-method-opena2a.md) |
 | Ed25519 keypair sources | RFC 8032 §7.1 Tests 1, 2, 3, 1024; secondary issuer seed `SHA-256("opena2a-atx-conformance/issuer-secondary/key-1/v1")` (not an RFC vector) | [datatracker.ietf.org/doc/html/rfc8032](https://datatracker.ietf.org/doc/html/rfc8032) |
