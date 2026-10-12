@@ -4,10 +4,11 @@
 These pin behaviour on inputs that no shipped fixture carries: a credential
 whose unsigned declaredPurpose holds a non-integer JSON number, a credential
 member outside the type the Go reference verifier decodes it into, an absent or
-null member, timestamps at the edges of Go's RFC 3339 grammar, a NaN or
-Infinity literal, a fixture the verifier raises on, a path that does not exist,
-and the verifier's own v1.1 projection over every jcs-vectors vector. Needs the
-same dependencies as verify.py. Run from this directory:
+null member, timestamps at the edges of Go's RFC 3339 grammar, a
+behavioralProfile.generatedAt outside it, a NaN or Infinity literal, a fixture
+the verifier raises on, a path that does not exist, and the verifier's own v1.1
+projection over every jcs-vectors vector. Needs the same dependencies as
+verify.py. Run from this directory:
 
     python3 -m unittest -v test_verify
 """
@@ -92,6 +93,20 @@ def _write_member(
     else:
         fixture["atx"][member] = "@@MEMBER@@"
         path.write_text(json.dumps(fixture).replace('"@@MEMBER@@"', literal))
+    return path
+
+
+def _write_generated_at(directory: Path, name: str, literal: str, outcome: str) -> Path:
+    """Write the v1.1 baseline with behavioralProfile.generatedAt replaced by
+    the raw JSON `literal`, expecting `outcome` (ACCEPT or a reject category)."""
+    fixture = json.loads(BASELINE_V11.read_text())
+    if outcome == "ACCEPT":
+        fixture["expected"] = {"verifyResult": "ACCEPT"}
+    else:
+        fixture["expected"] = {"verifyResult": "REJECT", "rejectCategory": outcome}
+    fixture["atx"]["behavioralProfile"]["generatedAt"] = "@@MEMBER@@"
+    path = directory / name
+    path.write_text(json.dumps(fixture).replace('"@@MEMBER@@"', literal))
     return path
 
 
@@ -330,6 +345,26 @@ GO_VERDICTS = (
     ("publisher", "7", "PARSE_ERROR", "publisher"),
 )
 
+# The verdict the Go reference verifier reaches when the v1.1 baseline's
+# behavioralProfile.generatedAt holds the raw JSON literal. Recorded from
+# `go run .` in ../go with Go 1.22.12 and with Go 1.26.3, which agree on each.
+# A generatedAt Go's time.Time decoder refuses makes the Go verifier project
+# the whole behavioralProfile as null, so the signature rejects; one that
+# decodes to the signed instant projects as signed.
+GO_GENERATED_AT_VERDICTS = (
+    ('"2026-05-19T00:00:00"', "SIGNATURE_INVALID"),
+    ('"2026-05-19"', "SIGNATURE_INVALID"),
+    ('"20991231T235959Z"', "SIGNATURE_INVALID"),
+    ('"2099-W52-1T00:00:00Z"', "SIGNATURE_INVALID"),
+    ('"2026-05-19 00:00:00Z"', "SIGNATURE_INVALID"),
+    ('"2026-05-19T00:00:00+0000"', "SIGNATURE_INVALID"),
+    ('"2026-05-19T24:00:00Z"', "SIGNATURE_INVALID"),
+    ("7", "SIGNATURE_INVALID"),
+    ("true", "SIGNATURE_INVALID"),
+    ('"2026-05-19T01:00:00+01:00"', "ACCEPT"),
+    ('"2026-05-19T00:00:00.5Z"', "ACCEPT"),
+)
+
 
 def _outcome(got: verify.VerifyResult) -> str:
     return "ACCEPT" if got.accepted else got.reject_category
@@ -417,6 +452,28 @@ class GoDecodedVerdict(unittest.TestCase):
         fixture["verifierState"]["clockRfc3339"] = "not-a-clock"
         got = verify.verify_fixture(fixture)
         self.assertEqual(got.reject_category, "VERIFIER_CONFIG_ERROR", got.reason)
+
+
+class GoGeneratedAtProjection(unittest.TestCase):
+    def test_generated_at_reaches_the_go_verdict(self):
+        for literal, outcome in GO_GENERATED_AT_VERDICTS:
+            with self.subTest(value=literal), tempfile.TemporaryDirectory() as tmp:
+                path = _write_generated_at(Path(tmp), "generated-at.json", literal, outcome)
+                got = verify.verify_fixture(verify.load_fixture(path))
+                self.assertEqual(_outcome(got), outcome, got.reason)
+
+    def test_directory_run_reaches_the_summary_line(self):
+        # Each generatedAt outside the layout used to end in a verify error
+        # with no verdict.
+        n = len(GO_GENERATED_AT_VERDICTS)
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            for i, (literal, outcome) in enumerate(GO_GENERATED_AT_VERDICTS):
+                _write_generated_at(directory, f"{i:02d}-generated-at.json", literal, outcome)
+            code, text, err = _run_main(str(directory))
+        self.assertEqual(code, 0, text + err)
+        self.assertNotIn("verify error", text)
+        self.assertEqual(text.splitlines()[-1], f"summary: {n} pass, 0 fail ({n} fixtures)")
 
 
 class VerifyError(unittest.TestCase):

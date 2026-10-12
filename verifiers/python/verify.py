@@ -323,14 +323,21 @@ def canonical_payload_v11(atx: dict[str, Any]) -> bytes:
     }
 
     bp_in = atx.get("behavioralProfile")
+    behavioral_profile: Any = None
     if isinstance(bp_in, dict):
-        behavioral_profile: Any = {
-            "checksum": bp_in.get("checksum", "") or "",
-            "generatedAt": _normalize_rfc3339(bp_in["generatedAt"]) if bp_in.get("generatedAt") else "",
-            "observationDays": int(bp_in.get("observationDays", 0) or 0),
-        }
-    else:
-        behavioral_profile = None
+        try:
+            generated_at = _normalize_rfc3339(bp_in["generatedAt"]) if bp_in.get("generatedAt") else ""
+        except ValueError:
+            # The Go verifier's projectBehavioralProfileV11 projects
+            # behavioralProfile as null when generatedAt fails its time.Time
+            # decode; a generatedAt that fails this parse projects the same.
+            generated_at = None
+        if generated_at is not None:
+            behavioral_profile = {
+                "checksum": bp_in.get("checksum", "") or "",
+                "generatedAt": generated_at,
+                "observationDays": int(bp_in.get("observationDays", 0) or 0),
+            }
 
     # declaredPurpose is the one presence-based TBS member (atx-spec §1.3a.2
     # rule 5, degenerate inputs pinned per issue #11): absent / null /
