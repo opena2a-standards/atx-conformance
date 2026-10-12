@@ -28,10 +28,16 @@ lesson and scoped to the whole body because ATX signs it all):
     first-wins/last-wins parser-divergence smuggling split.
   - the fixture wrapper (name/verifierState/expected) is harness metadata and
     parses leniently.
-  - trustScore, trustLevel, issuedAt and expiresAt are type-checked the way
-    the Go reference verifier decodes them (a finite number, an integer in
-    int64 range, an RFC 3339 string); a value outside its type rejects as
-    PARSE_ERROR instead of raising.
+  - each member the Go reference verifier's atx struct declares with a typed
+    field, looked up by its exact name, is type-checked against that field:
+    strings, integers in int64 range, a finite trustScore, a boolean revoked,
+    arrays of strings, signature objects, and issuedAt/expiresAt in the
+    date-time grammar of Go 1.22's time.Parse(time.RFC3339). A value outside
+    its type rejects as PARSE_ERROR instead of raising; an absent or null
+    member takes the Go zero value. Go's encoding/json also matches a member
+    name that differs only in case, which this verifier does not, and parses
+    a timestamp's raw bytes, where this verifier decodes its JSON escapes
+    first, so on those inputs the two verifiers can disagree.
   - NaN, Infinity and -Infinity are not JSON, so a file carrying one fails to
     load, as it does in the Go reference verifier.
 
@@ -49,13 +55,11 @@ from __future__ import annotations
 import base64
 import json
 import math
-import os
 import re
 import sys
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from rfc8785 import canonicalize as _jcs_canonicalize  # noqa: E402
@@ -84,15 +88,111 @@ MLDSA65_PUBLIC_KEY_SIZE = 1952
 SUPPORTED_ATC_VERSION = "1.0"
 SUPPORTED_ATC_VERSION_V11 = "1.1"
 
-# An RFC 3339 date-time in the shape the Go reference verifier's time.Time
-# decoder accepts: a "T" separator, seconds, an optional fraction, and "Z" or a
-# +hh:mm / -hh:mm offset. Out-of-range fields are left to datetime.
+# The date-time layout of Go's time.Parse(time.RFC3339, s), which the Go
+# reference verifier's time.Time decoder applies (the Go standard library has
+# its stricter RFC 3339 checks disabled, golang/go#54580): a four-digit year, a
+# "T" separator, a one- or two-digit hour, seconds, an optional fraction after
+# "." or ",", and "Z" or a +hh:mm / -hh:mm offset. _parse_rfc3339 checks the
+# field ranges.
 _RFC3339 = re.compile(
-    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})", re.ASCII
+    r"(\d{4})-(\d{2})-(\d{2})T(\d{1,2}):(\d{2}):(\d{2})(?:[.,](\d+))?"
+    r"(?:Z|([+-])(\d{2}):(\d{2}))",
+    re.ASCII,
 )
 
-# The range of the Go reference verifier's int, which holds trustLevel.
+# The range of the Go reference verifier's int64 and int (trustLevel).
 _INT64_MIN, _INT64_MAX = -(2**63), 2**63 - 1
+
+
+class _Instant(NamedTuple):
+    """A point in time as Go's time.Time holds it: whole seconds since
+    1970-01-01T00:00:00Z and nanoseconds within that second, so instants
+    compare in time order. Unlike datetime it reaches year 0 and, through an
+    offset, the years before and after 0000-9999."""
+
+    seconds: int
+    nanos: int
+
+
+def _days_in(month: int, year: int) -> int:
+    if month == 2:
+        leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+        return 29 if leap else 28
+    return 30 if month in (4, 6, 9, 11) else 31
+
+
+def _days_from_civil(year: int, month: int, day: int) -> int:
+    """Days from 1970-01-01 to a date of the proleptic Gregorian calendar."""
+    if month <= 2:
+        year -= 1
+    era = year // 400
+    yoe = year - era * 400
+    doy = (153 * (month + (-3 if month > 2 else 9)) + 2) // 5 + day - 1
+    doe = yoe * 365 + yoe // 4 - yoe // 100 + doy
+    return era * 146097 + doe - 719468
+
+
+def _civil_from_days(days: int) -> tuple[int, int, int]:
+    """The (year, month, day) that _days_from_civil maps to days."""
+    days += 719468
+    era = days // 146097
+    doe = days - era * 146097
+    yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
+    doy = doe - (365 * yoe + yoe // 4 - yoe // 100)
+    mp = (5 * doy + 2) // 153
+    day = doy - (153 * mp + 2) // 5 + 1
+    month = mp + 3 if mp < 10 else mp - 9
+    return yoe + era * 400 + (1 if month <= 2 else 0), month, day
+
+
+# Go's zero time.Time, which an absent or null timestamp member decodes to.
+_GO_ZERO_TIME = _Instant(_days_from_civil(1, 1, 1) * 86400, 0)
+
+
+def _parse_rfc3339(value: Any) -> _Instant:
+    """Parse a timestamp as Go 1.22's time.Parse(time.RFC3339, value) does, or
+    raise ValueError. The ranges are Go's: year 0000-9999, hour 0-23, minute
+    and second 0-59, and any two-digit offset hour and minute; a fraction keeps
+    nine digits. Go 1.23 and later also reject an offset hour above 24 or an
+    offset minute above 60; CI builds the Go reference verifier with Go 1.22,
+    which does not."""
+    if not isinstance(value, str):
+        raise ValueError("not a JSON string")
+    m = _RFC3339.fullmatch(value)
+    if m is None:
+        raise ValueError("not in the RFC 3339 layout")
+    year, month, day, hour, minute, second = (int(g) for g in m.group(1, 2, 3, 4, 5, 6))
+    fraction, sign, offset_hour, offset_minute = m.group(7, 8, 9, 10)
+    if not 1 <= month <= 12:
+        raise ValueError("month out of range")
+    if hour > 23:
+        raise ValueError("hour out of range")
+    if minute > 59:
+        raise ValueError("minute out of range")
+    if second > 59:
+        raise ValueError("second out of range")
+    offset = 0
+    if sign is not None:
+        offset = (int(offset_hour) * 60 + int(offset_minute)) * 60
+        if sign == "-":
+            offset = -offset
+    if not 1 <= day <= _days_in(month, year):
+        raise ValueError("day out of range")
+    seconds = (
+        _days_from_civil(year, month, day) * 86400 + hour * 3600 + minute * 60 + second - offset
+    )
+    return _Instant(seconds, int((fraction or "")[:9].ljust(9, "0")))
+
+
+def _format_rfc3339(t: _Instant) -> str:
+    """Go's t.UTC().Format(time.RFC3339): UTC with seconds precision."""
+    days, secs = divmod(t.seconds, 86400)
+    year, month, day = _civil_from_days(days)
+    year_text = f"-{-year:04d}" if year < 0 else f"{year:04d}"
+    return (
+        f"{year_text}-{month:02d}-{day:02d}"
+        f"T{secs // 3600:02d}:{secs // 60 % 60:02d}:{secs % 60:02d}Z"
+    )
 
 
 class _DupMarkedDict(dict):
@@ -188,6 +288,7 @@ def canonical_payload(atx: dict[str, Any]) -> bytes:
     %.6f for finite floats in the ranges we use (0.0 to ~100.0). The
     atcVersion in the canonical string is the literal "1.0" regardless of the
     credential's atcVersion field, a property of the v1.0 canonical form itself.
+    atx is the credential as _decode_credential returns it.
     """
     return (
         f"{atx['agentId']}|"
@@ -196,10 +297,10 @@ def canonical_payload(atx: dict[str, Any]) -> bytes:
         f"{atx['contentHash']}|"
         f"{atx.get('buildAttestation', '')}|"
         f"{atx['issuerDid']}|"
-        f"{int(atx['trustLevel'])}|"
-        f"{float(atx['trustScore']):.6f}|"
-        f"{_normalize_rfc3339(atx['issuedAt'])}|"
-        f"{_normalize_rfc3339(atx['expiresAt'])}|"
+        f"{atx['trustLevel']}|"
+        f"{atx['trustScore']:.6f}|"
+        f"{_format_rfc3339(atx['issuedAt'])}|"
+        f"{_format_rfc3339(atx['expiresAt'])}|"
         f"{SUPPORTED_ATC_VERSION}"
     ).encode("utf-8")
 
@@ -210,7 +311,8 @@ def canonical_payload_v11(atx: dict[str, Any]) -> bytes:
     atx-spec core.md §1.3a.2. Unlike canonical_payload, this covers capabilities,
     scanSummary, issuerChain, publisher, and behavioralProfile. The byte
     agreement with the Go and TypeScript verifiers is guaranteed by the
-    jcs-vectors suite, not by shared code.
+    jcs-vectors suite, not by shared code. atx is the credential as
+    _decode_credential returns it.
     """
     scan = atx.get("scanSummary")
     if not isinstance(scan, dict):
@@ -225,14 +327,21 @@ def canonical_payload_v11(atx: dict[str, Any]) -> bytes:
     }
 
     bp_in = atx.get("behavioralProfile")
+    behavioral_profile: Any = None
     if isinstance(bp_in, dict):
-        behavioral_profile: Any = {
-            "checksum": bp_in.get("checksum", "") or "",
-            "generatedAt": _normalize_rfc3339(bp_in["generatedAt"]) if bp_in.get("generatedAt") else "",
-            "observationDays": int(bp_in.get("observationDays", 0) or 0),
-        }
-    else:
-        behavioral_profile = None
+        try:
+            generated_at = _normalize_rfc3339(bp_in["generatedAt"]) if bp_in.get("generatedAt") else ""
+        except ValueError:
+            # The Go verifier's projectBehavioralProfileV11 projects
+            # behavioralProfile as null when generatedAt fails its time.Time
+            # decode; a generatedAt that fails this parse projects the same.
+            generated_at = None
+        if generated_at is not None:
+            behavioral_profile = {
+                "checksum": bp_in.get("checksum", "") or "",
+                "generatedAt": generated_at,
+                "observationDays": int(bp_in.get("observationDays", 0) or 0),
+            }
 
     # declaredPurpose is the one presence-based TBS member (atx-spec §1.3a.2
     # rule 5, degenerate inputs pinned per issue #11): absent / null /
@@ -259,10 +368,10 @@ def canonical_payload_v11(atx: dict[str, Any]) -> bytes:
         # trustScore is string-encoded %.6f so every JSON number left is an integer.
         "trustScore": "%.6f" % float(atx["trustScore"]),
         "trustLevel": int(atx["trustLevel"]),
-        "issuedAt": _normalize_rfc3339(atx["issuedAt"]),
-        "expiresAt": _normalize_rfc3339(atx["expiresAt"]),
+        "issuedAt": _format_rfc3339(atx["issuedAt"]),
+        "expiresAt": _format_rfc3339(atx["expiresAt"]),
         "issuerDid": atx["issuerDid"],
-        "issuerChain": list(atx.get("issuerChain") or []),
+        "issuerChain": list(atx["issuerChain"]),
     }
     if declared_purpose is not None:
         tbs["declaredPurpose"] = declared_purpose
@@ -270,17 +379,9 @@ def canonical_payload_v11(atx: dict[str, Any]) -> bytes:
 
 
 def _normalize_rfc3339(s: str) -> str:
-    """Round-trip RFC 3339 through Python's datetime, normalize to UTC ISO with
-    seconds precision (matching Go's time.RFC3339 "2006-01-02T15:04:05Z07:00").
-
-    Go's RFC3339 format is "2006-01-02T15:04:05Z07:00" which means
-    "<seconds>Z" for UTC times. We reproduce that exact shape.
-    """
-    # Python's fromisoformat handles trailing Z since 3.11; for portability
-    # we normalize manually.
-    s2 = s.replace("Z", "+00:00")
-    dt = datetime.fromisoformat(s2).astimezone(timezone.utc)
-    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    """Normalize an RFC 3339 timestamp to UTC with seconds precision, the shape
+    of Go's time.RFC3339 "2006-01-02T15:04:05Z07:00" for a UTC time."""
+    return _format_rfc3339(_parse_rfc3339(s))
 
 
 def _controller_did(key_id: str) -> str:
@@ -342,38 +443,118 @@ def _finite_number(value: Any) -> bool:
         return False
 
 
-def _typed_member_error(atx: dict[str, Any]) -> str | None:
-    """Reason a present, non-null trustScore, trustLevel, issuedAt or expiresAt
-    holds a value outside its type, else None.
+# The Go type of each credential member the Go reference verifier's atx struct
+# declares. Members it holds as raw JSON (declaredPurpose, behavioralProfile,
+# scanSummary) or does not declare (createdAt) are not decoded.
+_MEMBER_TYPES = {
+    "id": "string",
+    "atcVersion": "string",
+    "agentId": "string",
+    "agentDid": "string",
+    "publisher": "string",
+    "publisherDid": "string",
+    "version": "string",
+    "contentHash": "string",
+    "buildAttestation": "string",
+    "transparencyLogIndex": "int64",
+    "capabilities": "[]string",
+    "trustScore": "float64",
+    "trustLevel": "int64",
+    "issuedAt": "time.Time",
+    "expiresAt": "time.Time",
+    "issuerDid": "string",
+    "issuerChain": "[]string",
+    "signatures": "[]signature",
+    "revoked": "bool",
+}
 
-    These are the members this verifier converts with float(), int() and
-    datetime, which raise on a malformed value. The Go reference verifier
-    decodes them into float64, int and time.Time and rejects the same values
-    as PARSE_ERROR before interpreting any field, so this mirrors that decode:
-    trustScore a finite JSON number, trustLevel a JSON integer in int64 range,
-    each timestamp an RFC 3339 string.
-    """
-    score = atx.get("trustScore")
-    if score is not None and not _finite_number(score):
-        return f"trustScore {score!r} is not a finite JSON number"
-    level = atx.get("trustLevel")
-    if level is not None and not (
-        isinstance(level, int)
-        and not isinstance(level, bool)
-        and _INT64_MIN <= level <= _INT64_MAX
-    ):
-        return f"trustLevel {level!r} is not a JSON integer in int64 range"
-    for name in ("issuedAt", "expiresAt"):
-        value = atx.get(name)
+# The members of one signatures entry, each a Go string.
+_SIGNATURE_MEMBERS = ("keyId", "algorithm", "value")
+
+
+class _DecodeError(ValueError):
+    """A credential member holds a value outside its Go type."""
+
+
+def _decode_member(name: str, go_type: str, value: Any) -> Any:
+    """Type-check one member against go_type, its type in the Go reference
+    verifier, and return its decoded value, or raise _DecodeError. A null
+    takes the Go zero value. The decoded value is not always the one the Go
+    field holds; see _decode_credential."""
+    if go_type == "string":
+        if value is None or isinstance(value, str):
+            return value or ""
+        raise _DecodeError(f"{name} {value!r} is not a JSON string")
+    if go_type == "int64":
         if value is None:
-            continue
-        if not isinstance(value, str) or not _RFC3339.fullmatch(value):
-            return f"{name} {value!r} is not an RFC 3339 date-time"
+            return 0
+        if (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and _INT64_MIN <= value <= _INT64_MAX
+        ):
+            return value
+        raise _DecodeError(f"{name} {value!r} is not a JSON integer in int64 range")
+    if go_type == "float64":
+        if value is None:
+            return 0.0
+        if _finite_number(value):
+            return float(value)
+        raise _DecodeError(f"{name} {value!r} is not a finite JSON number")
+    if go_type == "bool":
+        if value is None or isinstance(value, bool):
+            return bool(value)
+        raise _DecodeError(f"{name} {value!r} is not a JSON boolean")
+    if go_type == "time.Time":
+        if value is None:
+            return _GO_ZERO_TIME
         try:
-            datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return _parse_rfc3339(value)
         except ValueError as exc:
-            return f"{name} {value!r} is not an RFC 3339 date-time ({exc})"
-    return None
+            raise _DecodeError(f"{name} {value!r} is not an RFC 3339 date-time ({exc})") from None
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise _DecodeError(f"{name} {value!r} is not a JSON array")
+    if go_type == "[]string":
+        return [_decode_member(f"{name}[{i}]", "string", item) for i, item in enumerate(value)]
+    return [_decode_signature(f"{name}[{i}]", item) for i, item in enumerate(value)]
+
+
+def _decode_signature(name: str, value: Any) -> dict[str, Any]:
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise _DecodeError(f"{name} {value!r} is not a JSON object")
+    return {m: _decode_member(f"{name}.{m}", "string", value.get(m)) for m in _SIGNATURE_MEMBERS}
+
+
+def _decode_credential(atx: Any) -> dict[str, Any]:
+    """The credential with each member in _MEMBER_TYPES type-checked against
+    its field in the Go reference verifier's atx struct, or raise
+    _DecodeError. A member is looked up by its exact name, where Go's
+    json.Unmarshal also matches a name that differs only in case, and a
+    timestamp is parsed after json.loads has decoded its escapes, where Go
+    parses the raw bytes.
+
+    Each member in _MEMBER_TYPES holds its decoded value: the Go zero value
+    when it is absent or null, an _Instant for a timestamp. That value is not
+    always the one the Go field holds. For example, Go's encoding/json decodes
+    an unpaired UTF-16 surrogate escape in a string to U+FFFD, where json.loads
+    keeps the surrogate, and keeps the sign of a trustScore written as -0,
+    where this verifier holds 0.0. Other members are copied unchanged. The Go
+    reference verifier rejects a member outside its type as PARSE_ERROR before
+    interpreting any field, and so does this one, instead of raising from
+    float(), int() or iteration later.
+    """
+    if atx is None:
+        atx = {}
+    if not isinstance(atx, dict):
+        raise _DecodeError(f"credential {atx!r} is not a JSON object")
+    decoded = dict(atx)
+    for name, go_type in _MEMBER_TYPES.items():
+        decoded[name] = _decode_member(name, go_type, atx.get(name))
+    return decoded
 
 
 def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
@@ -389,11 +570,15 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
             reject_category="PARSE_ERROR",
             reason=f'credential contains duplicate member "{dup}" (strict parse: the whole ATX credential is a signed body; RFC 8259 §4 duplicate names are parser-divergent)',
         )
-    bad_member = _typed_member_error(atx)
-    if bad_member is not None:
-        return VerifyResult(reject_category="PARSE_ERROR", reason=bad_member)
+    try:
+        atx = _decode_credential(atx)
+    except _DecodeError as exc:
+        return VerifyResult(reject_category="PARSE_ERROR", reason=str(exc))
 
-    now =datetime.fromisoformat(vs["clockRfc3339"].replace("Z", "+00:00")).astimezone(timezone.utc)
+    try:
+        now = _parse_rfc3339(vs.get("clockRfc3339", ""))
+    except ValueError as exc:
+        return VerifyResult(reject_category="VERIFIER_CONFIG_ERROR", reason=f"bad clockRfc3339: {exc}")
 
     # Step 1: schema version. Dispatch on atcVersion: "1.0" verifies the legacy
     # pipe form, "1.1" verifies JCS(TBS) (atx-spec §1.3a).
@@ -405,15 +590,15 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
         )
 
     # Step 2: expiry.
-    expires = datetime.fromisoformat(atx["expiresAt"].replace("Z", "+00:00")).astimezone(timezone.utc)
+    expires = atx["expiresAt"]
     if now > expires:
         return VerifyResult(
             reject_category="EXPIRED",
-            reason=f"expired at {expires.strftime('%Y-%m-%dT%H:%M:%SZ')}, verifier clock is {now.strftime('%Y-%m-%dT%H:%M:%SZ')}",
+            reason=f"expired at {_format_rfc3339(expires)}, verifier clock is {_format_rfc3339(now)}",
         )
 
     # Step 3: revocation.
-    if atx.get("revoked"):
+    if atx["revoked"]:
         return VerifyResult(reject_category="REVOKED", reason="credential revoked field is true")
     crl = vs.get("crl")
     if crl:
@@ -454,9 +639,9 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
     eds, pqs = index_public_keys(
         vs["publicKeys"], _authority_set_for(atx, vs.get("trustedIssuers", []))
     )
-    result = VerifyResult(sigs_expected=len(atx.get("signatures", [])))
+    result = VerifyResult(sigs_expected=len(atx["signatures"]))
 
-    for sig in atx.get("signatures", []):
+    for sig in atx["signatures"]:
         try:
             sig_bytes = base64.b64decode(sig["value"])
         except Exception as exc:
@@ -519,7 +704,7 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
     # the length of issuerChain, which the signer writes. Recorded on the
     # result so an ACCEPT never reads as a step-7 verdict.
     result.step7_performed = False
-    result.trust_level = int(atx.get("trustLevel", 0))
+    result.trust_level = atx["trustLevel"]
 
     result.accepted = True
     return result
@@ -579,7 +764,14 @@ def main(argv: list[str]) -> int:
             total_fail += 1
             continue
 
-        got = verify_fixture(fixture)
+        # A fixture this verifier cannot handle gets a FAIL line of its own;
+        # the fixtures after it are still verified and the summary printed.
+        try:
+            got = verify_fixture(fixture)
+        except Exception as exc:
+            print(f"FAIL  {p}  (verify error: {type(exc).__name__}: {exc})")
+            total_fail += 1
+            continue
         expected = fixture.get("expected", {})
         want_accept = expected.get("verifyResult", "").upper() == "ACCEPT"
 

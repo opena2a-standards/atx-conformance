@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestFoldKey pins the field-fold used by the fold-aware duplicate detector to
@@ -249,4 +250,70 @@ func mustHexDecode(t *testing.T, s string) []byte {
 		t.Fatalf("expected.canonicalHex is not hex: %v", err)
 	}
 	return b
+}
+
+// TestTimestampDecode pins what the time.Time decoder behind issuedAt and
+// expiresAt accepts. The Python reference verifier ports this grammar
+// (_parse_rfc3339 in ../python/verify.py) and test_verify.py carries the same
+// table, so a Go release that changes how the decoder treats one of these
+// inputs, for example by enabling the strict RFC 3339 checks the standard
+// library has disabled (golang/go#54580), fails here before the two verifiers
+// drift apart. An offset hour above 24 or an offset minute above 60 is in
+// neither table: Go 1.22, which CI builds with, decodes it, and Go 1.23 and
+// later reject it.
+func TestTimestampDecode(t *testing.T) {
+	accepted := []struct {
+		in, utc     string
+		unix, nanos int64
+	}{
+		{"2099-12-31T23:59:59Z", "2099-12-31T23:59:59Z", 4102444799, 0},
+		{"2099-12-31T23:59:59,5Z", "2099-12-31T23:59:59Z", 4102444799, 500000000},
+		{"2099-12-31T23:59:59.123456789123Z", "2099-12-31T23:59:59Z", 4102444799, 123456789},
+		{"2099-12-31T23:59:59+24:00", "2099-12-30T23:59:59Z", 4102358399, 0},
+		{"2099-12-31T23:59:59-24:00", "2100-01-01T23:59:59Z", 4102531199, 0},
+		{"2099-12-31T23:59:59+23:60", "2099-12-30T23:59:59Z", 4102358399, 0},
+		{"0000-12-31T23:59:59Z", "0000-12-31T23:59:59Z", -62135596801, 0},
+		{"0000-02-29T00:00:00Z", "0000-02-29T00:00:00Z", -62162121600, 0},
+		{"0000-01-01T00:00:00+01:00", "-0001-12-31T23:00:00Z", -62167222800, 0},
+		{"9999-12-31T23:59:59-24:00", "10000-01-01T23:59:59Z", 253402387199, 0},
+		{"2000-02-29T00:00:00Z", "2000-02-29T00:00:00Z", 951782400, 0},
+		{"2099-12-31T9:59:59Z", "2099-12-31T09:59:59Z", 4102394399, 0},
+		{"1969-12-31T23:59:59.999999999Z", "1969-12-31T23:59:59Z", -1, 999999999},
+	}
+	for _, c := range accepted {
+		raw, _ := json.Marshal(c.in)
+		var got time.Time
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Errorf("%q: decode error %v, want %s", c.in, err, c.utc)
+			continue
+		}
+		u := got.UTC()
+		if s := u.Format(time.RFC3339); s != c.utc || u.Unix() != c.unix || int64(u.Nanosecond()) != c.nanos {
+			t.Errorf("%q decoded to %s (%d, %d), want %s (%d, %d)", c.in, s, u.Unix(), u.Nanosecond(), c.utc, c.unix, c.nanos)
+		}
+	}
+	rejected := []string{
+		"2099-12-31T24:00:00Z",
+		"2099-12-31T23:60:00Z",
+		"2099-12-31T23:59:60Z",
+		"2099-13-01T00:00:00Z",
+		"2099-12-00T00:00:00Z",
+		"1900-02-29T00:00:00Z",
+		"2099-12-31t23:59:59Z",
+		"2099-12-31T23:59:59z",
+		"2099-12-31T23:59:59.Z",
+		"2099-12-31T23:59:59",
+		"2099-12-31T23:59:59+0100",
+		"+999-12-31T23:59:59Z",
+	}
+	for _, in := range rejected {
+		raw, _ := json.Marshal(in)
+		var got time.Time
+		if err := json.Unmarshal(raw, &got); err == nil {
+			t.Errorf("%q decoded to %s, want a decode error", in, got.UTC().Format(time.RFC3339))
+		}
+	}
+	if s := (time.Time{}).UTC().Format(time.RFC3339); s != "0001-01-01T00:00:00Z" {
+		t.Errorf("zero time formats as %s, want 0001-01-01T00:00:00Z", s)
+	}
 }

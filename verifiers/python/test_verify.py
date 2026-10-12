@@ -2,11 +2,13 @@
 """Unit tests for the Python reference verifier.
 
 These pin behaviour on inputs that no shipped fixture carries: a credential
-whose unsigned declaredPurpose holds a non-integer JSON number, a malformed
-trustScore, trustLevel, issuedAt or expiresAt, a NaN or Infinity literal, a
-path that does not exist, and the verifier's own v1.1 projection over every
-jcs-vectors vector. Needs the same dependencies as verify.py. Run from this
-directory:
+whose unsigned declaredPurpose holds a non-integer JSON number, a credential
+member outside the type the Go reference verifier decodes it into, an absent or
+null member, timestamps at the edges of Go's RFC 3339 grammar, a
+behavioralProfile.generatedAt outside it, a NaN or Infinity literal, a fixture
+the verifier raises on, a path that does not exist, and the verifier's own v1.1
+projection over every jcs-vectors vector. Needs the same dependencies as
+verify.py. Run from this directory:
 
     python3 -m unittest -v test_verify
 """
@@ -20,7 +22,9 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
@@ -69,18 +73,44 @@ def _verdict(purpose) -> verify.VerifyResult:
         return verify.verify_fixture(verify.load_fixture(path))
 
 
-def _write_member(directory: Path, name: str, baseline: Path, member: str, literal: str) -> Path:
+def _write_member(
+    directory: Path,
+    name: str,
+    baseline: Path,
+    member: str,
+    literal: str | None,
+    expected: dict | None = None,
+) -> Path:
     """Write `baseline` with atx[member] replaced by the raw JSON `literal`,
-    so values json.dumps cannot write (1e400, NaN) reach the loader as text."""
+    so values json.dumps cannot write (1e400, NaN) reach the loader as text.
+    A literal of None removes the member."""
     fixture = json.loads(baseline.read_text())
-    fixture["atx"][member] = "@@MEMBER@@"
-    fixture["expected"] = dict(PARSE_ERROR_EXPECTED)
+    fixture["expected"] = dict(expected or PARSE_ERROR_EXPECTED)
+    path = directory / name
+    if literal is None:
+        del fixture["atx"][member]
+        path.write_text(json.dumps(fixture))
+    else:
+        fixture["atx"][member] = "@@MEMBER@@"
+        path.write_text(json.dumps(fixture).replace('"@@MEMBER@@"', literal))
+    return path
+
+
+def _write_generated_at(directory: Path, name: str, literal: str, outcome: str) -> Path:
+    """Write the v1.1 baseline with behavioralProfile.generatedAt replaced by
+    the raw JSON `literal`, expecting `outcome` (ACCEPT or a reject category)."""
+    fixture = json.loads(BASELINE_V11.read_text())
+    if outcome == "ACCEPT":
+        fixture["expected"] = {"verifyResult": "ACCEPT"}
+    else:
+        fixture["expected"] = {"verifyResult": "REJECT", "rejectCategory": outcome}
+    fixture["atx"]["behavioralProfile"]["generatedAt"] = "@@MEMBER@@"
     path = directory / name
     path.write_text(json.dumps(fixture).replace('"@@MEMBER@@"', literal))
     return path
 
 
-def _member_verdict(baseline: Path, member: str, literal: str) -> verify.VerifyResult:
+def _member_verdict(baseline: Path, member: str, literal: str | None) -> verify.VerifyResult:
     with tempfile.TemporaryDirectory() as tmp:
         path = _write_member(Path(tmp), "member.json", baseline, member, literal)
         return verify.verify_fixture(verify.load_fixture(path))
@@ -140,10 +170,24 @@ class InjectedNumberPurpose(unittest.TestCase):
 
 
 # Raw JSON values the Go reference verifier's typed decode refuses, so it
-# rejects them as PARSE_ERROR: a string, boolean or out-of-range number where
-# float64 trustScore or int trustLevel is declared, and a timestamp that is not
-# an RFC 3339 string.
+# rejects them as PARSE_ERROR: a value of another JSON type or out of range for
+# a string, int64, float64, bool, []string or []signature field, and a
+# timestamp outside the grammar of Go's time.Parse(time.RFC3339).
 MALFORMED_MEMBERS = (
+    ("id", "[]"),
+    ("agentId", "7"),
+    ("publisher", "7"),
+    ("transparencyLogIndex", '"x"'),
+    ("transparencyLogIndex", "1.5"),
+    ("transparencyLogIndex", "1e2"),
+    ("transparencyLogIndex", "9223372036854775808"),
+    ("capabilities", '"abc"'),
+    ("issuerChain", "7"),
+    ("signatures", '"x"'),
+    ("revoked", '"yes"'),
+    ("revoked", "1"),
+    ("expiresAt", '"2099-12-31T24:00:00Z"'),
+    ("issuedAt", '"2026-05-23T24:00:00Z"'),
     ("trustScore", '"abc"'),
     ("trustScore", '"87.5"'),
     ("trustScore", "true"),
@@ -189,7 +233,7 @@ class MalformedTypedMember(unittest.TestCase):
         for path in sorted((ROOT / "fixtures").glob("*.json")):
             with self.subTest(fixture=path.name):
                 atx = verify.load_fixture(path)["atx"]
-                self.assertIsNone(verify._typed_member_error(atx))
+                verify._decode_credential(atx)
 
     def test_directory_run_reaches_the_summary_line(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -201,6 +245,258 @@ class MalformedTypedMember(unittest.TestCase):
         self.assertEqual(code, 0, text)
         self.assertEqual(text.count("observed: REJECT[PARSE_ERROR: "), 2, text)
         self.assertEqual(text.splitlines()[-1], "summary: 3 pass, 0 fail (3 fixtures)")
+
+
+# Timestamps Go's time.Time decoder, which the Go reference verifier uses for
+# issuedAt and expiresAt, accepts, with what Go then holds: the UTC time it
+# formats with time.RFC3339, and its Unix seconds and nanoseconds. Recorded
+# from Go; TestTimestampDecode in ../go pins the same table against the Go
+# toolchain.
+GO_ACCEPTED_TIMESTAMPS = (
+    ("2099-12-31T23:59:59Z", "2099-12-31T23:59:59Z", 4102444799, 0),
+    ("2099-12-31T23:59:59,5Z", "2099-12-31T23:59:59Z", 4102444799, 500000000),
+    ("2099-12-31T23:59:59.123456789123Z", "2099-12-31T23:59:59Z", 4102444799, 123456789),
+    ("2099-12-31T23:59:59+24:00", "2099-12-30T23:59:59Z", 4102358399, 0),
+    ("2099-12-31T23:59:59-24:00", "2100-01-01T23:59:59Z", 4102531199, 0),
+    ("2099-12-31T23:59:59+23:60", "2099-12-30T23:59:59Z", 4102358399, 0),
+    ("0000-12-31T23:59:59Z", "0000-12-31T23:59:59Z", -62135596801, 0),
+    ("0000-02-29T00:00:00Z", "0000-02-29T00:00:00Z", -62162121600, 0),
+    ("0000-01-01T00:00:00+01:00", "-0001-12-31T23:00:00Z", -62167222800, 0),
+    ("9999-12-31T23:59:59-24:00", "10000-01-01T23:59:59Z", 253402387199, 0),
+    ("2000-02-29T00:00:00Z", "2000-02-29T00:00:00Z", 951782400, 0),
+    ("2099-12-31T9:59:59Z", "2099-12-31T09:59:59Z", 4102394399, 0),
+    ("1969-12-31T23:59:59.999999999Z", "1969-12-31T23:59:59Z", -1, 999999999),
+)
+
+# Timestamps Go's time.Time decoder rejects. TestTimestampDecode pins these too.
+GO_REJECTED_TIMESTAMPS = (
+    "2099-12-31T24:00:00Z",
+    "2099-12-31T23:60:00Z",
+    "2099-12-31T23:59:60Z",
+    "2099-13-01T00:00:00Z",
+    "2099-12-00T00:00:00Z",
+    "1900-02-29T00:00:00Z",
+    "2099-12-31t23:59:59Z",
+    "2099-12-31T23:59:59z",
+    "2099-12-31T23:59:59.Z",
+    "2099-12-31T23:59:59",
+    "2099-12-31T23:59:59+0100",
+    "+999-12-31T23:59:59Z",
+)
+
+# Offsets past +24:00 or +23:60. Go 1.22, which CI builds the Go reference
+# verifier with, decodes them, and Go 1.23 and later reject them, so
+# TestTimestampDecode pins neither outcome; this verifier follows Go 1.22.
+# Recorded from Go 1.22.12.
+GO122_OFFSET_TIMESTAMPS = (
+    ("2099-12-31T23:59:59+25:00", "2099-12-30T22:59:59Z", 4102354799, 0),
+    ("2099-12-31T23:59:59+23:61", "2099-12-30T23:58:59Z", 4102358339, 0),
+    ("2099-12-31T23:59:59-99:99", "2100-01-05T04:38:59Z", 4102807139, 0),
+    ("2026-05-23T00:00:00+00:61", "2026-05-22T22:59:00Z", 1779490740, 0),
+)
+
+# The verdict `go run .` in ../go reaches with Go 1.22.12 on the v1.0 and v1.1
+# baselines when atx[member] holds one of those offsets: the timestamp decodes,
+# it no longer matches the signed value, and the signature rejects. Built with
+# Go 1.23 or later, the Go verifier reaches PARSE_ERROR instead.
+GO122_OFFSET_VERDICTS = (
+    ("expiresAt", '"2099-12-31T23:59:59+25:00"', "SIGNATURE_INVALID"),
+    ("expiresAt", '"2099-12-31T23:59:59+00:61"', "SIGNATURE_INVALID"),
+    ("expiresAt", '"2099-12-31T23:59:59-99:99"', "SIGNATURE_INVALID"),
+    ("issuedAt", '"2026-05-23T00:00:00+00:61"', "SIGNATURE_INVALID"),
+    ("issuedAt", '"2026-05-23T00:00:00+25:00"', "SIGNATURE_INVALID"),
+)
+
+# The verdict the Go reference verifier reaches when atx[member] holds the raw
+# JSON literal (None: the member is absent), the same on the v1.0 and v1.1
+# baselines, with text its reason and this verifier's both contain. Recorded
+# from `go run .` in ../go. Go leaves an absent or null member at its zero
+# value, so a null expiresAt is the zero time and expired.
+GO_VERDICTS = (
+    ("expiresAt", '"2099-12-31T23:59:59,5Z"', "ACCEPT", ""),
+    ("expiresAt", '"2099-12-31T23:59:59+24:00"', "SIGNATURE_INVALID", ""),
+    ("expiresAt", '"0000-12-31T23:59:59Z"', "EXPIRED", "expired at 0000-12-31T23:59:59Z"),
+    ("issuedAt", '"0000-01-01T00:00:00Z"', "SIGNATURE_INVALID", ""),
+    ("issuedAt", '"2026-05-23T01:00:00+01:00"', "ACCEPT", ""),
+    ("issuedAt", '"2026-05-23T0:00:00Z"', "ACCEPT", ""),
+    ("expiresAt", '"2099-12-31T24:00:00Z"', "PARSE_ERROR", "hour out of range"),
+    ("issuedAt", '"2026-05-23T24:00:00Z"', "PARSE_ERROR", "hour out of range"),
+    ("transparencyLogIndex", '"x"', "PARSE_ERROR", "transparencyLogIndex"),
+    ("transparencyLogIndex", "1.5", "PARSE_ERROR", "transparencyLogIndex"),
+    ("transparencyLogIndex", "null", "ACCEPT", ""),
+    ("issuerChain", "7", "PARSE_ERROR", "issuerChain"),
+    ("issuerChain", "[7]", "PARSE_ERROR", "issuerChain"),
+    ("signatures", '"x"', "PARSE_ERROR", "signatures"),
+    ("signatures", '["x"]', "PARSE_ERROR", "signatures"),
+    ("signatures", '[{"value": 7}]', "PARSE_ERROR", "signatures"),
+    ("signatures", "null", "SIGNATURE_INVALID", "no valid signatures"),
+    ("signatures", "[null]", "SIGNATURE_INVALID", "unsupported signature algorithm"),
+    ("signatures", None, "SIGNATURE_INVALID", "no valid signatures"),
+    ("trustScore", "null", "SIGNATURE_INVALID", ""),
+    ("trustLevel", "null", "SIGNATURE_INVALID", ""),
+    ("issuedAt", "null", "SIGNATURE_INVALID", ""),
+    ("issuedAt", None, "SIGNATURE_INVALID", ""),
+    ("expiresAt", "null", "EXPIRED", "expired at 0001-01-01T00:00:00Z"),
+    ("expiresAt", None, "EXPIRED", "expired at 0001-01-01T00:00:00Z"),
+    ("agentId", None, "SIGNATURE_INVALID", ""),
+    ("revoked", '"yes"', "PARSE_ERROR", "revoked"),
+    ("revoked", "null", "ACCEPT", ""),
+    ("capabilities", '"abc"', "PARSE_ERROR", "capabilities"),
+    ("publisher", "7", "PARSE_ERROR", "publisher"),
+)
+
+# The verdict the Go reference verifier reaches when the v1.1 baseline's
+# behavioralProfile.generatedAt holds the raw JSON literal. Recorded from
+# `go run .` in ../go with Go 1.22.12 and with Go 1.26.3, which agree on each.
+# A generatedAt Go's time.Time decoder refuses makes the Go verifier project
+# the whole behavioralProfile as null, so the signature rejects; one that
+# decodes to the signed instant projects as signed.
+GO_GENERATED_AT_VERDICTS = (
+    ('"2026-05-19T00:00:00"', "SIGNATURE_INVALID"),
+    ('"2026-05-19"', "SIGNATURE_INVALID"),
+    ('"20991231T235959Z"', "SIGNATURE_INVALID"),
+    ('"2099-W52-1T00:00:00Z"', "SIGNATURE_INVALID"),
+    ('"2026-05-19 00:00:00Z"', "SIGNATURE_INVALID"),
+    ('"2026-05-19T00:00:00+0000"', "SIGNATURE_INVALID"),
+    ('"2026-05-19T24:00:00Z"', "SIGNATURE_INVALID"),
+    ("7", "SIGNATURE_INVALID"),
+    ("true", "SIGNATURE_INVALID"),
+    ('"2026-05-19T01:00:00+01:00"', "ACCEPT"),
+    ('"2026-05-19T00:00:00.5Z"', "ACCEPT"),
+)
+
+
+def _outcome(got: verify.VerifyResult) -> str:
+    return "ACCEPT" if got.accepted else got.reject_category
+
+
+class GoTimestampGrammar(unittest.TestCase):
+    def test_accepted_timestamps_decode_as_go_does(self):
+        for text, utc, seconds, nanos in GO_ACCEPTED_TIMESTAMPS:
+            with self.subTest(timestamp=text):
+                instant = verify._parse_rfc3339(text)
+                self.assertEqual(instant, verify._Instant(seconds, nanos))
+                self.assertEqual(verify._format_rfc3339(instant), utc)
+
+    def test_rejected_timestamps_raise(self):
+        for text in GO_REJECTED_TIMESTAMPS:
+            with self.subTest(timestamp=text), self.assertRaises(ValueError):
+                verify._parse_rfc3339(text)
+
+    def test_offsets_past_24_hours_decode_as_go_1_22_does(self):
+        for text, utc, seconds, nanos in GO122_OFFSET_TIMESTAMPS:
+            with self.subTest(timestamp=text):
+                instant = verify._parse_rfc3339(text)
+                self.assertEqual(instant, verify._Instant(seconds, nanos))
+                self.assertEqual(verify._format_rfc3339(instant), utc)
+
+    def test_zero_time_is_go_zero_time(self):
+        self.assertEqual(verify._GO_ZERO_TIME, verify._Instant(-62135596800, 0))
+        self.assertEqual(verify._format_rfc3339(verify._GO_ZERO_TIME), "0001-01-01T00:00:00Z")
+
+    def test_day_count_agrees_with_datetime(self):
+        epoch = date(1970, 1, 1).toordinal()
+        for ordinal in range(date.min.toordinal(), date.max.toordinal() + 1, 997):
+            day = date.fromordinal(ordinal)
+            with self.subTest(date=day.isoformat()):
+                days = verify._days_from_civil(day.year, day.month, day.day)
+                self.assertEqual(days, ordinal - epoch)
+                self.assertEqual(verify._civil_from_days(days), (day.year, day.month, day.day))
+
+
+class GoDecodedVerdict(unittest.TestCase):
+    def test_member_reaches_the_go_verdict(self):
+        for baseline in (BASELINE_V10, BASELINE_V11):
+            for member, literal, outcome, fragment in GO_VERDICTS:
+                with self.subTest(baseline=baseline.name, member=member, value=literal):
+                    got = _member_verdict(baseline, member, literal)
+                    self.assertEqual(_outcome(got), outcome, got.reason)
+                    self.assertIn(fragment, got.reason)
+
+    def test_offset_past_24_hours_reaches_the_go_1_22_verdict(self):
+        for baseline in (BASELINE_V10, BASELINE_V11):
+            for member, literal, outcome in GO122_OFFSET_VERDICTS:
+                with self.subTest(baseline=baseline.name, member=member, value=literal):
+                    got = _member_verdict(baseline, member, literal)
+                    self.assertEqual(_outcome(got), outcome, got.reason)
+
+    def test_directory_run_reaches_the_summary_line(self):
+        # Each of these used to end the run with a traceback, or reach a
+        # verdict the Go reference verifier does not.
+        shapes = (
+            ("issuerChain", "7"),
+            ("signatures", '"x"'),
+            ("trustScore", "null"),
+            ("trustLevel", "null"),
+            ("issuedAt", "null"),
+            ("expiresAt", "null"),
+            ("revoked", '"yes"'),
+            ("transparencyLogIndex", '"x"'),
+        )
+        verdicts = {(m, lit): outcome for m, lit, outcome, _ in GO_VERDICTS}
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            for i, (member, literal) in enumerate(shapes):
+                category = verdicts[(member, literal)]
+                expected = {"verifyResult": "REJECT", "rejectCategory": category}
+                _write_member(directory, f"{i}-{member}.json", BASELINE_V11, member, literal, expected)
+            (directory / "z-baseline-valid.json").write_text(BASELINE_V11.read_text())
+            code, text, err = _run_main(str(directory))
+        self.assertEqual(code, 0, text + err)
+        self.assertNotIn("verify error", text)
+        self.assertEqual(text.splitlines()[-1], "summary: 9 pass, 0 fail (9 fixtures)")
+
+    def test_bad_clock_is_a_config_error(self):
+        # Go parses the verifier clock with time.Parse(time.RFC3339).
+        fixture = json.loads(BASELINE_V11.read_text())
+        fixture["verifierState"]["clockRfc3339"] = "not-a-clock"
+        got = verify.verify_fixture(fixture)
+        self.assertEqual(got.reject_category, "VERIFIER_CONFIG_ERROR", got.reason)
+
+
+class GoGeneratedAtProjection(unittest.TestCase):
+    def test_generated_at_reaches_the_go_verdict(self):
+        for literal, outcome in GO_GENERATED_AT_VERDICTS:
+            with self.subTest(value=literal), tempfile.TemporaryDirectory() as tmp:
+                path = _write_generated_at(Path(tmp), "generated-at.json", literal, outcome)
+                got = verify.verify_fixture(verify.load_fixture(path))
+                self.assertEqual(_outcome(got), outcome, got.reason)
+
+    def test_directory_run_reaches_the_summary_line(self):
+        # Each generatedAt outside the layout used to end in a verify error
+        # with no verdict.
+        n = len(GO_GENERATED_AT_VERDICTS)
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            for i, (literal, outcome) in enumerate(GO_GENERATED_AT_VERDICTS):
+                _write_generated_at(directory, f"{i:02d}-generated-at.json", literal, outcome)
+            code, text, err = _run_main(str(directory))
+        self.assertEqual(code, 0, text + err)
+        self.assertNotIn("verify error", text)
+        self.assertEqual(text.splitlines()[-1], f"summary: {n} pass, 0 fail ({n} fixtures)")
+
+
+class VerifyError(unittest.TestCase):
+    def test_raising_fixture_gets_a_fail_line_and_the_run_continues(self):
+        real = verify.verify_fixture
+
+        def raises_on_one(fixture):
+            if fixture.get("name") == "raises":
+                raise RuntimeError("unexpected input")
+            return real(fixture)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            fixture = json.loads(BASELINE_V11.read_text())
+            fixture["name"] = "raises"
+            (directory / "a-raises.json").write_text(json.dumps(fixture))
+            (directory / "b-baseline-valid.json").write_text(BASELINE_V11.read_text())
+            with mock.patch.object(verify, "verify_fixture", raises_on_one):
+                code, text, _ = _run_main(str(directory))
+        self.assertEqual(code, 1, text)
+        self.assertIn("a-raises.json  (verify error: RuntimeError: unexpected input)", text)
+        self.assertIn("observed: ACCEPT", text)
+        self.assertEqual(text.splitlines()[-1], "summary: 1 pass, 1 fail (2 fixtures)")
 
 
 class NonStandardConstant(unittest.TestCase):
@@ -261,10 +557,12 @@ class JCSVectorsThroughVerifierProjection(unittest.TestCase):
                 vector = json.loads(path.read_text(encoding="utf-8"))
                 # The TBS carries trustScore as its %.6f string; the credential
                 # carries the same value as a JSON number. Every other TBS
-                # member is already in its wire form.
+                # member is already in its wire form. The projection reads the
+                # credential as _decode_credential returns it, so decode first,
+                # as the Go test parses the credential before projecting.
                 credential = dict(vector["tbs"])
                 credential["trustScore"] = json.loads(credential["trustScore"])
-                got = verify.canonical_payload_v11(credential)
+                got = verify.canonical_payload_v11(verify._decode_credential(credential))
                 self.assertEqual(got.hex(), vector["expected"]["canonicalHex"])
 
 
