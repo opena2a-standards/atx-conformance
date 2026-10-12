@@ -7,7 +7,12 @@ member outside the type the Go reference verifier decodes it into, an absent or
 null member, timestamps at the edges of Go's RFC 3339 grammar, a
 behavioralProfile.generatedAt outside it, a NaN or Infinity literal, a fixture
 the verifier raises on, a path that does not exist, and the verifier's own v1.1
-projection over every jcs-vectors vector. One test reads verify.py itself: it
+projection over every jcs-vectors vector. They also pin what Go's encoding/json
+makes of a member name in another case, a timestamp written with a JSON
+escape, an unpaired surrogate escape and a trustScore of -0, the projection of
+behavioralProfile and scanSummary members outside their Go type, the signature
+base64 alphabet, a fixture whose expected member is not an object, and a
+report line standard output cannot encode. One test reads verify.py itself: it
 imports no name it does not use. Needs the same dependencies as verify.py. Run
 from this directory:
 
@@ -21,6 +26,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import string
 import sys
 import tempfile
 import unittest
@@ -118,11 +124,85 @@ def _member_verdict(baseline: Path, member: str, literal: str | None) -> verify.
         return verify.verify_fixture(verify.load_fixture(path))
 
 
+# In place of a raw literal: the member keeps the value the baseline gives it.
+KEEP = object()
+
+
+def _write_at(
+    directory: Path,
+    name: str,
+    baseline: Path,
+    path: tuple,
+    literal,
+    rename: str | None = None,
+    expected: dict | None = None,
+) -> Path:
+    """Write `baseline` with the atx member at `path` replaced by the raw JSON
+    `literal` and, with `rename`, written under that name. A path step is a
+    member name or an array index, so ("signatures", 0, "value") is the first
+    signature's value. A literal of None removes the member; KEEP keeps its
+    value, for a rename alone."""
+    fixture = json.loads(baseline.read_text())
+    fixture["expected"] = dict(expected or PARSE_ERROR_EXPECTED)
+    parent = fixture["atx"]
+    for step in path[:-1]:
+        parent = parent[step]
+    value = parent.pop(path[-1], None)
+    if literal is KEEP:
+        literal = json.dumps(value)
+    if literal is not None:
+        parent[rename or path[-1]] = "@@MEMBER@@"
+    out = directory / name
+    out.write_text(json.dumps(fixture).replace('"@@MEMBER@@"', literal or ""))
+    return out
+
+
+def _at_verdict(baseline: Path, path: tuple, literal, rename: str | None = None) -> verify.VerifyResult:
+    with tempfile.TemporaryDirectory() as tmp:
+        written = _write_at(Path(tmp), "member.json", baseline, path, literal, rename)
+        return verify.verify_fixture(verify.load_fixture(written))
+
+
+def _credential_at(baseline: Path, path: tuple, literal, rename: str | None = None) -> dict:
+    """The credential _write_at writes, as _decode_credential returns it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        written = _write_at(Path(tmp), "member.json", baseline, path, literal, rename)
+        return verify._decode_credential(verify.load_fixture(written)["atx"])
+
+
+def _projection_at(path: tuple, literal) -> dict:
+    """The v1.1 signed payload of the credential _write_at writes from the
+    v1.1 baseline, parsed."""
+    return json.loads(verify.canonical_payload_v11(_credential_at(BASELINE_V11, path, literal)))
+
+
+def _write_wrapper(directory: Path, name: str, baseline: Path, member: str, literal: str) -> Path:
+    """Write `baseline` with the fixture's own member (expected, atx) replaced
+    by the raw JSON `literal`."""
+    fixture = json.loads(baseline.read_text())
+    fixture[member] = "@@MEMBER@@"
+    out = directory / name
+    out.write_text(json.dumps(fixture).replace('"@@MEMBER@@"', literal))
+    return out
+
+
 def _run_main(*args: str) -> tuple[int, str, str]:
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         code = verify.main(["verify.py", *args])
     return code, out.getvalue(), err.getvalue()
+
+
+def _run_main_utf8(*args: str) -> tuple[int, str]:
+    """verify.main with standard output a strict UTF-8 stream, which is what a
+    pipe or a file gives it. The io.StringIO of _run_main accepts an unpaired
+    surrogate that such a stream refuses."""
+    raw = io.BytesIO()
+    out = io.TextIOWrapper(raw, encoding="utf-8", newline="\n")
+    with contextlib.redirect_stdout(out):
+        code = verify.main(["verify.py", *args])
+        out.flush()
+    return code, raw.getvalue().decode("utf-8")
 
 
 def _load_serializer(path: Path):
@@ -174,8 +254,12 @@ class InjectedNumberPurpose(unittest.TestCase):
 # Raw JSON values the Go reference verifier's typed decode refuses, so it
 # rejects them as PARSE_ERROR: a value of another JSON type or out of range for
 # a string, int64, float64, bool, []string or []signature field, and a
-# timestamp outside the grammar of Go's time.Parse(time.RFC3339).
+# timestamp outside the grammar of Go's time.Parse(time.RFC3339) or written
+# with a JSON escape, which Go's time.Time decoder does not decode.
 MALFORMED_MEMBERS = (
+    ("expiresAt", '"2099-12-31T23:59:59\\u005a"'),
+    ("expiresAt", '"\\u0032099-12-31T23:59:59Z"'),
+    ("issuedAt", '"2026-05-23T00:00:00\\u005A"'),
     ("id", "[]"),
     ("agentId", "7"),
     ("publisher", "7"),
@@ -365,6 +449,292 @@ GO_GENERATED_AT_VERDICTS = (
     ("true", "SIGNATURE_INVALID"),
     ('"2026-05-19T01:00:00+01:00"', "ACCEPT"),
     ('"2026-05-19T00:00:00.5Z"', "ACCEPT"),
+    ('"2026-05-19T00:00:00\\u005a"', "SIGNATURE_INVALID"),
+)
+
+# The tables below were recorded from the Go reference verifier in ../go, from
+# `go run .` for a verdict and from canonicalPayload and canonicalPayloadV11
+# for a signed payload, built with Go 1.22.12 and with Go 1.26.3, which agree
+# on every row.
+
+# A JSON escape outside issuedAt and expiresAt: Go decodes it, so the baselines
+# still verify. (path, raw literal).
+GO_ACCEPTED_ESCAPES = (
+    (("agentId",), '"\\u0061gent_conformance_test_001"'),
+    (("issuerDid",), '"did:opena2a:authority:opena2a\\u002eorg"'),
+    (("createdAt",), '"2026-05-23T00:00:00\\u005a"'),
+)
+
+# A member whose name differs from the Go struct field's only in case, or by
+# the two letters Go folds onto ASCII (Kelvin sign U+212A, long s U+017F): Go
+# reads it as that member. (path, name as written, raw literal, Go verdict).
+GO_FOLDED_NAME_VERDICTS = (
+    (("revoked",), "Revoked", "true", "REVOKED"),
+    (("revoked",), "REVOKED", "true", "REVOKED"),
+    (("revoked",), "revo\u212aed", "true", "REVOKED"),
+    (("signatures",), "\u017fignatures", "[]", "SIGNATURE_INVALID"),
+    (("expiresAt",), "ExpiresAt", KEEP, "ACCEPT"),
+    (("expiresAt",), "expiresat", '"2000-01-01T00:00:00Z"', "EXPIRED"),
+    (("agentId",), "AGENTID", KEEP, "ACCEPT"),
+    (("trustScore",), "TrustScore", KEEP, "ACCEPT"),
+    (("atcVersion",), "ATCVERSION", '"9.9"', "UNSUPPORTED_VERSION"),
+    (("issuerDid",), "ISSUERDID", '"did:x:y"', "UNTRUSTED_ISSUER"),
+    (("id",), "ID", "7", "PARSE_ERROR"),
+    (("signatures", 0, "value"), "VALUE", KEEP, "ACCEPT"),
+    (("signatures", 0, "value"), "VALUE", "7", "PARSE_ERROR"),
+    (("signatures", 0, "algorithm"), "Algorithm", '"none"', "SIGNATURE_INVALID"),
+)
+
+# The same for members only the v1.1 payload signs, on the v1.1 baseline.
+GO_FOLDED_NAME_VERDICTS_V11 = (
+    (("declaredPurpose",), "DeclaredPurpose", '{"x": 1}', "SIGNATURE_INVALID"),
+    (("behavioralProfile",), "BEHAVIORALPROFILE", KEEP, "ACCEPT"),
+    (("behavioralProfile",), "BehavioralProfile", "null", "SIGNATURE_INVALID"),
+    (("behavioralProfile", "checksum"), "Checksum", KEEP, "ACCEPT"),
+    (("behavioralProfile", "generatedAt"), "GENERATEDAT", KEEP, "ACCEPT"),
+    (("behavioralProfile", "generatedAt"), "GeneratedAt", '"2026-05-19"', "SIGNATURE_INVALID"),
+    (("behavioralProfile", "observationDays"), "ObservationDays", KEEP, "ACCEPT"),
+    (("scanSummary",), "ScanSummary", KEEP, "ACCEPT"),
+    (("scanSummary", "hma"), "HMA", KEEP, "ACCEPT"),
+    (("scanSummary", "criticalFindings"), "CRITICALFINDINGS", "3", "SIGNATURE_INVALID"),
+    (("scanSummary", "secretless"), "SECRETLESS", '"dirty"', "SIGNATURE_INVALID"),
+    (("capabilities",), "Capabilities", KEEP, "ACCEPT"),
+    (("issuerChain",), "IssuerChain", "[]", "SIGNATURE_INVALID"),
+    (("publisher",), "PUBLISHER", '"x"', "SIGNATURE_INVALID"),
+)
+
+# What Go's base64.StdEncoding.DecodeString makes of the first signature's
+# value after an edit: it skips CR and LF, keeps a final group's unused bits,
+# and refuses every other character outside the padded standard alphabet.
+# (edit, what it does to the value, Go verdict). A refused value rejects with
+# "invalid base64" in the reason.
+BASE64_ALPHABET = string.ascii_uppercase + string.ascii_lowercase + string.digits + "+/"
+GO_BASE64_VERDICTS = (
+    ("two characters outside the alphabet appended", lambda v: v + "!!", "SIGNATURE_INVALID"),
+    ("one inserted", lambda v: v[:10] + "!" + v[10:], "SIGNATURE_INVALID"),
+    ("space appended", lambda v: v + " ", "SIGNATURE_INVALID"),
+    ("space prepended", lambda v: " " + v, "SIGNATURE_INVALID"),
+    ("tab appended", lambda v: v + "\t", "SIGNATURE_INVALID"),
+    ("NUL appended", lambda v: v + "\x00", "SIGNATURE_INVALID"),
+    ("third padding character", lambda v: v + "=", "SIGNATURE_INVALID"),
+    ("data after the padding", lambda v: v + "AAAA", "SIGNATURE_INVALID"),
+    ("padding removed", lambda v: v[:-2], "SIGNATURE_INVALID"),
+    ("half the padding removed", lambda v: v[:-1], "SIGNATURE_INVALID"),
+    ("URL-safe alphabet", lambda v: v.replace("+", "-").replace("/", "_"), "SIGNATURE_INVALID"),
+    ("padding alone", lambda v: "====", "SIGNATURE_INVALID"),
+    ("unpaired surrogate", lambda v: "\ud800", "SIGNATURE_INVALID"),
+    ("LF appended", lambda v: v + "\n", "ACCEPT"),
+    ("LF prepended", lambda v: "\n" + v, "ACCEPT"),
+    ("CRLF inserted", lambda v: v[:40] + "\r\n" + v[40:], "ACCEPT"),
+    ("LF inside the padding", lambda v: v[:-1] + "\n=", "ACCEPT"),
+    # The last character before "==" carries four unused bits; setting one
+    # leaves the decoded signature as it was.
+    (
+        "unused bit set",
+        lambda v: v[:-3] + BASE64_ALPHABET[BASE64_ALPHABET.index(v[-3]) | 1] + "==",
+        "ACCEPT",
+    ),
+)
+
+# An unpaired UTF-16 surrogate escape in a string member, which Go's
+# encoding/json decodes to U+FFFD. (path, raw literal, the string Go holds).
+GO_SURROGATE_DECODES = (
+    (("agentId",), '"\\ud800"', "\ufffd"),
+    (("agentId",), '"\\udc00"', "\ufffd"),
+    (("agentId",), '"a\\ud800b"', "a\ufffdb"),
+    (("agentId",), '"\\ud800\\ud800"', "\ufffd\ufffd"),
+    (("agentId",), '"\\udc00\\ud800"', "\ufffd\ufffd"),
+    (("agentId",), '"\\ud800\\ud800\\udc00"', "\ufffd\U00010000"),
+    (("publisher",), '"\\ud83d\\ude00"', "\U0001f600"),
+    (("issuerDid",), '"did:x:\\ud800"', "did:x:\ufffd"),
+)
+
+# The verdict on each baseline with such an escape. (path, raw literal, Go
+# verdict).
+GO_SURROGATE_VERDICTS = (
+    (("agentId",), '"\\ud800"', "SIGNATURE_INVALID"),
+    (("agentId",), '"a\\ud800b"', "SIGNATURE_INVALID"),
+    (("issuerDid",), '"did:x:\\ud800"', "UNTRUSTED_ISSUER"),
+    (("id",), '"\\udfff"', "ACCEPT"),
+    (("signatures", 0, "keyId"), '"\\ud800"', "ACCEPT"),
+    (("signatures", 0, "value"), '"\\ud800"', "SIGNATURE_INVALID"),
+)
+
+# The same on the v1.1 baseline, for members only the v1.1 payload signs.
+# declaredPurpose enters that payload undecoded, and the Go verifier's JCS
+# library refuses an unpaired surrogate escape in it.
+GO_SURROGATE_VERDICTS_V11 = (
+    (("publisher",), '"\\ud800"', "SIGNATURE_INVALID"),
+    (("capabilities",), '["\\ud800"]', "SIGNATURE_INVALID"),
+    (("issuerChain",), '["\\ud800"]', "SIGNATURE_INVALID"),
+    (("behavioralProfile", "checksum"), '"\\ud800"', "SIGNATURE_INVALID"),
+    (("scanSummary", "hma"), '"\\ud800"', "SIGNATURE_INVALID"),
+    (("declaredPurpose",), '"\\ud800"', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '"\\udc00"', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '{"k": "\\ud800"}', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '{"\\ud800": 1}', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '["\\ud800"]', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '"\\ud83d\\ude00"', "SIGNATURE_INVALID"),
+)
+
+# trustScore as Go formats it with %.6f into both signed payloads: the float64
+# decode keeps the sign of a zero. (raw literal, formatted).
+GO_TRUST_SCORE_FORMATS = (
+    ("-0", "-0.000000"),
+    ("-0.0", "-0.000000"),
+    ("-0e0", "-0.000000"),
+    ("-1e-9", "-0.000000"),
+    ("0", "0.000000"),
+    ("0.0000005", "0.000000"),
+    ("87.5", "87.500000"),
+)
+
+# The v1.1 baseline's behavioralProfile and scanSummary as signed.
+SIGNED_PROFILE = {
+    "checksum": "sha256:ghi789",
+    "generatedAt": "2026-05-19T00:00:00Z",
+    "observationDays": 14,
+}
+SIGNED_SCAN = {
+    "hma": "passed",
+    "criticalFindings": 0,
+    "highFindings": 0,
+    "secretless": "clean",
+    "cryptoServe": "no-weak-crypto",
+    "oasbLevel": "L1",
+}
+GO_ZERO_TIME = "0001-01-01T00:00:00Z"
+ZERO_PROFILE = {"checksum": "", "generatedAt": GO_ZERO_TIME, "observationDays": 0}
+ZERO_SCAN = {
+    "hma": "",
+    "criticalFindings": 0,
+    "highFindings": 0,
+    "secretless": "",
+    "cryptoServe": "",
+    "oasbLevel": "",
+}
+
+# behavioralProfile as the Go verifier's projectBehavioralProfileV11 projects
+# it into the v1.1 signed payload when the member at path holds the raw
+# literal (None: absent). A member outside its Go type projects the whole
+# profile as null; an absent or null member takes the Go zero value.
+# (path, raw literal, projection).
+GO_BEHAVIORAL_PROFILE_PROJECTIONS = (
+    (("behavioralProfile", "generatedAt"), '"2026-05-19"', None),
+    (("behavioralProfile", "generatedAt"), '"2026-05-19T00:00:00\\u005a"', None),
+    (("behavioralProfile", "generatedAt"), '""', None),
+    (("behavioralProfile", "generatedAt"), "0", None),
+    (("behavioralProfile", "generatedAt"), "false", None),
+    (("behavioralProfile", "generatedAt"), "[]", None),
+    (("behavioralProfile", "generatedAt"), "{}", None),
+    (("behavioralProfile", "generatedAt"), "null", {**SIGNED_PROFILE, "generatedAt": GO_ZERO_TIME}),
+    (("behavioralProfile", "generatedAt"), None, {**SIGNED_PROFILE, "generatedAt": GO_ZERO_TIME}),
+    (("behavioralProfile", "generatedAt"), '"2026-05-19T01:00:00+01:00"', SIGNED_PROFILE),
+    (("behavioralProfile", "observationDays"), '"14"', None),
+    (("behavioralProfile", "observationDays"), "14.0", None),
+    (("behavioralProfile", "observationDays"), "14.5", None),
+    (("behavioralProfile", "observationDays"), "1e1", None),
+    (("behavioralProfile", "observationDays"), "true", None),
+    (("behavioralProfile", "observationDays"), '"abc"', None),
+    (("behavioralProfile", "observationDays"), "[]", None),
+    (("behavioralProfile", "observationDays"), "9223372036854775808", None),
+    (("behavioralProfile", "observationDays"), "null", {**SIGNED_PROFILE, "observationDays": 0}),
+    (("behavioralProfile", "observationDays"), None, {**SIGNED_PROFILE, "observationDays": 0}),
+    (("behavioralProfile", "observationDays"), "-0", {**SIGNED_PROFILE, "observationDays": 0}),
+    (("behavioralProfile", "observationDays"), "-1", {**SIGNED_PROFILE, "observationDays": -1}),
+    (("behavioralProfile", "checksum"), "7", None),
+    (("behavioralProfile", "checksum"), "[]", None),
+    (("behavioralProfile", "checksum"), "true", None),
+    (("behavioralProfile", "checksum"), "{}", None),
+    (("behavioralProfile", "checksum"), "null", {**SIGNED_PROFILE, "checksum": ""}),
+    (("behavioralProfile", "checksum"), None, {**SIGNED_PROFILE, "checksum": ""}),
+    (("behavioralProfile", "checksum"), '"\\ud800"', {**SIGNED_PROFILE, "checksum": "\ufffd"}),
+    (("behavioralProfile",), "7", None),
+    (("behavioralProfile",), '"x"', None),
+    (("behavioralProfile",), "[]", None),
+    (("behavioralProfile",), "true", None),
+    (("behavioralProfile",), "null", None),
+    (("behavioralProfile",), None, None),
+    (("behavioralProfile",), "{}", ZERO_PROFILE),
+)
+
+# scanSummary as the Go verifier's projectScanSummaryV11 projects it. It
+# ignores the decode error, so a member outside its Go type takes the zero
+# value and the others keep theirs. (path, raw literal, projection).
+GO_SCAN_SUMMARY_PROJECTIONS = (
+    (("scanSummary", "criticalFindings"), "3", {**SIGNED_SCAN, "criticalFindings": 3}),
+    (("scanSummary", "criticalFindings"), '"3"', SIGNED_SCAN),
+    (("scanSummary", "criticalFindings"), "3.5", SIGNED_SCAN),
+    (("scanSummary", "criticalFindings"), "3.0", SIGNED_SCAN),
+    (("scanSummary", "criticalFindings"), "1e1", SIGNED_SCAN),
+    (("scanSummary", "criticalFindings"), "true", SIGNED_SCAN),
+    (("scanSummary", "criticalFindings"), '"abc"', SIGNED_SCAN),
+    (("scanSummary", "criticalFindings"), "9223372036854775808", SIGNED_SCAN),
+    (("scanSummary", "criticalFindings"), "null", SIGNED_SCAN),
+    (("scanSummary", "highFindings"), '"1"', SIGNED_SCAN),
+    (("scanSummary", "hma"), "7", {**SIGNED_SCAN, "hma": ""}),
+    (("scanSummary", "hma"), "1.5", {**SIGNED_SCAN, "hma": ""}),
+    (("scanSummary", "hma"), "true", {**SIGNED_SCAN, "hma": ""}),
+    (("scanSummary", "hma"), "[]", {**SIGNED_SCAN, "hma": ""}),
+    (("scanSummary", "hma"), "null", {**SIGNED_SCAN, "hma": ""}),
+    (("scanSummary", "hma"), '"\\ud800"', {**SIGNED_SCAN, "hma": "\ufffd"}),
+    (("scanSummary", "oasbLevel"), "2", {**SIGNED_SCAN, "oasbLevel": ""}),
+    (("scanSummary", "secretless"), None, {**SIGNED_SCAN, "secretless": ""}),
+    (("scanSummary",), "7", ZERO_SCAN),
+    (("scanSummary",), '"x"', ZERO_SCAN),
+    (("scanSummary",), "[1.5]", ZERO_SCAN),
+    (("scanSummary",), "null", ZERO_SCAN),
+    (("scanSummary",), None, ZERO_SCAN),
+)
+
+# The verdict on the v1.1 baseline with such a member. The baseline signs
+# criticalFindings 0 and highFindings 0, so a scanSummary count the Go verifier
+# cannot decode projects the signed 0 and the signature still verifies; a null
+# behavioralProfile is not what was signed. (path, raw literal, Go verdict).
+GO_UNDECODABLE_MEMBER_VERDICTS = (
+    (("scanSummary", "criticalFindings"), '"3"', "ACCEPT"),
+    (("scanSummary", "criticalFindings"), '"abc"', "ACCEPT"),
+    (("scanSummary", "highFindings"), '"1"', "ACCEPT"),
+    (("scanSummary", "criticalFindings"), "3", "SIGNATURE_INVALID"),
+    (("scanSummary", "hma"), "7", "SIGNATURE_INVALID"),
+    (("behavioralProfile", "observationDays"), '"14"', "SIGNATURE_INVALID"),
+    (("behavioralProfile", "observationDays"), "14.0", "SIGNATURE_INVALID"),
+    (("behavioralProfile", "observationDays"), "14.5", "SIGNATURE_INVALID"),
+    (("behavioralProfile", "observationDays"), '"abc"', "SIGNATURE_INVALID"),
+    (("behavioralProfile", "checksum"), "7", "SIGNATURE_INVALID"),
+)
+
+# A fixture whose credential is not an object. Go's decode refuses a number,
+# an array, a string or a boolean, and leaves null or {} at the zero value,
+# whose atcVersion is "". (raw literal, Go verdict).
+GO_CREDENTIAL_VERDICTS = (
+    ("7", "PARSE_ERROR"),
+    ("[]", "PARSE_ERROR"),
+    ('"x"', "PARSE_ERROR"),
+    ("true", "PARSE_ERROR"),
+    ("null", "UNSUPPORTED_VERSION"),
+    ("{}", "UNSUPPORTED_VERSION"),
+)
+
+# An expiresAt of 2099-12-31T23:59:59.5Z against a verifier clock in the same
+# second: the comparison keeps the fraction. (clock, Go verdict).
+GO_SUBSECOND_EXPIRY_VERDICTS = (
+    ("2099-12-31T23:59:59.6Z", "EXPIRED"),
+    ("2099-12-31T23:59:59.5Z", "ACCEPT"),
+    ("2099-12-31T23:59:59.4Z", "ACCEPT"),
+)
+
+# A fixture whose expected member the Go verifier's expectedOutcome struct
+# cannot hold, so the file fails to load there, with what this verifier's
+# load error names.
+GO_UNLOADABLE_EXPECTED = (
+    ("7", "expected 7 is not a JSON object"),
+    ('"ACCEPT"', "expected 'ACCEPT' is not a JSON object"),
+    ("[]", "expected [] is not a JSON object"),
+    ("true", "expected True is not a JSON object"),
+    ('{"verifyResult": 7}', "expected.verifyResult 7 is not a JSON string"),
+    ('{"verifyResult": "REJECT", "rejectCategory": 7}', "expected.rejectCategory 7 is not a JSON string"),
+    ('{"verifyResult": "REJECT", "reasonContains": 7}', "expected.reasonContains 7 is not a JSON string"),
 )
 
 
@@ -476,6 +846,297 @@ class GoGeneratedAtProjection(unittest.TestCase):
         self.assertEqual(code, 0, text + err)
         self.assertNotIn("verify error", text)
         self.assertEqual(text.splitlines()[-1], f"summary: {n} pass, 0 fail ({n} fixtures)")
+
+
+class GoMemberNameFolding(unittest.TestCase):
+    def test_folded_name_reaches_the_go_verdict(self):
+        for baseline in (BASELINE_V10, BASELINE_V11):
+            for path, name, literal, outcome in GO_FOLDED_NAME_VERDICTS:
+                with self.subTest(baseline=baseline.name, path=path, name=name, value=literal):
+                    got = _at_verdict(baseline, path, literal, rename=name)
+                    self.assertEqual(_outcome(got), outcome, got.reason)
+
+    def test_folded_name_of_a_v1_1_member_reaches_the_go_verdict(self):
+        for path, name, literal, outcome in GO_FOLDED_NAME_VERDICTS_V11:
+            with self.subTest(path=path, name=name, value=literal):
+                got = _at_verdict(BASELINE_V11, path, literal, rename=name)
+                self.assertEqual(_outcome(got), outcome, got.reason)
+
+    def test_another_name_is_not_the_member(self):
+        # Control: folding joins case variants only. "revoked_" is no member
+        # of the credential, so revoked is absent, false, and the baseline
+        # verifies.
+        for baseline in (BASELINE_V10, BASELINE_V11):
+            with self.subTest(baseline=baseline.name):
+                got = _at_verdict(baseline, ("revoked",), "true", rename="revoked_")
+                self.assertTrue(got.accepted, got.reason)
+
+
+class GoEscapedString(unittest.TestCase):
+    def test_escape_outside_a_timestamp_is_decoded(self):
+        # MALFORMED_MEMBERS holds the other half: an escape in issuedAt or
+        # expiresAt is a PARSE_ERROR.
+        for baseline in (BASELINE_V10, BASELINE_V11):
+            for path, literal in GO_ACCEPTED_ESCAPES:
+                with self.subTest(baseline=baseline.name, path=path, value=literal):
+                    got = _at_verdict(baseline, path, literal)
+                    self.assertTrue(got.accepted, got.reason)
+
+    def test_escaped_verifier_clock_is_decoded(self):
+        # Go holds clockRfc3339 as a string and parses it once decoded.
+        fixture = json.loads(BASELINE_V11.read_text())
+        fixture["verifierState"]["clockRfc3339"] = "@@CLOCK@@"
+        text = json.dumps(fixture).replace("@@CLOCK@@", "2026-05-24T00:00:00\\u005a")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "clock.json"
+            path.write_text(text)
+            got = verify.verify_fixture(verify.load_fixture(path))
+        self.assertTrue(got.accepted, got.reason)
+
+
+class GoSignatureBase64(unittest.TestCase):
+    def test_signature_value_reaches_the_go_verdict(self):
+        for baseline in (BASELINE_V10, BASELINE_V11):
+            value = json.loads(baseline.read_text())["atx"]["signatures"][0]["value"]
+            for label, edit, outcome in GO_BASE64_VERDICTS:
+                with self.subTest(baseline=baseline.name, edit=label):
+                    self.assertNotEqual(edit(value), value)
+                    path = ("signatures", 0, "value")
+                    got = _at_verdict(baseline, path, json.dumps(edit(value)))
+                    self.assertEqual(_outcome(got), outcome, got.reason)
+                    if outcome != "ACCEPT":
+                        self.assertIn("invalid base64", got.reason)
+
+
+class GoUnpairedSurrogate(unittest.TestCase):
+    def test_string_member_decodes_to_the_replacement_character(self):
+        for path, literal, decoded in GO_SURROGATE_DECODES:
+            with self.subTest(path=path, value=literal):
+                credential = _credential_at(BASELINE_V11, path, literal)
+                self.assertEqual(credential[path[0]], decoded)
+
+    def test_signed_payloads_carry_the_replacement_character(self):
+        v10 = verify.canonical_payload(_credential_at(BASELINE_V10, ("agentId",), '"a\\ud800b"'))
+        self.assertTrue(v10.startswith("a\ufffdb|".encode("utf-8")), v10)
+        v11 = _projection_at(("agentId",), '"a\\ud800b"')
+        self.assertEqual(v11["agentId"], "a\ufffdb")
+
+    def test_member_reaches_the_go_verdict(self):
+        for baseline in (BASELINE_V10, BASELINE_V11):
+            for path, literal, outcome in GO_SURROGATE_VERDICTS:
+                with self.subTest(baseline=baseline.name, path=path, value=literal):
+                    got = _at_verdict(baseline, path, literal)
+                    self.assertEqual(_outcome(got), outcome, got.reason)
+
+    def test_v1_1_member_reaches_the_go_verdict(self):
+        for path, literal, outcome in GO_SURROGATE_VERDICTS_V11:
+            with self.subTest(path=path, value=literal):
+                got = _at_verdict(BASELINE_V11, path, literal)
+                self.assertEqual(_outcome(got), outcome, got.reason)
+
+    def test_names_that_decode_alike_are_duplicates(self):
+        # Go decodes both names to U+FFFD, so its strict parse sees one name
+        # twice, at the top of the credential and below it.
+        for literal in (
+            '{"\\ud800": 1, "\\ufffd": 2}',
+            '{"\\ud800": 1, "\\udbff": 2}',
+            '[{"\\udc00": 1, "\\ud800": 2}]',
+        ):
+            with self.subTest(value=literal):
+                got = _at_verdict(BASELINE_V11, ("extra",), literal)
+                self.assertEqual(got.reject_category, "PARSE_ERROR", got.reason)
+                self.assertIn("duplicate member", got.reason)
+
+    def test_verifier_state_strings_decode_the_same_way(self):
+        # Go decodes the CRL's agentId and the trusted issuers as it decodes
+        # the credential, so an unpaired surrogate on one side matches U+FFFD
+        # or another unpaired surrogate on the other.
+        for baseline in (BASELINE_V10, BASELINE_V11):
+            for agent_id, revoked_id in (("a\ud800", "a\ufffd"), ("a\ufffd", "a\udc00")):
+                with self.subTest(baseline=baseline.name, agent=agent_id, crl=revoked_id):
+                    fixture = json.loads(baseline.read_text())
+                    fixture["atx"]["agentId"] = agent_id
+                    fixture["verifierState"]["crl"] = {
+                        "entries": [{"agentId": revoked_id, "reason": "r\ud800"}]
+                    }
+                    with tempfile.TemporaryDirectory() as tmp:
+                        path = Path(tmp) / "crl.json"
+                        path.write_text(json.dumps(fixture))
+                        got = verify.verify_fixture(verify.load_fixture(path))
+                    self.assertEqual(got.reject_category, "REVOKED", got.reason)
+                    self.assertEqual(got.reason, "agent appears on CRL: r\ufffd")
+            with self.subTest(baseline=baseline.name, trusted="did:x:\\udfff"):
+                fixture = json.loads(baseline.read_text())
+                fixture["atx"]["issuerDid"] = "did:x:\ud800"
+                fixture["verifierState"]["trustedIssuers"] = ["did:x:\udfff"]
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = Path(tmp) / "trusted.json"
+                    path.write_text(json.dumps(fixture))
+                    got = verify.verify_fixture(verify.load_fixture(path))
+                self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+
+
+class GoNegativeZero(unittest.TestCase):
+    def test_trust_score_formats_as_go_formats_it(self):
+        for literal, formatted in GO_TRUST_SCORE_FORMATS:
+            with self.subTest(value=literal):
+                v10 = verify.canonical_payload(_credential_at(BASELINE_V10, ("trustScore",), literal))
+                self.assertEqual(v10.decode("utf-8").split("|")[7], formatted)
+                self.assertEqual(_projection_at(("trustScore",), literal)["trustScore"], formatted)
+
+    def test_negative_zero_is_an_integer(self):
+        # Controls: Go decodes -0 into an int64 or int field as 0, so it is
+        # not a PARSE_ERROR. transparencyLogIndex is unsigned by both payloads;
+        # trustLevel 0 is not the signed 4.
+        for baseline in (BASELINE_V10, BASELINE_V11):
+            with self.subTest(baseline=baseline.name):
+                got = _at_verdict(baseline, ("transparencyLogIndex",), "-0")
+                self.assertTrue(got.accepted, got.reason)
+                got = _at_verdict(baseline, ("trustLevel",), "-0")
+                self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+
+
+class GoUndecodableProjection(unittest.TestCase):
+    # The verdict alone does not tell a null behavioralProfile from any other
+    # projection the baseline's signature does not cover, so these compare the
+    # projected member with the one the Go verifier signs over.
+    def test_behavioral_profile_projects_as_go_projects_it(self):
+        for path, literal, projection in GO_BEHAVIORAL_PROFILE_PROJECTIONS:
+            with self.subTest(path=path, value=literal):
+                self.assertEqual(_projection_at(path, literal)["behavioralProfile"], projection)
+
+    def test_scan_summary_projects_as_go_projects_it(self):
+        for path, literal, projection in GO_SCAN_SUMMARY_PROJECTIONS:
+            with self.subTest(path=path, value=literal):
+                self.assertEqual(_projection_at(path, literal)["scanSummary"], projection)
+
+    def test_baseline_projects_what_it_signs(self):
+        payload = _projection_at(("createdAt",), KEEP)
+        self.assertEqual(payload["behavioralProfile"], SIGNED_PROFILE)
+        self.assertEqual(payload["scanSummary"], SIGNED_SCAN)
+
+    def test_member_reaches_the_go_verdict(self):
+        for path, literal, outcome in GO_UNDECODABLE_MEMBER_VERDICTS:
+            with self.subTest(path=path, value=literal):
+                got = _at_verdict(BASELINE_V11, path, literal)
+                self.assertEqual(_outcome(got), outcome, got.reason)
+
+    def test_directory_run_reaches_the_summary_line(self):
+        # A non-numeric observationDays or criticalFindings used to end in a
+        # verify error with no verdict.
+        n = len(GO_UNDECODABLE_MEMBER_VERDICTS)
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            for i, (path, literal, outcome) in enumerate(GO_UNDECODABLE_MEMBER_VERDICTS):
+                expected = {"verifyResult": "ACCEPT"}
+                if outcome != "ACCEPT":
+                    expected = {"verifyResult": "REJECT", "rejectCategory": outcome}
+                _write_at(directory, f"{i:02d}.json", BASELINE_V11, path, literal, expected=expected)
+            code, text, err = _run_main(str(directory))
+        self.assertEqual(code, 0, text + err)
+        self.assertNotIn("verify error", text)
+        self.assertEqual(text.splitlines()[-1], f"summary: {n} pass, 0 fail ({n} fixtures)")
+
+
+class GoNonObjectCredential(unittest.TestCase):
+    def test_credential_reaches_the_go_verdict(self):
+        for baseline in (BASELINE_V10, BASELINE_V11):
+            for literal, outcome in GO_CREDENTIAL_VERDICTS:
+                with self.subTest(baseline=baseline.name, atx=literal), tempfile.TemporaryDirectory() as tmp:
+                    path = _write_wrapper(Path(tmp), "atx.json", baseline, "atx", literal)
+                    got = verify.verify_fixture(verify.load_fixture(path))
+                    self.assertEqual(_outcome(got), outcome, got.reason)
+                    if outcome == "PARSE_ERROR":
+                        self.assertTrue(got.reason.startswith("credential "), got.reason)
+
+
+class GoSubSecondExpiry(unittest.TestCase):
+    def test_expiry_compares_the_fraction_of_a_second(self):
+        for baseline in (BASELINE_V10, BASELINE_V11):
+            for clock, outcome in GO_SUBSECOND_EXPIRY_VERDICTS:
+                with self.subTest(baseline=baseline.name, clock=clock):
+                    fixture = json.loads(baseline.read_text())
+                    fixture["atx"]["expiresAt"] = "2099-12-31T23:59:59.5Z"
+                    fixture["verifierState"]["clockRfc3339"] = clock
+                    got = verify.verify_fixture(fixture)
+                    self.assertEqual(_outcome(got), outcome, got.reason)
+
+
+class ExpectedMember(unittest.TestCase):
+    def test_expected_outside_its_go_type_is_a_load_error(self):
+        for literal, message in GO_UNLOADABLE_EXPECTED:
+            with self.subTest(expected=literal), tempfile.TemporaryDirectory() as tmp:
+                path = _write_wrapper(Path(tmp), "e.json", BASELINE_V11, "expected", literal)
+                with self.assertRaises(ValueError) as raised:
+                    verify._expected_outcome(verify.load_fixture(path))
+                self.assertEqual(str(raised.exception), message)
+
+    def test_absent_or_null_expected_is_the_zero_value(self):
+        # Go leaves an absent or null expected, and an absent or null member
+        # of it, at "". No verifyResult is not ACCEPT.
+        zero = {"verifyResult": "", "rejectCategory": "", "reasonContains": ""}
+        for fixture in ({}, {"expected": None}, {"expected": {}}, {"expected": {"verifyResult": None}}):
+            with self.subTest(fixture=fixture):
+                self.assertEqual(verify._expected_outcome(fixture), zero)
+
+    def test_directory_run_reaches_the_summary_line(self):
+        # Each of the first two used to end the run with an AttributeError
+        # traceback.
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            _write_wrapper(directory, "a-number.json", BASELINE_V11, "expected", "7")
+            _write_wrapper(directory, "b-null.json", BASELINE_V11, "expected", "null")
+            _write_wrapper(directory, "c-member.json", BASELINE_V11, "expected", '{"verifyResult": 7}')
+            (directory / "d-baseline-valid.json").write_text(BASELINE_V11.read_text())
+            code, text, err = _run_main(str(directory))
+        self.assertEqual(code, 1, text + err)
+        self.assertIn("a-number.json  (load error: expected 7 is not a JSON object)", text)
+        self.assertIn("c-member.json  (load error: expected.verifyResult 7 is not", text)
+        # b-null.json expects nothing, the credential verifies, and that is a
+        # mismatch with a report block of its own.
+        self.assertIn("b-null.json\n       expected: \n       observed: ACCEPT", text)
+        self.assertEqual(text.splitlines()[-1], "summary: 1 pass, 3 fail (4 fixtures)")
+
+
+class UnencodableReportLine(unittest.TestCase):
+    def test_unpaired_surrogate_in_a_reason_does_not_end_the_run(self):
+        # The issuer DID is quoted in the reason. It used to reach a UTF-8
+        # standard output as an unpaired surrogate and raise there.
+        untrusted = {"verifyResult": "REJECT", "rejectCategory": "UNTRUSTED_ISSUER"}
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            _write_at(
+                directory, "a-issuer.json", BASELINE_V11, ("issuerDid",), '"did:x:\\ud800"',
+                expected=untrusted,
+            )
+            (directory / "b-baseline-valid.json").write_text(BASELINE_V11.read_text())
+            code, text = _run_main_utf8(str(directory))
+        self.assertEqual(code, 0, text)
+        self.assertIn("issuer DID did:x:\ufffd is not in the verifier's trusted set", text)
+        self.assertEqual(text.splitlines()[-1], "summary: 2 pass, 0 fail (2 fixtures)")
+
+    def test_line_standard_output_cannot_encode_is_escaped(self):
+        # Whatever puts such a character in a report line, the line is
+        # written with it escaped and the run goes on.
+        real = verify.verify_fixture
+
+        def surrogate_in_reason(fixture):
+            if fixture.get("name") == "surrogate":
+                return verify.VerifyResult(reject_category="PARSE_ERROR", reason="bad \ud800 name")
+            return real(fixture)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            fixture = json.loads(BASELINE_V11.read_text())
+            fixture["name"] = "surrogate"
+            fixture["expected"] = dict(PARSE_ERROR_EXPECTED)
+            (directory / "a-surrogate.json").write_text(json.dumps(fixture))
+            (directory / "b-baseline-valid.json").write_text(BASELINE_V11.read_text())
+            with mock.patch.object(verify, "verify_fixture", surrogate_in_reason):
+                code, text = _run_main_utf8(str(directory))
+        self.assertEqual(code, 0, text)
+        self.assertIn("observed: REJECT[PARSE_ERROR: bad \\ud800 name]", text)
+        self.assertEqual(text.splitlines()[-1], "summary: 2 pass, 0 fail (2 fixtures)")
 
 
 class VerifyError(unittest.TestCase):

@@ -27,17 +27,28 @@ lesson and scoped to the whole body because ATX signs it all):
     sanctioned RFC 7519 last-wins semantics — duplicates are the RFC 8259 §4
     first-wins/last-wins parser-divergence smuggling split.
   - the fixture wrapper (name/verifierState/expected) is harness metadata and
-    parses leniently.
+    parses leniently. A fixture whose expected member is not an object of
+    strings fails to load, as it does in the Go reference verifier.
   - each member the Go reference verifier's atx struct declares with a typed
-    field, looked up by its exact name, is type-checked against that field:
-    strings, integers in int64 range, a finite trustScore, a boolean revoked,
-    arrays of strings, signature objects, and issuedAt/expiresAt in the
-    date-time grammar of Go 1.22's time.Parse(time.RFC3339). A value outside
-    its type rejects as PARSE_ERROR instead of raising; an absent or null
-    member takes the Go zero value. Go's encoding/json also matches a member
-    name that differs only in case, which this verifier does not, and parses
-    a timestamp's raw bytes, where this verifier decodes its JSON escapes
-    first, so on those inputs the two verifiers can disagree.
+    field is type-checked against that field: strings, integers in int64
+    range, a finite trustScore, a boolean revoked, arrays of strings,
+    signature objects, and issuedAt/expiresAt in the date-time grammar of Go
+    1.22's time.Parse(time.RFC3339). A value outside its type rejects as
+    PARSE_ERROR instead of raising; an absent or null member takes the Go zero
+    value.
+  - a member is read as Go's encoding/json reads it into that struct: a name
+    that differs from the field's only in case names the same member, an
+    unpaired UTF-16 surrogate escape in a string decodes to U+FFFD, a
+    trustScore written as -0 keeps its sign, and a timestamp written with a
+    JSON escape is outside the grammar, because Go parses the bytes between
+    its quotes. The members of scanSummary, behavioralProfile and each
+    signatures entry are read the same way.
+  - declaredPurpose is the one member no decoder reads: it enters the v1.1
+    signed payload as written. An unpaired surrogate escape in it cannot be
+    canonicalized and rejects as VERIFIER_CONFIG_ERROR, the category the Go
+    reference verifier's JCS library leads to. One input still differs: an
+    unpaired surrogate escape followed directly by another \\u escape, which
+    that library reads as a single U+FFFD and this verifier refuses.
   - NaN, Infinity and -Infinity are not JSON, so a file carrying one fails to
     load, as it does in the Go reference verifier.
 
@@ -103,6 +114,21 @@ _RFC3339 = re.compile(
 # The range of the Go reference verifier's int64 and int (trustLevel).
 _INT64_MIN, _INT64_MAX = -(2**63), 2**63 - 1
 
+# An unpaired UTF-16 surrogate, which json.loads keeps when a JSON string
+# escapes one with no partner beside it ("\ud800"). Go's encoding/json decodes
+# each to U+FFFD.
+_UNPAIRED_SURROGATE = re.compile("[\ud800-\udfff]")
+_REPLACEMENT_CHARACTER = chr(0xFFFD)
+
+# A JSON string literal in a document json.loads has accepted, with the colon
+# after it when it is a member name.
+_STRING_LITERAL = re.compile(r'"(?:[^"\\]|\\.)*"([ \t\n\r]*:)?', re.DOTALL)
+
+# What Go's base64.StdEncoding.DecodeString accepts once it has dropped every
+# CR and LF: four-character groups of the standard alphabet, the last one
+# padded with "=" when the data ends short.
+_BASE64 = re.compile(r"(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?")
+
 
 class _Instant(NamedTuple):
     """A point in time as Go's time.Time holds it: whole seconds since
@@ -155,7 +181,7 @@ def _parse_rfc3339(value: Any) -> _Instant:
     and second 0-59, and any two-digit offset hour and minute; a fraction keeps
     nine digits. Go 1.23 and later also reject an offset hour above 24 or an
     offset minute above 60; CI builds the Go reference verifier with Go 1.22,
-    which does not."""
+    which does not (README "Running the verifiers" says the same)."""
     if not isinstance(value, str):
         raise ValueError("not a JSON string")
     m = _RFC3339.fullmatch(value)
@@ -244,15 +270,25 @@ def _fold_key(s: str) -> str:
     return "".join(out)
 
 
+def _go_string(value: str) -> str:
+    """A JSON string as Go's encoding/json decodes it: each unpaired UTF-16
+    surrogate becomes U+FFFD."""
+    return _UNPAIRED_SURROGATE.sub(_REPLACEMENT_CHARACTER, value)
+
+
 def _dup_marking_pairs(pairs: list[tuple[str, Any]]) -> "_DupMarkedDict":
     out = _DupMarkedDict()
     dup: str | None = None
     seen_folded: dict[str, str] = {}
     for key, value in pairs:
-        fk = _fold_key(key)
+        # Names are compared as Go decodes them, so two names that escape
+        # different unpaired surrogates are one name. The object keeps the
+        # name as written.
+        name = _go_string(key)
+        fk = _fold_key(name)
         if dup is None and fk in seen_folded:
-            dup = key
-        seen_folded[fk] = key
+            dup = name
+        seen_folded[fk] = name
         if dup is None:
             dup = _subtree_duplicate(value)
         out[key] = value
@@ -314,34 +350,30 @@ def canonical_payload_v11(atx: dict[str, Any]) -> bytes:
     jcs-vectors suite, not by shared code. atx is the credential as
     _decode_credential returns it.
     """
+    # The Go verifier's projectScanSummaryV11 ignores a decode error, which
+    # leaves each member it could not decode at its zero value; a scanSummary
+    # that is not an object leaves all six there.
     scan = atx.get("scanSummary")
-    if not isinstance(scan, dict):
-        scan = {}
-    scan_summary = {
-        "hma": scan.get("hma", "") or "",
-        "criticalFindings": int(scan.get("criticalFindings", 0) or 0),
-        "highFindings": int(scan.get("highFindings", 0) or 0),
-        "secretless": scan.get("secretless", "") or "",
-        "cryptoServe": scan.get("cryptoServe", "") or "",
-        "oasbLevel": scan.get("oasbLevel", "") or "",
-    }
+    scan_summary = _decode_members(
+        _SCAN_SUMMARY_TYPES, scan if isinstance(scan, dict) else {}, "scanSummary.", lenient=True
+    )
 
+    # The Go verifier's projectBehavioralProfileV11 projects behavioralProfile
+    # as null when it is absent, null or not an object, and when one member
+    # fails its decode: a checksum that is not a string, an observationDays
+    # that is not an integer, a generatedAt outside the time.Time grammar. An
+    # absent or null generatedAt is the zero time, 0001-01-01T00:00:00Z.
     bp_in = atx.get("behavioralProfile")
     behavioral_profile: Any = None
     if isinstance(bp_in, dict):
         try:
-            generated_at = _normalize_rfc3339(bp_in["generatedAt"]) if bp_in.get("generatedAt") else ""
-        except ValueError:
-            # The Go verifier's projectBehavioralProfileV11 projects
-            # behavioralProfile as null when generatedAt fails its time.Time
-            # decode; a generatedAt that fails this parse projects the same.
-            generated_at = None
-        if generated_at is not None:
-            behavioral_profile = {
-                "checksum": bp_in.get("checksum", "") or "",
-                "generatedAt": generated_at,
-                "observationDays": int(bp_in.get("observationDays", 0) or 0),
-            }
+            behavioral_profile = _decode_members(
+                _BEHAVIORAL_PROFILE_TYPES, bp_in, "behavioralProfile."
+            )
+        except _DecodeError:
+            behavioral_profile = None
+        else:
+            behavioral_profile["generatedAt"] = _format_rfc3339(behavioral_profile["generatedAt"])
 
     # declaredPurpose is the one presence-based TBS member (atx-spec §1.3a.2
     # rule 5, degenerate inputs pinned per issue #11): absent / null /
@@ -376,12 +408,6 @@ def canonical_payload_v11(atx: dict[str, Any]) -> bytes:
     if declared_purpose is not None:
         tbs["declaredPurpose"] = declared_purpose
     return _jcs_canonicalize(tbs)
-
-
-def _normalize_rfc3339(s: str) -> str:
-    """Normalize an RFC 3339 timestamp to UTC with seconds precision, the shape
-    of Go's time.RFC3339 "2006-01-02T15:04:05Z07:00" for a UTC time."""
-    return _format_rfc3339(_parse_rfc3339(s))
 
 
 def _controller_did(key_id: str) -> str:
@@ -468,22 +494,65 @@ _MEMBER_TYPES = {
     "revoked": "bool",
 }
 
-# The members of one signatures entry, each a Go string.
-_SIGNATURE_MEMBERS = ("keyId", "algorithm", "value")
+# The members the Go reference verifier's atx struct holds as raw JSON and
+# decodes only when it projects the v1.1 signed payload, or never
+# (declaredPurpose).
+_RAW_MEMBERS = ("declaredPurpose", "behavioralProfile", "scanSummary")
+
+# The Go type of each member of one signatures entry, of behavioralProfile as
+# the Go verifier's projectBehavioralProfileV11 decodes it, of scanSummary as
+# its tbsScanSummaryV11 does, and of a fixture's expected object.
+_SIGNATURE_TYPES = {"keyId": "string", "algorithm": "string", "value": "string"}
+_BEHAVIORAL_PROFILE_TYPES = {
+    "checksum": "string",
+    "generatedAt": "time.Time",
+    "observationDays": "int64",
+}
+_SCAN_SUMMARY_TYPES = {
+    "hma": "string",
+    "criticalFindings": "int64",
+    "highFindings": "int64",
+    "secretless": "string",
+    "cryptoServe": "string",
+    "oasbLevel": "string",
+}
+_EXPECTED_TYPES = {
+    "verifyResult": "string",
+    "rejectCategory": "string",
+    "reasonContains": "string",
+}
 
 
 class _DecodeError(ValueError):
-    """A credential member holds a value outside its Go type."""
+    """A member holds a value outside its Go type."""
+
+
+class _EscapedString(str):
+    """A string value whose JSON literal carries a backslash escape, as
+    load_fixture marks it. Go's time.Time decoder parses the bytes between the
+    quotes, so it refuses a timestamp written with one; every other reader
+    takes the decoded string."""
+
+    __slots__ = ()
+
+
+class _NegativeZero(int):
+    """The JSON number -0, which json.loads reads as the integer 0, as
+    load_fixture marks it. Go's float64 decode keeps the sign."""
+
+    __slots__ = ()
 
 
 def _decode_member(name: str, go_type: str, value: Any) -> Any:
     """Type-check one member against go_type, its type in the Go reference
-    verifier, and return its decoded value, or raise _DecodeError. A null
-    takes the Go zero value. The decoded value is not always the one the Go
-    field holds; see _decode_credential."""
+    verifier, and return the value Go's encoding/json decodes it to, or raise
+    _DecodeError. A null takes the Go zero value; a timestamp decodes to an
+    _Instant."""
     if go_type == "string":
-        if value is None or isinstance(value, str):
-            return value or ""
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return _go_string(value)
         raise _DecodeError(f"{name} {value!r} is not a JSON string")
     if go_type == "int64":
         if value is None:
@@ -493,11 +562,13 @@ def _decode_member(name: str, go_type: str, value: Any) -> Any:
             and not isinstance(value, bool)
             and _INT64_MIN <= value <= _INT64_MAX
         ):
-            return value
+            return int(value)
         raise _DecodeError(f"{name} {value!r} is not a JSON integer in int64 range")
     if go_type == "float64":
         if value is None:
             return 0.0
+        if isinstance(value, _NegativeZero):
+            return -0.0
         if _finite_number(value):
             return float(value)
         raise _DecodeError(f"{name} {value!r} is not a finite JSON number")
@@ -509,6 +580,8 @@ def _decode_member(name: str, go_type: str, value: Any) -> Any:
         if value is None:
             return _GO_ZERO_TIME
         try:
+            if isinstance(value, _EscapedString):
+                raise ValueError("written with a JSON escape")
             return _parse_rfc3339(value)
         except ValueError as exc:
             raise _DecodeError(f"{name} {value!r} is not an RFC 3339 date-time ({exc})") from None
@@ -521,45 +594,127 @@ def _decode_member(name: str, go_type: str, value: Any) -> Any:
     return [_decode_signature(f"{name}[{i}]", item) for i, item in enumerate(value)]
 
 
+def _members_by_folded_name(value: dict[str, Any]) -> dict[str, Any]:
+    """The members of a JSON object under the name folding Go's encoding/json
+    matches a member to a struct field with: "Revoked" and "REVOKED" are the
+    member "revoked". The strict parse has already refused a credential in
+    which two names fold together; elsewhere the last one wins, as it does in
+    Go."""
+    return {_fold_key(key): member for key, member in value.items()}
+
+
+def _decode_members(
+    types: dict[str, str], value: dict[str, Any], prefix: str = "", lenient: bool = False
+) -> dict[str, Any]:
+    """Each member named in types, decoded from the JSON object value as Go's
+    encoding/json decodes it into a struct field of that type: matched by
+    folded name, the zero value when absent. A member outside its type raises
+    _DecodeError, or with lenient takes the zero value, which is what a Go
+    caller that ignores the decode error is left with."""
+    members = _members_by_folded_name(value)
+    decoded = {}
+    for name, go_type in types.items():
+        try:
+            decoded[name] = _decode_member(prefix + name, go_type, members.get(_fold_key(name)))
+        except _DecodeError:
+            if not lenient:
+                raise
+            decoded[name] = _decode_member(prefix + name, go_type, None)
+    return decoded
+
+
 def _decode_signature(name: str, value: Any) -> dict[str, Any]:
     if value is None:
         value = {}
     if not isinstance(value, dict):
         raise _DecodeError(f"{name} {value!r} is not a JSON object")
-    return {m: _decode_member(f"{name}.{m}", "string", value.get(m)) for m in _SIGNATURE_MEMBERS}
+    return _decode_members(_SIGNATURE_TYPES, value, f"{name}.")
 
 
 def _decode_credential(atx: Any) -> dict[str, Any]:
-    """The credential with each member in _MEMBER_TYPES type-checked against
-    its field in the Go reference verifier's atx struct, or raise
-    _DecodeError. A member is looked up by its exact name, where Go's
-    json.Unmarshal also matches a name that differs only in case, and a
-    timestamp is parsed after json.loads has decoded its escapes, where Go
-    parses the raw bytes.
+    """The credential as the Go reference verifier's atx struct holds it, or
+    raise _DecodeError. Each member in _MEMBER_TYPES is type-checked against
+    its field and holds the value Go's encoding/json decodes it to: the Go
+    zero value when it is absent or null, an _Instant for a timestamp, U+FFFD
+    for an unpaired UTF-16 surrogate escape in a string, -0.0 for a trustScore
+    written as -0. Each member in _RAW_MEMBERS holds its JSON value as loaded,
+    None when absent. A member is matched by its name under Go's case
+    folding, so "Revoked" is read as revoked. Other members are copied
+    unchanged.
 
-    Each member in _MEMBER_TYPES holds its decoded value: the Go zero value
-    when it is absent or null, an _Instant for a timestamp. That value is not
-    always the one the Go field holds. For example, Go's encoding/json decodes
-    an unpaired UTF-16 surrogate escape in a string to U+FFFD, where json.loads
-    keeps the surrogate, and keeps the sign of a trustScore written as -0,
-    where this verifier holds 0.0. Other members are copied unchanged. The Go
-    reference verifier rejects a member outside its type as PARSE_ERROR before
-    interpreting any field, and so does this one, instead of raising from
-    float(), int() or iteration later.
+    The Go reference verifier rejects a member outside its type as PARSE_ERROR
+    before interpreting any field, and so does this one, instead of raising
+    from float(), int() or iteration later.
     """
     if atx is None:
         atx = {}
     if not isinstance(atx, dict):
         raise _DecodeError(f"credential {atx!r} is not a JSON object")
     decoded = dict(atx)
-    for name, go_type in _MEMBER_TYPES.items():
-        decoded[name] = _decode_member(name, go_type, atx.get(name))
+    decoded.update(_decode_members(_MEMBER_TYPES, atx))
+    members = _members_by_folded_name(atx)
+    for name in _RAW_MEMBERS:
+        decoded[name] = members.get(_fold_key(name))
     return decoded
+
+
+def _expected_outcome(fixture: Any) -> dict[str, str]:
+    """The fixture's expected member as the Go reference verifier's
+    expectedOutcome struct holds it: verifyResult, rejectCategory and
+    reasonContains, each "" when absent or null. Raises ValueError for a
+    fixture or an expected member that is not a JSON object, or a member of
+    it that is not a string; the Go verifier fails to load such a file."""
+    if not isinstance(fixture, dict):
+        raise ValueError("fixture is not a JSON object")
+    expected = fixture.get("expected")
+    if expected is None:
+        expected = {}
+    if not isinstance(expected, dict):
+        raise ValueError(f"expected {expected!r} is not a JSON object")
+    return _decode_members(_EXPECTED_TYPES, expected, "expected.")
+
+
+def _decode_base64(value: str) -> bytes:
+    """Decode a signature value as Go's base64.StdEncoding.DecodeString does,
+    or raise ValueError: CR and LF are skipped, and any other character
+    outside the padded standard alphabet is refused, where base64.b64decode
+    discards it."""
+    text = value.replace("\r", "").replace("\n", "")
+    if _BASE64.fullmatch(text) is None:
+        raise ValueError("illegal base64 data")
+    return base64.b64decode(text)
+
+
+def _scalars(value: Any):
+    """Each (container, key) in value that holds a scalar, at any depth and
+    without recursion, so a deeply nested document does not exhaust the
+    stack."""
+    pending = [value]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, dict):
+            keys = list(node)
+        elif isinstance(node, list):
+            keys = range(len(node))
+        else:
+            continue
+        for key in keys:
+            if isinstance(node[key], (dict, list)):
+                pending.append(node[key])
+            else:
+                yield node, key
 
 
 def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
     atx = fixture["atx"]
     vs = fixture["verifierState"]
+
+    # The Go reference verifier decodes the verifier state into typed fields,
+    # so its strings are read the way the credential's are: the CRL's agentId
+    # and the trusted issuers are compared with decoded credential members.
+    for node, key in _scalars(vs):
+        if isinstance(node[key], str):
+            node[key] = _go_string(node[key])
 
     # Step 0: strict parse. A duplicate member at any depth of the CREDENTIAL
     # rejects before any field is interpreted (see module docstring). The
@@ -634,6 +789,15 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
                 reject_category="SIGNATURE_INVALID",
                 reason=f"no signature can be verified: the to-be-signed object cannot be canonicalized ({exc})",
             )
+        except UnicodeEncodeError as exc:
+            # Every decoded member holds U+FFFD where an unpaired surrogate
+            # was escaped, so this is declaredPurpose, which enters the TBS as
+            # written. The Go reference verifier's JCS library refuses the
+            # escape and the verifier reports the category below.
+            return VerifyResult(
+                reject_category="VERIFIER_CONFIG_ERROR",
+                reason=f"v1.1 canonicalization failed: declaredPurpose holds an unpaired UTF-16 surrogate ({exc})",
+            )
     else:
         payload = canonical_payload(atx)
     eds, pqs = index_public_keys(
@@ -643,8 +807,8 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
 
     for sig in atx["signatures"]:
         try:
-            sig_bytes = base64.b64decode(sig["value"])
-        except Exception as exc:
+            sig_bytes = _decode_base64(sig["value"])
+        except ValueError as exc:
             return VerifyResult(
                 reject_category="SIGNATURE_INVALID",
                 reason=f"signature {sig.get('keyId')} has invalid base64: {exc}",
@@ -716,15 +880,37 @@ def _reject_constant(name: str) -> Any:
     raise ValueError(f"{name} is not a JSON value (RFC 8259 §6)")
 
 
+def _parse_int(literal: str) -> int:
+    return _NegativeZero() if literal == "-0" else int(literal)
+
+
+def _null_if_escaped(literal: re.Match) -> str:
+    # A member name keeps its literal, so both parses build the same objects.
+    if literal.group(1) is None and "\\" in literal.group(0):
+        return "null"
+    return literal.group(0)
+
+
 def load_fixture(path: Path) -> dict[str, Any]:
     # The duplicate-marking hook preserves last-wins values (plain dict
     # semantics) while recording duplicates for the strict-parse check in
     # verify_fixture, which consults only the atx subtree.
-    return json.loads(
-        path.read_text(),
+    text = path.read_text()
+    fixture = json.loads(
+        text,
         object_pairs_hook=_dup_marking_pairs,
         parse_constant=_reject_constant,
+        parse_int=_parse_int,
     )
+    # json.loads does not say which strings were written with an escape, and
+    # Go's time.Time decoder refuses a timestamp that was. A second parse,
+    # with each such string value replaced by null, has the same shape as the
+    # first and holds null exactly where the first holds one of them.
+    shadow = json.loads(_STRING_LITERAL.sub(_null_if_escaped, text))
+    for (node, key), (other, _) in zip(_scalars(fixture), _scalars(shadow)):
+        if other[key] is None and isinstance(node[key], str):
+            node[key] = _EscapedString(node[key])
+    return fixture
 
 
 def expand_paths(args: list[str]) -> list[Path]:
@@ -742,6 +928,14 @@ def expand_paths(args: list[str]) -> list[Path]:
     return sorted(set(out))
 
 
+def _say(text: str, end: str = "\n") -> None:
+    """print() for a line that quotes a fixture or its path. A character
+    standard output cannot encode, an unpaired surrogate for one, is written
+    as a backslash escape instead of raising and ending the run."""
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    print(text.encode(encoding, "backslashreplace").decode(encoding), end=end)
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         sys.stderr.write("usage: verify.py <fixture.json|dir>...\n")
@@ -757,10 +951,13 @@ def main(argv: list[str]) -> int:
 
     total_pass = total_fail = 0
     for p in paths:
+        # A fixture whose expected member is not the object the Go reference
+        # verifier decodes fails to load, as it does there.
         try:
             fixture = load_fixture(p)
+            expected = _expected_outcome(fixture)
         except Exception as exc:
-            print(f"FAIL  {p}  (load error: {exc})")
+            _say(f"FAIL  {p}  (load error: {exc})")
             total_fail += 1
             continue
 
@@ -769,16 +966,15 @@ def main(argv: list[str]) -> int:
         try:
             got = verify_fixture(fixture)
         except Exception as exc:
-            print(f"FAIL  {p}  (verify error: {type(exc).__name__}: {exc})")
+            _say(f"FAIL  {p}  (verify error: {type(exc).__name__}: {exc})")
             total_fail += 1
             continue
-        expected = fixture.get("expected", {})
-        want_accept = expected.get("verifyResult", "").upper() == "ACCEPT"
+        want_accept = expected["verifyResult"].upper() == "ACCEPT"
 
         ok = (want_accept and got.accepted) or (not want_accept and not got.accepted)
-        if ok and not want_accept and expected.get("rejectCategory"):
+        if ok and not want_accept and expected["rejectCategory"]:
             ok = got.reject_category == expected["rejectCategory"]
-        if ok and not want_accept and expected.get("reasonContains"):
+        if ok and not want_accept and expected["reasonContains"]:
             ok = expected["reasonContains"].lower() in got.reason.lower()
 
         status = "PASS" if ok else "FAIL"
@@ -791,13 +987,13 @@ def main(argv: list[str]) -> int:
             rel = p.relative_to(Path.cwd())
         except ValueError:
             rel = p
-        print(f"{status}  {rel}")
-        print(f"       expected: {expected.get('verifyResult', '')}", end="")
-        if expected.get("rejectCategory"):
-            print(f" [{expected['rejectCategory']}]")
+        _say(f"{status}  {rel}")
+        _say(f"       expected: {expected['verifyResult']}", end="")
+        if expected["rejectCategory"]:
+            _say(f" [{expected['rejectCategory']}]")
         else:
             print()
-        print(f"       observed: {got}")
+        _say(f"       observed: {got}")
         if got.sigs_expected:
             print(
                 f"       signatures: {got.sigs_valid}/{got.sigs_expected} valid (ed25519={got.ed25519_valid} mldsa65={got.mldsa65_valid})"
