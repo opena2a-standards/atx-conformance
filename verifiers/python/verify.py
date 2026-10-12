@@ -26,6 +26,12 @@ lesson and scoped to the whole body because ATX signs it all):
     first-wins/last-wins parser-divergence smuggling split.
   - the fixture wrapper (name/verifierState/expected) is harness metadata and
     parses leniently.
+  - trustScore, trustLevel, issuedAt and expiresAt are type-checked the way
+    the Go reference verifier decodes them (a finite number, an integer in
+    int64 range, an RFC 3339 string); a value outside its type rejects as
+    PARSE_ERROR instead of raising.
+  - NaN, Infinity and -Infinity are not JSON, so a file carrying one fails to
+    load, as it does in the Go reference verifier.
 
 Usage:
     python verify.py ../../fixtures/baseline-valid.json
@@ -33,13 +39,16 @@ Usage:
     python verify.py ../..                 # repo root; walks fixtures/*.json
 
 Exit 0 iff every fixture's observed result matches expected.verifyResult.
+Exit 2 on a usage error, a path that does not exist, or no fixture files.
 """
 
 from __future__ import annotations
 
 import base64
 import json
+import math
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -72,6 +81,16 @@ MLDSA65_PUBLIC_KEY_SIZE = 1952
 
 SUPPORTED_ATC_VERSION = "1.0"
 SUPPORTED_ATC_VERSION_V11 = "1.1"
+
+# An RFC 3339 date-time in the shape the Go reference verifier's time.Time
+# decoder accepts: a "T" separator, seconds, an optional fraction, and "Z" or a
+# +hh:mm / -hh:mm offset. Out-of-range fields are left to datetime.
+_RFC3339 = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})", re.ASCII
+)
+
+# The range of the Go reference verifier's int, which holds trustLevel.
+_INT64_MIN, _INT64_MAX = -(2**63), 2**63 - 1
 
 
 class _DupMarkedDict(dict):
@@ -310,6 +329,51 @@ def index_public_keys(refs: list[dict[str, Any]], authority_set: set[str]):
     return eds, pqs
 
 
+def _finite_number(value: Any) -> bool:
+    # A JSON boolean is not a number, although Python's bool is an int. An
+    # integer too large for a float64 overflows, as it does in Go's decoder.
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _typed_member_error(atx: dict[str, Any]) -> str | None:
+    """Reason a present, non-null trustScore, trustLevel, issuedAt or expiresAt
+    holds a value outside its type, else None.
+
+    These are the members this verifier converts with float(), int() and
+    datetime, which raise on a malformed value. The Go reference verifier
+    decodes them into float64, int and time.Time and rejects the same values
+    as PARSE_ERROR before interpreting any field, so this mirrors that decode:
+    trustScore a finite JSON number, trustLevel a JSON integer in int64 range,
+    each timestamp an RFC 3339 string.
+    """
+    score = atx.get("trustScore")
+    if score is not None and not _finite_number(score):
+        return f"trustScore {score!r} is not a finite JSON number"
+    level = atx.get("trustLevel")
+    if level is not None and not (
+        isinstance(level, int)
+        and not isinstance(level, bool)
+        and _INT64_MIN <= level <= _INT64_MAX
+    ):
+        return f"trustLevel {level!r} is not a JSON integer in int64 range"
+    for name in ("issuedAt", "expiresAt"):
+        value = atx.get(name)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not _RFC3339.fullmatch(value):
+            return f"{name} {value!r} is not an RFC 3339 date-time"
+        try:
+            datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            return f"{name} {value!r} is not an RFC 3339 date-time ({exc})"
+    return None
+
+
 def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
     atx = fixture["atx"]
     vs = fixture["verifierState"]
@@ -323,8 +387,11 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
             reject_category="PARSE_ERROR",
             reason=f'credential contains duplicate member "{dup}" (strict parse: the whole ATX credential is a signed body; RFC 8259 §4 duplicate names are parser-divergent)',
         )
+    bad_member = _typed_member_error(atx)
+    if bad_member is not None:
+        return VerifyResult(reject_category="PARSE_ERROR", reason=bad_member)
 
-    now = datetime.fromisoformat(vs["clockRfc3339"].replace("Z", "+00:00")).astimezone(timezone.utc)
+    now =datetime.fromisoformat(vs["clockRfc3339"].replace("Z", "+00:00")).astimezone(timezone.utc)
 
     # Step 1: schema version. Dispatch on atcVersion: "1.0" verifies the legacy
     # pipe form, "1.1" verifies JCS(TBS) (atx-spec §1.3a).
@@ -456,11 +523,21 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
     return result
 
 
+def _reject_constant(name: str) -> Any:
+    # json.loads accepts NaN, Infinity and -Infinity by default; RFC 8259 §6
+    # has none of them, and the Go reference verifier fails to load them.
+    raise ValueError(f"{name} is not a JSON value (RFC 8259 §6)")
+
+
 def load_fixture(path: Path) -> dict[str, Any]:
     # The duplicate-marking hook preserves last-wins values (plain dict
     # semantics) while recording duplicates for the strict-parse check in
     # verify_fixture, which consults only the atx subtree.
-    return json.loads(path.read_text(), object_pairs_hook=_dup_marking_pairs)
+    return json.loads(
+        path.read_text(),
+        object_pairs_hook=_dup_marking_pairs,
+        parse_constant=_reject_constant,
+    )
 
 
 def expand_paths(args: list[str]) -> list[Path]:
@@ -468,7 +545,7 @@ def expand_paths(args: list[str]) -> list[Path]:
     for a in args:
         p = Path(a)
         if not p.exists():
-            raise FileNotFoundError(a)
+            raise FileNotFoundError(f"{a}: no such file or directory")
         if p.is_dir():
             fixtures_dir = p / "fixtures"
             target = fixtures_dir if fixtures_dir.is_dir() else p
@@ -482,7 +559,11 @@ def main(argv: list[str]) -> int:
     if len(argv) < 2:
         sys.stderr.write("usage: verify.py <fixture.json|dir>...\n")
         return 2
-    paths = expand_paths(argv[1:])
+    try:
+        paths = expand_paths(argv[1:])
+    except OSError as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return 2
     if not paths:
         sys.stderr.write("no fixture *.json files found\n")
         return 2
