@@ -406,13 +406,20 @@ A2A coordination map's criterion (c) thread
 | Repo | Spec | Status |
 |---|---|---|
 | `atx-conformance` (this repo) | ATX v1.0 + v1.1 credential schema | 25 fixtures (10 v1.0, 15 v1.1 JCS incl. 6 declaredPurpose), 2 verifiers (Go and Python, both full hybrid), `jcs-vectors/` byte-agreement gate (8 vectors, Go/Python/TS), `MANIFEST.sha256` pinned |
-| [`atp-conformance`](https://github.com/opena2a-standards/atp-conformance) | ATP v1.0.0-rc1 protocol | 4 fixtures (discovery, trust-proof baseline, trust-proof hybrid, Signed Tree Head), same 2-verifier pair, `MANIFEST.sha256` pinned |
-| [`aip-conformance`](https://github.com/opena2a-standards/aip-conformance) | AIP v1.0.0-draft identity protocol | §6.4 (VC `AgentTrustCredential`) covered by cross-linking this repo's fixtures; §5.1 challenge-response covered by 4 dedicated fixtures + Go/Python verifiers shipped at v0.2 (2026-05-28, Decision 3-C) |
+| [`atp-conformance`](https://github.com/opena2a-standards/atp-conformance) | ATP v1.0.0-rc1 protocol | 14 fixtures (discovery, trust proof, Signed Tree Head, inclusion and consistency proof, revocation list, with must-reject controls), same 2-verifier pair, `MANIFEST.sha256` pinned |
+| [`aip-conformance`](https://github.com/opena2a-standards/aip-conformance) | AIP v1.2.0-draft identity protocol | §6.4 (VC `AgentTrustCredential`) covered by cross-linking this repo's fixtures; §5.1 challenge-response covered by 4 dedicated fixtures + Go/Python verifiers; §6.1 trust-score composition covered by 3 fixtures |
 
 The three suites share the same MANIFEST-pinned byte-stable shape and are
 structurally comparable to A2A-IDF's
 [`aim-did-rfc9421/*`](https://github.com/opena2a-standards/a2a-idf-conformance/tree/main/fixtures/composition/aim-did-rfc9421)
 set.
+
+The fixture and verifier counts in the two sibling rows, and any release
+version a sibling row names, are measurements of those repositories, not of
+this one. [`scripts/check_sibling_rows.py`](./scripts/check_sibling_rows.py)
+reads both repositories through the GitHub API and fails when a row no
+longer matches them. It needs network access and is run by hand, not by the
+gates above.
 
 ## Repository layout
 
@@ -438,6 +445,8 @@ scripts/parity/                  Go/Python per-fixture parity gate
 scripts/*.py                     CI gates: README counts, spec references, schema
                                  validation, conformance profile, implementation
                                  status
+scripts/check_sibling_rows.py    sibling-repositories table against the sibling
+                                 repositories (network, run by hand)
 scripts/check_circl_pin.sh       CI gate: one cloudflare/circl version per Go module
 ```
 
