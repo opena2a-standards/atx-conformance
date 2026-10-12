@@ -1514,6 +1514,29 @@ class NestingDepth(unittest.TestCase):
         self.assertEqual(len(verify._string_literals('{"a": "' + "[" * 20000 + '"}')), 2)
 
 
+# Between the growth of the string-literal scan from 2,500 to 40,000 escaped
+# quotes (16 for a linear scan; 19 to 39 measured on a host with a load
+# average of 13 to 16, the time to allocate and touch memory growing faster
+# than the text) and that of the quadratic one it replaced from 250 to 4,000
+# (256 in theory; 242 to 259 measured on the same host).
+_GROWTH_BOUND = 100
+
+
+def _growth_to_16n(scan, n: int) -> float:
+    """How many times as long scan takes on a quote and 16n escaped quotes as
+    on a quote and n. Each length is timed at its fastest of five runs, taken
+    in turn, so load during one run does not move the figure, and a host
+    that runs every scan slower moves both lengths alike."""
+    texts = ['"' + '\\"' * count for count in (n, 16 * n)]
+    fastest = [float("inf")] * len(texts)
+    for _ in range(5):
+        for i, text in enumerate(texts):
+            started = time.perf_counter()
+            scan(text)
+            fastest[i] = min(fastest[i], time.perf_counter() - started)
+    return fastest[1] / fastest[0]
+
+
 class StringLiteralScan(unittest.TestCase):
     def test_literals_and_names_are_found(self):
         text = '{"k" : "v\\"w", "n": ["x\\\\", 1], "e": "\\u0041"}'
@@ -1532,16 +1555,32 @@ class StringLiteralScan(unittest.TestCase):
         self.assertEqual(verify._string_literals('{"a": "b\\"}'), [(1, 4, True)])
 
     def test_unterminated_literal_is_scanned_in_linear_time(self):
-        # A quote and 200,000 escaped quotes. A regular expression searched
-        # over the text retries from each of them: the pattern this scan
-        # replaced took 3.4 s at 20,000 in one measurement, and four times
-        # that at twice the count.
-        text = '"' + '\\"' * 200_000
-        started = time.perf_counter()
-        literals = verify._string_literals(text)
-        verify._escaped_values_nulled(text, literals)
-        self.assertEqual(literals, [])
-        self.assertLess(time.perf_counter() - started, 2.0)
+        # A quote and n escaped quotes. A regular expression searched over
+        # the text retries from each of them: the pattern this scan replaced
+        # took 3.4 s at 20,000 in one measurement, and four times that at
+        # twice the count. The bound is on how the time grows from 2,500 to
+        # 40,000, not on the time itself, so a slow or loaded host passes.
+        def scan(text):
+            literals = verify._string_literals(text)
+            verify._escaped_values_nulled(text, literals)
+            self.assertEqual(literals, [])
+
+        self.assertLess(_growth_to_16n(scan, 2_500), _GROWTH_BOUND)
+
+    def test_growth_bound_fails_the_replaced_scan(self):
+        # The pattern the scan replaced, searched over the text: the bound
+        # still tells a quadratic scan from a linear one.
+        replaced = re.compile(r'"(?:[^"\\]|\\.)*"([ \t\n\r]*:)?', re.DOTALL)
+        self.assertGreater(
+            _growth_to_16n(lambda text: list(replaced.finditer(text)), 250), _GROWTH_BOUND
+        )
+
+    def test_linear_time_bound_does_not_depend_on_the_host(self):
+        # A clock that counts each second as an hour stands for a host on
+        # which every scan takes 3,600 times as long.
+        clock = time.perf_counter
+        with mock.patch.object(time, "perf_counter", lambda: clock() * 3600):
+            self.test_unterminated_literal_is_scanned_in_linear_time()
 
     def test_load_fixture_scans_before_it_parses(self):
         # The scan meets an unterminated literal only because it runs before

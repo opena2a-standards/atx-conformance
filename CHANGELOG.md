@@ -220,6 +220,13 @@ whenever one lands; README "Versioning and stability" says they should not.
   reports `SIGNATURE_INVALID`; the Python verifier now reports that too, up
   to the 10000 levels Go's decoder accepts. Its canonical bytes for every
   other value do not change (#175). No fixture changes.
+- `test_verify.py` bounds how the string-literal scan's time grows from
+  2,500 to 40,000 escaped quotes, each length timed at its fastest of five
+  runs, where it bounded one scan of 200,000 at 2 seconds of wall-clock
+  time, which a loaded host could exceed with no code change. It also
+  checks that the regular expression the scan replaced exceeds the bound,
+  and that the scan stays within it on a clock that runs 3,600 times fast,
+  as it would read on a host that much slower (#177). No fixture changes.
 
 ## e2f9dc4 (#26, 2026-09-09): capabilities rewritten in 22 existing fixtures
 
