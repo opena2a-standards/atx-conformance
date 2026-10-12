@@ -104,6 +104,15 @@ cited only with `(closed` written right after it and never in a sentence that
 says something is tracked or coordinated there, and the implementations
 section must link this repository's issue tracker.
 
+It also holds what jcs-vectors/README.md, verifiers/python/verify.py and
+jcs-vectors/pin/main.go say about the JSON numbers left in the v1.1 TBS to
+the vectors' canonical strings. All three said `trustLevel` was the only one
+while every vector also carries scanSummary.criticalFindings and
+scanSummary.highFindings, and five carry behavioralProfile.observationDays.
+None may name one member as the only JSON number while the vectors carry
+another, the README must state that every JSON number left in the TBS is an
+integer, and every number in every vector must be one.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
 declares, the behavioralProfile note matches the fixtures, no criterion (c)
@@ -116,8 +125,9 @@ to module names alone), no Python dependency site calls the Python verifier
 zero-dependency while requirements.txt names a package, each jcs-vectors
 file describing canonicalize cites RFC 8785 Appendix G and calls it no
 reference implementation, every Version pinning link names a commit, the
-reproduction steps match the generator and no coordination link points at a
-closed issue, 1 otherwise, 2 on an unknown argument.
+reproduction steps match the generator, no coordination link points at a
+closed issue and every statement of the TBS numbers matches the vectors,
+1 otherwise, 2 on an unknown argument.
 """
 
 import collections
@@ -1118,6 +1128,165 @@ def reproduction_failures(readme, signing):
     return failures
 
 
+# jcs-vectors/README.md said `trustLevel` was the only JSON number left in the
+# TBS, and the Python verifier and the vector pinner said the same in comments,
+# while every vector also carries scanSummary.criticalFindings and
+# scanSummary.highFindings as JSON numbers and five carry
+# behavioralProfile.observationDays. The agreement argument rests on every one
+# of them being an integer, so that is what the README must state, and no site
+# may name one member as the only number unless the vectors carry no other.
+# Each site is paired with the wording it published, with its original wrap.
+TBS_NUMBER_SITES = (
+    ("jcs-vectors/README.md",
+     "`trustLevel` (an integer) is\n  the only JSON number left in the TBS"),
+    ("verifiers/python/verify.py",
+     "        # trustScore is string-encoded %.6f so trustLevel is the only JSON number."),
+    ("jcs-vectors/pin/main.go",
+     "// the float -> JCS-number cross-language hazard never arises). trustLevel is the\n"
+     "// only JSON number in the TBS and is always an integer."),
+)
+INTEGER_SITE = "jcs-vectors/README.md"
+INTEGER_CLAIM = "every JSON number left in the TBS is an integer"
+# "`trustLevel` (an integer) is the only JSON number", matched over prose with
+# comment markers and line wraps removed; group 1 is the member named.
+ONLY_NUMBER_CLAIM = re.compile(
+    r"`?(\w+)`?(?:\s+\([^)]*\))?\s+(?:is\s+)?the\s+only\s+JSON\s+number\b",
+    re.IGNORECASE,
+)
+
+
+class _NonInteger(str):
+    """A JSON number token with a fraction or an exponent."""
+
+
+def _prose(text):
+    """Collapse whitespace and drop line-leading `//` and `#` comment markers,
+    so a claim wrapped across comment lines reads as one sentence."""
+    return " ".join(re.sub(r"(?m)^\s*(?://+|#+)", " ", text).split())
+
+
+def _tbs_numbers(value, path="", member=""):
+    """Yield (path, member name, value) for every JSON number in a parsed TBS."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield from _tbs_numbers(item, f"{path}.{key}" if path else key, key)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _tbs_numbers(item, f"{path}[]", member)
+    elif isinstance(value, _NonInteger) or (
+            isinstance(value, int) and not isinstance(value, bool)):
+        yield path, member, value
+
+
+def load_canonical_strings(root):
+    """Map each jcs-vectors/vectors/*.json name to its expected.canonicalString,
+    or to None when the file has none."""
+    canonical = {}
+    for path in sorted((root / "jcs-vectors" / "vectors").glob("*.json")):
+        try:
+            text = json.loads(path.read_text(encoding="utf-8"))["expected"]["canonicalString"]
+        except (OSError, ValueError, KeyError, TypeError):
+            text = None
+        canonical[path.name] = text if isinstance(text, str) else None
+    return canonical
+
+
+def tbs_number_failures(sites, canonical):
+    """Hold each statement of which JSON numbers the TBS carries to the
+    vectors' canonical strings. `sites` maps a TBS_NUMBER_SITES path to its
+    text (None when missing); `canonical` is from load_canonical_strings."""
+    if not canonical:
+        return ["no jcs-vectors/vectors/*.json found; refusing to pass vacuously"]
+    failures = []
+    carriers = collections.defaultdict(set)
+    members = set()
+    for name, text in sorted(canonical.items()):
+        try:
+            tbs = json.loads(text, parse_float=_NonInteger)
+        except (TypeError, ValueError):
+            failures.append(f"jcs-vectors/vectors/{name} has no parseable "
+                            f"expected.canonicalString")
+            continue
+        for path, member, value in _tbs_numbers(tbs):
+            carriers[path].add(name)
+            members.add(member)
+            if isinstance(value, _NonInteger):
+                failures.append(
+                    f"jcs-vectors/vectors/{name}: TBS member {path} is the JSON "
+                    f"number {value}, not an integer; {INTEGER_SITE} states "
+                    f"{INTEGER_CLAIM}"
+                )
+    carried = ", ".join(f"{p} ({len(carriers[p])} of {len(canonical)})"
+                        for p in sorted(carriers))
+    for site, text in sites.items():
+        if text is None:
+            failures.append(f"{site} is missing; it states which JSON numbers "
+                            f"the TBS carries")
+            continue
+        for claim in ONLY_NUMBER_CLAIM.finditer(_prose(text)):
+            if members != {claim.group(1)}:
+                failures.append(
+                    f"{site} says `{claim.group(1)}` is the only JSON number in "
+                    f"the TBS, but the vectors carry {len(carriers)}: {carried}; "
+                    f"say {INTEGER_CLAIM}"
+                )
+    readme = sites.get(INTEGER_SITE)
+    if readme is not None and INTEGER_CLAIM not in _prose(readme):
+        failures.append(
+            f"{INTEGER_SITE} does not state that {INTEGER_CLAIM}; it is what "
+            f"cross-language agreement on the TBS numbers rests on"
+        )
+    return failures
+
+
+def _tbs_number_cases(sites, canonical):
+    """Restate each site's published only-number wording, drop the README's
+    integer statement, and give one vector a fractional number; each must add
+    a failure."""
+    baseline = set(tbs_number_failures(sites, canonical))
+    cases = []
+
+    def new(altered_sites=sites, altered_canonical=canonical):
+        return [f for f in tbs_number_failures(altered_sites, altered_canonical)
+                if f not in baseline]
+
+    for site, retracted in TBS_NUMBER_SITES:
+        label = f"{site} naming `trustLevel` the only JSON number in the TBS"
+        if sites.get(site) is None:
+            cases.append((False, label, f"{site} not found"))
+            continue
+        altered = dict(sites)
+        altered[site] = sites[site] + "\n" + retracted + "\n"
+        got = new(altered_sites=altered)
+        cases.append((any(f.startswith(f"{site} says `trustLevel`") for f in got),
+                      label, f"appending its published wording still passes: {got}"))
+
+    label = f"{INTEGER_SITE} not stating that {INTEGER_CLAIM}"
+    readme = sites.get(INTEGER_SITE)
+    if readme is None or INTEGER_CLAIM not in _prose(readme):
+        cases.append((False, label, f"the statement is not in {INTEGER_SITE}"))
+    else:
+        altered = dict(sites)
+        altered[INTEGER_SITE] = _prose(readme).replace(
+            INTEGER_CLAIM, "every JSON number left in the TBS is small")
+        got = new(altered_sites=altered)
+        cases.append((any(f.startswith(f"{INTEGER_SITE} does not state") for f in got),
+                      label, f"a README without it still passes: {got}"))
+
+    label = "a vector whose TBS carries a fractional JSON number"
+    name = next((n for n, t in sorted(canonical.items())
+                 if t and re.search(r'"trustLevel":\d+', t)), None)
+    if name is None:
+        cases.append((False, label, "no vector carries an integer trustLevel"))
+    else:
+        altered = dict(canonical)
+        altered[name] = re.sub(r'("trustLevel":\d+)', r"\g<1>.5", canonical[name], count=1)
+        got = new(altered_canonical=altered)
+        cases.append((any("not an integer" in f for f in got),
+                      label, f"trustLevel 3.5 in {name} still passes: {got}"))
+    return cases
+
+
 # The sibling-repositories table row that describes this repository.
 THIS_REPO_ROW = re.compile(r"^\| `atx-conformance` \(this repo\) \|.*$", re.M)
 # A row of the README fixture table: "| `fixtures/<name>` | <expected> | ...".
@@ -1311,7 +1480,7 @@ def check(readme, cosigners, fixtures, vectors, signing):
 Tree = collections.namedtuple("Tree", (
     "readme cosigners fixtures vectors signing fixture_paths workflow "
     "key_vectors used_key_ids versions go_mod verify_go py_requirements "
-    "py_dependency_texts jcs_sites"))
+    "py_dependency_texts jcs_sites tbs_sites tbs_canonical"))
 
 
 def tree_failures(tree):
@@ -1328,6 +1497,7 @@ def tree_failures(tree):
     failures.extend(python_dependency_failures(tree.py_requirements,
                                                tree.py_dependency_texts))
     failures.extend(jcs_library_failures(tree.jcs_sites))
+    failures.extend(tbs_number_failures(tree.tbs_sites, tree.tbs_canonical))
     return failures
 
 
@@ -2000,6 +2170,7 @@ def self_test(tree, verbose):
     took = time.perf_counter() - started
     cases.append((took < 1.5, "closed-tracker scan over a 40,000-character run of `[`",
                   f"took {took:.1f} s; the link-text match backtracks over the run"))
+    cases.extend(_tbs_number_cases(tree.tbs_sites, tree.tbs_canonical))
 
     failed = 0
     for ok, label, detail in cases:
@@ -2044,6 +2215,10 @@ def main():
             for site in PY_DEPENDENCY_SITES},
         jcs_sites={path: (ROOT / path).read_text(encoding="utf-8")
                    for path, _ in JCS_LIBRARY_SITES if (ROOT / path).exists()},
+        tbs_sites={site: (ROOT / site).read_text(encoding="utf-8")
+                   if (ROOT / site).exists() else None
+                   for site, _ in TBS_NUMBER_SITES},
+        tbs_canonical=load_canonical_strings(ROOT),
     )
 
     failed, total = self_test(tree, only_self_test)
@@ -2085,7 +2260,8 @@ def main():
           f"every Version pinning link names a commit; "
           f"the reproduction steps name every signing form and jcs-vectors "
           f"cross-check in the generator; coordination links point at an open "
-          f"issue tracker")
+          f"issue tracker; every statement of the JSON numbers in the TBS "
+          f"matches the {len(tree.tbs_canonical)} JCS vectors, all of them integers")
     return 0
 
 

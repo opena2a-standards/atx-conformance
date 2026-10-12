@@ -72,9 +72,8 @@ Determinism rules (the part that bites cross-language):
   `secretless`, `cryptoServe`, `oasbLevel`); never `null`.
 - **`trustScore` is string-encoded `%.6f`** in the TBS (e.g. `"87.500000"`),
   even though the wire field stays a JSON number. This removes the
-  float -> JCS-number formatting hazard entirely: `trustLevel` (an integer) is
-  the only JSON number left in the TBS, and integers serialize identically
-  everywhere.
+  float -> JCS-number formatting hazard entirely: every JSON number left in
+  the TBS is an integer, and integers serialize identically everywhere.
 - **`issuerChain` order is root-first** and significant: JCS preserves array
   order, it never sorts arrays.
 - The ML-DSA-65 hybrid leg signs the **same** `JCS(TBS)` bytes as Ed25519.

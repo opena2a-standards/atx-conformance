@@ -256,7 +256,7 @@ def canonical_payload_v11(atx: dict[str, Any]) -> bytes:
         "capabilities": list(atx.get("capabilities") or []),
         "behavioralProfile": behavioral_profile,
         "scanSummary": scan_summary,
-        # trustScore is string-encoded %.6f so trustLevel is the only JSON number.
+        # trustScore is string-encoded %.6f so every JSON number left is an integer.
         "trustScore": "%.6f" % float(atx["trustScore"]),
         "trustLevel": int(atx["trustLevel"]),
         "issuedAt": _normalize_rfc3339(atx["issuedAt"]),

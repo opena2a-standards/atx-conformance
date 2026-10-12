@@ -50,8 +50,8 @@ const atxCoreRef = "https://github.com/opena2a-standards/atx-spec/blob/e89bed94c
 
 // The eight vectors. Authored TBS objects use deliberately unsorted keys; JCS
 // sorts them. trustScore is a STRING in every TBS (the %.6f projection rule, so
-// the float -> JCS-number cross-language hazard never arises). trustLevel is the
-// only JSON number in the TBS and is always an integer.
+// the float -> JCS-number cross-language hazard never arises). Every JSON number
+// left in the TBS is an integer.
 var vectors = []vector{
 	{
 		file: "01-baseline.json",

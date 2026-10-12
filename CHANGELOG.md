@@ -57,6 +57,16 @@ whenever one lands; README "Versioning and stability" says they should not.
   `dilithium-py`. `scripts/check_readme_counts.py` fails when any of the
   three calls the Python verifier zero-dependency while that file names a
   package (#159). No fixture changes.
+- `jcs-vectors/README.md` says every JSON number left in the v1.1 TBS is an
+  integer, where it said `trustLevel` was the only one; the comments in
+  `verifiers/python/verify.py` and `jcs-vectors/pin/main.go` said the same.
+  Every vector also carries `scanSummary.criticalFindings` and
+  `scanSummary.highFindings`, and four of the eight carry
+  `behavioralProfile.observationDays`, all integers.
+  `scripts/check_readme_counts.py` fails when any of the three names one
+  member as the only JSON number while the vectors carry another, when the
+  README stops stating the integer rule, or when a vector's TBS carries a
+  non-integer number (#155). No fixture or vector changes.
 
 ## e2f9dc4 (#26, 2026-09-09): capabilities rewritten in 22 existing fixtures
 
