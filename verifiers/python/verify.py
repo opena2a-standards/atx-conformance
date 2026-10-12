@@ -12,7 +12,8 @@ Spec coverage:
   - Canonicalization: pipe-delimited 11-field string matching
     opena2a-registry/pkg/atcverify/verify.go canonicalPayload() VERBATIM
   - Ed25519 and ML-DSA-65 (FIPS 204) hybrid signature verification over the
-    same canonical payload, threshold (>=1 valid), trust level 3+ chain
+    same canonical payload (every declared signature must verify and at
+    least one must be present; no k-of-n threshold is read), trust level 3+ chain
     check, expiry, revocation, issuer-trust.
 
 Parsing rule (strict parse, ported from the aap-conformance protected-header

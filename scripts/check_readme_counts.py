@@ -27,8 +27,12 @@ Usage:
     python3 scripts/check_readme_counts.py              # self-test, then the check
     python3 scripts/check_readme_counts.py --self-test  # the self-test alone, per case
 
-Exit 0 when the self-test passes, every stated count matches the tree and the
-byte check is named, 1 otherwise, 2 on an unknown argument.
+The Scope table may name a k-of-n signature threshold as covered only when a
+fixture's verifierState declares the count it requires (THRESHOLD_FIELD).
+
+Exit 0 when the self-test passes, every stated count matches the tree, the
+byte check is named and the Scope table claims no threshold that no fixture
+declares, 1 otherwise, 2 on an unknown argument.
 """
 
 import collections
@@ -52,6 +56,47 @@ COSIGNERS = ROOT / "COSIGNERS.md"
 # verifiers for a check only MANIFEST.sha256 performs.
 EXPECTED_OUTPUT = "### Expected output"
 BYTE_CHECK = "shasum -a 256 -c MANIFEST.sha256"
+
+# The Scope table listed "Threshold 2-of-3 cosignature path" as covered while
+# no fixture states a required signature count and neither reference verifier
+# reads one: both require every declared signature to verify and at least one
+# to be present, so the threshold credential cut to one of its three
+# signatures is accepted. A covered row that names a threshold is therefore a
+# claim with no fixture behind it until some verifierState carries this field.
+THRESHOLD_FIELD = "requiredSignatures"
+THRESHOLD_CLAIM = re.compile(r"threshold|\b(?:\d+|k)-of-(?:\d+|n)\b", re.IGNORECASE)
+
+
+def declares_threshold(path):
+    try:
+        fx = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    state = fx.get("verifierState") if isinstance(fx, dict) else None
+    return isinstance(state, dict) and THRESHOLD_FIELD in state
+
+
+def threshold_claims(readme, fixtures):
+    """Covered Scope-table rows that name a threshold no fixture declares."""
+    if any(declares_threshold(p) for p in fixtures):
+        return []
+    scope = re.search(r"^## Scope\n(.*?)(?=^## )", readme, re.MULTILINE | re.DOTALL)
+    if not scope:
+        return ["no `## Scope` section found in README"]
+    failures = []
+    for line in scope.group(1).splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if not line.startswith("|") or len(cells) < 2 or set(cells[0]) <= set("-"):
+            continue
+        if cells[1].lower().startswith("not covered"):
+            continue
+        if THRESHOLD_CLAIM.search(cells[0]):
+            failures.append(
+                f"README Scope table lists {cells[0]!r} as covered, but no "
+                f"fixture's verifierState declares {THRESHOLD_FIELD}, so no "
+                f"verifier is held to a threshold"
+            )
+    return failures
 
 
 def section(text, heading):
@@ -402,6 +447,8 @@ def main():
     # The check runs even when the self-test failed: a site the self-test
     # cannot find is often a count the README dropped, and the check names it.
     failures += check(readme, cosigners, fixtures, vectors)
+    failures.extend(threshold_claims(readme, sorted(FIXTURES.glob("*.json"))))
+
     if failures:
         sys.stdout.flush()
         print("README counts do not match the tree:\n", file=sys.stderr)

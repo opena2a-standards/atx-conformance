@@ -33,8 +33,12 @@
       "reason": "no fixture carries verified signatures from more than one distinct authority, and the fixture format has no field for the required trust level that step 7's condition reads, so a verifier that omits step 7 entirely passes the suite; a length-of-issuerChain test is not step 7 (the spec says the chain length MUST NOT be counted) and implementations MUST self-attest this requirement until a fixture exists for it"
     },
     {
+      "item": "k-of-n threshold issuance (ATX core.md section 3.1 step 8: cosignatures from 2 of 3 key holders)",
+      "reason": "the fixture format has no field for the required signature count and neither reference verifier reads one: both require every declared signature to verify and at least one to be present, so the threshold fixture's credential cut to one of its three signatures is accepted, and a verifier that checks only the first signature passes the suite"
+    },
+    {
       "item": "Cosignature requirements (ATX core.md section 7: federation cosigning, and the root cosignature at trust level 4)",
-      "reason": "the threshold fixture pins one 2-of-3 cosignature over the signing bytes; no fixture asserts that a trust level 4 credential carries the root cosignature or that a federated issuance carries its peer's cosignature"
+      "reason": "the threshold fixture pins three signatures over the signing bytes, each of which must verify; no fixture asserts that a trust level 4 credential carries the root cosignature or that a federated issuance carries its peer's cosignature"
     },
     {
       "item": "Revocation propagation timing (ATX core.md section 3.3)",

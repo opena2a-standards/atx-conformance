@@ -32,7 +32,7 @@ What this suite verifies:
 | Trusted-issuer DID set | `fixtures/wrong-issuer.json` |
 | Ed25519 signature verification over the canonical payload | every fixture |
 | Hybrid Ed25519 + ML-DSA-65 signature verification (FIPS 204) | `fixtures/baseline-valid-hybrid.json` |
-| Threshold 2-of-3 cosignature path | `fixtures/threshold-2of3-cosignature.json` |
+| Multi-signature: every declared signature must verify (three Ed25519 signatures from three distinct keys) | `fixtures/threshold-2of3-cosignature.json` |
 | Tampered-signature rejection | `fixtures/tampered-signature.json` |
 | Key-to-issuer binding (a trusted authority cannot sign for another; a chain DID that is not a trusted issuer contributes no eligible key) | `fixtures/cross-issuer-key.json`, `fixtures/v1_1-cross-issuer-key.json`, `fixtures/v1_1-untrusted-chain-authority.json` |
 | ATX v1.1 JCS(TBS) signing, signed-field integrity | `fixtures/v1_1-baseline-valid.json`, `fixtures/v1_1-tampered-capabilities.json` |
@@ -41,6 +41,7 @@ What this suite verifies:
 | Strict credential parse: duplicate object members reject at any depth (RFC 8259 §4 parser-divergence smuggling) | `fixtures/v1_1-duplicate-purpose-member.json` |
 | Fold-aware strict parse: case-variant members that `encoding/json` collapses last-wins (e.g. `TRUSTLEVEL`/`trustLevel`) reject as PARSE_ERROR | `fixtures/v1_1-case-variant-member.json` |
 | Distinct signer-authority count for trust level 3 and above (§1.3 step 7) | not covered; see conformance.json notCovered |
+| k-of-n threshold issuance, such as 2-of-3 (§3.1 step 8): a credential with fewer valid signatures than the threshold rejects | not covered; see conformance.json notCovered |
 
 What this suite does NOT verify:
 
@@ -213,7 +214,7 @@ All fixtures use:
 | `fixtures/baseline-valid-hybrid.json` | ACCEPT | Ed25519 plus ML-DSA-65 signatures from the same primary issuer over the same canonical payload. Both verifiers validate both signatures. |
 | `fixtures/revoked.json` | REJECT (REVOKED) | Credential `revoked: true`, with a CRL entry for the agent as well. This fixture pins the flag: both reference verifiers read it first and return, so the CRL entry is not what rejects it. |
 | `fixtures/revoked-crl-only.json` | REJECT (REVOKED) | The accepted v1.0 baseline credential (`revoked: false`, trusted issuer, unexpired, valid signature) with a CRL entry for its agent in the verifier state. CRL membership is the only thing that revokes it (§1.3 step 6). A verifier that reads the credential's own flag and never consults the CRL wrongly accepts. |
-| `fixtures/threshold-2of3-cosignature.json` | ACCEPT | Three Ed25519 signatures from three distinct keys (primary plus two cosigners). All three verify. |
+| `fixtures/threshold-2of3-cosignature.json` | ACCEPT | Three Ed25519 signatures from three distinct keys (primary plus two cosigners). All three verify. No verifier reads a threshold: each declared signature must verify and one is enough, so this credential cut to any one of its signatures is also accepted. |
 | `fixtures/expired.json` | REJECT (EXPIRED) | `expiresAt: 2025-01-01T00:00:00Z`, earlier than the pinned clock. Otherwise valid. |
 | `fixtures/wrong-issuer.json` | REJECT (UNTRUSTED_ISSUER) | Real Ed25519 signature from an untrusted-issuer keypair (RFC 8032 §7.1 Test 1024 first 32 bytes), `issuerDid: did:opena2a:authority:attacker.example`. Signature is mathematically valid; issuer is not in trusted set. |
 | `fixtures/tampered-signature.json` | REJECT (SIGNATURE_INVALID) | One bit of the signature value flipped after signing. All other fields unchanged. |
