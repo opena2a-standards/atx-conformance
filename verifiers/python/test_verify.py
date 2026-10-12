@@ -1543,6 +1543,29 @@ class StringLiteralScan(unittest.TestCase):
         self.assertEqual(literals, [])
         self.assertLess(time.perf_counter() - started, 2.0)
 
+    def test_load_fixture_scans_before_it_parses(self):
+        # The scan meets an unterminated literal only because it runs before
+        # json.loads, which rejects one; that is why it has to be linear.
+        calls = []
+        scan, parse = verify._string_literals, verify._parse_json
+
+        def recording_scan(text):
+            calls.append("scan")
+            return scan(text)
+
+        def recording_parse(text, **hooks):
+            calls.append("parse")
+            return parse(text, **hooks)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            written = Path(tmp) / "unterminated.json"
+            written.write_text('{"atx": "' + '\\"' * 20_000)
+            with mock.patch.object(verify, "_string_literals", recording_scan), \
+                    mock.patch.object(verify, "_parse_json", recording_parse), \
+                    self.assertRaises(ValueError):
+                verify.load_fixture(written)
+        self.assertEqual(calls, ["scan", "parse"])
+
 
 class InvalidUTF8(unittest.TestCase):
     def test_invalid_byte_decodes_as_go_decodes_it(self):

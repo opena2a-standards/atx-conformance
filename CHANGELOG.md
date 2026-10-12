@@ -205,9 +205,11 @@ whenever one lands; README "Versioning and stability" says they should not.
   U+FFFD, one for each byte of the invalid sequence, where the file failed to
   load; arrays and objects nested up to 10000 levels deep, the fixture
   object included, load, where 5000 under one member failed to load, and
-  deeper ones fail to load as they do in Go. Its string-literal scan is a
-  single pass: the regular expression it replaces took time quadratic in the
-  length of an unterminated string literal (#173). No fixture changes.
+  deeper ones fail to load as they do in Go. Its string-literal scan now
+  runs before the file is parsed, where it can meet an unterminated string
+  literal, so it is a single pass, linear in that literal's length. The
+  regular expression it replaces ran only after `json.loads` had accepted
+  the file, so never on an unterminated literal (#173). No fixture changes.
 - `python3 verify.py --help` (or `-h`) prints the usage line and exits 0,
   where it reported `--help` as a missing path and exited 2 (#173). No
   fixture changes.
