@@ -75,15 +75,23 @@ versions the documents had moved past: v1.0 while AIP-SPEC.md read
 and was registered. A link at a commit names the bytes the stated version is
 read from.
 
+It also holds the README's "Reproducing the fixtures" steps to the generator
+in scripts/generate-fixtures/main.go. The steps described only the v1.0
+pipe-delimited payload while the v1.1 fixtures are signed over JCS(TBS), and
+they never mentioned the generator's cross-check of those bytes against
+jcs-vectors. The section must name every canonicalPayload* function the
+generator defines and every jcs-vectors file it cross-checks against, and no
+other.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
 declares, the behavioralProfile note matches the fixtures, no criterion (c)
 claim outruns the registry, the trustScore is called illustrative, the
 trigger sentence matches the workflow, both key-source lists name every
 Ed25519 key, both version labels name exactly the accepted versions, each
-Go dependency site names every direct requirement at its pinned version and
-every Version pinning link names a commit, 1
-otherwise, 2 on an unknown argument.
+Go dependency site names every direct requirement at its pinned version,
+every Version pinning link names a commit and the reproduction steps match
+the generator, 1 otherwise, 2 on an unknown argument.
 """
 
 import collections
@@ -799,6 +807,87 @@ def version_pin_failures(readme):
     return failures
 
 
+# The README's account of how the generator signs. It described only the v1.0
+# pipe-delimited payload while every v1.1 fixture is signed over JCS(TBS) by
+# canonicalPayloadV11, and it never mentioned that the generator panics unless
+# those bytes equal two jcs-vectors vectors. Both lists are read from the
+# generator, so a new signing form or cross-check cannot go undocumented.
+REPRODUCING = "## Reproducing the fixtures"
+GENERATOR = pathlib.Path("scripts") / "generate-fixtures" / "main.go"
+# A signing form the generator defines, and a canonical-bytes constant it
+# compares a v1.1 credential against before it builds any fixture.
+PAYLOAD_FUNC = re.compile(r"^func (canonicalPayload\w*)\(", re.M)
+CROSS_CHECK_HEX = re.compile(r'^const (jcs\w*CanonicalHex) = "([0-9a-f]+)"', re.M)
+NAMED_FUNC = re.compile(r"`(canonicalPayload\w*)`")
+NAMED_VECTOR = re.compile(r"jcs-vectors/vectors/[\w.-]+\.json")
+
+
+def generator_signing(root):
+    """Read the fixture generator. Return (the canonicalPayload* functions it
+    defines, the jcs-vectors file each jcs*CanonicalHex constant equals the
+    expected.canonicalHex of, failures)."""
+    try:
+        src = (root / GENERATOR).read_text(encoding="utf-8")
+    except OSError as exc:
+        return [], [], [f"{GENERATOR.as_posix()} cannot be read ({exc})"]
+    pinned = {}
+    for path in sorted((root / "jcs-vectors" / "vectors").glob("*.json")):
+        try:
+            hex_ = json.loads(path.read_text(encoding="utf-8"))["expected"]["canonicalHex"]
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        pinned.setdefault(hex_, path.relative_to(root).as_posix())
+    failures = []
+    vectors = []
+    for name, hex_ in CROSS_CHECK_HEX.findall(src):
+        if hex_ in pinned:
+            vectors.append(pinned[hex_])
+        else:
+            failures.append(
+                f"{GENERATOR.as_posix()} constant {name} equals the "
+                f"expected.canonicalHex of no jcs-vectors/vectors/*.json"
+            )
+    funcs = PAYLOAD_FUNC.findall(src)
+    if not funcs:
+        failures.append(
+            f"{GENERATOR.as_posix()} defines no canonicalPayload* function; "
+            f"refusing to pass vacuously"
+        )
+    return funcs, vectors, failures
+
+
+def reproduction_failures(readme, signing):
+    """The Reproducing the fixtures section must name every signing form the
+    generator defines and every jcs-vectors vector it cross-checks against,
+    and name no form or vector the generator does not have."""
+    funcs, vectors, failures = signing
+    failures = list(failures)
+    body = section(readme, REPRODUCING)
+    if body is None:
+        return failures + [f"no `{REPRODUCING}` section found in README"]
+    where = f"README `{REPRODUCING}`"
+    for name in funcs:
+        if f"`{name}`" not in body:
+            failures.append(
+                f"{where} does not name `{name}`, a canonical payload "
+                f"{GENERATOR.as_posix()} signs fixtures over"
+            )
+    for name in sorted(set(NAMED_FUNC.findall(body)) - set(funcs)):
+        failures.append(f"{where} names `{name}`, which {GENERATOR.as_posix()} does not define")
+    for path in vectors:
+        if path not in body:
+            failures.append(
+                f"{where} does not name {path}, a vector "
+                f"{GENERATOR.as_posix()} cross-checks its v1.1 bytes against"
+            )
+    for path in sorted(set(NAMED_VECTOR.findall(body)) - set(vectors)):
+        failures.append(
+            f"{where} names {path}, which {GENERATOR.as_posix()} does not "
+            f"cross-check against"
+        )
+    return failures
+
+
 # The sibling-repositories table row that describes this repository.
 THIS_REPO_ROW = re.compile(r"^\| `atx-conformance` \(this repo\) \|.*$", re.M)
 # A row of the README fixture table: "| `fixtures/<name>` | <expected> | ...".
@@ -838,10 +927,10 @@ def _claims(failures, text, pattern, actual, missing, wrong):
             failures.append(wrong(stated))
 
 
-def check(readme, cosigners, fixtures, vectors):
+def check(readme, cosigners, fixtures, vectors, signing):
     """Return the failures for README text, COSIGNERS text (None when the
-    file is missing), the fixture map from load_fixtures and the JCS vector
-    count."""
+    file is missing), the fixture map from load_fixtures, the JCS vector
+    count and the generator reading from generator_signing."""
     actual = len(fixtures)
     if actual == 0:
         return ["no fixtures found; refusing to pass vacuously"]
@@ -982,6 +1071,7 @@ def check(readme, cosigners, fixtures, vectors):
         failures.append(f"README fixture table has no row for fixtures/{name}")
 
     failures.extend(version_pin_failures(readme))
+    failures.extend(reproduction_failures(readme, signing))
     return failures
 
 
@@ -1296,14 +1386,34 @@ def _pin_case(label, texts, run, edit, expect):
     return False, label, f"expected a failure containing {want!r}, got {new}"
 
 
-def self_test(readme, cosigners, fixtures, vectors, versions, go_mod, verify_go,
-              verbose, workflow, key_vectors, used_key_ids):
-    texts = {"README.md": readme, "COSIGNERS.md": cosigners or ""}
-    baseline = set(check(readme, cosigners, fixtures, vectors))
+def _repro_case(label, texts, run, edit, expect):
+    """Alter the body of the Reproducing the fixtures section."""
+    readme = texts["README.md"]
+    start = readme.find(REPRODUCING + "\n")
+    if start < 0:
+        return False, label, f"no `{REPRODUCING}` section found in README.md"
+    start += len(REPRODUCING) + 1
+    end = re.compile(r"^#{1,6} ", re.M).search(readme, start)
+    end = end.start() if end else len(readme)
+    body = edit(readme[start:end])
+    if body == readme[start:end]:
+        return False, label, f"nothing to alter under `{REPRODUCING}` in README.md"
+    altered = dict(texts)
+    altered["README.md"] = readme[:start] + body + readme[end:]
+    new = run(altered)
+    if any(expect in f for f in new):
+        return True, label, ""
+    return False, label, f"expected a failure containing {expect!r}, got {new}"
 
-    def run(altered, cos=True):
+
+def self_test(readme, cosigners, fixtures, vectors, versions, go_mod, verify_go,
+              signing, verbose, workflow, key_vectors, used_key_ids):
+    texts = {"README.md": readme, "COSIGNERS.md": cosigners or ""}
+    baseline = set(check(readme, cosigners, fixtures, vectors, signing))
+
+    def run(altered, cos=True, sig=signing):
         cos_text = altered["COSIGNERS.md"] if cos and cosigners is not None else None
-        got = check(altered["README.md"], cos_text, fixtures, vectors)
+        got = check(altered["README.md"], cos_text, fixtures, vectors, sig)
         return [f for f in got if f not in baseline]
 
     cases = [_number_case(i, label, name, pattern, texts, run)
@@ -1390,6 +1500,37 @@ def self_test(readme, cosigners, fixtures, vectors, versions, go_mod, verify_go,
                   "version pinning section removed",
                   f"a README without the section still passes: {new}"))
 
+    funcs, vecs, _ = signing
+    for name in funcs:
+        cases.append(_repro_case(
+            f"reproduction steps not naming `{name}`", texts, run,
+            lambda body, n=name: body.replace(f"`{n}`", "the payload function"),
+            f"does not name `{name}`"))
+    for path in vecs:
+        cases.append(_repro_case(
+            f"reproduction steps not naming {path}", texts, run,
+            lambda body, p=path: body.replace(p, "a jcs-vectors vector"),
+            f"does not name {path}"))
+    if vecs:
+        cases.append(_repro_case(
+            "reproduction steps naming a vector the generator does not cross-check",
+            texts, run,
+            lambda body: body.replace(vecs[0], "jcs-vectors/vectors/99-not-a-vector.json"),
+            "names jcs-vectors/vectors/99-not-a-vector.json, which"))
+    else:
+        cases.append((False, "reproduction steps naming a vector the generator does not cross-check",
+                      f"{GENERATOR.as_posix()} cross-checks against no jcs-vectors vector"))
+    new = run(texts, sig=(funcs + ["canonicalPayloadV12"], vecs, []))
+    cases.append((any("does not name `canonicalPayloadV12`" in f for f in new),
+                  "generator signing form missing from the reproduction steps",
+                  f"a generator form the README does not name still passes: {new}"))
+    altered = dict(texts)
+    altered["README.md"] = readme.replace(REPRODUCING + "\n", "## Regenerating\n", 1)
+    new = run(altered)
+    cases.append((any(f"no `{REPRODUCING}` section" in f for f in new),
+                  "reproduction section removed",
+                  f"a README without the section still passes: {new}"))
+
     failed = 0
     for ok, label, detail in cases:
         if verbose or not ok:
@@ -1421,9 +1562,10 @@ def main():
     versions = accepted_versions(fixture_paths)
     go_mod = GO_MOD.read_text(encoding="utf-8") if GO_MOD.exists() else None
     verify_go = VERIFY_GO.read_text(encoding="utf-8") if VERIFY_GO.exists() else None
+    signing = generator_signing(ROOT)
 
     failed, total = self_test(readme, cosigners, fixtures, vectors, versions,
-                              go_mod, verify_go, only_self_test, workflow,
+                              go_mod, verify_go, signing, only_self_test, workflow,
                               key_vectors, used_key_ids)
     if failed:
         print(f"self-test FAILED: {failed} of {total} case(s) not caught by the check",
@@ -1435,7 +1577,7 @@ def main():
 
     # The check runs even when the self-test failed: a site the self-test
     # cannot find is often a count the README dropped, and the check names it.
-    failures += check(readme, cosigners, fixtures, vectors)
+    failures += check(readme, cosigners, fixtures, vectors, signing)
     failures.extend(threshold_claims(readme, fixture_paths))
     failures.extend(behavioral_profile_failures(readme, fixture_paths))
     failures.extend(ci_trigger_failures(readme, workflow))
@@ -1462,7 +1604,9 @@ def main():
           f"intro and version-pinning row name ATX {_versions(versions)}; "
           f"Go verifier dependency list, version-pinning rows and verify.go "
           f"header name every direct requirement of {GO_MOD_NAME}; "
-          f"every Version pinning link names a commit")
+          f"every Version pinning link names a commit; "
+          f"the reproduction steps name every signing form and jcs-vectors "
+          f"cross-check in the generator")
     return 0
 
 
