@@ -34,7 +34,7 @@
     },
     {
       "item": "k-of-n threshold issuance (ATX core.md section 3.1 step 8: cosignatures from 2 of 3 key holders)",
-      "reason": "the fixture format has no field for the required signature count and neither reference verifier reads one: both require every declared signature to verify and at least one to be present, so the threshold fixture's credential cut to one of its three signatures is accepted, and a verifier that checks only the first signature passes the suite"
+      "reason": "the fixture format has no field for the required signature count and neither reference verifier reads one: both require every declared signature to verify and at least one to be present, so the threshold fixture's credential cut to one of its three signatures is accepted, and a verifier that checks only the first signature passes the threshold fixture"
     },
     {
       "item": "Cosignature requirements (ATX core.md section 7: federation cosigning, and the root cosignature at trust level 4)",
