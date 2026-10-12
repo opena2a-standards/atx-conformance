@@ -45,14 +45,17 @@ case-fold ambiguity seen from the schema side.
 
 Every run starts with a self-test: altered copies of a tracked fixture and of
 conformance.json must each fail the format pass, and the tracked documents
-must pass it.
+must pass it. A case whose tracked document lacks the member it alters is
+reported red by that member's name, and the format pass still runs.
 
 Usage:
     python3 scripts/schema_validation.py              # self-test, then both passes
     python3 scripts/schema_validation.py --self-test  # the self-test alone
 """
 
+import contextlib
 import copy
+import io
 import json
 import pathlib
 import sys
@@ -110,10 +113,13 @@ def format_errors(doc: object, formats: dict) -> list[str]:
 
 
 def check_formats(formats: dict, problems: list[str]) -> int:
-    failures = len(problems)
+    """Print the format pass and return how many things failed it. A schema
+    file that cannot be used is reported and counted apart from the documents:
+    it is not one of them, so it does not come out of the pass count."""
     for problem in problems:
         print(f"FAIL  {problem}")
     docs = sorted((ROOT / "fixtures").glob("*.json")) + [PROFILE]
+    failed = 0
     for path in docs:
         errors = format_errors(json.loads(path.read_text(encoding="utf-8")), formats)
         rel = path.relative_to(ROOT)
@@ -121,39 +127,73 @@ def check_formats(formats: dict, problems: list[str]) -> int:
             print(f"FAIL  {rel}:")
             for err in errors:
                 print(f"      {err}")
-            failures += 1
+            failed += 1
         else:
             print(f"PASS  {rel}")
-    print(f"\nformat summary: {len(docs) - failures} pass, {failures} fail "
-          f"({len(docs)} documents, {len(formats)} format schemas)\n")
-    return failures
+    unusable = ""
+    if problems:
+        unusable = (f", {len(problems)} schema file{'' if len(problems) == 1 else 's'} "
+                    f"unusable")
+    print(f"\nformat summary: {len(docs) - failed} pass, {failed} fail "
+          f"({len(docs)} documents, {len(formats)} format schemas{unusable})\n")
+    return failed + len(problems)
 
 
-def _altered(doc: dict, change) -> dict:
+class _Unalterable(str):
+    """Stands in for an altered copy when the tracked document lacks the member
+    the case alters. The text names the member."""
+
+
+def _altered(doc: object, change) -> object:
+    """A deep copy of `doc` with `change` applied. A tracked document that has
+    lost the member `change` reaches for yields an _Unalterable instead, so the
+    case is reported red by name; the lookup once ended the run in a traceback
+    before the format pass had named the problem."""
     out = copy.deepcopy(doc)
-    change(out)
+    try:
+        change(out)
+    except (KeyError, IndexError, TypeError, AttributeError) as exc:
+        return _Unalterable(f"the tracked document has no member for this case "
+                            f"to alter ({type(exc).__name__}: {exc})")
     return out
 
 
-def _self_test_cases() -> list[tuple[str, object, bool]]:
-    """(label, document, conforms) for the tracked documents and altered copies."""
+def _tracked_documents() -> tuple[object, object, object]:
+    """The REJECT fixture, the ACCEPT fixture and the profile the cases alter."""
     fixtures = ROOT / "fixtures"
-    reject = json.loads((fixtures / "revoked.json").read_text(encoding="utf-8"))
-    accept = json.loads((fixtures / "baseline-valid.json").read_text(encoding="utf-8"))
-    profile = json.loads(PROFILE.read_text(encoding="utf-8"))
+    return (json.loads((fixtures / "revoked.json").read_text(encoding="utf-8")),
+            json.loads((fixtures / "baseline-valid.json").read_text(encoding="utf-8")),
+            json.loads(PROFILE.read_text(encoding="utf-8")))
+
+
+def _self_test_cases(reject: object, accept: object,
+                     profile: object) -> list[tuple[str, object, bool]]:
+    """(label, document, conforms) for the tracked documents and altered copies.
+    Every altered copy is built by _altered, so none can raise."""
     untracked = "https://example.invalid/schemas/fixture-v1.json"
     cases = [
         ("tracked REJECT fixture (with a CRL) conforms", reject, True),
         ("tracked ACCEPT fixture conforms", accept, True),
         ("tracked conformance.json conforms", profile, True),
         ("a document that is not an object", [reject], False),
-        ("fixture naming an untracked format", {**reject, "$schema": untracked}, False),
-        ("fixture naming the profile format", {**reject, "$schema": profile["$schema"]}, False),
-        ("fixture with an unknown member", {**reject, "verdict": "ACCEPT"}, False),
+        ("fixture naming an untracked format",
+         _altered(reject, lambda d: d.update({"$schema": untracked})), False),
+        ("fixture naming the profile format",
+         _altered(reject, lambda d: d.update({"$schema": profile["$schema"]})), False),
+        ("fixture with an unknown member",
+         _altered(reject, lambda d: d.update(verdict="ACCEPT")), False),
     ]
-    cases += [(f"fixture with no {m!r} member", {k: v for k, v in reject.items() if k != m}, False)
+    cases += [(f"fixture with no {m!r} member", _altered(reject, lambda d, m=m: d.pop(m)), False)
               for m in FIXTURE_MEMBERS]
     cases += [
+        ("fixture name outside the `atx-v<N>/<slug>` form",
+         _altered(reject, lambda d: d.update(name="Revoked")), False),
+        ("fixture requirement that opens with no § number",
+         _altered(reject, lambda d: d.update(requirement="step 4: a revoked agent is rejected")), False),
+        ("keypair path outside vectors/",
+         _altered(reject, lambda d: d["keypairRefs"][0].update(path="keys/issuer-primary.json")), False),
+        ("verifierState with an unknown member",
+         _altered(reject, lambda d: d["verifierState"].update(mode="strict")), False),
         ("REJECT with no rejectCategory",
          _altered(reject, lambda d: d["expected"].pop("rejectCategory")), False),
         ("REJECT with no reasonContains",
@@ -177,35 +217,102 @@ def _self_test_cases() -> list[tuple[str, object, bool]]:
         ("atx that is not an object",
          _altered(reject, lambda d: d.update(atx="credential")), False),
         ("profile naming an untracked format",
-         {**profile, "$schema": "https://example.invalid/schemas/conformance-profile-v1.json"}, False),
+         _altered(profile, lambda d: d.update(
+             {"$schema": "https://example.invalid/schemas/conformance-profile-v1.json"})), False),
         ("profile naming the fixture format",
-         {**profile, "$schema": reject["$schema"]}, False),
+         _altered(profile, lambda d: d.update({"$schema": reject["$schema"]})), False),
+        ("profile with an unknown member",
+         _altered(profile, lambda d: d.update(verdict="PASS")), False),
         ("profile with no requirements",
-         {k: v for k, v in profile.items() if k != "requirements"}, False),
+         _altered(profile, lambda d: d.pop("requirements")), False),
         ("profile requirement with a malformed expected",
          _altered(profile, lambda d: d["requirements"][0].update(expected="REJECTED")), False),
         ("profile requirement with no fixture path",
          _altered(profile, lambda d: d["requirements"][0].pop("fixture")), False),
+        ("profile requirement with an unregistered level",
+         _altered(profile, lambda d: d["requirements"][0].update(level="OPTIONAL")), False),
     ]
     return cases
 
 
-def self_test() -> tuple[int, int]:
-    formats, problems = load_formats()
-    failed = 0
-    for problem in problems:
-        print(f"  [RED  ] format schema unusable: {problem}")
-        failed += 1
-    cases = _self_test_cases()
+def _case_results(cases: list[tuple[str, object, bool]],
+                  formats: dict) -> list[tuple[bool, str, str]]:
+    """(green, label, detail) for each case run through the format pass."""
+    results = []
     for label, doc, conforms in cases:
+        if isinstance(doc, _Unalterable):
+            results.append((False, label, str(doc)))
+            continue
         errors = format_errors(doc, formats)
         ok = not errors if conforms else bool(errors)
+        detail = "" if ok else errors[0] if errors else "passed the format check"
+        results.append((ok, label, detail))
+    return results
+
+
+def _missing_member_case(label: str, member: str, built: list[tuple[str, object, bool]],
+                         reject: object, accept: object,
+                         profile: object) -> tuple[bool, str, str]:
+    """Building the cases from a tracked document that lacks `member` must turn
+    the cases that alter it red by name, not raise. `built` is the cases from
+    the tracked documents as they are; a case already unbuilt there is theirs."""
+    try:
+        cases = _self_test_cases(reject, accept, profile)
+    except Exception as exc:  # a traceback is the defect this case holds
+        return False, label, f"building the cases raised {type(exc).__name__}: {exc}"
+    already = {name for name, doc, _ in built if isinstance(doc, _Unalterable)}
+    unbuilt = [(name, str(doc)) for name, doc, _ in cases if isinstance(doc, _Unalterable)]
+    named = [text for _, text in unbuilt if repr(member) in text]
+    other = [text for name, text in unbuilt
+             if repr(member) not in text and name not in already]
+    return (bool(named) and not other, label,
+            f"expected each case that could not be built to name {member!r}, "
+            f"got {named + other}")
+
+
+def _summary_case(formats: dict) -> tuple[bool, str, str]:
+    """A schema file that cannot be used must not come out of the format
+    summary's pass count: the documents' counts stay as they are without it."""
+    label = "format summary counting an unusable schema file apart from the documents"
+
+    def summary(problems: list[str]) -> tuple[int, str]:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            failures = check_formats(formats, problems)
+        lines = [line for line in out.getvalue().splitlines()
+                 if line.startswith("format summary:")]
+        return failures, lines[0] if lines else ""
+
+    failures, line = summary([])
+    more, with_problem = summary(["schemas/made-up.schema.json: cannot be used"])
+    counts = line.partition(" (")[0]
+    ok = (bool(counts) and with_problem.startswith(counts + " (")
+          and "1 schema file unusable" in with_problem and more == failures + 1)
+    return ok, label, f"read {line!r} without it and {with_problem!r} with it"
+
+
+def self_test() -> tuple[int, int]:
+    formats, problems = load_formats()
+    results = [(False, f"format schema unusable: {problem}", "") for problem in problems]
+    reject, accept, profile = _tracked_documents()
+    cases = _self_test_cases(reject, accept, profile)
+    results += _case_results(cases, formats)
+    results.append(_missing_member_case(
+        "conformance.json with no 'requirements' member is reported by name",
+        "requirements", cases, reject, accept,
+        _altered(profile, lambda d: d.pop("requirements", None))))
+    results.append(_missing_member_case(
+        "REJECT fixture with no 'expected' member is reported by name",
+        "expected", cases, _altered(reject, lambda d: d.pop("expected", None)), accept, profile))
+    results.append(_summary_case(formats))
+    failed = 0
+    for ok, label, detail in results:
         print(f"  [{'GREEN' if ok else 'RED  '}] {label}")
         if not ok:
-            detail = errors[0] if errors else "passed the format check"
-            print(f"          {detail}")
+            if detail:
+                print(f"          {detail}")
             failed += 1
-    return failed, len(cases) + len(problems)
+    return failed, len(results)
 
 
 def check_credentials() -> int:

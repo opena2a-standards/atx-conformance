@@ -82,7 +82,7 @@ SUITE = {
         {
             "name": "jcs-byte-agreement",
             "path": "jcs-vectors/run-agreement.sh",
-            "description": "three independent canonicalizers (Go gowebpki/jcs, vendored Python RFC 8785, TypeScript erdtman/canonicalize) must reproduce each vector's pinned canonical bytes exactly",
+            "description": "three independent canonicalizers (Go gowebpki/jcs, vendored Python RFC 8785, TypeScript erdtman/canonicalize) and the v1.1 TBS projection of both verifiers (verifiers/go, verifiers/python) must reproduce each vector's pinned canonical bytes exactly; the gate needs the Python verifier's dependencies",
         }
     ],
     "notCovered": [

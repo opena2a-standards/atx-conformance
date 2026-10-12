@@ -31,7 +31,7 @@ vector and fails unless all three reproduce the vector's pinned
 
 | Leg | Library | Also checks |
 |-----|---------|-------------|
-| Go | [`github.com/gowebpki/jcs`](https://github.com/gowebpki/jcs) (webpki.org reference port) | re-verifies the pinned Ed25519 + ML-DSA-65 signatures over the recomputed bytes |
+| Go | [`github.com/gowebpki/jcs`](https://github.com/gowebpki/jcs) (a Go implementation of RFC 8785) | re-verifies the pinned Ed25519 + ML-DSA-65 signatures over the recomputed bytes |
 | Python | vendored `python/rfc8785.py` (stdlib only) | adds no dependency to the Python verifier |
 | TS/JS | [`canonicalize`](https://www.npmjs.com/package/canonicalize) (erdtman, listed in RFC 8785 Appendix G) | the library the Secretless broker verifier uses |
 
@@ -142,8 +142,8 @@ the rest of that projection and the verification algorithm are tested by the
 v1.1 conformance fixtures. It is the foundation the Phase 1 verifier work is
 built on.
 
-It runs no code from another repository. The registry issuer, the offline
-verifier and the Secretless broker are covered only when their own CI
-canonicalizes each `vectors/*.json` `tbs` through their own projection and
+The gate runs no issuer, offline-verifier or broker code. The registry issuer,
+the offline verifier and the Secretless broker are covered only when their own
+CI canonicalizes each `vectors/*.json` `tbs` through their own projection and
 compares the result with `expected.canonicalHex`; this gate cannot report on
 them. The TypeScript leg runs the `canonicalize` library, not the broker.
