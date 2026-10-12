@@ -28,12 +28,16 @@ lesson and scoped to the whole body because ATX signs it all):
     first-wins/last-wins parser-divergence smuggling split.
   - the fixture wrapper (name/verifierState/expected) is harness metadata and
     parses leniently.
-  - every credential member the Go reference verifier decodes into a typed
-    field is decoded the way its json.Unmarshal does: strings, integers in
-    int64 range, a finite trustScore, a boolean revoked, arrays of strings,
-    signature objects, and issuedAt/expiresAt in the date-time grammar of Go's
-    time.Parse(time.RFC3339). A value outside its type rejects as PARSE_ERROR
-    instead of raising; an absent or null member takes the Go zero value.
+  - each member the Go reference verifier's atx struct declares with a typed
+    field, looked up by its exact name, is type-checked against that field:
+    strings, integers in int64 range, a finite trustScore, a boolean revoked,
+    arrays of strings, signature objects, and issuedAt/expiresAt in the
+    date-time grammar of Go 1.22's time.Parse(time.RFC3339). A value outside
+    its type rejects as PARSE_ERROR instead of raising; an absent or null
+    member takes the Go zero value. Go's encoding/json also matches a member
+    name that differs only in case, which this verifier does not, and parses
+    a timestamp's raw bytes, where this verifier decodes its JSON escapes
+    first, so on those inputs the two verifiers can disagree.
   - NaN, Infinity and -Infinity are not JSON, so a file carrying one fails to
     load, as it does in the Go reference verifier.
 
@@ -524,8 +528,11 @@ def _decode_signature(name: str, value: Any) -> dict[str, Any]:
 
 
 def _decode_credential(atx: Any) -> dict[str, Any]:
-    """The credential as the Go reference verifier's json.Unmarshal into its
-    atx struct leaves it, or raise _DecodeError.
+    """The credential with each member in _MEMBER_TYPES decoded into the value
+    the Go reference verifier's atx struct field holds, or raise _DecodeError.
+    A member is looked up by its exact name, where Go's json.Unmarshal also
+    matches a name that differs only in case, and a timestamp is parsed after
+    json.loads has decoded its escapes, where Go parses the raw bytes.
 
     Each member in _MEMBER_TYPES holds its decoded value: the Go zero value
     when it is absent or null, an _Instant for a timestamp. Other members are
