@@ -89,6 +89,13 @@ jcs-vectors. The section must name every canonicalPayload* function the
 generator defines and every jcs-vectors file it cross-checks against, and no
 other.
 
+It also holds what jcs-vectors/README.md, jcs-vectors/ts/package.json and
+jcs-vectors/ts/check.mjs say about the TypeScript leg's library to RFC 8785.
+All three called erdtman/canonicalize the RFC 8785 reference implementation,
+while RFC 8785 designates none and lists canonicalize in Appendix G among the
+open-source implementations verified to be compatible with JCS. Each must cite
+Appendix G and must not call the library the reference implementation.
+
 It also holds where README.md and COSIGNERS.md send readers to coordinate.
 Both kept naming a2aproject/A2A#1876 as the place second-party
 implementations and coordination are tracked after that issue was closed as
@@ -106,8 +113,9 @@ Ed25519 key, both version labels name exactly the accepted versions, each
 Go dependency site names every direct requirement (the two README sites at
 its pinned version; the verify.go header states no versions, so it is held
 to module names alone), no Python dependency site calls the Python verifier
-zero-dependency while requirements.txt names a package, every Version
-pinning link names a commit, the
+zero-dependency while requirements.txt names a package, each jcs-vectors
+file describing canonicalize cites RFC 8785 Appendix G and calls it no
+reference implementation, every Version pinning link names a commit, the
 reproduction steps match the generator and no coordination link points at a
 closed issue, 1 otherwise, 2 on an unknown argument.
 """
@@ -556,6 +564,60 @@ def python_dependency_failures(requirements, texts):
                 failures.append(f"{site} calls the Python verifier zero-dependency "
                                 f"(\"{claim}\"), but {PY_REQUIREMENTS_NAME} requires "
                                 f"{', '.join(packages)}")
+    return failures
+
+
+# The TypeScript leg of the JCS byte-agreement gate runs erdtman/canonicalize,
+# and the three files that describe it called it the RFC 8785 reference
+# implementation. RFC 8785 designates none: Appendix G lists canonicalize among
+# the open-source implementations verified to be compatible with JCS. Each file
+# is paired with the wording it published, with its original line wrap; the
+# claim pattern must keep matching each, or the gate cannot fire on it.
+JCS_LIBRARY_SITES = (
+    ("jcs-vectors/README.md", "(erdtman, RFC 8785 reference impl)"),
+    ("jcs-vectors/ts/package.json",
+     "(erdtman/canonicalize, the RFC 8785 reference implementation)."),
+    ("jcs-vectors/ts/check.mjs",
+     "// from the vector's `tbs` object using erdtman/canonicalize (the RFC 8785\n"
+     "// reference implementation, the same library the Secretless broker ATX verifier"),
+)
+JCS_REFERENCE_CLAIM = re.compile(
+    r"\bRFC\s*8785(?:'s)?\s+reference\s+impl(?:ementation)?\b"
+    r"|\breference\s+impl(?:ementation)?\s+(?:of|for)\s+RFC\s*8785\b",
+    re.IGNORECASE,
+)
+JCS_APPENDIX_G = "RFC 8785 Appendix G"
+
+
+def _flat_prose(text):
+    """`text` with line-leading `//` and `#` markers removed and whitespace
+    collapsed, so neither a line wrap nor a comment continuation splits a
+    phrase."""
+    return " ".join(re.sub(r"^\s*(?://+|#+)", "", text, flags=re.M).split())
+
+
+def jcs_library_failures(sites):
+    """Each file that describes the TypeScript leg's library (missing from
+    `sites` when the file is) must say RFC 8785 Appendix G lists it, and must
+    not call it the RFC 8785 reference implementation."""
+    failures = []
+    for path, retracted in JCS_LIBRARY_SITES:
+        if not JCS_REFERENCE_CLAIM.search(_flat_prose(retracted)):
+            failures.append(f"RFC 8785 reference claim pattern no longer matches "
+                            f"the wording {path} published; the gate cannot fire")
+        if path not in sites:
+            failures.append(f"{path} is missing; what it says about canonicalize "
+                            f"and RFC 8785 cannot be checked")
+            continue
+        flat = _flat_prose(sites[path])
+        claim = JCS_REFERENCE_CLAIM.search(flat)
+        if claim:
+            failures.append(f"{path} calls canonicalize \"{claim.group(0)}\", but "
+                            f"RFC 8785 designates no reference implementation; say "
+                            f"it is listed in {JCS_APPENDIX_G}")
+        if JCS_APPENDIX_G not in flat:
+            failures.append(f"{path} does not say canonicalize is listed in "
+                            f"{JCS_APPENDIX_G}")
     return failures
 
 
@@ -1249,7 +1311,7 @@ def check(readme, cosigners, fixtures, vectors, signing):
 Tree = collections.namedtuple("Tree", (
     "readme cosigners fixtures vectors signing fixture_paths workflow "
     "key_vectors used_key_ids versions go_mod verify_go py_requirements "
-    "py_dependency_texts"))
+    "py_dependency_texts jcs_sites"))
 
 
 def tree_failures(tree):
@@ -1265,6 +1327,7 @@ def tree_failures(tree):
     failures.extend(go_dependency_failures(tree.readme, tree.go_mod, tree.verify_go))
     failures.extend(python_dependency_failures(tree.py_requirements,
                                                tree.py_dependency_texts))
+    failures.extend(jcs_library_failures(tree.jcs_sites))
     return failures
 
 
@@ -1625,6 +1688,36 @@ def _python_dependency_cases(requirements, texts):
     return cases
 
 
+def _jcs_library_cases(sites):
+    """Restore each file's retracted reference claim beside its Appendix G
+    citation, drop the citation, and remove the file; each must add a failure
+    naming the file."""
+    baseline = set(jcs_library_failures(sites))
+    cases = []
+
+    def case(label, altered, needle):
+        new = [f for f in jcs_library_failures(altered) if f not in baseline]
+        cases.append((any(needle in f for f in new), label,
+                      f"expected a failure containing {needle!r}, got {new}"))
+
+    for path, retracted in JCS_LIBRARY_SITES:
+        text = sites.get(path)
+        if text is None or JCS_APPENDIX_G not in text:
+            cases.append((False, f"{path} citing {JCS_APPENDIX_G}",
+                          f"no `{JCS_APPENDIX_G}` found in {path}"))
+            continue
+        case(f"{path} restored to the retracted reference claim",
+             dict(sites, **{path: text + "\n" + retracted + "\n"}),
+             f"{path} calls canonicalize")
+        case(f"{path} not citing {JCS_APPENDIX_G}",
+             dict(sites, **{path: text.replace(JCS_APPENDIX_G, "RFC 8785")}),
+             f"{path} does not say canonicalize is listed in")
+        case(f"{path} missing",
+             {p: t for p, t in sites.items() if p != path},
+             f"{path} is missing")
+    return cases
+
+
 def _pin_case(label, texts, run, edit, expect):
     """Alter the first link at a commit in the Version pinning table."""
     readme = texts["README.md"]
@@ -1805,6 +1898,7 @@ def self_test(tree, verbose):
     cases.extend(_version_cases(readme, tree.versions))
     cases.extend(_go_dependency_cases(readme, tree.go_mod, tree.verify_go))
     cases.extend(_python_dependency_cases(tree.py_requirements, tree.py_dependency_texts))
+    cases.extend(_jcs_library_cases(tree.jcs_sites))
     cases.extend(_wiring_cases(tree))
 
     cases.append(_pin_case(
@@ -1948,6 +2042,8 @@ def main():
         py_dependency_texts={
             site: (ROOT / site).read_text(encoding="utf-8") if (ROOT / site).exists() else None
             for site in PY_DEPENDENCY_SITES},
+        jcs_sites={path: (ROOT / path).read_text(encoding="utf-8")
+                   for path, _ in JCS_LIBRARY_SITES if (ROOT / path).exists()},
     )
 
     failed, total = self_test(tree, only_self_test)
@@ -1984,6 +2080,8 @@ def main():
           f"header name every direct requirement of {GO_MOD_NAME}; "
           f"no jcs-vectors README or RFC 8785 serializer docstring calls the "
           f"Python verifier zero-dependency; "
+          f"each jcs-vectors file describing canonicalize cites "
+          f"{JCS_APPENDIX_G} and calls it no reference implementation; "
           f"every Version pinning link names a commit; "
           f"the reproduction steps name every signing form and jcs-vectors "
           f"cross-check in the generator; coordination links point at an open "
