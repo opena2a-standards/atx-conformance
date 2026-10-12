@@ -10,12 +10,17 @@
 // reproduce ACCEPT / REJECT.
 //
 // Spec it implements:
-//   - ATX v1.0 §1.1 schema (https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md)
+//   - ATX §1.1 schema, atcVersion "1.0" and "1.1" (https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md)
 //   - AIP §3 Hybrid Ed25519 + ML-DSA-65 (mandate at v1)
-//   - Canonicalization: pipe-delimited 11-field string matching
-//     opena2a-registry/pkg/atcverify/verify.go canonicalPayload() VERBATIM
-//   - ATX v1.1 (atcVersion "1.1"): signed over the RFC 8785 JCS form of the
-//     v1.1 TBS projection
+//   - Canonicalization: v1.0 signs the pipe-delimited 11-field string matching
+//     opena2a-registry/pkg/atcverify/verify.go canonicalPayload() VERBATIM;
+//     v1.1 signs JCS(TBS), the RFC 8785 form of the to-be-signed projection
+//     (core.md §1.3a.2). See README
+//     §"Canonicalization: v1.0 signs 11 fields; v1.1 signs JCS(TBS)".
+//
+// Not performed: the distinct signer-authority count for trust level 3+
+// (core.md §1.3 step 7). The asserted trustLevel is reported, never checked;
+// see conformance.json notCovered.
 //
 // Usage:
 //
@@ -131,10 +136,10 @@ type atx struct {
 // VERBATIM. It is duplicated here so the conformance verifier has zero
 // dependency on the production codebase.
 //
-// The signature covers exactly 11 fields. capabilities, scanSummary,
+// The v1.0 signature covers exactly 11 fields. capabilities, scanSummary,
 // publisher, publisherDid, transparencyLogIndex, behavioralProfile,
 // revoked-related fields, and createdAt are NOT signed. See README
-// §"Signed vs unsigned fields."
+// §"Canonicalization: v1.0 signs 11 fields; v1.1 signs JCS(TBS)".
 func canonicalPayload(a *atx) []byte {
 	return []byte(fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d|%.6f|%s|%s|%s",
 		a.AgentID,
@@ -430,8 +435,9 @@ func foldKey(s string) string {
 	return b.String()
 }
 
-// verify implements the 8-step ATX v1.0 verification algorithm with hybrid
-// signing enforcement per AIP §3.
+// verify runs the ATX v1.0 and v1.1 verification algorithm with hybrid
+// signing enforcement per AIP §3. Step 7 (distinct signer-authority count) is
+// not performed; see the comment at that step.
 func verify(f fixture) result {
 	// Step 0: strict parse. Duplicate members reject before interpretation
 	// (see rawDuplicateMember).

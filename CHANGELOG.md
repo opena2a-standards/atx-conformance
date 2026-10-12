@@ -144,6 +144,16 @@ whenever one lands; README "Versioning and stability" says they should not.
   5. `TestEarlyRejectFixturesCarryValidSignatures` in `verifiers/go` runs
   each such fixture through steps 5 to 8 with its gate lifted and requires
   its signatures to verify (#138). No fixture changes.
+- The header of `verifiers/python/verify.py` no longer lists a trust level
+  3+ chain check, which never ran; it lists v1.1 (`JCS(TBS)`) beside v1.0 and
+  says the distinct signer-authority count (core.md §1.3 step 7) is not
+  performed. The Go verifier's header says the same. `verifiers/go/verify.go`
+  and `scripts/generate-fixtures/main.go` cited README §"Signed vs unsigned
+  fields.", which README does not have; they now cite §"Canonicalization: v1.0
+  signs 11 fields; v1.1 signs JCS(TBS)". `test_verify.py` fails when the
+  Python header claims the step 7 check or omits a supported version, and it
+  and `verify_test.go` fail when a verifier or the generator cites a README
+  heading that does not exist (#161). No verdict or fixture changes.
 
 ## e2f9dc4 (#26, 2026-09-09): capabilities rewritten in 22 existing fixtures
 

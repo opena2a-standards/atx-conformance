@@ -8,15 +8,22 @@ demonstrate that an independent verifier in a second language reaches the same
 ACCEPT / REJECT verdict as the Go reference verifier for every fixture.
 
 Spec coverage:
-  - ATX v1.0 schema (atcVersion="1.0")
-  - Canonicalization: pipe-delimited 11-field string matching
-    opena2a-registry/pkg/atcverify/verify.go canonicalPayload() VERBATIM
-  - ATX v1.1 (atcVersion="1.1"): signed over the RFC 8785 JCS form of the
-    v1.1 TBS projection
+  - ATX v1.0 schema (atcVersion="1.0") and v1.1 schema (atcVersion="1.1");
+    any other atcVersion rejects as UNSUPPORTED_VERSION
+  - Canonicalization: v1.0 signs the pipe-delimited 11-field string matching
+    opena2a-registry/pkg/atcverify/verify.go canonicalPayload() VERBATIM;
+    v1.1 signs JCS(TBS), the RFC 8785 form of the to-be-signed projection
+    (core.md section 1.3a.2). See README
+    §"Canonicalization: v1.0 signs 11 fields; v1.1 signs JCS(TBS)".
   - Ed25519 and ML-DSA-65 (FIPS 204) hybrid signature verification over the
     same canonical payload (every declared signature must verify and at
-    least one must be present; no k-of-n threshold is read), trust level 3+ chain
-    check, expiry, revocation, issuer-trust.
+    least one must be present; no k-of-n threshold is read; an ML-DSA-65
+    signature needs a verifying Ed25519 companion), expiry, revocation
+    (the credential's revoked flag and the verifier's CRL), issuer-trust.
+
+Not performed: the distinct signer-authority count for trust level 3+
+(core.md section 1.3 step 7). The asserted trustLevel is reported, never
+checked; see conformance.json notCovered.
 
 Parsing rule (strict parse, ported from the aap-conformance protected-header
 lesson and scoped to the whole body because ATX signs it all):

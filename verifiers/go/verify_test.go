@@ -5,10 +5,53 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 )
+
+// TestReadmeCrossReferencesResolve pins that every README §"..." cross-reference
+// in this verifier and in the fixture generator names a heading README.md
+// carries. A reference split across two comment lines reads as one.
+// atx-conformance#161: both sources cited §"Signed vs unsigned fields.", a
+// section README never had.
+func TestReadmeCrossReferencesResolve(t *testing.T) {
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatalf("cannot read README.md: %v", err)
+	}
+	headings := map[string]bool{}
+	fenced := false
+	for _, line := range strings.Split(string(readme), "\n") {
+		switch {
+		case strings.HasPrefix(line, "```"):
+			fenced = !fenced
+		case !fenced && strings.HasPrefix(line, "#"):
+			headings[strings.TrimSpace(strings.TrimLeft(line, "#"))] = true
+		}
+	}
+
+	continuation := regexp.MustCompile(`\n[ \t]*//[ \t]*`)
+	reference := regexp.MustCompile(`README\s+§"([^"]+)"`)
+	found := 0
+	for _, src := range []string{"verify.go", "../../scripts/generate-fixtures/main.go"} {
+		body, err := os.ReadFile(src) //nolint:gosec // G304: src ranges over the two fixed repository paths above
+		if err != nil {
+			t.Fatalf("cannot read %s: %v", src, err)
+		}
+		text := continuation.ReplaceAllString(string(body), " ")
+		for _, m := range reference.FindAllStringSubmatch(text, -1) {
+			found++
+			if !headings[m[1]] {
+				t.Errorf("%s cites README §%q, which is not a README heading", src, m[1])
+			}
+		}
+	}
+	if found == 0 {
+		t.Fatal("no README cross-reference found; refusing to pass vacuously")
+	}
+}
 
 // TestFoldKey pins the field-fold used by the fold-aware duplicate detector to
 // encoding/json's own folding: ASCII case-insensitive plus the only two

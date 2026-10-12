@@ -120,7 +120,8 @@ type ATX struct {
 // atcVersion. Notably, the signature does NOT cover capabilities,
 // behavioralProfile, scanSummary, signatures, revoked, revokedAt,
 // revocationReason, transparencyLogIndex, publisher, publisherDid, agentDid
-// (wait, agentDid IS included). See README §"Signed vs unsigned fields."
+// (wait, agentDid IS included). See README
+// §"Canonicalization: v1.0 signs 11 fields; v1.1 signs JCS(TBS)".
 func canonicalPayload(a *ATX) []byte {
 	canonical := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d|%.6f|%s|%s|%s",
 		a.AgentID,

@@ -12,9 +12,10 @@ makes of a member name in another case, a timestamp written with a JSON
 escape, an unpaired surrogate escape and a trustScore of -0, the projection of
 behavioralProfile and scanSummary members outside their Go type, the signature
 base64 alphabet, a fixture whose expected member is not an object, and a
-report line standard output cannot encode. One test reads verify.py itself: it
-imports no name it does not use. Needs the same dependencies as verify.py. Run
-from this directory:
+report line standard output cannot encode. Two tests read verify.py itself: it
+imports no name it does not use, and its module docstring lists only the checks
+the verifier runs. Needs the same dependencies as verify.py. Run from this
+directory:
 
     python3 -m unittest -v test_verify
 """
@@ -26,6 +27,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import re
 import string
 import sys
 import tempfile
@@ -1242,6 +1244,55 @@ class JCSVectorsThroughVerifierProjection(unittest.TestCase):
                 credential["trustScore"] = json.loads(credential["trustScore"])
                 got = verify.canonical_payload_v11(verify._decode_credential(credential))
                 self.assertEqual(got.hex(), vector["expected"]["canonicalHex"])
+
+
+def _readme_headings() -> set[str]:
+    headings, fenced = set(), False
+    for line in (ROOT / "README.md").read_text(encoding="utf-8").splitlines():
+        if line.startswith("```"):
+            fenced = not fenced
+        elif not fenced and line.startswith("#"):
+            headings.add(line.lstrip("#").strip())
+    return headings
+
+
+class HeaderDocs(unittest.TestCase):
+    """The module docstring lists only the checks verify_fixture performs, and
+    its README cross-references name real headings. atx-conformance#161."""
+
+    def _spec_coverage(self) -> str:
+        doc = verify.__doc__
+        start = doc.index("Spec coverage:")
+        return doc[start : doc.index("\n\n", start)]
+
+    def test_lists_every_supported_version(self):
+        coverage = self._spec_coverage()
+        for version in (verify.SUPPORTED_ATC_VERSION, verify.SUPPORTED_ATC_VERSION_V11):
+            with self.subTest(version=version):
+                self.assertIn(f'atcVersion="{version}"', coverage)
+
+    def test_does_not_claim_the_step7_check(self):
+        # A trust level 3+ credential is accepted without the distinct
+        # signer-authority count, so the coverage list must not claim one.
+        got = verify.verify_fixture(verify.load_fixture(ROOT / "fixtures" / "baseline-valid.json"))
+        self.assertTrue(got.accepted)
+        self.assertGreaterEqual(got.trust_level, 3)
+        self.assertFalse(got.step7_performed)
+        coverage = self._spec_coverage().lower()
+        for claim in ("trust level", "chain check"):
+            with self.subTest(claim=claim):
+                self.assertNotIn(claim, coverage)
+
+    def test_readme_cross_references_resolve(self):
+        # Join continuation lines so a reference split across two lines of a
+        # docstring or comment reads as one.
+        text = re.sub(r"\n[ \t]*(#[ \t]*)?", " ", (HERE / "verify.py").read_text(encoding="utf-8"))
+        refs = re.findall(r'README\s+§"([^"]+)"', text)
+        self.assertTrue(refs, "no README cross-reference found; refusing to pass vacuously")
+        headings = _readme_headings()
+        for ref in refs:
+            with self.subTest(ref=ref):
+                self.assertIn(ref, headings)
 
 
 if __name__ == "__main__":
