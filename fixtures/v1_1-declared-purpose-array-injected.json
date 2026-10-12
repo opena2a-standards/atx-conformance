@@ -2,6 +2,7 @@
   "$schema": "https://atx.opena2a.org/schemas/fixture-v1.json",
   "name": "atx-v1_1/declared-purpose-array-injected",
   "description": "An ATX v1.1 credential signed with no declaredPurpose, carrying an attacker-appended ARRAY declaredPurpose value. Non-object values are included in the TBS verbatim (atx-spec §1.3a.2 rule 5), so the recomputed canonical bytes no longer match the signature and the verifier MUST REJECT with a signature-validation reason. A verifier that normalizes non-object values away would accept unsigned purpose content riding a valid signature.",
+  "requirement": "§1.3a.2 rule 5: a present non-object declaredPurpose value enters the TBS verbatim, so an array added after signing is a signature failure",
   "spec": [
     {
       "id": "ATX",
@@ -32,11 +33,6 @@
       "id": "RFC 8032",
       "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
       "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
-    },
-    {
-      "id": "FIPS 204",
-      "ref": "https://csrc.nist.gov/pubs/fips/204/final",
-      "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
     }
   ],
   "keypairRefs": [

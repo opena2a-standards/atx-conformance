@@ -2,6 +2,7 @@
   "$schema": "https://atx.opena2a.org/schemas/fixture-v1.json",
   "name": "atx-v1_1/tampered-declared-purpose",
   "description": "An ATX v1.1 credential whose declaredPurpose.category was rewritten from financial-operations to agent-orchestration AFTER signing. Because v1.1 signs JCS(TBS) and declaredPurpose is part of it, the verifier recomputes the canonical bytes, finds they no longer match the signature, and MUST REJECT. This is the integrity property that makes a declared purpose binding and non-repudiable (§1.5).",
+  "requirement": "§1.5: declaredPurpose is under the v1.1 signature, so a declaredPurpose changed after signing is a signature failure",
   "spec": [
     {
       "id": "ATX",
@@ -32,11 +33,6 @@
       "id": "RFC 8032",
       "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
       "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
-    },
-    {
-      "id": "FIPS 204",
-      "ref": "https://csrc.nist.gov/pubs/fips/204/final",
-      "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
     }
   ],
   "keypairRefs": [

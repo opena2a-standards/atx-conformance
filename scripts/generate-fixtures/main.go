@@ -302,11 +302,13 @@ type KeypairRef struct {
 }
 
 // Fixture wraps an ATX with all the metadata a language-agnostic verifier
-// needs: spec refs, expected outcome, verifier configuration.
+// needs: the requirement it tests, spec refs, expected outcome, verifier
+// configuration.
 type Fixture struct {
 	Schema        string          `json:"$schema"`
 	Name          string          `json:"name"`
 	Description   string          `json:"description"`
+	Requirement   string          `json:"requirement"`
 	Spec          []SpecRef       `json:"spec"`
 	KeypairRefs   []KeypairRef    `json:"keypairRefs"`
 	VerifierState VerifierState   `json:"verifierState"`
@@ -990,6 +992,11 @@ func main() {
 			panic("fixtureSections names no fixture: " + name)
 		}
 	}
+	for name := range fixtureRequirements {
+		if !fixtureRequirementsUsed[name] {
+			panic("fixtureRequirements names no fixture: " + name)
+		}
+	}
 
 	// MANIFEST.sha256: one line per fixture, in path-sorted order.
 	sort.Slice(manifest, func(i, j int) bool { return manifest[i].path < manifest[j].path })
@@ -1087,6 +1094,7 @@ const (
 var fixtureSections = map[string][]string{
 	"atx-v1/revoked":                             {secRevocation},
 	"atx-v1/revoked-crl-only":                    {secRevocation},
+	"atx-v1/wrong-issuer":                        {secSecurity},
 	"atx-v1_1/hybrid-pq-only":                    {secSecurity},
 	"atx-v1_1/tampered-capabilities":             {secSignedFields},
 	"atx-v1_1/declared-purpose-valid":            {secDeclaredPurpose},
@@ -1099,6 +1107,43 @@ var fixtureSections = map[string][]string{
 
 // fixtureSectionsUsed records which fixtureSections entries wrap consumed.
 var fixtureSectionsUsed = map[string]bool{}
+
+// fixtureRequirements names the requirement each fixture tests: the § number
+// of the core.md section it comes from, which the fixture's spec list cites,
+// then the step or rule. scripts/conformance_profile.py --check fails on a
+// fixture whose requirement names a section it does not cite, or repeats
+// another fixture's. wrap fails on a fixture with no entry, and main on an
+// entry that names no fixture.
+var fixtureRequirements = map[string]string{
+	"atx-v1/baseline-valid":                      "§1.3 step 8: a v1.0 credential whose one Ed25519 signature, made with its issuer's key, verifies over the legacy canonical bytes passes every step and is accepted",
+	"atx-v1/baseline-valid-hybrid":               "§1.3 step 5: every declared signature verifies, the ML-DSA-65 signature included, so a v1.0 hybrid credential is accepted",
+	"atx-v1/revoked":                             "§3.3 step 7: a credential its issuing node marked revoked is rejected; its revoked flag is set and its agentId is also on the verifier's CRL",
+	"atx-v1/revoked-crl-only":                    "§1.3 step 6: an agentId listed on the verifier's CRL is rejected although the credential's own revoked flag is false",
+	"atx-v1/threshold-2of3-cosignature":          "§1.3 step 5: every declared signature verifies, here three Ed25519 signatures by three keys, so the credential is accepted; the 2-of-3 threshold of §3.1 step 8 is not tested",
+	"atx-v1/expired":                             "§1.3 step 2: a credential whose expiresAt is earlier than the verifier's clock is rejected",
+	"atx-v1/wrong-issuer":                        "§13, Key substitution at resolution: an issuer the verifier does not trust is rejected even when its own signature verifies",
+	"atx-v1/tampered-signature":                  "§1.3 step 4: an Ed25519 signature that does not verify over the legacy canonical bytes is a signature failure",
+	"atx-v1/malformed-schema":                    "§1.3 step 1: a credential whose atcVersion (2.0) is not a supported schema version is rejected",
+	"atx-v1/cross-issuer-key":                    "§1.3 step 4, key eligibility: under atcVersion 1.0 only a key resolved for the issuerDid is eligible, so a signature made with another trusted authority's key is a signature failure",
+	"atx-v1_1/baseline-valid":                    "§1.3a.2: a v1.1 credential whose one Ed25519 signature verifies over JCS(TBS) is accepted",
+	"atx-v1_1/no-transparency-log-index":         "§1.1: transparencyLogIndex is optional and outside JCS(TBS), so a v1.1 credential that omits it is accepted",
+	"atx-v1_1/baseline-valid-hybrid":             "§1.3 step 5: every declared signature verifies, the ML-DSA-65 signature included, so a v1.1 hybrid credential is accepted",
+	"atx-v1_1/hybrid-mldsa-tampered":             "§1.3 step 5: a declared ML-DSA-65 signature that does not verify is a signature failure, although the Ed25519 signature verifies",
+	"atx-v1_1/hybrid-pq-only":                    "§13, Cryptographic agility: a credential that declares an ML-DSA-65 signature must also carry a verifying Ed25519 signature, so an ML-DSA-65 signature alone is a signature failure",
+	"atx-v1_1/tampered-capabilities":             "§1.3a.4: capabilities are under the v1.1 signature, so capabilities changed after signing are a signature failure",
+	"atx-v1_1/declared-purpose-valid":            "§1.5: a present declaredPurpose object is signed as part of JCS(TBS) (§1.3a.2 rule 5), and a credential carrying one is accepted",
+	"atx-v1_1/tampered-declared-purpose":         "§1.5: declaredPurpose is under the v1.1 signature, so a declaredPurpose changed after signing is a signature failure",
+	"atx-v1_1/declared-purpose-empty-whitespace": "§1.3a.2 rule 5: an empty declaredPurpose object, whatever whitespace it is written with, is treated as absent and left out of the TBS",
+	"atx-v1_1/declared-purpose-array-injected":   "§1.3a.2 rule 5: a present non-object declaredPurpose value enters the TBS verbatim, so an array added after signing is a signature failure",
+	"atx-v1_1/declared-purpose-string-injected":  "§1.3a.2 rule 5: a present non-object declaredPurpose value enters the TBS verbatim, so a string added after signing is a signature failure",
+	"atx-v1_1/duplicate-purpose-member":          "§1.3 step 1: parsing the credential rejects an object member repeated at any depth (RFC 8259 §4) as PARSE_ERROR before any field is read (§12)",
+	"atx-v1_1/case-variant-member":               "§1.3 step 1: parsing the credential rejects two member names that fold to one field (TRUSTLEVEL and trustLevel) as PARSE_ERROR before any field is read (§12)",
+	"atx-v1_1/cross-issuer-key":                  "§1.3 step 4, key eligibility: under atcVersion 1.1 a key is eligible only for the issuerDid or a trusted issuer the signed issuerChain names, so a signature made with a trusted authority's key outside both is a signature failure",
+	"atx-v1_1/untrusted-chain-authority":         "§1.3 step 4, key eligibility: a DID the signed issuerChain names that is not a trusted issuer contributes no eligible key, so a signature made with its key is a signature failure",
+}
+
+// fixtureRequirementsUsed records which fixtureRequirements entries wrap consumed.
+var fixtureRequirementsUsed = map[string]bool{}
 
 // atxSections lists the core.md sections a fixture cites: the schema and the
 // verification algorithm, the canonical signing form its atcVersion selects
@@ -1129,12 +1174,25 @@ func wrap(name, description string, refs []KeypairRef, vs VerifierState, expecte
 	spec = append(spec,
 		SpecRef{ID: "AIP", Ref: "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md", Section: "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"},
 		SpecRef{ID: "RFC 8032", Ref: "https://datatracker.ietf.org/doc/html/rfc8032", Section: "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"},
-		SpecRef{ID: "FIPS 204", Ref: "https://csrc.nist.gov/pubs/fips/204/final", Section: "ML-DSA-65 (Module-Lattice-Based DSA)"},
 	)
+	// FIPS 204 is cited only by a credential that carries an ML-DSA-65
+	// signature (scripts/conformance_profile.py --check).
+	for _, sig := range atx.Signatures {
+		if sig.Algorithm == "ML-DSA-65" {
+			spec = append(spec, SpecRef{ID: "FIPS 204", Ref: "https://csrc.nist.gov/pubs/fips/204/final", Section: "ML-DSA-65 (Module-Lattice-Based DSA)"})
+			break
+		}
+	}
+	requirement, ok := fixtureRequirements[name]
+	if !ok {
+		panic("fixtureRequirements has no entry for " + name)
+	}
+	fixtureRequirementsUsed[name] = true
 	return Fixture{
 		Schema:        "https://atx.opena2a.org/schemas/fixture-v1.json",
 		Name:          name,
 		Description:   description,
+		Requirement:   requirement,
 		Spec:          spec,
 		KeypairRefs:   refs,
 		VerifierState: vs,

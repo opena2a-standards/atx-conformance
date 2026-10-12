@@ -62,7 +62,13 @@ What this suite does NOT verify:
 The full requirement-to-fixture mapping is machine-readable in
 [`conformance.json`](./conformance.json), regenerated from the fixtures by
 [`scripts/conformance_profile.py`](./scripts/conformance_profile.py) and
-CI-checked against drift.
+CI-checked against drift. Each entry's `requirement`, copied from its
+fixture, names the step or rule that fixture tests and opens with the
+number of the `core.md` section it comes from: `atx-v1/expired` tests
+`§1.3 step 2`, the expiry check. The drift check fails when a fixture has
+no `requirement`, when its section is not one of the fixture's ATX `spec`
+citations, or when two fixtures name the same requirement. A fixture
+cites FIPS 204 only when its credential carries an ML-DSA-65 signature.
 
 ## Continuous verification
 
@@ -428,8 +434,8 @@ scripts/check_circl_pin.sh       CI gate: one cloudflare/circl version per Go mo
   when one of them changed. The rule was broken once, in e2f9dc4 (#26);
   [`CHANGELOG.md`](./CHANGELOG.md) lists the 22 fixtures that commit changed
   under their existing names.
-- A fixture's `description` and its `spec` citation list are
-  documentation, and may be corrected in place. Doing so changes that
+- A fixture's `description`, its `requirement` and its `spec` citation
+  list are documentation, and may be corrected in place. Doing so changes that
   fixture's hash and its manifest line, so a consumer pinning this
   repository at a commit sees no change until they bump deliberately.
   Documentation that is wrong and cannot be fixed without minting a
