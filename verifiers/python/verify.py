@@ -434,6 +434,16 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
     if result.sigs_valid == 0:
         return VerifyResult(reject_category="SIGNATURE_INVALID", reason="no valid signatures")
 
+    # Ed25519 companion (core.md section 13, Cryptographic agility): a
+    # credential that declares an ML-DSA-65 entry MUST also carry a verifying
+    # Ed25519 entry, so a post-quantum signature alone never verifies a
+    # credential (fixtures/v1_1-hybrid-pq-only.json).
+    if result.mldsa65_valid and not result.ed25519_valid:
+        return VerifyResult(
+            reject_category="SIGNATURE_INVALID",
+            reason="ML-DSA-65 signature declared without a verifying Ed25519 signature (an ML-DSA-65 entry requires an Ed25519 companion)",
+        )
+
     # Step 7 (distinct signer-authority count for trust level 3+) is NOT
     # performed by this verifier: no fixture carries verified signatures from
     # more than one authority, and core.md section 1.3 step 7 forbids counting

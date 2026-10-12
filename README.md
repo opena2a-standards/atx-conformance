@@ -68,7 +68,7 @@ counts, the verifier results, the fixture bytes and the claims this
 README makes about them -- not every sentence below:
 
 1. Both reference verifiers run against `fixtures/` and must report
-   `24 pass, 0 fail`.
+   `25 pass, 0 fail`.
 2. The fixture generator re-runs and the committed fixture bytes plus
    `MANIFEST.sha256` must reproduce exactly (byte-pin).
 3. The JCS byte-agreement gate
@@ -144,7 +144,13 @@ capabilities are now signed.
 
 ### Hybrid signing: what this suite requires
 
-ATX v1.0 mandates hybrid Ed25519 + ML-DSA-65 signing at the wire format.
+The ATX spec has every credential carry an Ed25519 and an ML-DSA-65
+signature (core.md §1.1). This suite does not require both: it accepts
+single-suite Ed25519 credentials, and 6 of its 8 ACCEPT fixtures
+(`baseline-valid.json` among them) carry Ed25519 signatures only. What it
+requires is that every declared signature verifies, and that a credential
+which declares an ML-DSA-65 entry also carries a verifying Ed25519 entry
+(core.md §13, Cryptographic agility).
 `baseline-valid-hybrid.json` and `v1_1-baseline-valid-hybrid.json` each
 carry an Ed25519 signature and an ML-DSA-65 signature over the same signed
 payload. In both, the ML-DSA-65 `value` is the base64 of a raw FIPS 204
@@ -159,7 +165,11 @@ Each verifies the ML-DSA-65 signature cryptographically over the same
 canonical payload the Ed25519 signature signs. The MUST-REJECT control
 `fixtures/v1_1-hybrid-mldsa-tampered.json` — the hybrid baseline with the
 Ed25519 entry intact and the ML-DSA-65 value flipped by one bit — pins that
-a forged post-quantum signature cannot ride an intact classical one.
+a forged post-quantum signature cannot ride an intact classical one. The
+MUST-REJECT control `fixtures/v1_1-hybrid-pq-only.json` — the hybrid
+baseline with the Ed25519 entry removed, leaving one ML-DSA-65 signature
+that verifies — pins that a post-quantum signature cannot verify a
+credential without its Ed25519 companion.
 
 ### Trusted-issuer DID method used by this suite
 
@@ -223,6 +233,7 @@ All fixtures use:
 | `fixtures/v1_1-no-transparency-log-index.json` | ACCEPT | ATX v1.1 omitting the optional `transparencyLogIndex`. The log assigns it after signing and it is outside `JCS(TBS)`, so this credential's canonical bytes and signature are identical to the v1.1 baseline's. A verifier that requires the field, or reads its presence as evidence of log inclusion, wrongly rejects. |
 | `fixtures/v1_1-baseline-valid-hybrid.json` | ACCEPT | ATX v1.1 with Ed25519 plus ML-DSA-65 over the same `JCS(TBS)` bytes. Both verifiers validate both signatures. |
 | `fixtures/v1_1-hybrid-mldsa-tampered.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 hybrid with the Ed25519 signature intact and one bit of the ML-DSA-65 signature flipped after signing. Every declared signature must verify, so a forged post-quantum signature cannot ride an intact classical one. A verifier that records ML-DSA-65 as present without verifying it wrongly accepts. |
+| `fixtures/v1_1-hybrid-pq-only.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 carrying one ML-DSA-65 signature that verifies and no Ed25519 signature. A credential that declares an ML-DSA-65 entry must also carry a verifying Ed25519 entry (core.md §13, Cryptographic agility). A verifier that checks only that every declared signature verifies wrongly accepts. |
 | `fixtures/v1_1-tampered-capabilities.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 whose `capabilities` were escalated to `system:exec` after signing. Rejected because v1.1 signs capabilities; the v1.0 form would have accepted it. |
 | `fixtures/v1_1-declared-purpose-valid.json` | ACCEPT | ATX v1.1 carrying a populated `declaredPurpose` (§1.5: vocabVersion, statement, category, taskScopes, capabilityJustification, autonomy, dataScopes, egressScopes). The presence-based member is signed as part of `JCS(TBS)`; canonical bytes equal the `jcs-vectors` `08-declared-purpose` vector. |
 | `fixtures/v1_1-tampered-declared-purpose.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 whose `declaredPurpose.category` was rewritten from `financial-operations` to `agent-orchestration` after signing. Rejected because v1.1 signs declaredPurpose; this is the integrity that makes a declared purpose binding and non-repudiable (no post-issuance purpose-laundering). |
@@ -270,7 +281,7 @@ Depends on:
 
 ### Expected output
 
-Both verifiers report `summary: 24 pass, 0 fail (24 fixtures)` against the
+Both verifiers report `summary: 25 pass, 0 fail (25 fixtures)` against the
 shipped fixture set. A verifier prints a FAIL line when its result on a
 fixture differs from the fixture's expected outcome, which is how drift in
 verifier semantics (the verifier no longer follows the spec) shows up.
@@ -344,8 +355,8 @@ breaking change for downstream verifiers.
 
 | Implementation | Verifier | Status |
 |---|---|---|
-| `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 24 / 24 PASS |
-| `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 24 / 24 PASS |
+| `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 25 / 25 PASS |
+| `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 25 / 25 PASS |
 
 Independent second-party implementations are tracked on the sibling issue
 [a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876).
@@ -358,7 +369,7 @@ A2A coordination map's criterion (c) thread
 
 | Repo | Spec | Status |
 |---|---|---|
-| `atx-conformance` (this repo) | ATX v1.0 + v1.1 credential schema | 24 fixtures (10 v1.0, 14 v1.1 JCS incl. 6 declaredPurpose), 2 verifiers (Go and Python, both full hybrid), `jcs-vectors/` byte-agreement gate (8 vectors, Go/Python/TS), `MANIFEST.sha256` pinned |
+| `atx-conformance` (this repo) | ATX v1.0 + v1.1 credential schema | 25 fixtures (10 v1.0, 15 v1.1 JCS incl. 6 declaredPurpose), 2 verifiers (Go and Python, both full hybrid), `jcs-vectors/` byte-agreement gate (8 vectors, Go/Python/TS), `MANIFEST.sha256` pinned |
 | [`atp-conformance`](https://github.com/opena2a-standards/atp-conformance) | ATP v1.0.0-rc1 protocol | 4 fixtures (discovery, trust-proof baseline, trust-proof hybrid, Signed Tree Head), same 2-verifier pair, `MANIFEST.sha256` pinned |
 | [`aip-conformance`](https://github.com/opena2a-standards/aip-conformance) | AIP v1.0.0-draft identity protocol | §6.4 (VC `AgentTrustCredential`) covered by cross-linking this repo's fixtures; §5.1 challenge-response covered by 4 dedicated fixtures + Go/Python verifiers shipped at v0.2 (2026-05-28, Decision 3-C) |
 
@@ -377,7 +388,7 @@ COSIGNERS.md                     how a second party cosigns a verifier run, and 
 MANIFEST.sha256                  per-fixture SHA-256 (path-sorted)
 conformance.json                 requirement-to-fixture profile (generated from the
                                  fixtures, drift-checked in CI)
-fixtures/                        the 24 conformance fixtures (byte-stable JSON)
+fixtures/                        the 25 conformance fixtures (byte-stable JSON)
 jcs-vectors/                     JCS(TBS) byte-agreement vectors and the Go, Python
                                  and TypeScript canonicalizers that must agree on them
 schemas/vendor/atx-spec/         vendored atx-spec credential schema and core.md

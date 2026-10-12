@@ -4,7 +4,7 @@ Second-party cosigners attest that they have independently:
 
 1. Cloned this repository at a specific commit SHA
 2. Run BOTH reference verifiers against the published fixture set
-3. Observed `summary: 24 pass, 0 fail (24 fixtures)` from each verifier
+3. Observed `summary: 25 pass, 0 fail (25 fixtures)` from each verifier
 4. Produced a Sigstore keyless cosign signature over [`MANIFEST.sha256`](./MANIFEST.sha256)
 
 The signature attests to the fixture bytes; the entry below attests that
@@ -38,7 +38,9 @@ ML-DSA-65 (FIPS 204), each over the same canonical payload — the Go verifier
 via `cloudflare/circl`, the Python verifier via `dilithium-py`. The
 forged-post-quantum control `fixtures/v1_1-hybrid-mldsa-tampered.json` pins
 that each REJECTs a tampered ML-DSA-65 signature even when the Ed25519
-signature is intact. See the README's "Hybrid signing: what this suite
+signature is intact, and `fixtures/v1_1-hybrid-pq-only.json` pins that each
+REJECTs a valid ML-DSA-65 signature that carries no Ed25519 companion. See
+the README's "Hybrid signing: what this suite
 requires" section for the full picture.
 
 ## CI self-cosignature (baseline)
@@ -68,7 +70,7 @@ SHA-256 of `MANIFEST.sha256`.
 
 | Cosigner | Commit SHA | Go verifier | Python verifier | Sigstore artifact | Date |
 |---|---|---|---|---|---|
-| opena2a-org (self-cosigned baseline, CI) | every `main` push (see CI self-cosignature) | `24 pass, 0 fail` | `24 pass, 0 fail` | Rekor entry per push (keyless CI signature) | 2026-07-04 onward |
+| opena2a-org (self-cosigned baseline, CI) | every `main` push (see CI self-cosignature) | `25 pass, 0 fail` | `25 pass, 0 fail` | Rekor entry per push (keyless CI signature) | 2026-07-04 onward |
 
 Self-cosignature exists to anchor the baseline; second-party signatures are
 what close criterion (c). Recruiting at least one second-party cosigner per

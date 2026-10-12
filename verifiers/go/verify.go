@@ -566,6 +566,17 @@ func verify(f fixture) result {
 		return result{RejectCategory: "SIGNATURE_INVALID", Reason: "no valid signatures"}
 	}
 
+	// Ed25519 companion (core.md section 13, Cryptographic agility): a
+	// credential that declares an ML-DSA-65 entry MUST also carry a verifying
+	// Ed25519 entry, so a post-quantum signature alone never verifies a
+	// credential (fixtures/v1_1-hybrid-pq-only.json).
+	if res.MLDSA65Valid && !res.Ed25519Valid {
+		return result{
+			RejectCategory: "SIGNATURE_INVALID",
+			Reason:         "ML-DSA-65 signature declared without a verifying Ed25519 signature (an ML-DSA-65 entry requires an Ed25519 companion)",
+		}
+	}
+
 	// Step 6: content hash. Content not supplied to this verifier; skipped.
 
 	// Step 7 (distinct signer-authority count for trust level 3+) is NOT

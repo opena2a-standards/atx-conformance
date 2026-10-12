@@ -696,6 +696,27 @@ func main() {
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
 				atx)
 		}},
+		{"fixtures/v1_1-hybrid-pq-only.json", func() Fixture {
+			// The missing-classical-companion control. The hybrid baseline
+			// with the Ed25519 entry removed, so the credential carries one
+			// ML-DSA-65 signature that verifies. core.md section 13
+			// (Cryptographic agility) requires a credential that declares an
+			// ML-DSA-65 entry to also carry a verifying Ed25519 entry. A
+			// verifier that checks only that every declared signature verifies
+			// wrongly ACCEPTs.
+			atx := newBaselineV11ATX()
+			pq, _ := signMLDSA65(mldsa.SeedHex, canonicalPayloadV11(&atx))
+			pq.KeyID = mldsa.KeyID
+			atx.Signatures = []ATCSignature{pq}
+			return wrap("atx-v1_1/hybrid-pq-only",
+				"An ATX v1.1 credential carrying a single ML-DSA-65 signature that verifies over JCS(TBS), and no Ed25519 signature. The spec requires a credential that declares an ML-DSA-65 entry to also carry a verifying Ed25519 entry, so a post-quantum signature alone cannot verify a credential. Verifier MUST REJECT with a signature-validation reason. A verifier that checks only that every declared signature verifies wrongly ACCEPTs.",
+				[]KeypairRef{
+					{Role: mldsa.Role, Path: "vectors/mldsa65-seed.json", Algorithm: mldsa.Algorithm, PublicKeyHex: mldsa.PublicKeyHex, KeyID: mldsa.KeyID},
+				},
+				hybridVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
 		{"fixtures/v1_1-tampered-capabilities.json", func() Fixture {
 			// The v1.1 win, made concrete. Sign the TBS with the honest
 			// capabilities, then escalate capabilities AFTER signing. Under
@@ -1057,6 +1078,7 @@ const (
 	secSignedFields    = "1.3a.4 Authorization on signed fields requires v1.1"
 	secDeclaredPurpose = "1.5 Declared purpose (optional)"
 	secRevocation      = "3.3 Revocation flow"
+	secSecurity        = "13. Security considerations"
 )
 
 // fixtureSections names the core.md sections a fixture exercises beyond the
@@ -1065,6 +1087,7 @@ const (
 var fixtureSections = map[string][]string{
 	"atx-v1/revoked":                             {secRevocation},
 	"atx-v1/revoked-crl-only":                    {secRevocation},
+	"atx-v1_1/hybrid-pq-only":                    {secSecurity},
 	"atx-v1_1/tampered-capabilities":             {secSignedFields},
 	"atx-v1_1/declared-purpose-valid":            {secDeclaredPurpose},
 	"atx-v1_1/tampered-declared-purpose":         {secDeclaredPurpose},
