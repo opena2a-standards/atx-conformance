@@ -473,6 +473,22 @@ func main() {
 		defaultVerifierState.PublicKeys...),
 		keypairRefFor(untrusted, "vectors/issuer-untrusted.json"))
 
+	// Revoking verifier state: the default state plus a CRL whose one entry
+	// names the test agent, issued before the pinned clock and not yet due for
+	// its next update. Used by both revocation fixtures.
+	revokingVerifierState := defaultVerifierState
+	revokingVerifierState.CRL = &CRL{
+		Version:    1,
+		IssuedAt:   mustParseTime("2026-05-23T12:00:00Z"),
+		NextUpdate: mustParseTime("2026-05-30T12:00:00Z"),
+		Entries: []CRLEntry{{
+			AgentID:   testAgentID,
+			RevokedAt: revokedTime,
+			Reason:    "key compromise (test)",
+		}},
+		Signature: "TEST_ONLY_UNSIGNED_CRL",
+	}
+
 	type fixtureSpec struct {
 		writePath string
 		build     func() Fixture
@@ -508,30 +524,35 @@ func main() {
 		{"fixtures/revoked.json", func() Fixture {
 			atx := newBaselineATX()
 			atx.Signatures = []ATCSignature{signWithKey(primary, atx)}
-			// The fixture populates both the revoked flag and a CRL entry so
-			// that both rejection paths are exercised regardless of the order
-			// in which a verifier checks them.
+			// The fixture populates both the revoked flag and a CRL entry, but
+			// it pins the flag only: both reference verifiers read the flag
+			// first and return, and reasonContains "revoked" is not met by a
+			// rejection that names the CRL. fixtures/revoked-crl-only.json is
+			// the fixture whose verdict depends on the CRL.
 			atx.Revoked = true
 			rt := revokedTime
 			atx.RevokedAt = &rt
 			atx.RevocationReason = "key compromise (test)"
-			vs := defaultVerifierState
-			vs.CRL = &CRL{
-				Version:    1,
-				IssuedAt:   mustParseTime("2026-05-23T12:00:00Z"),
-				NextUpdate: mustParseTime("2026-05-30T12:00:00Z"),
-				Entries: []CRLEntry{{
-					AgentID:   atx.AgentID,
-					RevokedAt: rt,
-					Reason:    "key compromise (test)",
-				}},
-				Signature: "TEST_ONLY_UNSIGNED_CRL",
-			}
 			return wrap("atx-v1/revoked",
 				"A previously-valid ATX whose credential-level Revoked flag is set and whose AgentID also appears in the verifier's CRL. Verifier MUST REJECT with revocation reason. Both rejection paths are exercised.",
 				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
-				vs,
+				revokingVerifierState,
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "REVOKED", ReasonContains: "revoked"},
+				atx)
+		}},
+		{"fixtures/revoked-crl-only.json", func() Fixture {
+			// The credential is the accepted baseline, byte for byte: revoked
+			// is false and it carries no revokedAt or revocationReason. Its
+			// agentId on the verifier's CRL is the only thing that revokes it
+			// (core.md §1.3 step 6), so a verifier that reads the credential's
+			// own flag and never consults the CRL accepts it.
+			atx := newBaselineATX()
+			atx.Signatures = []ATCSignature{signWithKey(primary, atx)}
+			return wrap("atx-v1/revoked-crl-only",
+				"An ATX v1.0 credential whose own revoked flag is false and whose AgentID appears in the verifier's CRL. It is the accepted baseline in every other respect: a trusted issuer, unexpired, one Ed25519 signature that verifies. CRL membership is the only thing that revokes it, so a verifier that reads the credential's revoked flag and never consults the CRL wrongly accepts. The flag is outside the signed bytes of both signing forms, so it can be cleared on a revoked credential without breaking the signature; the CRL entry cannot. Verifier MUST REJECT with a revocation reason that names the CRL.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				revokingVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "REVOKED", ReasonContains: "CRL"},
 				atx)
 		}},
 		{"fixtures/threshold-2of3-cosignature.json", func() Fixture {
@@ -1043,6 +1064,7 @@ const (
 // entry that names no fixture, so a renamed fixture cannot drop its citation.
 var fixtureSections = map[string][]string{
 	"atx-v1/revoked":                             {secRevocation},
+	"atx-v1/revoked-crl-only":                    {secRevocation},
 	"atx-v1_1/tampered-capabilities":             {secSignedFields},
 	"atx-v1_1/declared-purpose-valid":            {secDeclaredPurpose},
 	"atx-v1_1/tampered-declared-purpose":         {secDeclaredPurpose},

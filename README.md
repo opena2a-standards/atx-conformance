@@ -27,7 +27,8 @@ What this suite verifies:
 |---|---|
 | ATX v1.0 schema-version gate | `fixtures/malformed-schema.json` |
 | Expiry gate against a pinned verifier clock | `fixtures/expired.json` |
-| Revocation via credential `revoked` flag AND CRL membership | `fixtures/revoked.json` |
+| Revocation via the credential `revoked` flag | `fixtures/revoked.json` |
+| Revocation via CRL membership alone, the credential's own flag being false (§1.3 step 6) | `fixtures/revoked-crl-only.json` |
 | Trusted-issuer DID set | `fixtures/wrong-issuer.json` |
 | Ed25519 signature verification over the canonical payload | every fixture |
 | Hybrid Ed25519 + ML-DSA-65 signature verification (FIPS 204) | `fixtures/baseline-valid-hybrid.json` |
@@ -66,7 +67,7 @@ counts, the verifier results, the fixture bytes and the claims this
 README makes about them -- not every sentence below:
 
 1. Both reference verifiers run against `fixtures/` and must report
-   `23 pass, 0 fail`.
+   `24 pass, 0 fail`.
 2. The fixture generator re-runs and the committed fixture bytes plus
    `MANIFEST.sha256` must reproduce exactly (byte-pin).
 3. The JCS byte-agreement gate
@@ -210,7 +211,8 @@ All fixtures use:
 |---|---|---|
 | `fixtures/baseline-valid.json` | ACCEPT | Single Ed25519 signature from primary issuer, trust level 4 with 2-link chain. The minimum viable accepted credential. |
 | `fixtures/baseline-valid-hybrid.json` | ACCEPT | Ed25519 plus ML-DSA-65 signatures from the same primary issuer over the same canonical payload. Both verifiers validate both signatures. |
-| `fixtures/revoked.json` | REJECT (REVOKED) | Credential `revoked: true` AND CRL entry for the agent. Both rejection paths exercised. |
+| `fixtures/revoked.json` | REJECT (REVOKED) | Credential `revoked: true`, with a CRL entry for the agent as well. This fixture pins the flag: both reference verifiers read it first and return, so the CRL entry is not what rejects it. |
+| `fixtures/revoked-crl-only.json` | REJECT (REVOKED) | The accepted v1.0 baseline credential (`revoked: false`, trusted issuer, unexpired, valid signature) with a CRL entry for its agent in the verifier state. CRL membership is the only thing that revokes it (§1.3 step 6). A verifier that reads the credential's own flag and never consults the CRL wrongly accepts. |
 | `fixtures/threshold-2of3-cosignature.json` | ACCEPT | Three Ed25519 signatures from three distinct keys (primary plus two cosigners). All three verify. |
 | `fixtures/expired.json` | REJECT (EXPIRED) | `expiresAt: 2025-01-01T00:00:00Z`, earlier than the pinned clock. Otherwise valid. |
 | `fixtures/wrong-issuer.json` | REJECT (UNTRUSTED_ISSUER) | Real Ed25519 signature from an untrusted-issuer keypair (RFC 8032 §7.1 Test 1024 first 32 bytes), `issuerDid: did:opena2a:authority:attacker.example`. Signature is mathematically valid; issuer is not in trusted set. |
@@ -266,7 +268,7 @@ Depends on:
 
 ### Expected output
 
-Both verifiers report `summary: 23 pass, 0 fail (23 fixtures)` against the
+Both verifiers report `summary: 24 pass, 0 fail (24 fixtures)` against the
 shipped fixture set. A verifier prints a FAIL line when its result on a
 fixture differs from the fixture's expected outcome, which is how drift in
 verifier semantics (the verifier no longer follows the spec) shows up.
@@ -340,8 +342,8 @@ breaking change for downstream verifiers.
 
 | Implementation | Verifier | Status |
 |---|---|---|
-| `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 23 / 23 PASS |
-| `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 23 / 23 PASS |
+| `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 24 / 24 PASS |
+| `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 24 / 24 PASS |
 
 Independent second-party implementations are tracked on the sibling issue
 [a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876).
@@ -354,7 +356,7 @@ A2A coordination map's criterion (c) thread
 
 | Repo | Spec | Status |
 |---|---|---|
-| `atx-conformance` (this repo) | ATX v1.0 + v1.1 credential schema | 23 fixtures (9 v1.0, 14 v1.1 JCS incl. 6 declaredPurpose), 2 verifiers (Go and Python, both full hybrid), `jcs-vectors/` byte-agreement gate (8 vectors, Go/Python/TS), `MANIFEST.sha256` pinned |
+| `atx-conformance` (this repo) | ATX v1.0 + v1.1 credential schema | 24 fixtures (10 v1.0, 14 v1.1 JCS incl. 6 declaredPurpose), 2 verifiers (Go and Python, both full hybrid), `jcs-vectors/` byte-agreement gate (8 vectors, Go/Python/TS), `MANIFEST.sha256` pinned |
 | [`atp-conformance`](https://github.com/opena2a-standards/atp-conformance) | ATP v1.0.0-rc1 protocol | 4 fixtures (discovery, trust-proof baseline, trust-proof hybrid, Signed Tree Head), same 2-verifier pair, `MANIFEST.sha256` pinned |
 | [`aip-conformance`](https://github.com/opena2a-standards/aip-conformance) | AIP v1.0.0-draft identity protocol | §6.4 (VC `AgentTrustCredential`) covered by cross-linking this repo's fixtures; §5.1 challenge-response covered by 4 dedicated fixtures + Go/Python verifiers shipped at v0.2 (2026-05-28, Decision 3-C) |
 

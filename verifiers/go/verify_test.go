@@ -66,6 +66,47 @@ func TestRawDuplicateMember(t *testing.T) {
 	}
 }
 
+// TestSuiteCatchesCRLBlindVerifier pins that the shipped fixture set depends
+// on CRL membership (atx-spec core.md §1.3 step 6). It runs every fixture
+// twice: as shipped, where the reference verifier must report the pinned
+// outcome, and with the CRL dropped from the verifier state, which is what a
+// verifier with no CRL support sees. At least one fixture must then miss its
+// pinned outcome. Without one, the revocation coverage this suite claims is
+// met by a verifier that reads the credential's own revoked flag and stops.
+//
+// Mutation-verified: with fixtures/revoked-crl-only.json removed, the CRL-blind
+// run matches every remaining fixture and this test fails.
+func TestSuiteCatchesCRLBlindVerifier(t *testing.T) {
+	paths, err := expandFixturePaths([]string{"../../fixtures"})
+	if err != nil {
+		t.Fatalf("cannot list the shipped fixtures: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("no shipped fixtures found; refusing to pass vacuously")
+	}
+
+	var caughtBy []string
+	for _, p := range paths {
+		f, err := loadFixture(p)
+		if err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+		if got := verify(f); !matchesExpected(f.Expected, got) {
+			t.Errorf("%s: reference verifier observed %s, not the pinned outcome", p, got)
+			continue
+		}
+		crlBlind := f
+		crlBlind.VerifierState.CRL = nil
+		if !matchesExpected(f.Expected, verify(crlBlind)) {
+			caughtBy = append(caughtBy, f.Name)
+		}
+	}
+	if len(caughtBy) == 0 {
+		t.Fatalf("a verifier that never consults the CRL matches all %d fixtures: no fixture's verdict depends on CRL membership", len(paths))
+	}
+	t.Logf("a CRL-blind verifier misses the pinned outcome of: %s", strings.Join(caughtBy, ", "))
+}
+
 // TestStrictParseDepthGuard is the regression for the unbounded-recursion DoS.
 // A credential nested past encoding/json's own depth limit (10000) must be
 // rejected without crashing. The strict-parse scan aborts at maxScanDepth and

@@ -689,20 +689,7 @@ func main() {
 			continue
 		}
 		got := verify(f)
-		wantAccept := strings.EqualFold(f.Expected.VerifyResult, "ACCEPT")
-
-		ok := (wantAccept && got.Accepted) || (!wantAccept && !got.Accepted)
-		// For REJECT fixtures, also verify the category matches if declared.
-		if ok && !wantAccept && f.Expected.RejectCategory != "" {
-			if got.RejectCategory != f.Expected.RejectCategory {
-				ok = false
-			}
-		}
-		if ok && !wantAccept && f.Expected.ReasonContains != "" {
-			if !strings.Contains(strings.ToLower(got.Reason), strings.ToLower(f.Expected.ReasonContains)) {
-				ok = false
-			}
-		}
+		ok := matchesExpected(f.Expected, got)
 
 		status := "PASS"
 		if !ok {
@@ -732,6 +719,27 @@ func main() {
 	if totalFail > 0 {
 		os.Exit(1)
 	}
+}
+
+// matchesExpected reports whether an observed result is the outcome a fixture
+// pins: the verdict, and for a REJECT fixture the category and the reason
+// substring where the fixture declares them.
+func matchesExpected(want expectedOutcome, got result) bool {
+	wantAccept := strings.EqualFold(want.VerifyResult, "ACCEPT")
+	if wantAccept != got.Accepted {
+		return false
+	}
+	if wantAccept {
+		return true
+	}
+	if want.RejectCategory != "" && got.RejectCategory != want.RejectCategory {
+		return false
+	}
+	if want.ReasonContains != "" &&
+		!strings.Contains(strings.ToLower(got.Reason), strings.ToLower(want.ReasonContains)) {
+		return false
+	}
+	return true
 }
 
 func loadFixture(path string) (fixture, error) {
