@@ -75,6 +75,13 @@ whenever one lands; README "Versioning and stability" says they should not.
   `jcs-vectors/README.md` says the gate runs no issuer, offline-verifier or
   broker code, where it said the directory proved agreement for all of them
   (#156). No fixture or vector changes.
+- `jcs-vectors/README.md` says v1.1 signs `capabilities`, `scanSummary`,
+  `issuerChain`, `publisher` and any field the spec adds to the TBS
+  projection, where it said every future field: a member the projection does
+  not name is unsigned, so one added after signing leaves the signature valid
+  and both verifiers report ACCEPT. `scripts/check_readme_counts.py` fails
+  when that README claims future fields are signed or stops stating the
+  projection rule (#158). No fixture changes.
 
 ## e2f9dc4 (#26, 2026-09-09): capabilities rewritten in 22 existing fixtures
 

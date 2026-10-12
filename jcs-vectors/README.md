@@ -2,9 +2,16 @@
 
 ATX v1.1 signs a canonicalized JSON to-be-signed (TBS) object instead of the
 v1.0 11-field pipe string, so `capabilities`, `scanSummary`, `issuerChain`,
-`publisher`, and every future field become integrity-protected. The signature is
-computed over `JCS(TBS)` where JCS is [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785)
-JSON Canonicalization.
+`publisher`, and any field the spec adds to the TBS projection become
+integrity-protected. The signature is computed over `JCS(TBS)` where JCS is
+[RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) JSON Canonicalization.
+
+The TBS is an explicit projection (see the construction rule below), so a
+credential member the projection does not name is not signed. A member added to
+`fixtures/v1_1-baseline-valid.json` after signing leaves the signature valid, and
+both verifiers in this repository still report ACCEPT. The vendored v1.1 wire
+schema rejects an unknown top-level member (`additionalProperties: false`); the
+signature does not.
 
 The single hard requirement of that design is **cross-language byte agreement**:
 the registry issuer (Go), the offline verifier (Go), the conformance verifiers

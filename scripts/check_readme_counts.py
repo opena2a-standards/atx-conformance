@@ -113,6 +113,13 @@ None may name one member as the only JSON number while the vectors carry
 another, the README must state that every JSON number left in the TBS is an
 integer, and every number in every vector must be one.
 
+It also holds what jcs-vectors/README.md says v1.1 signs to the explicit TBS
+projection. It said "every future field" becomes integrity-protected while a
+member the projection does not name stays unsigned: added after signing, it
+leaves the signature valid and both verifiers report ACCEPT. The README must
+not claim future fields are signed and must say a field is signed once the
+spec adds it to the TBS projection.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
 declares, the behavioralProfile note matches the fixtures, no criterion (c)
@@ -126,8 +133,9 @@ zero-dependency while requirements.txt names a package, each jcs-vectors
 file describing canonicalize cites RFC 8785 Appendix G and calls it no
 reference implementation, every Version pinning link names a commit, the
 reproduction steps match the generator, no coordination link points at a
-closed issue and every statement of the TBS numbers matches the vectors,
-1 otherwise, 2 on an unknown argument.
+closed issue, every statement of the TBS numbers matches the vectors and
+the jcs-vectors README scopes signing to the TBS projection, 1 otherwise,
+2 on an unknown argument.
 """
 
 import collections
@@ -205,6 +213,25 @@ RETRACTED_TRUST_CLAIM = (
 )
 TRUST_HEADING = "### Trust scoring: 9-factor reference"
 TRUST_PLACEHOLDER = "illustrative"
+
+# jcs-vectors/README.md said v1.1 signing makes "every future field"
+# integrity-protected. The TBS is an explicit projection: a member it does not
+# name is unsigned, so a field added after signing leaves the signature valid
+# and both verifiers report ACCEPT. A field is signed only once the spec adds it
+# to the projection. Matched over whitespace-collapsed text.
+JCS_README = ROOT / "jcs-vectors" / "README.md"
+JCS_README_NAME = "jcs-vectors/README.md"
+FUTURE_FIELD_CLAIM = re.compile(
+    r"\b(?:every|any|all)\s+(?:future|new|later|unknown|added)\s+fields?\b",
+    re.IGNORECASE,
+)
+# The sentence jcs-vectors/README.md published, with its original line wrap.
+RETRACTED_FUTURE_CLAIM = (
+    "`publisher`, and every future field become integrity-protected"
+)
+JCS_PROJECTION_RULE = re.compile(
+    r"\bfield the spec adds to the TBS\s+projection\b", re.IGNORECASE
+)
 
 # The README's continuous-verification section says when the gates run. It said
 # "on each push and pull request" while the workflow runs on pull requests and
@@ -747,6 +774,33 @@ def trust_score_failures(readme):
         failures.append(
             f"README `{TRUST_HEADING}` does not call the fixture trustScore "
             f"{TRUST_PLACEHOLDER}; nothing in this suite computes it"
+        )
+    return failures
+
+
+def jcs_scope_failures(jcs_readme):
+    """Check that jcs-vectors/README.md scopes v1.1 signing to the TBS
+    projection (None when the file is missing)."""
+    if jcs_readme is None:
+        return [f"{JCS_README_NAME} is missing; it states what v1.1 signs"]
+    failures = []
+    if not FUTURE_FIELD_CLAIM.search(" ".join(RETRACTED_FUTURE_CLAIM.split())):
+        failures.append(
+            "future-field claim pattern no longer matches the sentence it was "
+            "written for; the gate cannot fire"
+        )
+    text = " ".join(jcs_readme.split())
+    claim = FUTURE_FIELD_CLAIM.search(text)
+    if claim:
+        failures.append(
+            f"{JCS_README_NAME} says \"{claim.group(0)}\" is signed, but the "
+            "TBS is an explicit projection and a member it does not name stays "
+            "unsigned; say \"any field the spec adds to the TBS projection\""
+        )
+    if not JCS_PROJECTION_RULE.search(text):
+        failures.append(
+            f"{JCS_README_NAME} does not say a field is signed once the spec "
+            "adds it to the TBS projection"
         )
     return failures
 
@@ -1480,7 +1534,7 @@ def check(readme, cosigners, fixtures, vectors, signing):
 Tree = collections.namedtuple("Tree", (
     "readme cosigners fixtures vectors signing fixture_paths workflow "
     "key_vectors used_key_ids versions go_mod verify_go py_requirements "
-    "py_dependency_texts jcs_sites tbs_sites tbs_canonical"))
+    "py_dependency_texts jcs_sites tbs_sites tbs_canonical jcs_readme"))
 
 
 def tree_failures(tree):
@@ -1498,6 +1552,7 @@ def tree_failures(tree):
                                                tree.py_dependency_texts))
     failures.extend(jcs_library_failures(tree.jcs_sites))
     failures.extend(tbs_number_failures(tree.tbs_sites, tree.tbs_canonical))
+    failures.extend(jcs_scope_failures(tree.jcs_readme))
     return failures
 
 
@@ -2172,6 +2227,24 @@ def self_test(tree, verbose):
                   f"took {took:.1f} s; the link-text match backtracks over the run"))
     cases.extend(_tbs_number_cases(tree.tbs_sites, tree.tbs_canonical))
 
+    jcs_readme = tree.jcs_readme
+    jcs_text = jcs_readme or ""
+    jcs_baseline = set(jcs_scope_failures(jcs_readme))
+    rule = JCS_PROJECTION_RULE.search(jcs_text)
+    for label, altered, want in (
+            (f"{JCS_README_NAME} saying every future field is signed",
+             jcs_text + "\n" + RETRACTED_FUTURE_CLAIM + ".\n",
+             "is signed, but the TBS is an explicit projection"),
+            (f"{JCS_README_NAME} dropping the TBS projection rule",
+             jcs_text[:rule.start()] + "field" + jcs_text[rule.end():] if rule else None,
+             "does not say a field is signed once the spec adds it")):
+        if altered is None:
+            cases.append((False, label, f"no projection rule found in {JCS_README_NAME}"))
+            continue
+        new = [f for f in jcs_scope_failures(altered) if f not in jcs_baseline]
+        cases.append((any(want in f for f in new), label,
+                      f"the altered {JCS_README_NAME} still passes: {new}"))
+
     failed = 0
     for ok, label, detail in cases:
         if verbose or not ok:
@@ -2219,6 +2292,7 @@ def main():
                    if (ROOT / site).exists() else None
                    for site, _ in TBS_NUMBER_SITES},
         tbs_canonical=load_canonical_strings(ROOT),
+        jcs_readme=JCS_README.read_text(encoding="utf-8") if JCS_README.exists() else None,
     )
 
     failed, total = self_test(tree, only_self_test)
@@ -2261,7 +2335,8 @@ def main():
           f"the reproduction steps name every signing form and jcs-vectors "
           f"cross-check in the generator; coordination links point at an open "
           f"issue tracker; every statement of the JSON numbers in the TBS "
-          f"matches the {len(tree.tbs_canonical)} JCS vectors, all of them integers")
+          f"matches the {len(tree.tbs_canonical)} JCS vectors, all of them integers; "
+          f"{JCS_README_NAME} scopes v1.1 signing to the TBS projection")
     return 0
 
 
