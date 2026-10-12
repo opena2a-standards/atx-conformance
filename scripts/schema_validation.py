@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
-"""Validate every fixture's embedded ATX credential against the vendored spec schema.
+"""Validate every fixture, and conformance.json, against the schemas they rely on.
 
-The schema is the machine-readable model published by atx-spec
-(schemas/atx-credential-v1.1.schema.json), vendored under
+Two passes.
+
+FORMAT. Each fixture and conformance.json names its file format in a `$schema`
+member. That name MUST be the `$id` of a schema this repository ships under
+schemas/*.schema.json (fixture-v1.schema.json, conformance-profile-v1.schema.json),
+and the whole document MUST validate against it. The `$id` is an identifier;
+the host it names does not serve the file, so the tracked file is the
+definition. A `$schema` no tracked file defines fails, as does any document that
+breaks its format.
+
+CREDENTIAL. The atx-spec schema is the machine-readable model published by
+atx-spec (schemas/atx-credential-v1.1.schema.json), vendored under
 schemas/vendor/atx-spec/ and byte-drift-gated in CI against the pinned
 ATX_SPEC_REF.
 
@@ -32,8 +42,17 @@ additional property. In both, the strict-parse rejection proper is pinned by
 the verifiers (PARSE_ERROR via foldKey), not by this parse-semantics-agnostic
 schema layer; the case-variant fixture's schema failure is just the same
 case-fold ambiguity seen from the schema side.
+
+Every run starts with a self-test: altered copies of a tracked fixture and of
+conformance.json must each fail the format pass, and the tracked documents
+must pass it.
+
+Usage:
+    python3 scripts/schema_validation.py              # self-test, then both passes
+    python3 scripts/schema_validation.py --self-test  # the self-test alone
 """
 
+import copy
 import json
 import pathlib
 import sys
@@ -46,9 +65,150 @@ except ImportError:
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCHEMA = ROOT / "schemas" / "vendor" / "atx-spec" / "atx-credential-v1.1.schema.json"
+FORMAT_GLOB = "schemas/*.schema.json"
+PROFILE = ROOT / "conformance.json"
+
+# The members every v1 fixture carries, as the generator writes them. Listed
+# here rather than read from the schema, so a schema that stops requiring one
+# fails the self-test instead of shrinking it.
+FIXTURE_MEMBERS = (
+    "$schema", "name", "description", "requirement", "spec",
+    "keypairRefs", "verifierState", "expected", "atx",
+)
 
 
-def main() -> int:
+def load_formats(root: pathlib.Path = ROOT) -> tuple[dict, list[str]]:
+    """Each tracked format schema keyed by its `$id`, and what is wrong with any
+    that cannot be used. A schema whose `$schema` const differs from its `$id`
+    would hold documents to a format name it does not define."""
+    formats, problems = {}, []
+    for path in sorted(root.glob(FORMAT_GLOB)):
+        rel = path.relative_to(root)
+        schema = json.loads(path.read_text(encoding="utf-8"))
+        Draft202012Validator.check_schema(schema)
+        sid = schema.get("$id")
+        const = schema.get("properties", {}).get("$schema", {}).get("const")
+        if not isinstance(sid, str) or const != sid:
+            problems.append(f"{rel}: `$schema` const {const!r} is not its `$id` {sid!r}")
+        elif sid in formats:
+            problems.append(f"{rel}: `$id` {sid} is already defined by another file")
+        else:
+            formats[sid] = Draft202012Validator(schema)
+    return formats, problems
+
+
+def format_errors(doc: object, formats: dict) -> list[str]:
+    """Why a document does not conform to the format its `$schema` names;
+    empty when it does."""
+    if not isinstance(doc, dict):
+        return ["is not a JSON object"]
+    named = doc.get("$schema")
+    if not isinstance(named, str) or named not in formats:
+        return [f"`$schema` {named!r} is not the `$id` of any {FORMAT_GLOB} file"]
+    errors = sorted(formats[named].iter_errors(doc), key=lambda e: e.json_path)
+    return [f"{e.json_path}: {e.message}" for e in errors]
+
+
+def check_formats(formats: dict, problems: list[str]) -> int:
+    failures = len(problems)
+    for problem in problems:
+        print(f"FAIL  {problem}")
+    docs = sorted((ROOT / "fixtures").glob("*.json")) + [PROFILE]
+    for path in docs:
+        errors = format_errors(json.loads(path.read_text(encoding="utf-8")), formats)
+        rel = path.relative_to(ROOT)
+        if errors:
+            print(f"FAIL  {rel}:")
+            for err in errors:
+                print(f"      {err}")
+            failures += 1
+        else:
+            print(f"PASS  {rel}")
+    print(f"\nformat summary: {len(docs) - failures} pass, {failures} fail "
+          f"({len(docs)} documents, {len(formats)} format schemas)\n")
+    return failures
+
+
+def _altered(doc: dict, change) -> dict:
+    out = copy.deepcopy(doc)
+    change(out)
+    return out
+
+
+def _self_test_cases() -> list[tuple[str, object, bool]]:
+    """(label, document, conforms) for the tracked documents and altered copies."""
+    fixtures = ROOT / "fixtures"
+    reject = json.loads((fixtures / "revoked.json").read_text(encoding="utf-8"))
+    accept = json.loads((fixtures / "baseline-valid.json").read_text(encoding="utf-8"))
+    profile = json.loads(PROFILE.read_text(encoding="utf-8"))
+    untracked = "https://example.invalid/schemas/fixture-v1.json"
+    cases = [
+        ("tracked REJECT fixture (with a CRL) conforms", reject, True),
+        ("tracked ACCEPT fixture conforms", accept, True),
+        ("tracked conformance.json conforms", profile, True),
+        ("a document that is not an object", [reject], False),
+        ("fixture naming an untracked format", {**reject, "$schema": untracked}, False),
+        ("fixture naming the profile format", {**reject, "$schema": profile["$schema"]}, False),
+        ("fixture with an unknown member", {**reject, "verdict": "ACCEPT"}, False),
+    ]
+    cases += [(f"fixture with no {m!r} member", {k: v for k, v in reject.items() if k != m}, False)
+              for m in FIXTURE_MEMBERS]
+    cases += [
+        ("REJECT with no rejectCategory",
+         _altered(reject, lambda d: d["expected"].pop("rejectCategory")), False),
+        ("REJECT with no reasonContains",
+         _altered(reject, lambda d: d["expected"].pop("reasonContains")), False),
+        ("ACCEPT that names a rejectCategory",
+         _altered(accept, lambda d: d["expected"].update(rejectCategory="REVOKED")), False),
+        ("verifyResult other than ACCEPT or REJECT",
+         _altered(accept, lambda d: d["expected"].update(verifyResult="PASS")), False),
+        ("rejectCategory no verifier reports",
+         _altered(reject, lambda d: d["expected"].update(rejectCategory="DENIED")), False),
+        ("keypair with an unregistered algorithm",
+         _altered(reject, lambda d: d["keypairRefs"][0].update(algorithm="RSA")), False),
+        ("public key that is not lowercase hex",
+         _altered(reject, lambda d: d["verifierState"]["publicKeys"][0].update(publicKeyHex="not-hex")), False),
+        ("verifier clock that is not RFC 3339",
+         _altered(reject, lambda d: d["verifierState"].update(clockRfc3339="2026-05-23")), False),
+        ("CRL entry with no agentId",
+         _altered(reject, lambda d: d["verifierState"]["crl"]["entries"][0].pop("agentId")), False),
+        ("spec citation with no section",
+         _altered(reject, lambda d: d["spec"][0].pop("section")), False),
+        ("atx that is not an object",
+         _altered(reject, lambda d: d.update(atx="credential")), False),
+        ("profile naming an untracked format",
+         {**profile, "$schema": "https://example.invalid/schemas/conformance-profile-v1.json"}, False),
+        ("profile naming the fixture format",
+         {**profile, "$schema": reject["$schema"]}, False),
+        ("profile with no requirements",
+         {k: v for k, v in profile.items() if k != "requirements"}, False),
+        ("profile requirement with a malformed expected",
+         _altered(profile, lambda d: d["requirements"][0].update(expected="REJECTED")), False),
+        ("profile requirement with no fixture path",
+         _altered(profile, lambda d: d["requirements"][0].pop("fixture")), False),
+    ]
+    return cases
+
+
+def self_test() -> tuple[int, int]:
+    formats, problems = load_formats()
+    failed = 0
+    for problem in problems:
+        print(f"  [RED  ] format schema unusable: {problem}")
+        failed += 1
+    cases = _self_test_cases()
+    for label, doc, conforms in cases:
+        errors = format_errors(doc, formats)
+        ok = not errors if conforms else bool(errors)
+        print(f"  [{'GREEN' if ok else 'RED  '}] {label}")
+        if not ok:
+            detail = errors[0] if errors else "passed the format check"
+            print(f"          {detail}")
+            failed += 1
+    return failed, len(cases) + len(problems)
+
+
+def check_credentials() -> int:
     schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
     Draft202012Validator.check_schema(schema)
     validator = Draft202012Validator(schema)
@@ -131,7 +291,30 @@ def main() -> int:
             print(f"PASS  {path.name}")
 
     print(f"\nsummary: {len(fixtures) - failures} pass, {failures} fail ({len(fixtures)} fixtures)")
-    return 1 if failures else 0
+    return failures
+
+
+def main() -> int:
+    # An unrecognised flag must not fall through to the default run and exit 0.
+    unknown = [a for a in sys.argv[1:] if a != "--self-test"]
+    if unknown:
+        print(f"unknown argument(s): {' '.join(unknown)}", file=sys.stderr)
+        print(f"usage: {pathlib.Path(sys.argv[0]).name} [--self-test]", file=sys.stderr)
+        return 2
+
+    print("self-test: the format pass fails on each altered document\n")
+    failed, total = self_test()
+    if failed:
+        print(f"\nself-test FAILED: {failed} of {total} case(s)\n", file=sys.stderr)
+    else:
+        print(f"\nself-test passed: {total} cases\n")
+    if "--self-test" in sys.argv:
+        return 1 if failed else 0
+
+    formats, problems = load_formats()
+    format_failures = check_formats(formats, problems)
+    credential_failures = check_credentials()
+    return 1 if failed or format_failures or credential_failures else 0
 
 
 if __name__ == "__main__":

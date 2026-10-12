@@ -20,6 +20,14 @@ whenever one lands; README "Versioning and stability" says they should not.
   copies it. `scripts/conformance_profile.py --check` fails on a fixture
   with no `requirement`, one whose section is not among the fixture's ATX
   `spec` citations, or one that two fixtures share (#140).
+- `schemas/fixture-v1.schema.json` and
+  `schemas/conformance-profile-v1.schema.json` define the two file formats
+  whose `$schema` URIs the fixtures and `conformance.json` carry; neither URI
+  is served. `scripts/schema_validation.py` fails when a document's
+  `$schema` is not the `$id` of a tracked schema or the document does not
+  validate against it, and starts every run with a self-test that alters a
+  fixture and the profile and requires each copy to fail (#154). No fixture
+  changes.
 
 ### Changed
 

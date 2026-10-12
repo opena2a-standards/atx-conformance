@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atx.opena2a.org/schemas/fixture-v1.json",
+  "title": "ATX conformance fixture, format v1",
+  "description": "One conformance fixture: the ATX credential under test, the state a verifier applies before running, and the outcome it must report. The `$id` is the identifier every fixture names in its `$schema` member; this file is its definition. The credential in `atx` is checked against the atx-spec credential schema separately (scripts/schema_validation.py), because several fixtures carry a schema-invalid credential by design.",
+  "type": "object",
+  "required": [
+    "$schema",
+    "name",
+    "description",
+    "requirement",
+    "spec",
+    "keypairRefs",
+    "verifierState",
+    "expected",
+    "atx"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "description": "The identifier of this format. Equal to this schema's `$id`.",
+      "const": "https://atx.opena2a.org/schemas/fixture-v1.json"
+    },
+    "name": {
+      "description": "Stable fixture name. Matched by name, not by path, when an existing fixture is compared with an earlier commit.",
+      "type": "string",
+      "pattern": "^atx-v[0-9]+(_[0-9]+)?/[a-z0-9][a-z0-9-]*$"
+    },
+    "description": {
+      "description": "What the credential carries and the verdict it must get. Documentation; may be corrected in place.",
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "requirement": {
+      "description": "The step or rule the fixture tests, opening with the number of the core.md section it comes from.",
+      "type": "string",
+      "pattern": "^§[0-9]"
+    },
+    "fixtureType": {
+      "description": "Kind of artifact under test. Absent means atx-credential.",
+      "enum": ["atx-credential"]
+    },
+    "spec": {
+      "description": "Normative citations. Documentation; may be corrected in place.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/specRef" }
+    },
+    "keypairRefs": {
+      "description": "The keypair vectors the credential's signatures were made with.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/keypairRef" }
+    },
+    "verifierState": { "$ref": "#/$defs/verifierState" },
+    "expected": { "$ref": "#/$defs/expected" },
+    "atx": {
+      "description": "The ATX credential under test, signatures included.",
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "rfc3339": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "specRef": {
+      "type": "object",
+      "required": ["id", "ref", "section"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "ref": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "section": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "keypairRef": {
+      "description": "Public half of one keypair vector. Verifiers load only the public key.",
+      "type": "object",
+      "required": ["role", "path", "algorithm", "publicKeyHex", "keyId"],
+      "additionalProperties": false,
+      "properties": {
+        "role": { "$ref": "#/$defs/nonEmptyString" },
+        "path": {
+          "description": "Repository-relative path of the keypair vector.",
+          "type": "string",
+          "pattern": "^vectors/[^/]+\\.json$"
+        },
+        "algorithm": { "enum": ["Ed25519", "ML-DSA-65"] },
+        "publicKeyHex": {
+          "type": "string",
+          "pattern": "^([0-9a-f]{2})+$"
+        },
+        "keyId": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "verifierState": {
+      "description": "Configuration the verifier MUST apply before running.",
+      "type": "object",
+      "required": ["clockRfc3339", "trustedIssuers", "publicKeys"],
+      "additionalProperties": false,
+      "properties": {
+        "clockRfc3339": {
+          "description": "The verifier's current time.",
+          "$ref": "#/$defs/rfc3339"
+        },
+        "trustedIssuers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        },
+        "publicKeys": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/keypairRef" }
+        },
+        "crl": { "$ref": "#/$defs/crl" }
+      }
+    },
+    "crl": {
+      "description": "Certificate revocation list the verifier holds.",
+      "type": "object",
+      "required": ["version", "issuedAt", "nextUpdate", "entries", "signature"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "type": "integer" },
+        "issuedAt": { "$ref": "#/$defs/rfc3339" },
+        "nextUpdate": { "$ref": "#/$defs/rfc3339" },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["agentId", "revokedAt", "reason"],
+            "additionalProperties": false,
+            "properties": {
+              "agentId": { "$ref": "#/$defs/nonEmptyString" },
+              "revokedAt": { "$ref": "#/$defs/rfc3339" },
+              "reason": { "type": "string" }
+            }
+          }
+        },
+        "signature": { "type": "string" }
+      }
+    },
+    "expected": {
+      "description": "The outcome the verifier MUST report. A REJECT names its category and a substring of its reason; an ACCEPT names neither.",
+      "type": "object",
+      "required": ["verifyResult"],
+      "additionalProperties": false,
+      "properties": {
+        "verifyResult": { "enum": ["ACCEPT", "REJECT"] },
+        "rejectCategory": {
+          "enum": [
+            "PARSE_ERROR",
+            "UNSUPPORTED_VERSION",
+            "REVOKED",
+            "EXPIRED",
+            "UNTRUSTED_ISSUER",
+            "SIGNATURE_INVALID"
+          ]
+        },
+        "reasonContains": { "$ref": "#/$defs/nonEmptyString" }
+      },
+      "if": {
+        "properties": { "verifyResult": { "const": "REJECT" } }
+      },
+      "then": {
+        "required": ["rejectCategory", "reasonContains"]
+      },
+      "else": {
+        "not": {
+          "anyOf": [
+            { "required": ["rejectCategory"] },
+            { "required": ["reasonContains"] }
+          ]
+        }
+      }
+    }
+  }
+}
