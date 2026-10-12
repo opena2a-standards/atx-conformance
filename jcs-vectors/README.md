@@ -21,7 +21,7 @@ vector and fails unless all three reproduce the vector's pinned
 | Leg | Library | Also checks |
 |-----|---------|-------------|
 | Go | [`github.com/gowebpki/jcs`](https://github.com/gowebpki/jcs) (webpki.org reference port) | re-verifies the pinned Ed25519 + ML-DSA-65 signatures over the recomputed bytes |
-| Python | vendored `python/rfc8785.py` (stdlib only) | keeps the Python verifier zero-dependency |
+| Python | vendored `python/rfc8785.py` (stdlib only) | adds no dependency to the Python verifier |
 | TS/JS | [`canonicalize`](https://www.npmjs.com/package/canonicalize) (erdtman, RFC 8785 reference impl) | the library the Secretless broker verifier uses |
 
 The libraries are an implementation detail behind the vectors. The vectors are

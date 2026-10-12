@@ -42,6 +42,13 @@ whenever one lands; README "Versioning and stability" says they should not.
   covers a README naming a `canonicalPayload*` function the generator does
   not define, and `scripts/conformance_profile.py --check` covers a
   requirement whose § number does not open it (#153). No fixture changes.
+- `jcs-vectors/README.md` and the docstring of both copies of the vendored
+  RFC 8785 serializer say it adds no dependency to the Python verifier,
+  where they called the verifier zero-dependency:
+  `verifiers/python/requirements.txt` names `cryptography` and
+  `dilithium-py`. `scripts/check_readme_counts.py` fails when any of the
+  three calls the Python verifier zero-dependency while that file names a
+  package (#159). No fixture changes.
 
 ## e2f9dc4 (#26, 2026-09-09): capabilities rewritten in 22 existing fixtures
 

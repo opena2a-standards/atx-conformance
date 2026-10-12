@@ -1,8 +1,8 @@
 """Vendored RFC 8785 (JSON Canonicalization Scheme) serializer.
 
-Standard-library only, so the Python ATX verifier keeps its zero-dependency
-offline promise. This is a clean-room implementation of the subset of RFC 8785
-that ATX v1.1 TBS objects exercise:
+Standard-library only, so it adds no dependency to the offline Python ATX
+verifier. This is a clean-room implementation of the subset of RFC 8785 that
+ATX v1.1 TBS objects exercise:
 
   * object members sorted by UTF-16 code-unit order of the member name
   * array element order preserved (never sorted)

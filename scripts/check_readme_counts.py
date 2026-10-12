@@ -67,6 +67,12 @@ list under the README's Go heading, the version-pinning table and the header
 comment of verifiers/go/verify.go. All three named cloudflare/circl alone
 while go.mod also required gowebpki/jcs.
 
+It also holds what jcs-vectors/README.md and both copies of the vendored RFC
+8785 serializer say about the Python verifier's dependencies to
+verifiers/python/requirements.txt. All three called the verifier
+zero-dependency while that file names cryptography and dilithium-py; the
+serializer adds no dependency, but the verifier is not dependency-free.
+
 It also holds every link to an opena2a-standards document in the README's
 Version pinning table to a commit. The AIP row linked the repository and the
 did:opena2a row linked the document on its default branch, so both stated
@@ -99,7 +105,9 @@ trigger sentence matches the workflow, both key-source lists name every
 Ed25519 key, both version labels name exactly the accepted versions, each
 Go dependency site names every direct requirement (the two README sites at
 its pinned version; the verify.go header states no versions, so it is held
-to module names alone), every Version pinning link names a commit, the
+to module names alone), no Python dependency site calls the Python verifier
+zero-dependency while requirements.txt names a package, every Version
+pinning link names a commit, the
 reproduction steps match the generator and no coordination link points at a
 closed issue, 1 otherwise, 2 on an unknown argument.
 """
@@ -490,6 +498,64 @@ def go_dependency_failures(readme, go_mod, verify_go):
             if not _names(header, module):
                 failures.append(f"{GO_HEADER_SITE} does not name {module}, "
                                 f"which {GO_MOD_NAME} requires")
+    return failures
+
+
+# The places that say what the vendored RFC 8785 serializer means for the
+# Python verifier's dependencies: the jcs-vectors README's Python row and the
+# docstring of each copy of the serializer. All three called the verifier
+# zero-dependency while requirements.txt names cryptography and dilithium-py.
+# The serializer adds no dependency; the verifier still has those two.
+PY_REQUIREMENTS = ROOT / "verifiers" / "python" / "requirements.txt"
+PY_REQUIREMENTS_NAME = "verifiers/python/requirements.txt"
+PY_DEPENDENCY_SITES = (
+    "jcs-vectors/README.md",
+    "verifiers/python/rfc8785.py",
+    "jcs-vectors/python/rfc8785.py",
+)
+# A requirement line opens with the package name; comments and `-r`-style
+# options open with another character.
+PY_REQUIREMENT = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)", re.M)
+ZERO_DEPENDENCY = re.compile(r"\bzero[- ]dep", re.I)
+
+
+def python_requirements(requirements):
+    """The package names a requirements.txt lists, in order."""
+    return PY_REQUIREMENT.findall(requirements)
+
+
+def statements(text):
+    """Each sentence of `text` on one line, and each table row as one."""
+    for block in re.split(r"\n\s*\n", text):
+        if block.lstrip().startswith("|"):
+            yield from (line.strip() for line in block.splitlines())
+        else:
+            yield from re.split(r"(?<=[.!?])\s+", " ".join(block.split()))
+
+
+def python_dependency_failures(requirements, texts):
+    """No site may call the Python verifier zero-dependency while
+    requirements.txt (None when missing) names a package. `texts` maps each of
+    PY_DEPENDENCY_SITES to its text, None when the file is missing. A
+    zero-dependency statement about the serializer alone is true and passes."""
+    if requirements is None:
+        return [f"{PY_REQUIREMENTS_NAME} is missing; the Python verifier's "
+                f"stated dependencies cannot be checked"]
+    packages = python_requirements(requirements)
+    failures = []
+    for site in PY_DEPENDENCY_SITES:
+        text = texts.get(site)
+        if text is None:
+            failures.append(f"{site} is missing; what it says about the Python "
+                            f"verifier's dependencies cannot be checked")
+            continue
+        for claim in statements(text):
+            if (packages and ZERO_DEPENDENCY.search(claim)
+                    and re.search(r"\bPython\b", claim)
+                    and re.search(r"\bverifiers?\b", claim, re.I)):
+                failures.append(f"{site} calls the Python verifier zero-dependency "
+                                f"(\"{claim}\"), but {PY_REQUIREMENTS_NAME} requires "
+                                f"{', '.join(packages)}")
     return failures
 
 
@@ -1182,7 +1248,8 @@ def check(readme, cosigners, fixtures, vectors, signing):
 # through the same checks main() runs.
 Tree = collections.namedtuple("Tree", (
     "readme cosigners fixtures vectors signing fixture_paths workflow "
-    "key_vectors used_key_ids versions go_mod verify_go"))
+    "key_vectors used_key_ids versions go_mod verify_go py_requirements "
+    "py_dependency_texts"))
 
 
 def tree_failures(tree):
@@ -1196,6 +1263,8 @@ def tree_failures(tree):
     failures.extend(key_source_failures(tree.readme, tree.key_vectors, tree.used_key_ids))
     failures.extend(version_label_failures(tree.readme, tree.versions))
     failures.extend(go_dependency_failures(tree.readme, tree.go_mod, tree.verify_go))
+    failures.extend(python_dependency_failures(tree.py_requirements,
+                                               tree.py_dependency_texts))
     return failures
 
 
@@ -1490,6 +1559,72 @@ def _go_dependency_cases(readme, go_mod, verify_go):
     return cases
 
 
+# The two forms the zero-dependency claim was published in, with their
+# original line wraps: the jcs-vectors README row and the serializer docstring.
+RETRACTED_PY_CLAIMS = (
+    "| Python | vendored `python/rfc8785.py` (stdlib only) | keeps the Python "
+    "verifier zero-dependency |",
+    "Standard-library only, so the Python ATX verifier keeps its zero-dependency\n"
+    "offline promise.",
+)
+
+
+def _python_dependency_cases(requirements, texts):
+    """Append each retracted zero-dependency claim to each site; each must add
+    a failure naming the site. The same claim must pass when requirements.txt
+    names no package, and a zero-dependency statement about the serializer
+    alone must pass, so the check holds the claim to the file."""
+    missing = [PY_REQUIREMENTS_NAME] if requirements is None else []
+    missing += [s for s in PY_DEPENDENCY_SITES if texts.get(s) is None]
+    if missing:
+        return [(False, "Python verifier dependency sites",
+                 f"{', '.join(missing)} missing")]
+    baseline = collections.Counter(python_dependency_failures(requirements, texts))
+    cases = []
+
+    def appended(site, sentence):
+        altered = dict(texts)
+        altered[site] = texts[site] + "\n\n" + sentence + "\n"
+        return altered
+
+    def added(failures):
+        # A multiset difference: a site that already states the claim reports
+        # the appended copy as a second, identical failure.
+        return list((collections.Counter(failures) - baseline).elements())
+
+    parsed = python_requirements(
+        "# pinned\ncryptography>=42.0.0\n\n-r more.txt\ndilithium-py>=1.1.0  # FIPS 204\n")
+    cases.append((parsed == ["cryptography", "dilithium-py"],
+                  "requirements.txt package names, comments and options aside",
+                  f"read {parsed}"))
+
+    for site in PY_DEPENDENCY_SITES:
+        for claim in RETRACTED_PY_CLAIMS:
+            new = added(python_dependency_failures(requirements, appended(site, claim)))
+            cases.append((any(f.startswith(f"{site} calls the Python verifier") for f in new),
+                          f"{site} calling the Python verifier zero-dependency: "
+                          f"{claim.splitlines()[0][:40]}...",
+                          f"appending the claim still passes: {new}"))
+
+    site = PY_DEPENDENCY_SITES[0]
+    for claim in RETRACTED_PY_CLAIMS:
+        new = python_dependency_failures("# no packages\n", appended(site, claim))
+        cases.append((not new, f"{site} zero-dependency claim with no package required: "
+                               f"{claim.splitlines()[0][:40]}...",
+                      f"expected no failure when {PY_REQUIREMENTS_NAME} names no "
+                      f"package, got {new}"))
+    serializer = "The vendored serializer itself is zero-dependency."
+    new = added(python_dependency_failures(requirements, appended(site, serializer)))
+    cases.append((not new, f"{site} calling the serializer alone zero-dependency",
+                  f"a true statement about the serializer fails: {new}"))
+
+    new = python_dependency_failures(None, texts)
+    cases.append((any(f.startswith(f"{PY_REQUIREMENTS_NAME} is missing") for f in new),
+                  f"{PY_REQUIREMENTS_NAME} missing",
+                  f"a missing {PY_REQUIREMENTS_NAME} still passes: {new}"))
+    return cases
+
+
 def _pin_case(label, texts, run, edit, expect):
     """Alter the first link at a commit in the Version pinning table."""
     readme = texts["README.md"]
@@ -1577,6 +1712,16 @@ def _wiring_cases(tree):
     else:
         case("Go dependency", GO_INVENTED,
              go_mod=tree.go_mod + f"\nrequire {GO_INVENTED} {GO_ALTERED_VERSION}\n")
+    site = PY_DEPENDENCY_SITES[0]
+    if tree.py_dependency_texts.get(site) is None:
+        cases.append((False, "main() running the Python dependency check",
+                      f"{site} is missing"))
+    else:
+        case("Python dependency", f"{site} calls the Python verifier zero-dependency",
+             py_requirements=(tree.py_requirements or "") + "\ncryptography\n",
+             py_dependency_texts={**tree.py_dependency_texts,
+                                  site: (tree.py_dependency_texts[site]
+                                         + "\n\nThe Python verifier is zero-dependency.\n")})
     return cases
 
 
@@ -1659,6 +1804,7 @@ def self_test(tree, verbose):
     cases.extend(_key_source_cases(readme, tree.key_vectors, tree.used_key_ids))
     cases.extend(_version_cases(readme, tree.versions))
     cases.extend(_go_dependency_cases(readme, tree.go_mod, tree.verify_go))
+    cases.extend(_python_dependency_cases(tree.py_requirements, tree.py_dependency_texts))
     cases.extend(_wiring_cases(tree))
 
     cases.append(_pin_case(
@@ -1797,6 +1943,11 @@ def main():
         versions=accepted_versions(fixture_paths),
         go_mod=GO_MOD.read_text(encoding="utf-8") if GO_MOD.exists() else None,
         verify_go=VERIFY_GO.read_text(encoding="utf-8") if VERIFY_GO.exists() else None,
+        py_requirements=(PY_REQUIREMENTS.read_text(encoding="utf-8")
+                         if PY_REQUIREMENTS.exists() else None),
+        py_dependency_texts={
+            site: (ROOT / site).read_text(encoding="utf-8") if (ROOT / site).exists() else None
+            for site in PY_DEPENDENCY_SITES},
     )
 
     failed, total = self_test(tree, only_self_test)
@@ -1831,6 +1982,8 @@ def main():
           f"intro and version-pinning row name ATX {_versions(tree.versions)}; "
           f"Go verifier dependency list, version-pinning rows and verify.go "
           f"header name every direct requirement of {GO_MOD_NAME}; "
+          f"no jcs-vectors README or RFC 8785 serializer docstring calls the "
+          f"Python verifier zero-dependency; "
           f"every Version pinning link names a commit; "
           f"the reproduction steps name every signing form and jcs-vectors "
           f"cross-check in the generator; coordination links point at an open "
