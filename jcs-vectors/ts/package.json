@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "TypeScript/JS leg of the ATX v1.1 JCS byte-agreement gate (erdtman/canonicalize, the RFC 8785 reference implementation).",
+  "description": "TypeScript/JS leg of the ATX v1.1 JCS byte-agreement gate (erdtman/canonicalize, listed in RFC 8785 Appendix G).",
   "scripts": {
     "check": "node check.mjs"
   },

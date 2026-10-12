@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://specs.opena2a.org/schemas/conformance-profile-v1.json",
+  "title": "Conformance profile, format v1",
+  "description": "The machine-readable profile of a conformance suite (conformance.json): the spec it tests, its verifiers and extra gates, what it does not cover, and one requirement per fixture. The `$id` is the identifier the profile names in its `$schema` member; this file is its definition.",
+  "type": "object",
+  "required": [
+    "$schema",
+    "suite",
+    "spec",
+    "fixtureManifest",
+    "verifiers",
+    "additionalGates",
+    "notCovered",
+    "requirements"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "description": "The identifier of this format. Equal to this schema's `$id`.",
+      "const": "https://specs.opena2a.org/schemas/conformance-profile-v1.json"
+    },
+    "suite": { "$ref": "#/$defs/nonEmptyString" },
+    "spec": {
+      "type": "object",
+      "required": ["id", "name", "version", "ref"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "version": { "$ref": "#/$defs/nonEmptyString" },
+        "ref": { "$ref": "#/$defs/httpsUrl" }
+      }
+    },
+    "fixtureManifest": {
+      "description": "Repository-relative path of the fixture byte manifest.",
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "verifiers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["language", "path", "coverage"],
+        "additionalProperties": false,
+        "properties": {
+          "language": { "$ref": "#/$defs/nonEmptyString" },
+          "path": { "$ref": "#/$defs/nonEmptyString" },
+          "coverage": { "$ref": "#/$defs/nonEmptyString" }
+        }
+      }
+    },
+    "additionalGates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "path", "description"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "$ref": "#/$defs/nonEmptyString" },
+          "path": { "$ref": "#/$defs/nonEmptyString" },
+          "description": { "$ref": "#/$defs/nonEmptyString" }
+        }
+      }
+    },
+    "notCovered": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["item", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "item": { "$ref": "#/$defs/nonEmptyString" },
+          "reason": { "$ref": "#/$defs/nonEmptyString" }
+        }
+      }
+    },
+    "requirements": {
+      "description": "One entry per fixture, derived from it by scripts/conformance_profile.py.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/requirement" }
+    }
+  },
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "httpsUrl": {
+      "type": "string",
+      "pattern": "^https://"
+    },
+    "requirement": {
+      "type": "object",
+      "required": [
+        "fixture",
+        "name",
+        "requirement",
+        "fixtureType",
+        "level",
+        "specRefs",
+        "expected",
+        "description"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "fixture": {
+          "description": "Repository-relative path of the fixture.",
+          "type": "string",
+          "pattern": "^fixtures/[^/]+\\.json$"
+        },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "requirement": {
+          "type": "string",
+          "pattern": "^§[0-9]"
+        },
+        "fixtureType": { "enum": ["atx-credential"] },
+        "level": { "enum": ["MUST", "SHOULD", "MAY"] },
+        "specRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["id", "ref", "section"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "$ref": "#/$defs/nonEmptyString" },
+              "ref": { "$ref": "#/$defs/httpsUrl" },
+              "section": { "$ref": "#/$defs/nonEmptyString" }
+            }
+          }
+        },
+        "expected": {
+          "description": "ACCEPT, or REJECT followed by the reject category in brackets.",
+          "type": "string",
+          "pattern": "^(ACCEPT|REJECT\\[[A-Z_]+\\])$"
+        },
+        "description": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    }
+  }
+}

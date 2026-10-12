@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Python reference verifier for the ATX v1.0 conformance fixture set.
+"""Python reference verifier for the ATX v1.0 and v1.1 conformance fixture set.
 
 Depends only on the Python standard library plus the `cryptography` package
 (for Ed25519 verification) and the `dilithium-py` package (for ML-DSA-65
@@ -11,6 +11,8 @@ Spec coverage:
   - ATX v1.0 schema (atcVersion="1.0")
   - Canonicalization: pipe-delimited 11-field string matching
     opena2a-registry/pkg/atcverify/verify.go canonicalPayload() VERBATIM
+  - ATX v1.1 (atcVersion="1.1"): signed over the RFC 8785 JCS form of the
+    v1.1 TBS projection
   - Ed25519 and ML-DSA-65 (FIPS 204) hybrid signature verification over the
     same canonical payload (every declared signature must verify and at
     least one must be present; no k-of-n threshold is read), trust level 3+ chain
@@ -254,7 +256,7 @@ def canonical_payload_v11(atx: dict[str, Any]) -> bytes:
         "capabilities": list(atx.get("capabilities") or []),
         "behavioralProfile": behavioral_profile,
         "scanSummary": scan_summary,
-        # trustScore is string-encoded %.6f so trustLevel is the only JSON number.
+        # trustScore is string-encoded %.6f so every JSON number left is an integer.
         "trustScore": "%.6f" % float(atx["trustScore"]),
         "trustLevel": int(atx["trustLevel"]),
         "issuedAt": _normalize_rfc3339(atx["issuedAt"]),

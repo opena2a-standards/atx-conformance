@@ -112,7 +112,12 @@ claims this README makes about them -- not every sentence below:
    fixture's `atx` member must validate against the atx-spec machine-readable
    credential schema, vendored under `schemas/vendor/atx-spec/` and
    byte-drift-gated against a pinned atx-spec ref; the `malformed-schema`
-   fixture must fail on exactly the `atcVersion` registry enum.
+   fixture must fail on exactly the `atcVersion` registry enum. Before that,
+   every fixture and `conformance.json` must name in `$schema` the `$id` of a
+   schema under `schemas/` and validate against it in full
+   (`schemas/fixture-v1.schema.json`,
+   `schemas/conformance-profile-v1.schema.json`); a self-test first proves the
+   check fails on altered copies of each.
 
 ## Honest scope notes
 
@@ -385,7 +390,7 @@ breaking change for downstream verifiers.
 | gowebpki/jcs (Go RFC 8785 canonicalization) | v1.0.1 | [github.com/gowebpki/jcs](https://github.com/gowebpki/jcs) |
 | cryptography (Python Ed25519) | >= 42.0.0 | [pyca/cryptography](https://github.com/pyca/cryptography) |
 | dilithium-py (Python ML-DSA-65) | >= 1.1.0 | [GiacomoPope/dilithium-py](https://github.com/GiacomoPope/dilithium-py) |
-| Conformance fixture format | v1 (this repo) | [`fixtures/baseline-valid.json#$schema`](./fixtures/baseline-valid.json) |
+| Conformance fixture format | v1 (this repo) | [`schemas/fixture-v1.schema.json`](./schemas/fixture-v1.schema.json) |
 
 ## Implementations that validate against this suite
 
@@ -438,6 +443,7 @@ conformance.json                 requirement-to-fixture profile (generated from 
 fixtures/                        the 25 conformance fixtures (byte-stable JSON)
 jcs-vectors/                     JCS(TBS) byte-agreement vectors and the Go, Python
                                  and TypeScript canonicalizers that must agree on them
+schemas/*.schema.json            fixture-v1 and conformance-profile-v1 file formats
 schemas/vendor/atx-spec/         vendored atx-spec credential schema and core.md
                                  (pinned ref)
 vectors/                         test keypair vectors (TEST-ONLY)
@@ -458,7 +464,13 @@ scripts/check_circl_pin.sh       CI gate: one cloudflare/circl version per Go mo
 - The conformance fixture file format (`$schema: fixture-v1`) is stable
   across patch revisions of this repository. Adding new fixture fields is
   a minor version bump; renaming or removing fields is a major version
-  bump.
+  bump. The format is defined by
+  [`schemas/fixture-v1.schema.json`](./schemas/fixture-v1.schema.json), and
+  `conformance.json` by
+  [`schemas/conformance-profile-v1.schema.json`](./schemas/conformance-profile-v1.schema.json).
+  The `$schema` URI a document carries is that file's `$id`, an identifier:
+  the host it names does not serve the file, so read the schema from this
+  repository at the commit you pin.
 - The set of fixtures may grow. New fixtures are additive and do not
   invalidate prior `MANIFEST.sha256` entries; each new fixture appears as
   a new line in the manifest.
@@ -490,7 +502,7 @@ Issues and PRs welcome on this repository. Second-party implementations and
 cosigners are coordinated on its
 [issue tracker](https://github.com/opena2a-standards/atx-conformance/issues).
 Substantive coordination on the ATX wire format itself happens in
-[`opena2a-org/atx-spec`](https://github.com/opena2a-standards/atx-spec).
+[`opena2a-standards/atx-spec`](https://github.com/opena2a-standards/atx-spec).
 
 ## License
 

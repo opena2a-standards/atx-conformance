@@ -67,6 +67,12 @@ list under the README's Go heading, the version-pinning table and the header
 comment of verifiers/go/verify.go. All three named cloudflare/circl alone
 while go.mod also required gowebpki/jcs.
 
+It also holds what jcs-vectors/README.md and both copies of the vendored RFC
+8785 serializer say about the Python verifier's dependencies to
+verifiers/python/requirements.txt. All three called the verifier
+zero-dependency while that file names cryptography and dilithium-py; the
+serializer adds no dependency, but the verifier is not dependency-free.
+
 It also holds every link to an opena2a-standards document in the README's
 Version pinning table to a commit. The AIP row linked the repository and the
 did:opena2a row linked the document on its default branch, so both stated
@@ -83,6 +89,13 @@ jcs-vectors. The section must name every canonicalPayload* function the
 generator defines and every jcs-vectors file it cross-checks against, and no
 other.
 
+It also holds what jcs-vectors/README.md, jcs-vectors/ts/package.json and
+jcs-vectors/ts/check.mjs say about the TypeScript leg's library to RFC 8785.
+All three called erdtman/canonicalize the RFC 8785 reference implementation,
+while RFC 8785 designates none and lists canonicalize in Appendix G among the
+open-source implementations verified to be compatible with JCS. Each must cite
+Appendix G and must not call the library the reference implementation.
+
 It also holds where README.md and COSIGNERS.md send readers to coordinate.
 Both kept naming a2aproject/A2A#1876 as the place second-party
 implementations and coordination are tracked after that issue was closed as
@@ -91,16 +104,38 @@ cited only with `(closed` written right after it and never in a sentence that
 says something is tracked or coordinated there, and the implementations
 section must link this repository's issue tracker.
 
+It also holds what jcs-vectors/README.md, verifiers/python/verify.py and
+jcs-vectors/pin/main.go say about the JSON numbers left in the v1.1 TBS to
+the vectors' canonical strings. All three said `trustLevel` was the only one
+while every vector also carries scanSummary.criticalFindings and
+scanSummary.highFindings, and five carry behavioralProfile.observationDays.
+None may name one member as the only JSON number while the vectors carry
+another, the README must state that every JSON number left in the TBS is an
+integer, and every number in every vector must be one.
+
+It also holds what jcs-vectors/README.md says v1.1 signs to the explicit TBS
+projection. It said "every future field" becomes integrity-protected while a
+member the projection does not name stays unsigned: added after signing, it
+leaves the signature valid and both verifiers report ACCEPT. The README must
+not claim future fields are signed and must say a field is signed once the
+spec adds it to the TBS projection.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
 declares, the behavioralProfile note matches the fixtures, no criterion (c)
 claim outruns the registry, the trustScore is called illustrative, the
 trigger sentence matches the workflow, both key-source lists name every
 Ed25519 key, both version labels name exactly the accepted versions, each
-Go dependency site names every direct requirement at its pinned version,
-every Version pinning link names a commit, the reproduction steps match
-the generator and no coordination link points at a closed issue, 1
-otherwise, 2 on an unknown argument.
+Go dependency site names every direct requirement (the two README sites at
+its pinned version; the verify.go header states no versions, so it is held
+to module names alone), no Python dependency site calls the Python verifier
+zero-dependency while requirements.txt names a package, each jcs-vectors
+file describing canonicalize cites RFC 8785 Appendix G and calls it no
+reference implementation, every Version pinning link names a commit, the
+reproduction steps match the generator, no coordination link points at a
+closed issue, every statement of the TBS numbers matches the vectors and
+the jcs-vectors README scopes signing to the TBS projection, 1 otherwise,
+2 on an unknown argument.
 """
 
 import collections
@@ -108,6 +143,7 @@ import json
 import pathlib
 import re
 import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 README = ROOT / "README.md"
@@ -177,6 +213,25 @@ RETRACTED_TRUST_CLAIM = (
 )
 TRUST_HEADING = "### Trust scoring: 9-factor reference"
 TRUST_PLACEHOLDER = "illustrative"
+
+# jcs-vectors/README.md said v1.1 signing makes "every future field"
+# integrity-protected. The TBS is an explicit projection: a member it does not
+# name is unsigned, so a field added after signing leaves the signature valid
+# and both verifiers report ACCEPT. A field is signed only once the spec adds it
+# to the projection. Matched over whitespace-collapsed text.
+JCS_README = ROOT / "jcs-vectors" / "README.md"
+JCS_README_NAME = "jcs-vectors/README.md"
+FUTURE_FIELD_CLAIM = re.compile(
+    r"\b(?:every|any|all)\s+(?:future|new|later|unknown|added)\s+fields?\b",
+    re.IGNORECASE,
+)
+# The sentence jcs-vectors/README.md published, with its original line wrap.
+RETRACTED_FUTURE_CLAIM = (
+    "`publisher`, and every future field become integrity-protected"
+)
+JCS_PROJECTION_RULE = re.compile(
+    r"\bfield the spec adds to the TBS\s+projection\b", re.IGNORECASE
+)
 
 # The README's continuous-verification section says when the gates run. It said
 # "on each push and pull request" while the workflow runs on pull requests and
@@ -351,7 +406,7 @@ def accepted_versions(paths):
 def intro_paragraph(readme):
     """The first paragraph after the title, whitespace-collapsed, or None."""
     lines = readme.splitlines()
-    starts = [i for i, l in enumerate(lines) if l.startswith("# ")]
+    starts = [i for i, line in enumerate(lines) if line.startswith("# ")]
     if not starts:
         return None
     para = []
@@ -491,6 +546,118 @@ def go_dependency_failures(readme, go_mod, verify_go):
     return failures
 
 
+# The places that say what the vendored RFC 8785 serializer means for the
+# Python verifier's dependencies: the jcs-vectors README's Python row and the
+# docstring of each copy of the serializer. All three called the verifier
+# zero-dependency while requirements.txt names cryptography and dilithium-py.
+# The serializer adds no dependency; the verifier still has those two.
+PY_REQUIREMENTS = ROOT / "verifiers" / "python" / "requirements.txt"
+PY_REQUIREMENTS_NAME = "verifiers/python/requirements.txt"
+PY_DEPENDENCY_SITES = (
+    "jcs-vectors/README.md",
+    "verifiers/python/rfc8785.py",
+    "jcs-vectors/python/rfc8785.py",
+)
+# A requirement line opens with the package name; comments and `-r`-style
+# options open with another character.
+PY_REQUIREMENT = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)", re.M)
+ZERO_DEPENDENCY = re.compile(r"\bzero[- ]dep", re.I)
+
+
+def python_requirements(requirements):
+    """The package names a requirements.txt lists, in order."""
+    return PY_REQUIREMENT.findall(requirements)
+
+
+def statements(text):
+    """Each sentence of `text` on one line, and each table row as one."""
+    for block in re.split(r"\n\s*\n", text):
+        if block.lstrip().startswith("|"):
+            yield from (line.strip() for line in block.splitlines())
+        else:
+            yield from re.split(r"(?<=[.!?])\s+", " ".join(block.split()))
+
+
+def python_dependency_failures(requirements, texts):
+    """No site may call the Python verifier zero-dependency while
+    requirements.txt (None when missing) names a package. `texts` maps each of
+    PY_DEPENDENCY_SITES to its text, None when the file is missing. A
+    zero-dependency statement about the serializer alone is true and passes."""
+    if requirements is None:
+        return [f"{PY_REQUIREMENTS_NAME} is missing; the Python verifier's "
+                f"stated dependencies cannot be checked"]
+    packages = python_requirements(requirements)
+    failures = []
+    for site in PY_DEPENDENCY_SITES:
+        text = texts.get(site)
+        if text is None:
+            failures.append(f"{site} is missing; what it says about the Python "
+                            f"verifier's dependencies cannot be checked")
+            continue
+        for claim in statements(text):
+            if (packages and ZERO_DEPENDENCY.search(claim)
+                    and re.search(r"\bPython\b", claim)
+                    and re.search(r"\bverifiers?\b", claim, re.I)):
+                failures.append(f"{site} calls the Python verifier zero-dependency "
+                                f"(\"{claim}\"), but {PY_REQUIREMENTS_NAME} requires "
+                                f"{', '.join(packages)}")
+    return failures
+
+
+# The TypeScript leg of the JCS byte-agreement gate runs erdtman/canonicalize,
+# and the three files that describe it called it the RFC 8785 reference
+# implementation. RFC 8785 designates none: Appendix G lists canonicalize among
+# the open-source implementations verified to be compatible with JCS. Each file
+# is paired with the wording it published, with its original line wrap; the
+# claim pattern must keep matching each, or the gate cannot fire on it.
+JCS_LIBRARY_SITES = (
+    ("jcs-vectors/README.md", "(erdtman, RFC 8785 reference impl)"),
+    ("jcs-vectors/ts/package.json",
+     "(erdtman/canonicalize, the RFC 8785 reference implementation)."),
+    ("jcs-vectors/ts/check.mjs",
+     "// from the vector's `tbs` object using erdtman/canonicalize (the RFC 8785\n"
+     "// reference implementation, the same library the Secretless broker ATX verifier"),
+)
+JCS_REFERENCE_CLAIM = re.compile(
+    r"\bRFC\s*8785(?:'s)?\s+reference\s+impl(?:ementation)?\b"
+    r"|\breference\s+impl(?:ementation)?\s+(?:of|for)\s+RFC\s*8785\b",
+    re.IGNORECASE,
+)
+JCS_APPENDIX_G = "RFC 8785 Appendix G"
+
+
+def _flat_prose(text):
+    """`text` with line-leading `//` and `#` markers removed and whitespace
+    collapsed, so neither a line wrap nor a comment continuation splits a
+    phrase."""
+    return " ".join(re.sub(r"^\s*(?://+|#+)", "", text, flags=re.M).split())
+
+
+def jcs_library_failures(sites):
+    """Each file that describes the TypeScript leg's library (missing from
+    `sites` when the file is) must say RFC 8785 Appendix G lists it, and must
+    not call it the RFC 8785 reference implementation."""
+    failures = []
+    for path, retracted in JCS_LIBRARY_SITES:
+        if not JCS_REFERENCE_CLAIM.search(_flat_prose(retracted)):
+            failures.append(f"RFC 8785 reference claim pattern no longer matches "
+                            f"the wording {path} published; the gate cannot fire")
+        if path not in sites:
+            failures.append(f"{path} is missing; what it says about canonicalize "
+                            f"and RFC 8785 cannot be checked")
+            continue
+        flat = _flat_prose(sites[path])
+        claim = JCS_REFERENCE_CLAIM.search(flat)
+        if claim:
+            failures.append(f"{path} calls canonicalize \"{claim.group(0)}\", but "
+                            f"RFC 8785 designates no reference implementation; say "
+                            f"it is listed in {JCS_APPENDIX_G}")
+        if JCS_APPENDIX_G not in flat:
+            failures.append(f"{path} does not say canonicalize is listed in "
+                            f"{JCS_APPENDIX_G}")
+    return failures
+
+
 # Upstream A2A issues this suite once named as the place where second-party
 # implementations and coordination are tracked. Both are closed: 1876 as not
 # planned on 2026-06-15, and 1885, its re-file, on 2026-06-23. The README kept
@@ -500,8 +667,11 @@ def go_dependency_failures(readme, go_mod, verify_go):
 # coordinated or happening there.
 CLOSED_TRACKERS = ("1876", "1885")
 _CLOSED = "|".join(CLOSED_TRACKERS)
+# The link text is bounded: unbounded, every `[` in a run of them scanned to
+# the end of the run, so a paragraph of 40,000 `[` took seconds.
+LINK_TEXT_MAX = 200
 CLOSED_TRACKER_REF = re.compile(
-    rf"\[[^\]\n]*\]\(https://github\.com/a2aproject/A2A/issues/({_CLOSED})\)"
+    rf"\[[^\]\n]{{0,{LINK_TEXT_MAX}}}\]\(https://github\.com/a2aproject/A2A/issues/({_CLOSED})\)"
     rf"|https://github\.com/a2aproject/A2A/issues/({_CLOSED})\b"
     rf"|`?(?:a2aproject/)?A2A#({_CLOSED})\b`?"
 )
@@ -530,7 +700,7 @@ def registry_cosigners(cosigners):
     None when the heading or the table header row cannot be found."""
     lines = cosigners.splitlines()
     try:
-        start = [l.strip() for l in lines].index(REGISTRY_HEADING)
+        start = [line.strip() for line in lines].index(REGISTRY_HEADING)
     except ValueError:
         return None
     rows = []
@@ -604,6 +774,33 @@ def trust_score_failures(readme):
         failures.append(
             f"README `{TRUST_HEADING}` does not call the fixture trustScore "
             f"{TRUST_PLACEHOLDER}; nothing in this suite computes it"
+        )
+    return failures
+
+
+def jcs_scope_failures(jcs_readme):
+    """Check that jcs-vectors/README.md scopes v1.1 signing to the TBS
+    projection (None when the file is missing)."""
+    if jcs_readme is None:
+        return [f"{JCS_README_NAME} is missing; it states what v1.1 signs"]
+    failures = []
+    if not FUTURE_FIELD_CLAIM.search(" ".join(RETRACTED_FUTURE_CLAIM.split())):
+        failures.append(
+            "future-field claim pattern no longer matches the sentence it was "
+            "written for; the gate cannot fire"
+        )
+    text = " ".join(jcs_readme.split())
+    claim = FUTURE_FIELD_CLAIM.search(text)
+    if claim:
+        failures.append(
+            f"{JCS_README_NAME} says \"{claim.group(0)}\" is signed, but the "
+            "TBS is an explicit projection and a member it does not name stays "
+            "unsigned; say \"any field the spec adds to the TBS projection\""
+        )
+    if not JCS_PROJECTION_RULE.search(text):
+        failures.append(
+            f"{JCS_README_NAME} does not say a field is signed once the spec "
+            "adds it to the TBS projection"
         )
     return failures
 
@@ -752,8 +949,8 @@ def workflow_triggers(workflow):
     repository uses and the inline `on: push` / `on: [push, pull_request]`
     forms; a filter listed as a block sequence is read item by item."""
     lines = workflow.splitlines()
-    start = next((i for i, l in enumerate(lines)
-                  if re.match(r"""^(?:on|'on'|"on"):(?:\s|$)""", l)), None)
+    start = next((i for i, line in enumerate(lines)
+                  if re.match(r"""^(?:on|'on'|"on"):(?:\s|$)""", line)), None)
     if start is None:
         return None
     inline = lines[start].split(":", 1)[1].split("#", 1)[0].strip()
@@ -866,7 +1063,6 @@ def section(text, heading):
     return "\n".join(body)
 
 
-VERSION_PINNING = "## Version pinning"
 # A link to anything in an opena2a-standards repository, and the same link
 # naming a file at a full commit id, optionally with a #fragment.
 STANDARDS_LINK = re.compile(r"https://github\.com/opena2a-standards/[^\s()<>\[\]|]*")
@@ -984,6 +1180,165 @@ def reproduction_failures(readme, signing):
             f"cross-check against"
         )
     return failures
+
+
+# jcs-vectors/README.md said `trustLevel` was the only JSON number left in the
+# TBS, and the Python verifier and the vector pinner said the same in comments,
+# while every vector also carries scanSummary.criticalFindings and
+# scanSummary.highFindings as JSON numbers and five carry
+# behavioralProfile.observationDays. The agreement argument rests on every one
+# of them being an integer, so that is what the README must state, and no site
+# may name one member as the only number unless the vectors carry no other.
+# Each site is paired with the wording it published, with its original wrap.
+TBS_NUMBER_SITES = (
+    ("jcs-vectors/README.md",
+     "`trustLevel` (an integer) is\n  the only JSON number left in the TBS"),
+    ("verifiers/python/verify.py",
+     "        # trustScore is string-encoded %.6f so trustLevel is the only JSON number."),
+    ("jcs-vectors/pin/main.go",
+     "// the float -> JCS-number cross-language hazard never arises). trustLevel is the\n"
+     "// only JSON number in the TBS and is always an integer."),
+)
+INTEGER_SITE = "jcs-vectors/README.md"
+INTEGER_CLAIM = "every JSON number left in the TBS is an integer"
+# "`trustLevel` (an integer) is the only JSON number", matched over prose with
+# comment markers and line wraps removed; group 1 is the member named.
+ONLY_NUMBER_CLAIM = re.compile(
+    r"`?(\w+)`?(?:\s+\([^)]*\))?\s+(?:is\s+)?the\s+only\s+JSON\s+number\b",
+    re.IGNORECASE,
+)
+
+
+class _NonInteger(str):
+    """A JSON number token with a fraction or an exponent."""
+
+
+def _prose(text):
+    """Collapse whitespace and drop line-leading `//` and `#` comment markers,
+    so a claim wrapped across comment lines reads as one sentence."""
+    return " ".join(re.sub(r"(?m)^\s*(?://+|#+)", " ", text).split())
+
+
+def _tbs_numbers(value, path="", member=""):
+    """Yield (path, member name, value) for every JSON number in a parsed TBS."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield from _tbs_numbers(item, f"{path}.{key}" if path else key, key)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _tbs_numbers(item, f"{path}[]", member)
+    elif isinstance(value, _NonInteger) or (
+            isinstance(value, int) and not isinstance(value, bool)):
+        yield path, member, value
+
+
+def load_canonical_strings(root):
+    """Map each jcs-vectors/vectors/*.json name to its expected.canonicalString,
+    or to None when the file has none."""
+    canonical = {}
+    for path in sorted((root / "jcs-vectors" / "vectors").glob("*.json")):
+        try:
+            text = json.loads(path.read_text(encoding="utf-8"))["expected"]["canonicalString"]
+        except (OSError, ValueError, KeyError, TypeError):
+            text = None
+        canonical[path.name] = text if isinstance(text, str) else None
+    return canonical
+
+
+def tbs_number_failures(sites, canonical):
+    """Hold each statement of which JSON numbers the TBS carries to the
+    vectors' canonical strings. `sites` maps a TBS_NUMBER_SITES path to its
+    text (None when missing); `canonical` is from load_canonical_strings."""
+    if not canonical:
+        return ["no jcs-vectors/vectors/*.json found; refusing to pass vacuously"]
+    failures = []
+    carriers = collections.defaultdict(set)
+    members = set()
+    for name, text in sorted(canonical.items()):
+        try:
+            tbs = json.loads(text, parse_float=_NonInteger)
+        except (TypeError, ValueError):
+            failures.append(f"jcs-vectors/vectors/{name} has no parseable "
+                            f"expected.canonicalString")
+            continue
+        for path, member, value in _tbs_numbers(tbs):
+            carriers[path].add(name)
+            members.add(member)
+            if isinstance(value, _NonInteger):
+                failures.append(
+                    f"jcs-vectors/vectors/{name}: TBS member {path} is the JSON "
+                    f"number {value}, not an integer; {INTEGER_SITE} states "
+                    f"{INTEGER_CLAIM}"
+                )
+    carried = ", ".join(f"{p} ({len(carriers[p])} of {len(canonical)})"
+                        for p in sorted(carriers))
+    for site, text in sites.items():
+        if text is None:
+            failures.append(f"{site} is missing; it states which JSON numbers "
+                            f"the TBS carries")
+            continue
+        for claim in ONLY_NUMBER_CLAIM.finditer(_prose(text)):
+            if members != {claim.group(1)}:
+                failures.append(
+                    f"{site} says `{claim.group(1)}` is the only JSON number in "
+                    f"the TBS, but the vectors carry {len(carriers)}: {carried}; "
+                    f"say {INTEGER_CLAIM}"
+                )
+    readme = sites.get(INTEGER_SITE)
+    if readme is not None and INTEGER_CLAIM not in _prose(readme):
+        failures.append(
+            f"{INTEGER_SITE} does not state that {INTEGER_CLAIM}; it is what "
+            f"cross-language agreement on the TBS numbers rests on"
+        )
+    return failures
+
+
+def _tbs_number_cases(sites, canonical):
+    """Restate each site's published only-number wording, drop the README's
+    integer statement, and give one vector a fractional number; each must add
+    a failure."""
+    baseline = set(tbs_number_failures(sites, canonical))
+    cases = []
+
+    def new(altered_sites=sites, altered_canonical=canonical):
+        return [f for f in tbs_number_failures(altered_sites, altered_canonical)
+                if f not in baseline]
+
+    for site, retracted in TBS_NUMBER_SITES:
+        label = f"{site} naming `trustLevel` the only JSON number in the TBS"
+        if sites.get(site) is None:
+            cases.append((False, label, f"{site} not found"))
+            continue
+        altered = dict(sites)
+        altered[site] = sites[site] + "\n" + retracted + "\n"
+        got = new(altered_sites=altered)
+        cases.append((any(f.startswith(f"{site} says `trustLevel`") for f in got),
+                      label, f"appending its published wording still passes: {got}"))
+
+    label = f"{INTEGER_SITE} not stating that {INTEGER_CLAIM}"
+    readme = sites.get(INTEGER_SITE)
+    if readme is None or INTEGER_CLAIM not in _prose(readme):
+        cases.append((False, label, f"the statement is not in {INTEGER_SITE}"))
+    else:
+        altered = dict(sites)
+        altered[INTEGER_SITE] = _prose(readme).replace(
+            INTEGER_CLAIM, "every JSON number left in the TBS is small")
+        got = new(altered_sites=altered)
+        cases.append((any(f.startswith(f"{INTEGER_SITE} does not state") for f in got),
+                      label, f"a README without it still passes: {got}"))
+
+    label = "a vector whose TBS carries a fractional JSON number"
+    name = next((n for n, t in sorted(canonical.items())
+                 if t and re.search(r'"trustLevel":\d+', t)), None)
+    if name is None:
+        cases.append((False, label, "no vector carries an integer trustLevel"))
+    else:
+        altered = dict(canonical)
+        altered[name] = re.sub(r'("trustLevel":\d+)', r"\g<1>.5", canonical[name], count=1)
+        got = new(altered_canonical=altered)
+        cases.append((any("not an integer" in f for f in got),
+                      label, f"trustLevel 3.5 in {name} still passes: {got}"))
+    return cases
 
 
 # The sibling-repositories table row that describes this repository.
@@ -1171,6 +1526,33 @@ def check(readme, cosigners, fixtures, vectors, signing):
     failures.extend(version_pin_failures(readme))
     failures.extend(reproduction_failures(readme, signing))
     failures.extend(tracker_failures(readme, cosigners))
+    return failures
+
+
+# Everything the check reads from the tree, so one altered input can be run
+# through the same checks main() runs.
+Tree = collections.namedtuple("Tree", (
+    "readme cosigners fixtures vectors signing fixture_paths workflow "
+    "key_vectors used_key_ids versions go_mod verify_go py_requirements "
+    "py_dependency_texts jcs_sites tbs_sites tbs_canonical jcs_readme"))
+
+
+def tree_failures(tree):
+    """Every failure the check reports for `tree`: check() and the checks run
+    beside it. main() and the self-test's wiring cases both call this, so a
+    check dropped from here fails a case instead of going unrun."""
+    failures = check(tree.readme, tree.cosigners, tree.fixtures, tree.vectors, tree.signing)
+    failures.extend(threshold_claims(tree.readme, tree.fixture_paths))
+    failures.extend(behavioral_profile_failures(tree.readme, tree.fixture_paths))
+    failures.extend(ci_trigger_failures(tree.readme, tree.workflow))
+    failures.extend(key_source_failures(tree.readme, tree.key_vectors, tree.used_key_ids))
+    failures.extend(version_label_failures(tree.readme, tree.versions))
+    failures.extend(go_dependency_failures(tree.readme, tree.go_mod, tree.verify_go))
+    failures.extend(python_dependency_failures(tree.py_requirements,
+                                               tree.py_dependency_texts))
+    failures.extend(jcs_library_failures(tree.jcs_sites))
+    failures.extend(tbs_number_failures(tree.tbs_sites, tree.tbs_canonical))
+    failures.extend(jcs_scope_failures(tree.jcs_readme))
     return failures
 
 
@@ -1465,6 +1847,102 @@ def _go_dependency_cases(readme, go_mod, verify_go):
     return cases
 
 
+# The two forms the zero-dependency claim was published in, with their
+# original line wraps: the jcs-vectors README row and the serializer docstring.
+RETRACTED_PY_CLAIMS = (
+    "| Python | vendored `python/rfc8785.py` (stdlib only) | keeps the Python "
+    "verifier zero-dependency |",
+    "Standard-library only, so the Python ATX verifier keeps its zero-dependency\n"
+    "offline promise.",
+)
+
+
+def _python_dependency_cases(requirements, texts):
+    """Append each retracted zero-dependency claim to each site; each must add
+    a failure naming the site. The same claim must pass when requirements.txt
+    names no package, and a zero-dependency statement about the serializer
+    alone must pass, so the check holds the claim to the file."""
+    missing = [PY_REQUIREMENTS_NAME] if requirements is None else []
+    missing += [s for s in PY_DEPENDENCY_SITES if texts.get(s) is None]
+    if missing:
+        return [(False, "Python verifier dependency sites",
+                 f"{', '.join(missing)} missing")]
+    baseline = collections.Counter(python_dependency_failures(requirements, texts))
+    cases = []
+
+    def appended(site, sentence):
+        altered = dict(texts)
+        altered[site] = texts[site] + "\n\n" + sentence + "\n"
+        return altered
+
+    def added(failures):
+        # A multiset difference: a site that already states the claim reports
+        # the appended copy as a second, identical failure.
+        return list((collections.Counter(failures) - baseline).elements())
+
+    parsed = python_requirements(
+        "# pinned\ncryptography>=42.0.0\n\n-r more.txt\ndilithium-py>=1.1.0  # FIPS 204\n")
+    cases.append((parsed == ["cryptography", "dilithium-py"],
+                  "requirements.txt package names, comments and options aside",
+                  f"read {parsed}"))
+
+    for site in PY_DEPENDENCY_SITES:
+        for claim in RETRACTED_PY_CLAIMS:
+            new = added(python_dependency_failures(requirements, appended(site, claim)))
+            cases.append((any(f.startswith(f"{site} calls the Python verifier") for f in new),
+                          f"{site} calling the Python verifier zero-dependency: "
+                          f"{claim.splitlines()[0][:40]}...",
+                          f"appending the claim still passes: {new}"))
+
+    site = PY_DEPENDENCY_SITES[0]
+    for claim in RETRACTED_PY_CLAIMS:
+        new = python_dependency_failures("# no packages\n", appended(site, claim))
+        cases.append((not new, f"{site} zero-dependency claim with no package required: "
+                               f"{claim.splitlines()[0][:40]}...",
+                      f"expected no failure when {PY_REQUIREMENTS_NAME} names no "
+                      f"package, got {new}"))
+    serializer = "The vendored serializer itself is zero-dependency."
+    new = added(python_dependency_failures(requirements, appended(site, serializer)))
+    cases.append((not new, f"{site} calling the serializer alone zero-dependency",
+                  f"a true statement about the serializer fails: {new}"))
+
+    new = python_dependency_failures(None, texts)
+    cases.append((any(f.startswith(f"{PY_REQUIREMENTS_NAME} is missing") for f in new),
+                  f"{PY_REQUIREMENTS_NAME} missing",
+                  f"a missing {PY_REQUIREMENTS_NAME} still passes: {new}"))
+    return cases
+
+
+def _jcs_library_cases(sites):
+    """Restore each file's retracted reference claim beside its Appendix G
+    citation, drop the citation, and remove the file; each must add a failure
+    naming the file."""
+    baseline = set(jcs_library_failures(sites))
+    cases = []
+
+    def case(label, altered, needle):
+        new = [f for f in jcs_library_failures(altered) if f not in baseline]
+        cases.append((any(needle in f for f in new), label,
+                      f"expected a failure containing {needle!r}, got {new}"))
+
+    for path, retracted in JCS_LIBRARY_SITES:
+        text = sites.get(path)
+        if text is None or JCS_APPENDIX_G not in text:
+            cases.append((False, f"{path} citing {JCS_APPENDIX_G}",
+                          f"no `{JCS_APPENDIX_G}` found in {path}"))
+            continue
+        case(f"{path} restored to the retracted reference claim",
+             dict(sites, **{path: text + "\n" + retracted + "\n"}),
+             f"{path} calls canonicalize")
+        case(f"{path} not citing {JCS_APPENDIX_G}",
+             dict(sites, **{path: text.replace(JCS_APPENDIX_G, "RFC 8785")}),
+             f"{path} does not say canonicalize is listed in")
+        case(f"{path} missing",
+             {p: t for p, t in sites.items() if p != path},
+             f"{path} is missing")
+    return cases
+
+
 def _pin_case(label, texts, run, edit, expect):
     """Alter the first link at a commit in the Version pinning table."""
     readme = texts["README.md"]
@@ -1505,8 +1983,79 @@ def _repro_case(label, texts, run, edit, expect):
     return False, label, f"expected a failure containing {expect!r}, got {new}"
 
 
-def self_test(readme, cosigners, fixtures, vectors, versions, go_mod, verify_go,
-              signing, verbose, workflow, key_vectors, used_key_ids):
+def _wiring_cases(tree):
+    """Alter one input per check that tree_failures() runs and run it whole.
+    The cases above call each check directly, so they stay green when main()
+    stops running one; these fail instead."""
+    baseline = set(tree_failures(tree))
+    readme = tree.readme
+    cases = []
+
+    def case(label, want, **altered):
+        new = [f for f in tree_failures(tree._replace(**altered)) if f not in baseline]
+        cases.append((any(want in f for f in new), f"main() running the {label} check",
+                      f"expected a failure containing {want!r}, got {new}"))
+
+    row = FIXTURE_ROW.search(readme)
+    if row is None:
+        cases.append((False, "main() running the count check",
+                      "no fixture-table row found in README.md"))
+    else:
+        end = readme.index("\n", row.start()) + 1
+        case("count", f"has no row for fixtures/{row.group(1)}",
+             readme=readme[:row.start()] + readme[end:])
+
+    scope = re.search(r"^## Scope\n.*?^\|[-| ]+\|\n", readme, re.M | re.S)
+    if scope is None:
+        cases.append((False, "main() running the threshold check",
+                      "no `## Scope` table found in README.md"))
+    else:
+        claim = "Threshold 2-of-3 cosignature path"
+        case("threshold", f"lists {claim!r} as covered",
+             readme=(readme[:scope.end()] + f"| {claim} | every fixture |\n"
+                     + readme[scope.end():]),
+             fixture_paths=[p for p in tree.fixture_paths if not declares_threshold(p)])
+
+    case("behavioralProfile", "behavioralProfile is omitted",
+         readme=readme.replace("- Behavioral profile validation.",
+                               "- Behavioral profile validation. It is omitted.", 1))
+    case("CI trigger", f"{WORKFLOW_NAME} is missing", workflow=None)
+    case("key source", "nobody.example#key-1, which no vectors/*.json provides",
+         used_key_ids=tree.used_key_ids | {"did:opena2a:authority:nobody.example#key-1"})
+    case("version label", f"{INTRO_SITE} omits v9.9",
+         versions=set(tree.versions) | {"9.9"})
+    if tree.go_mod is None:
+        cases.append((False, "main() running the Go dependency check",
+                      f"{GO_MOD_NAME} is missing"))
+    else:
+        case("Go dependency", GO_INVENTED,
+             go_mod=tree.go_mod + f"\nrequire {GO_INVENTED} {GO_ALTERED_VERSION}\n")
+    site = PY_DEPENDENCY_SITES[0]
+    if tree.py_dependency_texts.get(site) is None:
+        cases.append((False, "main() running the Python dependency check",
+                      f"{site} is missing"))
+    else:
+        case("Python dependency", f"{site} calls the Python verifier zero-dependency",
+             py_requirements=(tree.py_requirements or "") + "\ncryptography\n",
+             py_dependency_texts={**tree.py_dependency_texts,
+                                  site: (tree.py_dependency_texts[site]
+                                         + "\n\nThe Python verifier is zero-dependency.\n")})
+    path, retracted = JCS_LIBRARY_SITES[0]
+    case("RFC 8785 library", f"{path} calls canonicalize",
+         jcs_sites={**tree.jcs_sites,
+                    path: tree.jcs_sites.get(path, "") + "\n" + retracted + "\n"})
+    site, retracted = TBS_NUMBER_SITES[0]
+    case("TBS number", f"{site} says `trustLevel` is the only JSON number",
+         tbs_sites={**tree.tbs_sites,
+                    site: (tree.tbs_sites.get(site) or "") + "\n" + retracted + "\n"})
+    case("signing scope", "is signed, but the TBS is an explicit projection",
+         jcs_readme=(tree.jcs_readme or "") + "\n" + RETRACTED_FUTURE_CLAIM + ".\n")
+    return cases
+
+
+def self_test(tree, verbose):
+    readme, cosigners, fixtures, vectors, signing = (
+        tree.readme, tree.cosigners, tree.fixtures, tree.vectors, tree.signing)
     texts = {"README.md": readme, "COSIGNERS.md": cosigners or ""}
     baseline = set(check(readme, cosigners, fixtures, vectors, signing))
 
@@ -1579,10 +2128,13 @@ def self_test(readme, cosigners, fixtures, vectors, versions, go_mod, verify_go,
                       "trustScore not called illustrative",
                       f"a section that drops `{TRUST_PLACEHOLDER}` still passes: {new}"))
 
-    cases.extend(_trigger_cases(readme, workflow))
-    cases.extend(_key_source_cases(readme, key_vectors, used_key_ids))
-    cases.extend(_version_cases(readme, versions))
-    cases.extend(_go_dependency_cases(readme, go_mod, verify_go))
+    cases.extend(_trigger_cases(readme, tree.workflow))
+    cases.extend(_key_source_cases(readme, tree.key_vectors, tree.used_key_ids))
+    cases.extend(_version_cases(readme, tree.versions))
+    cases.extend(_go_dependency_cases(readme, tree.go_mod, tree.verify_go))
+    cases.extend(_python_dependency_cases(tree.py_requirements, tree.py_dependency_texts))
+    cases.extend(_jcs_library_cases(tree.jcs_sites))
+    cases.extend(_wiring_cases(tree))
 
     cases.append(_pin_case(
         "version pinning link on a branch instead of a commit", texts, run,
@@ -1623,6 +2175,11 @@ def self_test(readme, cosigners, fixtures, vectors, versions, go_mod, verify_go,
     cases.append((any("does not name `canonicalPayloadV12`" in f for f in new),
                   "generator signing form missing from the reproduction steps",
                   f"a generator form the README does not name still passes: {new}"))
+    cases.append(_repro_case(
+        "reproduction steps naming a signing form the generator does not define",
+        texts, run,
+        lambda body: body + "\nThe generator also signs over `canonicalPayloadV99`.\n",
+        "names `canonicalPayloadV99`, which"))
     altered = dict(texts)
     altered["README.md"] = readme.replace(REPRODUCING + "\n", "## Regenerating\n", 1)
     new = run(altered)
@@ -1672,6 +2229,32 @@ def self_test(readme, cosigners, fixtures, vectors, versions, go_mod, verify_go,
                       f"{name} citing closed A2A#1885 with no `(closed` note",
                       f"appending the citation to {name} still passes: {new}"))
 
+    # Linear in the run: about 0.2 s. Unbounded link text took 3.5 s or more.
+    started = time.perf_counter()
+    closed_tracker_mentions("README.md", "[" * 40000)
+    took = time.perf_counter() - started
+    cases.append((took < 1.5, "closed-tracker scan over a 40,000-character run of `[`",
+                  f"took {took:.1f} s; the link-text match backtracks over the run"))
+    cases.extend(_tbs_number_cases(tree.tbs_sites, tree.tbs_canonical))
+
+    jcs_readme = tree.jcs_readme
+    jcs_text = jcs_readme or ""
+    jcs_baseline = set(jcs_scope_failures(jcs_readme))
+    rule = JCS_PROJECTION_RULE.search(jcs_text)
+    for label, altered, want in (
+            (f"{JCS_README_NAME} saying every future field is signed",
+             jcs_text + "\n" + RETRACTED_FUTURE_CLAIM + ".\n",
+             "is signed, but the TBS is an explicit projection"),
+            (f"{JCS_README_NAME} dropping the TBS projection rule",
+             jcs_text[:rule.start()] + "field" + jcs_text[rule.end():] if rule else None,
+             "does not say a field is signed once the spec adds it")):
+        if altered is None:
+            cases.append((False, label, f"no projection rule found in {JCS_README_NAME}"))
+            continue
+        new = [f for f in jcs_scope_failures(altered) if f not in jcs_baseline]
+        cases.append((any(want in f for f in new), label,
+                      f"the altered {JCS_README_NAME} still passes: {new}"))
+
     failed = 0
     for ok, label, detail in cases:
         if verbose or not ok:
@@ -1692,22 +2275,37 @@ def main():
     only_self_test = "--self-test" in sys.argv
 
     fixtures, failures = load_fixtures(ROOT)
-    readme = README.read_text(encoding="utf-8")
-    cosigners = COSIGNERS.read_text(encoding="utf-8") if COSIGNERS.exists() else None
-    vectors = count_vectors(ROOT)
-    workflow = WORKFLOW.read_text(encoding="utf-8") if WORKFLOW.exists() else None
     key_vectors, vector_failures = load_key_vectors(ROOT)
     failures += vector_failures
     fixture_paths = sorted(FIXTURES.glob("*.json"))
-    used_key_ids = fixture_key_ids(fixture_paths)
-    versions = accepted_versions(fixture_paths)
-    go_mod = GO_MOD.read_text(encoding="utf-8") if GO_MOD.exists() else None
-    verify_go = VERIFY_GO.read_text(encoding="utf-8") if VERIFY_GO.exists() else None
-    signing = generator_signing(ROOT)
+    tree = Tree(
+        readme=README.read_text(encoding="utf-8"),
+        cosigners=COSIGNERS.read_text(encoding="utf-8") if COSIGNERS.exists() else None,
+        fixtures=fixtures,
+        vectors=count_vectors(ROOT),
+        signing=generator_signing(ROOT),
+        fixture_paths=fixture_paths,
+        workflow=WORKFLOW.read_text(encoding="utf-8") if WORKFLOW.exists() else None,
+        key_vectors=key_vectors,
+        used_key_ids=fixture_key_ids(fixture_paths),
+        versions=accepted_versions(fixture_paths),
+        go_mod=GO_MOD.read_text(encoding="utf-8") if GO_MOD.exists() else None,
+        verify_go=VERIFY_GO.read_text(encoding="utf-8") if VERIFY_GO.exists() else None,
+        py_requirements=(PY_REQUIREMENTS.read_text(encoding="utf-8")
+                         if PY_REQUIREMENTS.exists() else None),
+        py_dependency_texts={
+            site: (ROOT / site).read_text(encoding="utf-8") if (ROOT / site).exists() else None
+            for site in PY_DEPENDENCY_SITES},
+        jcs_sites={path: (ROOT / path).read_text(encoding="utf-8")
+                   for path, _ in JCS_LIBRARY_SITES if (ROOT / path).exists()},
+        tbs_sites={site: (ROOT / site).read_text(encoding="utf-8")
+                   if (ROOT / site).exists() else None
+                   for site, _ in TBS_NUMBER_SITES},
+        tbs_canonical=load_canonical_strings(ROOT),
+        jcs_readme=JCS_README.read_text(encoding="utf-8") if JCS_README.exists() else None,
+    )
 
-    failed, total = self_test(readme, cosigners, fixtures, vectors, versions,
-                              go_mod, verify_go, signing, only_self_test, workflow,
-                              key_vectors, used_key_ids)
+    failed, total = self_test(tree, only_self_test)
     if failed:
         print(f"self-test FAILED: {failed} of {total} case(s) not caught by the check",
               file=sys.stderr)
@@ -1718,13 +2316,7 @@ def main():
 
     # The check runs even when the self-test failed: a site the self-test
     # cannot find is often a count the README dropped, and the check names it.
-    failures += check(readme, cosigners, fixtures, vectors, signing)
-    failures.extend(threshold_claims(readme, fixture_paths))
-    failures.extend(behavioral_profile_failures(readme, fixture_paths))
-    failures.extend(ci_trigger_failures(readme, workflow))
-    failures.extend(key_source_failures(readme, key_vectors, used_key_ids))
-    failures.extend(version_label_failures(readme, versions))
-    failures.extend(go_dependency_failures(readme, go_mod, verify_go))
+    failures += tree_failures(tree)
 
     if failures:
         sys.stdout.flush()
@@ -1736,19 +2328,25 @@ def main():
         return 1
 
     print(f"README and COSIGNERS counts match the tree: {len(fixtures)} fixtures "
-          f"(each with one fixture-table row), {vectors} JCS vectors, all stated "
+          f"(each with one fixture-table row), {tree.vectors} JCS vectors, all stated "
           f"as passing; README names the MANIFEST.sha256 byte check; "
           f"behavioralProfile scope note matches; criterion (c) claim matches "
           f"the cosignature registry; trustScore is called illustrative; "
           f"CI trigger sentence matches {WORKFLOW_NAME}; "
           f"both README key-source lists name every Ed25519 key in vectors/; "
-          f"intro and version-pinning row name ATX {_versions(versions)}; "
+          f"intro and version-pinning row name ATX {_versions(tree.versions)}; "
           f"Go verifier dependency list, version-pinning rows and verify.go "
           f"header name every direct requirement of {GO_MOD_NAME}; "
+          f"no jcs-vectors README or RFC 8785 serializer docstring calls the "
+          f"Python verifier zero-dependency; "
+          f"each jcs-vectors file describing canonicalize cites "
+          f"{JCS_APPENDIX_G} and calls it no reference implementation; "
           f"every Version pinning link names a commit; "
           f"the reproduction steps name every signing form and jcs-vectors "
           f"cross-check in the generator; coordination links point at an open "
-          f"issue tracker")
+          f"issue tracker; every statement of the JSON numbers in the TBS "
+          f"matches the {len(tree.tbs_canonical)} JCS vectors, all of them integers; "
+          f"{JCS_README_NAME} scopes v1.1 signing to the TBS projection")
     return 0
 
 

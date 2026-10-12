@@ -1,5 +1,5 @@
-// Package main is the Go reference verifier for the ATX v1.0 conformance
-// fixture set. It depends only on the Go standard library plus
+// Package main is the Go reference verifier for the ATX v1.0 and v1.1
+// conformance fixture set. It depends only on the Go standard library plus
 // github.com/cloudflare/circl (for ML-DSA-65 verification per FIPS 204) and
 // github.com/gowebpki/jcs (for RFC 8785 canonicalization of the v1.1 signed
 // payload).
@@ -14,6 +14,8 @@
 //   - AIP §3 Hybrid Ed25519 + ML-DSA-65 (mandate at v1)
 //   - Canonicalization: pipe-delimited 11-field string matching
 //     opena2a-registry/pkg/atcverify/verify.go canonicalPayload() VERBATIM
+//   - ATX v1.1 (atcVersion "1.1"): signed over the RFC 8785 JCS form of the
+//     v1.1 TBS projection
 //
 // Usage:
 //

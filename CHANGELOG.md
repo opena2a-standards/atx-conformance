@@ -20,6 +20,14 @@ whenever one lands; README "Versioning and stability" says they should not.
   copies it. `scripts/conformance_profile.py --check` fails on a fixture
   with no `requirement`, one whose section is not among the fixture's ATX
   `spec` citations, or one that two fixtures share (#140).
+- `schemas/fixture-v1.schema.json` and
+  `schemas/conformance-profile-v1.schema.json` define the two file formats
+  whose `$schema` URIs the fixtures and `conformance.json` carry; neither URI
+  is served. `scripts/schema_validation.py` fails when a document's
+  `$schema` is not the `$id` of a tracked schema or the document does not
+  validate against it, and starts every run with a self-test that alters a
+  fixture and the profile and requires each copy to fail (#154). No fixture
+  changes.
 
 ### Changed
 
@@ -36,6 +44,44 @@ whenever one lands; README "Versioning and stability" says they should not.
   `scripts/check_readme_counts.py` fails when the README calls the value the
   algorithm's output or stops calling it illustrative (#146). No fixture
   changes.
+- `scripts/check_readme_counts.py` runs its checks through one function that
+  its self-test also runs, so the self-test fails when a check stops being
+  run; it passed with the version-label check removed. Its self-test also
+  covers a README naming a `canonicalPayload*` function the generator does
+  not define, and `scripts/conformance_profile.py --check` covers a
+  requirement whose § number does not open it (#153). No fixture changes.
+- `jcs-vectors/README.md` and the docstring of both copies of the vendored
+  RFC 8785 serializer say it adds no dependency to the Python verifier,
+  where they called the verifier zero-dependency:
+  `verifiers/python/requirements.txt` names `cryptography` and
+  `dilithium-py`. `scripts/check_readme_counts.py` fails when any of the
+  three calls the Python verifier zero-dependency while that file names a
+  package (#159). No fixture changes.
+- `jcs-vectors/README.md` says every JSON number left in the v1.1 TBS is an
+  integer, where it said `trustLevel` was the only one; the comments in
+  `verifiers/python/verify.py` and `jcs-vectors/pin/main.go` said the same.
+  Every vector also carries `scanSummary.criticalFindings` and
+  `scanSummary.highFindings`, and four of the eight carry
+  `behavioralProfile.observationDays`, all integers.
+  `scripts/check_readme_counts.py` fails when any of the three names one
+  member as the only JSON number while the vectors carry another, when the
+  README stops stating the integer rule, or when a vector's TBS carries a
+  non-integer number (#155). No fixture or vector changes.
+- `jcs-vectors/run-agreement.sh` also runs both conformance verifiers' own
+  v1.1 projection and JCS call (`canonicalPayloadV11`,
+  `canonical_payload_v11`) over every vector and fails unless each reproduces
+  `expected.canonicalHex`; before, it ran only three standalone RFC 8785
+  libraries. The gate now needs the Python verifier's dependencies.
+  `jcs-vectors/README.md` says the gate runs no issuer, offline-verifier or
+  broker code, where it said the directory proved agreement for all of them
+  (#156). No fixture or vector changes.
+- `jcs-vectors/README.md` says v1.1 signs `capabilities`, `scanSummary`,
+  `issuerChain`, `publisher` and any field the spec adds to the TBS
+  projection, where it said every future field: a member the projection does
+  not name is unsigned, so one added after signing leaves the signature valid
+  and both verifiers report ACCEPT. `scripts/check_readme_counts.py` fails
+  when that README claims future fields are signed or stops stating the
+  projection rule (#158). No fixture changes.
 
 ## e2f9dc4 (#26, 2026-09-09): capabilities rewritten in 22 existing fixtures
 

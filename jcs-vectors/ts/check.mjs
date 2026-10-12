@@ -1,8 +1,8 @@
 // TypeScript/JS leg of the ATX v1.1 JCS byte-agreement gate.
 //
 // For each vector under ../vectors, independently recompute the canonical bytes
-// from the vector's `tbs` object using erdtman/canonicalize (the RFC 8785
-// reference implementation, the same library the Secretless broker ATX verifier
+// from the vector's `tbs` object using erdtman/canonicalize (listed in
+// RFC 8785 Appendix G, the same library the Secretless broker ATX verifier
 // will use), then assert they reproduce the pinned expected.canonicalHex
 // byte-for-byte. Agreement on the canonical bytes is the property this leg
 // proves; signature verification is covered by the Go leg.

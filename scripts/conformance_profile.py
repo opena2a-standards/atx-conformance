@@ -422,6 +422,8 @@ def self_test() -> int:
         ("reports a blank requirement by name", _fails_by_name({**good, "requirement": " \t"})),
         ("reports a requirement that does not open with a § section number by name",
          _fails_by_name({**good, "requirement": "step 2 of the verification algorithm"})),
+        ("reports a requirement whose § section number comes after other text by name",
+         _fails_by_name({**good, "requirement": "expiry, §1.3 step 2"})),
         ("reports a requirement naming a section the fixture does not cite by name",
          _fails_by_name({**good, "requirement": "§1.5: probe"})),
         ("reports a requirement whose section only a non-ATX citation names by name",
