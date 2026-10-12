@@ -55,7 +55,11 @@ exits 0.**
 
 Requires Go, Python 3 with the Python verifier's dependencies
 (`pip install -r ../verifiers/python/requirements.txt`), and Node (the script
-installs the pinned `canonicalize` into `ts/node_modules` on first run).
+installs the pinned `canonicalize` into `ts/node_modules` on first run with
+`npm ci`, which installs exactly `ts/package-lock.json`). A failed install
+prints npm's error and fails the TS/JS leg; the other legs and the gate's
+summary line still run. `python3 test_run_agreement.py` tests that handling
+with stub commands and needs no network.
 
 ## The TBS construction rule (normative)
 

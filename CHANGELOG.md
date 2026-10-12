@@ -154,6 +154,14 @@ whenever one lands; README "Versioning and stability" says they should not.
   Python header claims the step 7 check or omits a supported version, and it
   and `verify_test.go` fail when a verifier or the generator cites a README
   heading that does not exist (#161). No verdict or fixture changes.
+- `jcs-vectors/run-agreement.sh` installs the TS/JS leg's dependency with
+  `npm ci`, which installs exactly `ts/package-lock.json`, where it ran
+  `npm install`. A failed install prints npm's error and a `[ts] FAIL` line,
+  fails the gate, and the remaining legs and the `BYTE-AGREEMENT GATE` line
+  still run; before, the script exited 1 straight after the install line with
+  npm's output discarded and no summary. `jcs-vectors/test_run_agreement.py`
+  runs the script with stub commands and checks both outcomes of the
+  install (#170). No fixture or vector changes.
 
 ## e2f9dc4 (#26, 2026-09-09): capabilities rewritten in 22 existing fixtures
 

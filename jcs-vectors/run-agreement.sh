@@ -50,11 +50,21 @@ if ! python3 python/check.py; then fail=1; fi
 echo
 
 echo "=== [ts] erdtman/canonicalize ==="
+# A failed install fails this leg and the gate goes on to its other legs and
+# its summary line. Under `set -e` a bare failing install ended the script
+# here, and npm's error was discarded with its output.
+ts_installed=1
 if [ ! -d ts/node_modules ]; then
-  echo "[ts] installing pinned dependency (canonicalize) ..."
-  ( cd ts && npm install --no-audit --no-fund >/dev/null 2>&1 )
+  echo "[ts] installing pinned dependency (canonicalize) from ts/package-lock.json ..."
+  if ! install_out=$( cd ts && npm ci --no-audit --no-fund 2>&1 ); then
+    echo "$install_out"
+    echo "[ts] FAIL  npm ci in jcs-vectors/ts failed (npm output above): the TS/JS leg did not run"
+    ts_installed=0; fail=1
+  fi
 fi
-if ! node ts/check.mjs; then fail=1; fi
+if [ "$ts_installed" -eq 1 ]; then
+  if ! node ts/check.mjs; then fail=1; fi
+fi
 echo
 
 echo "=== [verifier/go] verifiers/go canonicalPayloadV11 ==="
