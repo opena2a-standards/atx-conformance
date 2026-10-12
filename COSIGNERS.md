@@ -10,7 +10,7 @@ Second-party cosigners attest that they have independently:
 The signature attests to the fixture bytes; the entry below attests that
 the verifiers were actually run. Both together close the gap noted in the
 A2A coordination map's criterion (c) on
-[`a2aproject/A2A#1885`](https://github.com/a2aproject/A2A/issues/1885).
+[`a2aproject/A2A#1885`](https://github.com/a2aproject/A2A/issues/1885) (closed on 2026-06-23).
 
 ## How to cosign
 

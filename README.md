@@ -1,7 +1,7 @@
 # atx-conformance
 
 Conformance fixtures and reference verifiers for the
-[ATX v1.0 credential schema](https://github.com/opena2a-standards/atx-spec).
+[ATX v1.0 and v1.1 credential schema](https://github.com/opena2a-standards/atx-spec).
 
 Each fixture is a byte-stable JSON file that bundles an Agent Trust Credential
 with verifier configuration and an expected outcome (ACCEPT or REJECT). Two
@@ -62,14 +62,20 @@ What this suite does NOT verify:
 The full requirement-to-fixture mapping is machine-readable in
 [`conformance.json`](./conformance.json), regenerated from the fixtures by
 [`scripts/conformance_profile.py`](./scripts/conformance_profile.py) and
-CI-checked against drift.
+CI-checked against drift. Each entry's `requirement`, copied from its
+fixture, names the step or rule that fixture tests and opens with the
+number of the `core.md` section it comes from: `atx-v1/expired` tests
+`§1.3 step 2`, the expiry check. The drift check fails when a fixture has
+no `requirement`, when its section is not one of the fixture's ATX `spec`
+citations, or when two fixtures name the same requirement. A fixture
+cites FIPS 204 only when its credential carries an ML-DSA-65 signature.
 
 ## Continuous verification
 
 [`.github/workflows/conformance.yml`](./.github/workflows/conformance.yml)
-runs the following gates on each push and pull request. They cover the
-counts, the verifier results, the fixture bytes and the claims this
-README makes about them -- not every sentence below:
+runs the following gates on every pull request and every push to `main`.
+They cover the counts, the verifier results, the fixture bytes and the
+claims this README makes about them -- not every sentence below:
 
 1. Both reference verifiers run against `fixtures/` and must report
    `25 pass, 0 fail`.
@@ -182,9 +188,9 @@ This suite uses the canonical post-consolidation DID method
 the 2026-05-23 unification across AIP-SPEC and ATX-SPEC. The `did:opena2a`
 method itself is formally documented at
 [`opena2a-standards/did-method-opena2a`](https://github.com/opena2a-standards/did-method-opena2a)
-(Apache-2.0) and is filed for registration with the W3C DID Extensions
-registry on
-[`w3c/did-extensions#717`](https://github.com/w3c/did-extensions/pull/717).
+(Apache-2.0) and is registered in the W3C DID Extensions registry
+([`w3c/did-extensions#717`](https://github.com/w3c/did-extensions/pull/717),
+merged 2026-07-04).
 Because the suite must run without any external trust configuration, the
 conformance verifiers take their trusted-issuer set from each fixture's
 `verifierState.trustedIssuers`; running the suite requires no issuer
@@ -192,9 +198,9 @@ configuration outside the fixture files.
 
 ### Trust scoring: 9-factor reference
 
-The `trustScore` field in each fixture (87.5 on the baseline) is composite
-output from the 9-factor algorithm specified in AIP-SPEC §6.1 with the
-audited weights:
+The `trustScore` field in each fixture (87.5 on the baseline) is an
+illustrative value; the 9-factor weights specified in AIP-SPEC §6.1 are
+reproduced for reference:
 
 | Factor | Weight |
 |---|---|
@@ -209,8 +215,9 @@ audited weights:
 | User feedback | 2 |
 | Total | 100 |
 
-The fixture value is illustrative; this suite does not verify the
-trust-score computation itself.
+No factor inputs in this suite produce the fixture value, and it is stated
+on a 0 to 100 scale, while AIP-SPEC §6.1 states the composite score on 0.0
+to 1.0. This suite does not verify the trust-score computation itself.
 
 ## Fixtures
 
@@ -219,7 +226,7 @@ All fixtures use:
 - Trusted issuer DID: `did:opena2a:authority:opena2a.org`
 - Test agent: `agent_conformance_test_001` (DID `did:opena2a:agent:agent_conformance_test_001`)
 - Pinned verifier clock: `2026-05-24T00:00:00Z`
-- Ed25519 keypair source: [RFC 8032 §7.1 Test 1](https://datatracker.ietf.org/doc/html/rfc8032#section-7.1) (primary) and Tests 2 / 3 (cosigners)
+- Ed25519 keypair sources: [RFC 8032 §7.1](https://datatracker.ietf.org/doc/html/rfc8032#section-7.1) Test 1 (primary), Tests 2 / 3 (cosigners) and Test 1024 (untrusted issuer); the trusted secondary issuer `partner.example` is not an RFC vector, its seed is `SHA-256("opena2a-atx-conformance/issuer-secondary/key-1/v1")` ([`vectors/issuer-secondary.json`](./vectors/issuer-secondary.json))
 - ML-DSA-65 keypair source: fixed test seed (incrementing bytes `00..1f`), public key pinned in [`vectors/mldsa65-seed.json`](./vectors/mldsa65-seed.json)
 
 | Fixture | Expected | Exercises |
@@ -268,6 +275,8 @@ Depends on:
 
 - Go 1.22 or later
 - `github.com/cloudflare/circl v1.6.2` (resolved by `go mod tidy`)
+- `github.com/gowebpki/jcs v1.0.1` (RFC 8785 canonicalization of the v1.1
+  signed payload; resolved the same way)
 
 ### Python (full hybrid Ed25519 plus ML-DSA-65)
 
@@ -322,18 +331,40 @@ The generator:
    `mldsa65.NewKeyFromSeed`). Pins the resolved public key into
    `vectors/mldsa65-seed.json` on first run; on subsequent runs, verifies
    that the pinned value still matches.
-3. Builds each ATX credential from a shared template (`newBaselineATX`),
-   then per-fixture mutates exactly the fields needed to exercise that
-   fixture's path (revoke, expire, swap issuer, tamper signature, change
-   schema version, add cosigners or ML-DSA-65 sig).
-4. Computes the pipe-delimited canonical payload (the 11-field form
-   defined normatively in `atx-spec` `core.md` §1.3a.1, duplicated
-   verbatim in the generator and in each reference verifier).
-5. Ed25519-signs (and ML-DSA-65-signs where applicable) the canonical
-   payload.
-6. Marshals each fixture to byte-stable JSON (`encoding/json` with 2-space
+3. Cross-checks the v1.1 signing form against the byte-agreement gate in
+   [`jcs-vectors/`](./jcs-vectors) before it builds any fixture. The v1.1
+   baseline credential (`newBaselineV11ATX`) must canonicalize to the
+   `expected.canonicalHex` of `jcs-vectors/vectors/01-baseline.json`, and
+   the same credential carrying the present-case `declaredPurpose` to the
+   one in `jcs-vectors/vectors/08-declared-purpose.json`. Panics on
+   divergence, so the v1.1 fixtures cannot drift from the bytes the Go,
+   Python and TypeScript legs of that gate agree on.
+4. Builds each ATX credential from a shared template (`newBaselineATX` for
+   v1.0, `newBaselineV11ATX` for v1.1), then per-fixture mutates exactly
+   the fields needed to exercise that fixture's path (revoke, expire, swap
+   issuer, tamper signature, change schema version, set `declaredPurpose`,
+   add cosigners or ML-DSA-65 sig).
+5. Computes the canonical payload in the form the credential's version
+   signs:
+   - Every fixture not named `v1_1-*.json`, including
+     `malformed-schema.json` with `atcVersion` "2.0": the pipe-delimited
+     11-field form defined normatively in `atx-spec` `core.md` §1.3a.1
+     (`canonicalPayload`), duplicated verbatim in the generator and in each
+     reference verifier.
+   - Every `v1_1-*.json` fixture: `JCS(TBS)` per `core.md` §1.3a.2
+     (`canonicalPayloadV11`). The generator projects the credential into
+     the v1.1 to-be-signed object, which adds `publisher`, `publisherDid`,
+     `capabilities`, `behavioralProfile`, `scanSummary`, `issuerChain` and,
+     when present, `declaredPurpose` to the signed fields, and canonicalizes
+     it per RFC 8785 with `github.com/gowebpki/jcs`.
+6. Ed25519-signs and ML-DSA-65-signs that payload, as each fixture carries
+   those signatures (`v1_1-hybrid-pq-only.json` carries the ML-DSA-65
+   signature alone). A fixture that tests tampering changes the field or
+   signature it tampers with after this step, so its signature covers the
+   original bytes.
+7. Marshals each fixture to byte-stable JSON (`encoding/json` with 2-space
    indent, fields in struct-declaration order).
-7. Writes the fixture file. Recomputes its SHA-256. Updates
+8. Writes the fixture file. Recomputes its SHA-256. Updates
    `MANIFEST.sha256` in path-sorted order.
 
 Re-running the generator MUST produce byte-identical fixtures. If the bytes
@@ -345,12 +376,13 @@ breaking change for downstream verifiers.
 
 | Component | Version | Source |
 |---|---|---|
-| ATX schema | v1.0 | [`opena2a-standards/atx-spec/core.md`](https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md) |
-| AIP spec | v1.0 (in flight on PR 1496) | [`opena2a-standards/agent-identity-protocol`](https://github.com/opena2a-standards/agent-identity-protocol) |
-| `did:opena2a` method | v0.1 (W3C registration filed, PR `w3c/did-extensions#717`) | [`opena2a-standards/did-method-opena2a`](https://github.com/opena2a-standards/did-method-opena2a/blob/main/did-method-opena2a.md) |
-| Ed25519 test vector source | RFC 8032 §7.1 Tests 1, 2, 3, 1024 | [datatracker.ietf.org/doc/html/rfc8032](https://datatracker.ietf.org/doc/html/rfc8032) |
+| ATX schema | v1.0 and v1.1 | [`opena2a-standards/atx-spec/core.md`](https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md) |
+| AIP spec | v1.2.0-draft | [`opena2a-standards/agent-identity-protocol/AIP-SPEC.md`](https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md) |
+| `did:opena2a` method | v0.2 (draft), registered in the W3C DID Extensions registry (`w3c/did-extensions#717`, merged 2026-07-04) | [`opena2a-standards/did-method-opena2a/did-method-opena2a.md`](https://github.com/opena2a-standards/did-method-opena2a/blob/c160d50d0f90d809bb60ccfae0b5ca9d7fda2ab2/did-method-opena2a.md) |
+| Ed25519 keypair sources | RFC 8032 §7.1 Tests 1, 2, 3, 1024; secondary issuer seed `SHA-256("opena2a-atx-conformance/issuer-secondary/key-1/v1")` (not an RFC vector) | [datatracker.ietf.org/doc/html/rfc8032](https://datatracker.ietf.org/doc/html/rfc8032) |
 | ML-DSA-65 | FIPS 204 final | [csrc.nist.gov/pubs/fips/204/final](https://csrc.nist.gov/pubs/fips/204/final) |
 | CIRCL (ML-DSA-65 implementation) | v1.6.2 | [github.com/cloudflare/circl](https://github.com/cloudflare/circl) |
+| gowebpki/jcs (Go RFC 8785 canonicalization) | v1.0.1 | [github.com/gowebpki/jcs](https://github.com/gowebpki/jcs) |
 | cryptography (Python Ed25519) | >= 42.0.0 | [pyca/cryptography](https://github.com/pyca/cryptography) |
 | dilithium-py (Python ML-DSA-65) | >= 1.1.0 | [GiacomoPope/dilithium-py](https://github.com/GiacomoPope/dilithium-py) |
 | Conformance fixture format | v1 (this repo) | [`fixtures/baseline-valid.json#$schema`](./fixtures/baseline-valid.json) |
@@ -362,25 +394,35 @@ breaking change for downstream verifiers.
 | `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 25 / 25 PASS |
 | `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 25 / 25 PASS |
 
-Independent second-party implementations are tracked on the sibling issue
-[a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876).
+To list an independent second-party implementation here, or to arrange a
+cosignature, open an issue on this repository's
+[issue tracker](https://github.com/opena2a-standards/atx-conformance/issues).
+The cosignature itself is recorded by pull request, as
+[`COSIGNERS.md`](./COSIGNERS.md#how-to-cosign) describes.
 
 ## Sibling repositories
 
 Two peer conformance suites cover the other OpenA2A specs in scope of the
 A2A coordination map's criterion (c) thread
-[`a2aproject/A2A#1885`](https://github.com/a2aproject/A2A/issues/1885):
+[`a2aproject/A2A#1885`](https://github.com/a2aproject/A2A/issues/1885) (closed on 2026-06-23):
 
 | Repo | Spec | Status |
 |---|---|---|
 | `atx-conformance` (this repo) | ATX v1.0 + v1.1 credential schema | 25 fixtures (10 v1.0, 15 v1.1 JCS incl. 6 declaredPurpose), 2 verifiers (Go and Python, both full hybrid), `jcs-vectors/` byte-agreement gate (8 vectors, Go/Python/TS), `MANIFEST.sha256` pinned |
-| [`atp-conformance`](https://github.com/opena2a-standards/atp-conformance) | ATP v1.0.0-rc1 protocol | 4 fixtures (discovery, trust-proof baseline, trust-proof hybrid, Signed Tree Head), same 2-verifier pair, `MANIFEST.sha256` pinned |
-| [`aip-conformance`](https://github.com/opena2a-standards/aip-conformance) | AIP v1.0.0-draft identity protocol | §6.4 (VC `AgentTrustCredential`) covered by cross-linking this repo's fixtures; §5.1 challenge-response covered by 4 dedicated fixtures + Go/Python verifiers shipped at v0.2 (2026-05-28, Decision 3-C) |
+| [`atp-conformance`](https://github.com/opena2a-standards/atp-conformance) | ATP v1.0.0-rc1 protocol | 14 fixtures (discovery, trust proof, Signed Tree Head, inclusion and consistency proof, revocation list, with must-reject controls), same 2-verifier pair, `MANIFEST.sha256` pinned |
+| [`aip-conformance`](https://github.com/opena2a-standards/aip-conformance) | AIP v1.2.0-draft identity protocol | §6.4 (VC `AgentTrustCredential`) covered by cross-linking this repo's fixtures; §5.1 challenge-response covered by 4 dedicated fixtures + Go/Python verifiers; §6.1 trust-score composition covered by 3 fixtures |
 
 The three suites share the same MANIFEST-pinned byte-stable shape and are
 structurally comparable to A2A-IDF's
 [`aim-did-rfc9421/*`](https://github.com/opena2a-standards/a2a-idf-conformance/tree/main/fixtures/composition/aim-did-rfc9421)
 set.
+
+The fixture and verifier counts in the two sibling rows, and any release
+version a sibling row names, are measurements of those repositories, not of
+this one. [`scripts/check_sibling_rows.py`](./scripts/check_sibling_rows.py)
+reads both repositories through the GitHub API and fails when a row no
+longer matches them. It needs network access and is run by hand, not by the
+gates above.
 
 ## Repository layout
 
@@ -406,6 +448,8 @@ scripts/parity/                  Go/Python per-fixture parity gate
 scripts/*.py                     CI gates: README counts, spec references, schema
                                  validation, conformance profile, implementation
                                  status
+scripts/check_sibling_rows.py    sibling-repositories table against the sibling
+                                 repositories (network, run by hand)
 scripts/check_circl_pin.sh       CI gate: one cloudflare/circl version per Go module
 ```
 
@@ -428,8 +472,8 @@ scripts/check_circl_pin.sh       CI gate: one cloudflare/circl version per Go mo
   when one of them changed. The rule was broken once, in e2f9dc4 (#26);
   [`CHANGELOG.md`](./CHANGELOG.md) lists the 22 fixtures that commit changed
   under their existing names.
-- A fixture's `description` and its `spec` citation list are
-  documentation, and may be corrected in place. Doing so changes that
+- A fixture's `description`, its `requirement` and its `spec` citation
+  list are documentation, and may be corrected in place. Doing so changes that
   fixture's hash and its manifest line, so a consumer pinning this
   repository at a commit sees no change until they bump deliberately.
   Documentation that is wrong and cannot be fixed without minting a
@@ -442,10 +486,11 @@ scripts/check_circl_pin.sh       CI gate: one cloudflare/circl version per Go mo
 
 ## Contributing
 
-Issues and PRs welcome on this repository. Substantive coordination on the
-ATX wire format itself happens in [`opena2a-org/atx-spec`](https://github.com/opena2a-standards/atx-spec)
-and in the A2A coordination map on
-[a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876).
+Issues and PRs welcome on this repository. Second-party implementations and
+cosigners are coordinated on its
+[issue tracker](https://github.com/opena2a-standards/atx-conformance/issues).
+Substantive coordination on the ATX wire format itself happens in
+[`opena2a-org/atx-spec`](https://github.com/opena2a-standards/atx-spec).
 
 ## License
 

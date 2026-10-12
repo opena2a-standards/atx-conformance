@@ -2,6 +2,7 @@
   "$schema": "https://atx.opena2a.org/schemas/fixture-v1.json",
   "name": "atx-v1_1/declared-purpose-empty-whitespace",
   "description": "An ATX v1.1 credential signed with no declaredPurpose, carrying a whitespace-empty declaredPurpose object ({ }) appended after signing. Emptiness is a JSON-parse-level property (atx-spec §1.3a.2 rule 5): any serialization of the empty object is the empty object, treated as absent and omitted from the TBS, so the signature still verifies. Verifier MUST ACCEPT. A verifier that compares the raw byte string against \"{}\" instead of parsing wrongly includes the value and REJECTs.",
+  "requirement": "§1.3a.2 rule 5: an empty declaredPurpose object, whatever whitespace it is written with, is treated as absent and left out of the TBS",
   "spec": [
     {
       "id": "ATX",
@@ -32,11 +33,6 @@
       "id": "RFC 8032",
       "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
       "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
-    },
-    {
-      "id": "FIPS 204",
-      "ref": "https://csrc.nist.gov/pubs/fips/204/final",
-      "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
     }
   ],
   "keypairRefs": [

@@ -2,6 +2,7 @@
   "$schema": "https://atx.opena2a.org/schemas/fixture-v1.json",
   "name": "atx-v1/wrong-issuer",
   "description": "A syntactically valid ATX signed by a real keypair, but issued under a DID that is NOT in the verifier's trusted set. The signature itself is valid; the issuer is not. Verifier MUST REJECT with an untrusted-issuer reason.",
+  "requirement": "§13, Key substitution at resolution: an issuer the verifier does not trust is rejected even when its own signature verifies",
   "spec": [
     {
       "id": "ATX",
@@ -19,6 +20,11 @@
       "section": "1.3a.1 Legacy form (`atcVersion` = \"1.0\")"
     },
     {
+      "id": "ATX",
+      "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+      "section": "13. Security considerations"
+    },
+    {
       "id": "AIP",
       "ref": "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md",
       "section": "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"
@@ -27,11 +33,6 @@
       "id": "RFC 8032",
       "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
       "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
-    },
-    {
-      "id": "FIPS 204",
-      "ref": "https://csrc.nist.gov/pubs/fips/204/final",
-      "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
     }
   ],
   "keypairRefs": [

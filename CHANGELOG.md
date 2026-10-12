@@ -14,6 +14,28 @@ whenever one lands; README "Versioning and stability" says they should not.
   from the merge base of `HEAD` and `origin/main`. Run it with `--base A
   --head B` to audit a past commit range, and with `--self-test` to see it
   fail on each kind of change it covers.
+- Every fixture carries a `requirement` member naming the step or rule it
+  tests, opening with the number of the `core.md` section it comes from
+  (`atx-v1/expired`: `§1.3 step 2`), and each `conformance.json` entry
+  copies it. `scripts/conformance_profile.py --check` fails on a fixture
+  with no `requirement`, one whose section is not among the fixture's ATX
+  `spec` citations, or one that two fixtures share (#140).
+
+### Changed
+
+- FIPS 204 is cited only by the four fixtures whose credential carries an
+  ML-DSA-65 signature, where every fixture cited it before, and
+  `atx-v1/wrong-issuer` also cites `core.md` section 13, which holds the
+  issuer-trust rule it tests (#140). Every fixture's bytes and
+  `MANIFEST.sha256` line change; no `atx`, `verifierState` or `expected`
+  member does.
+- README calls the fixture `trustScore` (87.5) an illustrative value and
+  reproduces the AIP-SPEC §6.1 9-factor weights for reference, where it said
+  the value was composite output from that algorithm: no fixture carries
+  factor inputs, and AIP-SPEC §6.1 states the composite on 0.0 to 1.0.
+  `scripts/check_readme_counts.py` fails when the README calls the value the
+  algorithm's output or stops calling it illustrative (#146). No fixture
+  changes.
 
 ## e2f9dc4 (#26, 2026-09-09): capabilities rewritten in 22 existing fixtures
 

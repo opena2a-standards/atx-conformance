@@ -2,6 +2,7 @@
   "$schema": "https://atx.opena2a.org/schemas/fixture-v1.json",
   "name": "atx-v1_1/no-transparency-log-index",
   "description": "An ATX v1.1 credential that omits the optional transparencyLogIndex. The field is assigned by the log after signing and is outside JCS(TBS), so its absence changes no canonical bytes and no signature; this credential's JCS(TBS) is byte-identical to the v1.1 baseline's. Verifier MUST ACCEPT. A verifier that requires the field, or that reads its presence as evidence of transparency-log inclusion, wrongly REJECTs.",
+  "requirement": "§1.1: transparencyLogIndex is optional and outside JCS(TBS), so a v1.1 credential that omits it is accepted",
   "spec": [
     {
       "id": "ATX",
@@ -27,11 +28,6 @@
       "id": "RFC 8032",
       "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
       "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
-    },
-    {
-      "id": "FIPS 204",
-      "ref": "https://csrc.nist.gov/pubs/fips/204/final",
-      "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
     }
   ],
   "keypairRefs": [

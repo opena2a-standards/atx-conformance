@@ -3,7 +3,7 @@
   "role": "issuer-untrusted",
   "algorithm": "Ed25519",
   "provenance": {
-    "source": "RFC 8032 §7.3 Abbreviated Test 1024 (first 32 bytes)",
+    "source": "RFC 8032 §7.1 Test 1024 (first 32 bytes)",
     "ref": "https://datatracker.ietf.org/doc/html/rfc8032#section-7.1",
     "purpose": "deterministic, reproducible reference vector for the untrusted-issuer case"
   },

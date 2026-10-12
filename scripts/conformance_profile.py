@@ -11,6 +11,12 @@ heading of the vendored, pinned core.md. The top-level `spec.ref` is that
 script's CORE_REF, core.md at the pinned atx-spec commit, so moving the pin
 makes the committed profile stale until it is regenerated.
 
+Each fixture names the requirement it tests in its `requirement` member: the
+§ number of the core.md section the rule comes from, then the step or rule
+("§1.3 step 2: ..."). The section must be one the fixture's `spec` list cites
+as ATX, and no two fixtures may name the same requirement. A fixture cites
+FIPS 204 exactly when its credential carries an ML-DSA-65 signature.
+
 A fixture that cannot be read into a requirement (not JSON, not an object, a
 required member missing, unreadable, or nested more than MAX_DEPTH levels
 deep) or written into the profile (carrying text with no UTF-8 form, such as
@@ -27,6 +33,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import re
 import shutil
 import sys
 import tempfile
@@ -102,6 +109,17 @@ SUITE = {
     ],
 }
 
+# A fixture's `requirement` opens with the number of the core.md section it
+# comes from, then names the step or rule: "§1.3 step 2: ...". The number must
+# be that of a heading the fixture's `spec` list cites as ATX, and
+# scripts/check_spec_refs.py holds every such heading to the pinned core.md.
+REQUIREMENT_SECTION = re.compile(r"§(\d+(?:\.\d+[a-z]?)*)(?=[ ,:])")
+
+# A fixture cites FIPS 204 exactly when its credential carries a signature of
+# this algorithm.
+FIPS_204 = "FIPS 204"
+ML_DSA_65 = "ML-DSA-65"
+
 # The deepest a requirement may nest. A deeper one is refused before anything
 # is rendered: the text json.dumps(indent=2) writes grows with the square of
 # the depth, and how deep it can write at all depends on the Python version.
@@ -127,6 +145,33 @@ def _nests_deeper_than(limit: int, value: object) -> bool:
     return False
 
 
+def _cited_atx_sections(spec: object) -> set[str]:
+    """The section numbers of a spec list's ATX citations: "1.3a.1" for the
+    heading "1.3a.1 Legacy form ...", "13" for "13. Security considerations"."""
+    if not isinstance(spec, list):
+        return set()
+    return {
+        ref["section"].split(" ", 1)[0].rstrip(".")
+        for ref in spec
+        if isinstance(ref, dict) and ref.get("id") == "ATX" and isinstance(ref.get("section"), str)
+    }
+
+
+def _cites(spec: object, ident: str) -> bool:
+    return isinstance(spec, list) and any(isinstance(r, dict) and r.get("id") == ident for r in spec)
+
+
+def _signs_with(atx: object, algorithm: str) -> bool:
+    sigs = atx.get("signatures") if isinstance(atx, dict) else None
+    return isinstance(sigs, list) and any(
+        isinstance(s, dict) and s.get("algorithm") == algorithm for s in sigs)
+
+
+def _requirement_key(text: str) -> str:
+    """Two requirements that differ only in case and blanks are the same one."""
+    return " ".join(text.split()).casefold()
+
+
 def requirement(path: Path, failures: list[str]) -> dict | None:
     """The requirement a fixture defines, or None with its failure recorded."""
     name = f"fixtures/{path.name}"
@@ -148,10 +193,31 @@ def requirement(path: Path, failures: list[str]) -> dict | None:
     if not isinstance(fx, dict):
         failures.append(f"{where}: is not a JSON object")
         return None
-    missing = [k for k in ("name", "description", "spec", "expected") if k not in fx]
+    missing = [k for k in ("name", "description", "requirement", "spec", "expected") if k not in fx]
     if missing:
         noun = "member" if len(missing) == 1 else "members"
         failures.append(f"{where}: has no {', '.join(map(repr, missing))} {noun}")
+        return None
+    text = fx["requirement"]
+    if not isinstance(text, str) or not text.strip():
+        failures.append(f"{where}: 'requirement' is not a non-empty string")
+        return None
+    section = REQUIREMENT_SECTION.match(text)
+    if section is None:
+        failures.append(f"{where}: 'requirement' does not open with the § number of a core.md section")
+        return None
+    if section.group(1) not in _cited_atx_sections(fx["spec"]):
+        failures.append(
+            f"{where}: 'requirement' names §{section.group(1)}, "
+            "which no ATX citation in its 'spec' list carries"
+        )
+        return None
+    cites_fips, signs_mldsa = _cites(fx["spec"], FIPS_204), _signs_with(fx.get("atx"), ML_DSA_65)
+    if cites_fips and not signs_mldsa:
+        failures.append(f"{where}: cites {FIPS_204} but its credential carries no {ML_DSA_65} signature")
+        return None
+    if signs_mldsa and not cites_fips:
+        failures.append(f"{where}: its credential carries an {ML_DSA_65} signature but it does not cite {FIPS_204}")
         return None
     expected = fx["expected"]
     if not isinstance(expected, dict) or "verifyResult" not in expected:
@@ -167,6 +233,7 @@ def requirement(path: Path, failures: list[str]) -> dict | None:
     req = {
         "fixture": name,
         "name": fx["name"],
+        "requirement": text,
         "fixtureType": fx.get("fixtureType", "atx-credential"),
         "level": "MUST",
         "specRefs": fx["spec"],
@@ -195,10 +262,18 @@ def build(root: Path = REPO_ROOT) -> tuple[dict, list[str]]:
     requirement."""
     requirements: list[dict] = []
     failures: list[str] = []
+    first_with: dict[str, str] = {}
     for path in sorted((root / "fixtures").glob("*.json")):
         req = requirement(path, failures)
-        if req is not None:
-            requirements.append(req)
+        if req is None:
+            continue
+        # A requirement two fixtures share says which section both exercise,
+        # not what either one tests.
+        first = first_with.setdefault(_requirement_key(req["requirement"]), req["fixture"])
+        if first != req["fixture"]:
+            failures.append(f"{req['fixture']}: 'requirement' repeats that of {first}")
+            continue
+        requirements.append(req)
     profile = dict(SUITE)
     profile["requirements"] = requirements
     return profile, failures
@@ -274,12 +349,37 @@ def _names_undecodable(fixture: object) -> bool:
             and failures[0].startswith("fixtures/bad-\\udcff.json: "))
 
 
+def _cite(section: str) -> dict:
+    """An ATX citation of a core.md heading."""
+    return {"id": "ATX", "ref": check_spec_refs.CORE_REF, "section": section}
+
+
 def _nested(depth: int) -> str:
-    """A fixture nested depth levels deep: its spec is arrays nested one level
-    less, so its requirement nests as deep as it does."""
-    n = depth - 1
-    return ('{"name": "p", "description": "d", "spec": ' + "[" * n + "]" * n
-            + ', "expected": {"verifyResult": "ACCEPT"}}')
+    """A fixture nested depth levels deep: its spec holds a citation and arrays
+    nested two levels less, so its requirement nests as deep as it does."""
+    n = depth - 2
+    return ('{"name": "p", "description": "d", "requirement": "§1.1: p", "spec": ['
+            + json.dumps(_cite("1.1 ATX schema")) + ", " + "[" * n + "]" * n
+            + '], "expected": {"verifyResult": "ACCEPT"}}')
+
+
+def _with_other(fixture: dict, other: dict) -> object:
+    """A maker writing fixture to fixtures/probe.json and other to
+    fixtures/other.json, which sorts and is read first."""
+    def make(probe: Path) -> None:
+        probe.write_text(json.dumps(fixture), encoding="utf-8")
+        (probe.parent / "other.json").write_text(json.dumps(other), encoding="utf-8")
+    return make
+
+
+def _repeat_reported(fixture: dict, other: dict) -> bool:
+    """build() reports probe.json, by name, as repeating other.json's
+    requirement, and keeps other.json's."""
+    built = _build(_with_other(fixture, other))
+    return (built is not None and len(built[1]) == 1
+            and built[1][0].startswith("fixtures/probe.json: ")
+            and "fixtures/other.json" in built[1][0]
+            and [r["fixture"] for r in built[0]["requirements"]] == ["fixtures/other.json"])
 
 
 def _main_on(make: object, argv: list[str]) -> tuple[int, str, str, bool]:
@@ -296,7 +396,12 @@ def _main_on(make: object, argv: list[str]) -> tuple[int, str, str, bool]:
 
 
 def self_test() -> int:
-    good = {"name": "probe", "description": "d", "spec": [], "expected": {"verifyResult": "ACCEPT"}}
+    good = {"name": "probe", "description": "d", "requirement": "§1.3 step 2: probe",
+            "spec": [_cite("1.1 ATX schema"), _cite("1.3 Local verification algorithm")],
+            "expected": {"verifyResult": "ACCEPT"}}
+    fips = {"id": "FIPS 204", "ref": "https://csrc.nist.gov/pubs/fips/204/final", "section": "ML-DSA-65"}
+    hybrid = {**good, "spec": [*good["spec"], fips],
+              "atx": {"signatures": [{"algorithm": "Ed25519"}, {"algorithm": "ML-DSA-65"}]}}
     with _fixtures(good) as root:
         profile, failures = build(root)
     write_rc, _, _, write_unchanged = _main_on(good, [])
@@ -306,8 +411,44 @@ def self_test() -> int:
     bad_rc, bad_out, bad_err, bad_unchanged = _main_on(good, ["--bogus"])
     cases: list[tuple[str, bool]] = [
         ("builds a well-formed fixture", not failures and len(profile["requirements"]) == 1),
+        ("the requirement entry carries the fixture's requirement",
+         [r.get("requirement") for r in profile["requirements"]] == [good["requirement"]]),
         ("spec.ref is core.md at the pinned atx-spec commit",
          profile["spec"]["ref"] == check_spec_refs.CORE_REF),
+        ("reports a fixture with no requirement member by name",
+         _fails_by_name({k: v for k, v in good.items() if k != "requirement"})),
+        ("reports a requirement that is not a string by name",
+         _fails_by_name({**good, "requirement": [good["requirement"]]})),
+        ("reports a blank requirement by name", _fails_by_name({**good, "requirement": " \t"})),
+        ("reports a requirement that does not open with a § section number by name",
+         _fails_by_name({**good, "requirement": "step 2 of the verification algorithm"})),
+        ("reports a requirement naming a section the fixture does not cite by name",
+         _fails_by_name({**good, "requirement": "§1.5: probe"})),
+        ("reports a requirement whose section only a non-ATX citation names by name",
+         _fails_by_name({**good, "requirement": "§3: probe",
+                         "spec": [{"id": "AIP", "ref": "x", "section": "3 Signing"}]})),
+        ("reads §13 from the heading '13. Security considerations'",
+         _builds({**good, "requirement": "§13, Cryptographic agility: probe",
+                  "spec": [_cite("13. Security considerations")]})),
+        ("reads §1.3a.2 from the heading '1.3a.2 JCS form ...'",
+         _builds({**good, "requirement": "§1.3a.2 rule 5: probe",
+                  "spec": [_cite('1.3a.2 JCS form (`atcVersion` = "1.1")')]})),
+        ("reports a requirement naming §1.3a.2 where the fixture cites only §1.3 by name",
+         _fails_by_name({**good, "requirement": "§1.3a.2 rule 5: probe"})),
+        ("reports a second fixture repeating another's requirement by name",
+         _repeat_reported(good, {**good, "name": "other"})),
+        ("reports a requirement that repeats another's but for case and blanks by name",
+         _repeat_reported(good, {**good, "name": "other", "requirement": "§1.3  STEP 2:\tProbe "})),
+        ("builds two fixtures with distinct requirements",
+         (lambda b: b is not None and not b[1] and len(b[0]["requirements"]) == 2)(
+             _build(_with_other(good, {**good, "name": "other", "requirement": "§1.3 step 3: probe"})))),
+        ("builds a fixture citing FIPS 204 that carries an ML-DSA-65 signature", _builds(hybrid)),
+        ("reports a fixture citing FIPS 204 with no ML-DSA-65 signature by name",
+         _fails_by_name({**hybrid, "atx": {"signatures": [{"algorithm": "Ed25519"}]}})),
+        ("reports a fixture citing FIPS 204 with no atx member by name",
+         _fails_by_name({k: v for k, v in hybrid.items() if k != "atx"})),
+        ("reports a fixture carrying an ML-DSA-65 signature that does not cite FIPS 204 by name",
+         _fails_by_name({**hybrid, "spec": good["spec"]})),
         ("reports a fixture that is not JSON by name", _fails_by_name("{")),
         ("reports a fixture that is a JSON array by name", _fails_by_name([good])),
         ("reports a fixture that is a JSON number by name", _fails_by_name("5")),
@@ -328,8 +469,8 @@ def self_test() -> int:
         (f"reports a fixture nested {check_spec_refs.DEEP:,} levels deep by name",
          _fails_by_name(_nested(check_spec_refs.DEEP))),
         ("reports a fixture carrying a lone surrogate escape by name",
-         _fails_by_name('{"name": "p", "description": "\\ud800", "spec": [],'
-                        ' "expected": {"verifyResult": "ACCEPT"}}')),
+         _fails_by_name(json.dumps({**good, "description": "SURROGATE"})
+                        .replace("SURROGATE", "\\ud800"))),
         ("reports a fixture whose file name is not valid UTF-8 by name, in printable form",
          _names_undecodable(good)),
         ("writes conformance.json for a well-formed fixture", write_rc == 0 and not write_unchanged),

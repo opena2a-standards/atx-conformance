@@ -1,6 +1,8 @@
 // Package main is the Go reference verifier for the ATX v1.0 conformance
 // fixture set. It depends only on the Go standard library plus
-// github.com/cloudflare/circl (for ML-DSA-65 verification per FIPS 204).
+// github.com/cloudflare/circl (for ML-DSA-65 verification per FIPS 204) and
+// github.com/gowebpki/jcs (for RFC 8785 canonicalization of the v1.1 signed
+// payload).
 //
 // It does NOT import any opena2a-* SDK or registry package. The goal is to
 // validate that the conformance fixtures are byte-stable and that an

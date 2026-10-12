@@ -40,10 +40,67 @@ registry in COSIGNERS.md. The README said the suite "closes criterion (c)"
 self-cosignature. Criterion (c) is closed by a second-party row, so the README
 may state it as closed only once such a row is recorded.
 
+It also holds the README's trust-scoring note to what the suite contains. The
+README called each fixture's trustScore composite output from the AIP-SPEC
+§6.1 9-factor algorithm while no fixture carries factor inputs, so it must
+call the value illustrative and must not call it the algorithm's output.
+
+It also holds the README's statement of when the gates run to the `on:`
+block of .github/workflows/conformance.yml. The README said "on each push and
+pull request" while the workflow runs on pushes to main only.
+
+It also holds the README's two Ed25519 key-source lists to vectors/. Both
+named RFC 8032 Tests 1, 2, 3 and 1024 only, while the trusted partner.example
+key two fixtures sign with is derived from a SHA-256 label. Every key id the
+fixtures name must be a vector's keyId, every Ed25519 vector's source must be
+named in both lists, and an RFC 8032 source must cite the section its own ref
+links (issuer-untrusted.json cited Test 1024 under §7.3; it is in §7.1).
+
+It also holds the ATX versions the README says the suite covers, in the intro
+paragraph and the `ATX schema` row of the version-pinning table, to the
+versions the fixtures expect to ACCEPT. Both said "v1.0" alone while most
+fixtures were v1.1 and the vendored schema was the v1.1 schema.
+
+It also holds the Go verifier's stated dependencies to the direct requirements
+of verifiers/go/go.mod, in the three places that state them: the dependency
+list under the README's Go heading, the version-pinning table and the header
+comment of verifiers/go/verify.go. All three named cloudflare/circl alone
+while go.mod also required gowebpki/jcs.
+
+It also holds every link to an opena2a-standards document in the README's
+Version pinning table to a commit. The AIP row linked the repository and the
+did:opena2a row linked the document on its default branch, so both stated
+versions the documents had moved past: v1.0 while AIP-SPEC.md read
+1.2.0-draft, and v0.1 with registration "filed" after the method reached 0.2
+and was registered. A link at a commit names the bytes the stated version is
+read from.
+
+It also holds the README's "Reproducing the fixtures" steps to the generator
+in scripts/generate-fixtures/main.go. The steps described only the v1.0
+pipe-delimited payload while the v1.1 fixtures are signed over JCS(TBS), and
+they never mentioned the generator's cross-check of those bytes against
+jcs-vectors. The section must name every canonicalPayload* function the
+generator defines and every jcs-vectors file it cross-checks against, and no
+other.
+
+It also holds where README.md and COSIGNERS.md send readers to coordinate.
+Both kept naming a2aproject/A2A#1876 as the place second-party
+implementations and coordination are tracked after that issue was closed as
+not planned; its re-file #1885 is closed too. A closed upstream issue may be
+cited only with `(closed` written right after it and never in a sentence that
+says something is tracked or coordinated there, and the implementations
+section must link this repository's issue tracker.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
-declares, the behavioralProfile note matches the fixtures and no criterion (c)
-claim outruns the registry, 1 otherwise, 2 on an unknown argument.
+declares, the behavioralProfile note matches the fixtures, no criterion (c)
+claim outruns the registry, the trustScore is called illustrative, the
+trigger sentence matches the workflow, both key-source lists name every
+Ed25519 key, both version labels name exactly the accepted versions, each
+Go dependency site names every direct requirement at its pinned version,
+every Version pinning link names a commit, the reproduction steps match
+the generator and no coordination link points at a closed issue, 1
+otherwise, 2 on an unknown argument.
 """
 
 import collections
@@ -101,6 +158,372 @@ CRITERION_C_CLAIM = re.compile(
 RETRACTED_CLAIM = "It closes criterion (c)\non the OpenA2A maturity bar"
 REGISTRY_HEADING = "## Cosignature registry"
 
+# The README called each fixture's `trustScore` (87.5) "composite output from
+# the 9-factor algorithm specified in AIP-SPEC §6.1". No fixture carries the
+# factor inputs that would produce it, and AIP-SPEC §6.1 states the composite
+# on 0.0 to 1.0 while the fixtures use 0 to 100. The value is a placeholder,
+# so the README may reproduce the weights but not call the value their output.
+# Matched over whitespace-collapsed text so a line wrap cannot hide it.
+TRUST_SCORE_CLAIM = re.compile(
+    r"\b(?:output|result|computed|calculated|produced|derived)\s+"
+    r"(?:from|of|by|with|using)\s+the\s+9-factor\s+(?:algorithm|formula|model)",
+    re.IGNORECASE,
+)
+# The sentence README.md published, with its original line wrap. The claim
+# pattern must keep matching it, or the gate cannot fire on the text it was
+# written for.
+RETRACTED_TRUST_CLAIM = (
+    "is composite\noutput from the 9-factor algorithm specified in AIP-SPEC §6.1"
+)
+TRUST_HEADING = "### Trust scoring: 9-factor reference"
+TRUST_PLACEHOLDER = "illustrative"
+
+# The README's continuous-verification section says when the gates run. It said
+# "on each push and pull request" while the workflow runs on pull requests and
+# on pushes to main only, so a push to any other branch without a pull request
+# ran no gate. The sentence is held to the workflow's `on:` block.
+WORKFLOW = ROOT / ".github" / "workflows" / "conformance.yml"
+WORKFLOW_NAME = ".github/workflows/conformance.yml"
+CONTINUOUS = "## Continuous verification"
+# The wording published before the triggers were gated.
+RETRACTED_TRIGGERS = "on each push and pull request"
+# A claim that every push runs the gates. Only true when push has no branch
+# filter; "every push to `main`" does not match.
+EVERY_PUSH_CLAIM = re.compile(r"\b(?:each|every|any|all)\s+push(?:es)?\b(?!\s+to\s)",
+                              re.IGNORECASE)
+
+# Each Ed25519 keypair the generator signs with is a vectors/*.json file whose
+# `provenance.source` says where its seed comes from, and the README restates
+# those sources in two places. Both listed RFC 8032 Tests 1, 2, 3 and 1024 only,
+# while the trusted `partner.example` key two fixtures sign with is derived from
+# a SHA-256 label. Each site must name every vector's source: an RFC 8032
+# vector by its section and test number, any other vector by its source string.
+VECTORS = ROOT / "vectors"
+KEY_SOURCE_SITES = (
+    ("README fixture conventions list",
+     re.compile(r"^- Ed25519 keypair sources?:.*$", re.M)),
+    ("README version-pinning table",
+     re.compile(r"^\| Ed25519 keypair sources? \|.*$", re.M)),
+)
+RFC8032_SOURCE = re.compile(r"^RFC 8032 §(\d+(?:\.\d+)*)\b.*?\bTest (\d+)\b")
+RFC8032_REF = re.compile(r"/rfc8032#section-(\d+(?:\.\d+)*)$")
+# "Test 1", "Tests 2 / 3", "Tests 2 and 3", "Tests 1, 2, 3, 1024".
+TEST_LIST = re.compile(r"\bTests?\s+(\d+(?:\s*(?:,|/|and)\s*\d+)*)")
+# issuer-untrusted.json cited Test 1024 under §7.3, which holds the Ed25519ph
+# vectors, while its own `ref` linked §7.1, where Test 1024 is. A source is
+# held to the section its ref links.
+RETRACTED_KEY_SOURCE = "RFC 8032 §7.3 Abbreviated Test 1024 (first 32 bytes)"
+AUTHORITY_KEY_ID = re.compile(r"did:opena2a:authority:[\w.-]+#[\w-]+")
+
+
+def load_key_vectors(root):
+    """Return (vectors, failures): one dict per vectors/*.json file with its
+    name, algorithm, keyId and provenance source and ref."""
+    vectors, failures = [], []
+    for path in sorted((root / "vectors").glob("*.json")):
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            failures.append(f"vectors/{path.name} cannot be read as JSON ({exc})")
+            continue
+        if not isinstance(doc, dict):
+            failures.append(f"vectors/{path.name} is not a JSON object")
+            continue
+        prov = doc.get("provenance")
+        prov = prov if isinstance(prov, dict) else {}
+        vectors.append({
+            "name": path.name,
+            "algorithm": doc.get("algorithm"),
+            "keyId": doc.get("keyId"),
+            "source": prov.get("source"),
+            "ref": prov.get("ref"),
+        })
+    return vectors, failures
+
+
+def fixture_key_ids(paths):
+    """Every authority key id named anywhere in the given fixture files."""
+    ids = set()
+    for path in paths:
+        ids.update(AUTHORITY_KEY_ID.findall(path.read_text(encoding="utf-8")))
+    return ids
+
+
+def key_source_failures(readme, vectors, used_key_ids):
+    """Check every Ed25519 vector's provenance, and that both README key-source
+    sites name it. `used_key_ids` are the key ids the fixtures name; each must
+    be the keyId of a vector, or the key it names has no listed source."""
+    failures = []
+    known = {v["keyId"] for v in vectors}
+    for key_id in sorted(used_key_ids - known):
+        failures.append(f"fixtures name key {key_id}, which no vectors/*.json "
+                        "provides, so its source is listed nowhere")
+    ed25519 = [v for v in vectors if v["algorithm"] == "Ed25519"]
+    if not ed25519:
+        return failures + ["no Ed25519 keypair found in vectors/; refusing to "
+                           "pass vacuously"]
+
+    sites = []
+    for label, pattern in KEY_SOURCE_SITES:
+        found = pattern.findall(readme)
+        if not found:
+            failures.append(f"no {label} row found in README (pattern "
+                            f"{pattern.pattern!r})")
+        sites.extend((label, line) for line in found)
+
+    for v in ed25519:
+        where = f"vectors/{v['name']}"
+        source = v["source"]
+        if not isinstance(source, str) or not source.strip():
+            failures.append(f"{where} has no provenance.source")
+            continue
+        rfc = RFC8032_SOURCE.match(source)
+        if source.startswith("RFC 8032") and not rfc:
+            failures.append(f"{where} source {source!r} names no `§N Test N`")
+            continue
+        if rfc:
+            section, test = rfc.groups()
+            link = RFC8032_REF.search(v["ref"] or "")
+            if not link:
+                failures.append(f"{where} cites RFC 8032 §{section} but its ref "
+                                "links no RFC 8032 section")
+            elif link.group(1) != section:
+                failures.append(f"{where} cites RFC 8032 §{section} but its ref "
+                                f"links §{link.group(1)}")
+        for label, line in sites:
+            if rfc:
+                tests = {n for group in TEST_LIST.findall(line)
+                         for n in re.findall(r"\d+", group)}
+                named = f"RFC 8032 §{section}" in line and test in tests
+                want = f"RFC 8032 §{section} Test {test}"
+            else:
+                named = source in line
+                want = source
+            if not named:
+                failures.append(f"{label} does not name the key source of "
+                                f"{where} ({v['keyId']}): {want}")
+    return failures
+
+
+# The two places a reader learns which ATX versions this suite covers. Both
+# read "v1.0" while the fixtures, the vendored schema and the pinned spec were
+# also v1.1. A version is covered when some fixture expects a credential of
+# that atcVersion to ACCEPT: malformed-schema.json carries "2.0" only so that
+# it is rejected as unsupported.
+VERSION_PINNING = "## Version pinning"
+SCHEMA_PIN_ROW = re.compile(r"^\| ATX schema \| ([^|\n]*) \|", re.M)
+INTRO_SITE = "README intro paragraph"
+PIN_SITE = f"README `{VERSION_PINNING}` `ATX schema` row"
+ATX_VERSION = re.compile(r"\bv(\d+\.\d+)\b")
+
+# The three places a reader learns what the Go verifier depends on. Each named
+# cloudflare/circl alone after go.mod had come to require gowebpki/jcs for the
+# v1.1 signed payload, so each is held to the direct requirements of go.mod.
+GO_MOD = ROOT / "verifiers" / "go" / "go.mod"
+VERIFY_GO = ROOT / "verifiers" / "go" / "verify.go"
+GO_MOD_NAME = "verifiers/go/go.mod"
+GO_HEADING = re.compile(r"^### Go\b.*$", re.M)
+# A dependency-list item naming a module at a version: "- `<module> <version>`".
+GO_MODULE_ITEM = re.compile(r"^- `([^`\s]+/[^`\s]+) (v[^`\s]+)`", re.M)
+GO_PACKAGE_CLAUSE = re.compile(r"^package \w+", re.M)
+GO_LIST_SITE = "README Go verifier dependency list"
+GO_PIN_SITE = f"README `{VERSION_PINNING}` table"
+GO_HEADER_SITE = "verifiers/go/verify.go header comment"
+
+
+def accepted_versions(paths):
+    """The atcVersion of every fixture whose expected verifyResult is ACCEPT."""
+    versions = set()
+    for path in paths:
+        try:
+            fx = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        atx = fx.get("atx") if isinstance(fx, dict) else None
+        expected = fx.get("expected") if isinstance(fx, dict) else None
+        if (isinstance(atx, dict) and isinstance(expected, dict)
+                and expected.get("verifyResult") == "ACCEPT"
+                and isinstance(atx.get("atcVersion"), str)):
+            versions.add(atx["atcVersion"])
+    return versions
+
+
+def intro_paragraph(readme):
+    """The first paragraph after the title, whitespace-collapsed, or None."""
+    lines = readme.splitlines()
+    starts = [i for i, l in enumerate(lines) if l.startswith("# ")]
+    if not starts:
+        return None
+    para = []
+    for line in lines[starts[0] + 1:]:
+        if not line.strip():
+            if para:
+                break
+            continue
+        if line.startswith("#"):
+            break
+        para.append(line.strip())
+    return " ".join(para) or None
+
+
+def _versions(names):
+    return " and ".join(f"v{v}" for v in sorted(names))
+
+
+def version_label_failures(readme, versions):
+    """Each README version label must name exactly the accepted versions."""
+    if not versions:
+        return ["no fixture expects a credential to ACCEPT; refusing to pass "
+                "the README version labels vacuously"]
+    pinning = section(readme, VERSION_PINNING)
+    row = SCHEMA_PIN_ROW.search(pinning) if pinning is not None else None
+    sites = ((INTRO_SITE, intro_paragraph(readme)),
+             (PIN_SITE, row.group(1) if row else None))
+    failures = []
+    for where, text in sites:
+        if text is None:
+            failures.append(f"{where} not found; the ATX versions it names "
+                            f"cannot be checked")
+            continue
+        named = set(ATX_VERSION.findall(text))
+        problems = []
+        if versions - named:
+            problems.append(f"omits {_versions(versions - named)}")
+        if named - versions:
+            problems.append(f"names {_versions(named - versions)}, which no "
+                            f"fixture expects to ACCEPT")
+        if problems:
+            failures.append(f"{where} {' and '.join(problems)}; the fixtures "
+                            f"accept ATX {_versions(versions)}")
+    return failures
+
+
+def direct_requirements(go_mod):
+    """Map each module a go.mod requires directly to its pinned version."""
+    required = {}
+    block = False
+    for line in go_mod.splitlines():
+        code, _, comment = line.partition("//")
+        words = code.split()
+        if words == ["require", "("]:
+            block = True
+            continue
+        if words == [")"]:
+            block = False
+            continue
+        if words[:1] == ["require"]:
+            words = words[1:]
+        elif not block:
+            continue
+        if len(words) == 2 and "indirect" not in comment:
+            required[words[0]] = words[1]
+    return required
+
+
+def go_header(source):
+    """The comment above a Go file's package clause."""
+    clause = GO_PACKAGE_CLAUSE.search(source)
+    return source[:clause.start()] if clause else ""
+
+
+def _names(text, module):
+    """Whether `text` names `module`, not a longer module name starting with it."""
+    return re.search(re.escape(module) + r"(?![\w-])", text) is not None
+
+
+def go_dependency_failures(readme, go_mod, verify_go):
+    """Each place that states the Go verifier's dependencies must name every
+    direct requirement of go.mod (None when a file is missing). The README
+    sites state versions, so those must be the pinned ones; the verify.go
+    header is prose, so it is checked for omissions only."""
+    if go_mod is None:
+        return [f"{GO_MOD_NAME} is missing; the Go verifier's stated "
+                f"dependencies cannot be checked"]
+    required = direct_requirements(go_mod)
+    if not required:
+        return [f"{GO_MOD_NAME} states no direct requirement; refusing to pass "
+                f"the Go verifier's stated dependencies vacuously"]
+    failures = []
+
+    heading = GO_HEADING.search(readme)
+    body = section(readme, heading.group(0)) if heading else None
+    if body is None:
+        failures.append(f"{GO_LIST_SITE} not found: README has no `### Go` section")
+    else:
+        listed = dict(GO_MODULE_ITEM.findall(body))
+        for module, version in sorted(required.items()):
+            if module not in listed:
+                failures.append(f"{GO_LIST_SITE} omits `{module} {version}`, "
+                                f"which {GO_MOD_NAME} requires")
+            elif listed[module] != version:
+                failures.append(f"{GO_LIST_SITE} states `{module} {listed[module]}` "
+                                f"but {GO_MOD_NAME} pins {version}")
+        for module in sorted(set(listed) - set(required)):
+            failures.append(f"{GO_LIST_SITE} lists `{module}`, which "
+                            f"{GO_MOD_NAME} does not require directly")
+
+    pinning = section(readme, VERSION_PINNING)
+    if pinning is None:
+        failures.append(f"{GO_PIN_SITE} not found; the Go module versions it "
+                        f"states cannot be checked")
+    else:
+        rows = [[c.strip() for c in line.strip().strip("|").split("|")]
+                for line in pinning.splitlines() if line.startswith("|")]
+        for module, version in sorted(required.items()):
+            stated = [r[1] for r in rows if len(r) >= 3 and _names(r[2], module)]
+            if not stated:
+                failures.append(f"{GO_PIN_SITE} has no row for {module}, which "
+                                f"{GO_MOD_NAME} pins at {version}")
+            for found in stated:
+                if found != version:
+                    failures.append(f"{GO_PIN_SITE} states {module} {found} but "
+                                    f"{GO_MOD_NAME} pins {version}")
+
+    if verify_go is None:
+        failures.append(f"{GO_HEADER_SITE} not found: verifiers/go/verify.go "
+                        f"is missing")
+    else:
+        header = go_header(verify_go)
+        for module in sorted(required):
+            if not _names(header, module):
+                failures.append(f"{GO_HEADER_SITE} does not name {module}, "
+                                f"which {GO_MOD_NAME} requires")
+    return failures
+
+
+# Upstream A2A issues this suite once named as the place where second-party
+# implementations and coordination are tracked. Both are closed: 1876 as not
+# planned on 2026-06-15, and 1885, its re-file, on 2026-06-23. The README kept
+# sending readers to 1876 for both after it closed. A mention may stay as a
+# citation of where criterion (c) was stated, but only with `(closed` written
+# right after it, and never in a sentence that says something is tracked,
+# coordinated or happening there.
+CLOSED_TRACKERS = ("1876", "1885")
+_CLOSED = "|".join(CLOSED_TRACKERS)
+CLOSED_TRACKER_REF = re.compile(
+    rf"\[[^\]\n]*\]\(https://github\.com/a2aproject/A2A/issues/({_CLOSED})\)"
+    rf"|https://github\.com/a2aproject/A2A/issues/({_CLOSED})\b"
+    rf"|`?(?:a2aproject/)?A2A#({_CLOSED})\b`?"
+)
+CLOSED_NOTE = re.compile(r"\s*\(closed\b", re.IGNORECASE)
+TRACKING_CLAIM = re.compile(r"\b(?:tracked|tracking|coordinated|happens)\b", re.IGNORECASE)
+# The two sentences README.md published after 1876 closed, with their original
+# line wraps. The gate must keep failing each of them.
+RETRACTED_TRACKING = (
+    "Independent second-party implementations are tracked on the sibling issue\n"
+    "[a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876)."
+)
+RETRACTED_COORDINATION = (
+    "Substantive coordination on the\n"
+    "ATX wire format itself happens in "
+    "[`opena2a-org/atx-spec`](https://github.com/opena2a-standards/atx-spec)\n"
+    "and in the A2A coordination map on\n"
+    "[a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876)."
+)
+# The open location the implementations section must send readers to instead.
+OPEN_TRACKER = "https://github.com/opena2a-standards/atx-conformance/issues"
+IMPLEMENTATIONS = "## Implementations that validate against this suite"
+
 
 def registry_cosigners(cosigners):
     """Return the Cosigner cell of every data row in the registry table, or
@@ -155,6 +578,87 @@ def criterion_c_failures(readme, cosigners):
             "records no second-party cosignature (self-cosignatures do not "
             "count); state it as designed to close criterion (c) once one is "
             "recorded"
+        )
+    return failures
+
+
+def trust_score_failures(readme):
+    """Check that the README calls the fixture trustScore a placeholder."""
+    failures = []
+    if not TRUST_SCORE_CLAIM.search(" ".join(RETRACTED_TRUST_CLAIM.split())):
+        failures.append(
+            "trustScore claim pattern no longer matches the sentence it was "
+            "written for; the gate cannot fire"
+        )
+    claim = TRUST_SCORE_CLAIM.search(" ".join(readme.split()))
+    if claim:
+        failures.append(
+            f"README states the fixture trustScore is \"{claim.group(0)}\", but "
+            "no fixture carries factor inputs that produce it; call it an "
+            "illustrative value"
+        )
+    body = section(readme, TRUST_HEADING)
+    if body is None:
+        failures.append(f"no `{TRUST_HEADING}` section found in README")
+    elif TRUST_PLACEHOLDER not in body:
+        failures.append(
+            f"README `{TRUST_HEADING}` does not call the fixture trustScore "
+            f"{TRUST_PLACEHOLDER}; nothing in this suite computes it"
+        )
+    return failures
+
+
+def closed_tracker_mentions(name, text):
+    """Mentions of a closed upstream issue in `text` that sit in a sentence
+    sending the reader there to track or coordinate something, or that do not
+    say the issue is closed. Matched per paragraph over whitespace-collapsed
+    text so a line wrap cannot hide either."""
+    failures = []
+    for para in re.split(r"\n\s*\n", text):
+        flat = " ".join(para.split())
+        for ref in CLOSED_TRACKER_REF.finditer(flat):
+            issue = f"a2aproject/A2A#{next(g for g in ref.groups() if g)}"
+            start = flat.rfind(". ", 0, ref.start())
+            end = flat.find(". ", ref.end())
+            sentence = flat[start + 2 if start >= 0 else 0:end if end >= 0 else len(flat)]
+            claim = TRACKING_CLAIM.search(sentence)
+            if claim:
+                failures.append(
+                    f"{name} sends readers to {issue}, which is closed (the "
+                    f"sentence says \"{claim.group(0)}\"); point them to this "
+                    f"repository's issue tracker ({OPEN_TRACKER}) instead"
+                )
+            elif not CLOSED_NOTE.match(flat, ref.end()):
+                failures.append(
+                    f"{name} cites {issue} without saying it is closed; write "
+                    f"`(closed ...)` right after it so no reader takes it for a "
+                    f"live tracking location"
+                )
+    return failures
+
+
+def tracker_failures(readme, cosigners):
+    """Check README.md and COSIGNERS.md (None when missing) for coordination
+    links that point at a closed upstream issue, and the README
+    implementations section for a link to an open one."""
+    failures = []
+    for retracted in (RETRACTED_TRACKING, RETRACTED_COORDINATION):
+        if not closed_tracker_mentions("x", retracted):
+            failures.append(
+                "closed-tracker pattern no longer matches a sentence it was "
+                "written for; the gate cannot fire"
+            )
+    failures.extend(closed_tracker_mentions("README.md", readme))
+    if cosigners is not None:
+        failures.extend(closed_tracker_mentions("COSIGNERS.md", cosigners))
+    implementations = section(readme, IMPLEMENTATIONS)
+    if implementations is None:
+        failures.append(f"no `{IMPLEMENTATIONS}` section found in README")
+    elif OPEN_TRACKER not in implementations:
+        failures.append(
+            f"README `{IMPLEMENTATIONS}` does not link this repository's issue "
+            f"tracker ({OPEN_TRACKER}), the open place to report a second-party "
+            f"implementation or arrange a cosignature"
         )
     return failures
 
@@ -234,6 +738,114 @@ def threshold_claims(readme, fixtures):
     return failures
 
 
+def _flow_list(value):
+    """Parse a YAML scalar or flow sequence (`main`, `[main, dev]`)."""
+    value = value.strip()
+    if value.startswith("[") and value.endswith("]"):
+        value = value[1:-1]
+    return [v.strip().strip("'\"") for v in value.split(",") if v.strip()]
+
+
+def workflow_triggers(workflow):
+    """Return {event: {filter: [value, ...]}} for the top-level `on:` key of
+    the workflow text, or None when it has none. Covers the block form this
+    repository uses and the inline `on: push` / `on: [push, pull_request]`
+    forms; a filter listed as a block sequence is read item by item."""
+    lines = workflow.splitlines()
+    start = next((i for i, l in enumerate(lines)
+                  if re.match(r"""^(?:on|'on'|"on"):(?:\s|$)""", l)), None)
+    if start is None:
+        return None
+    inline = lines[start].split(":", 1)[1].split("#", 1)[0].strip()
+    if inline:
+        return {event: {} for event in _flow_list(inline)}
+    triggers = {}
+    event = key = None
+    event_indent = 0
+    for line in lines[start + 1:]:
+        text = line.split("#", 1)[0].rstrip()
+        if not text.strip():
+            continue
+        if not line[0].isspace():
+            break
+        indent = len(text) - len(text.lstrip())
+        body = text.strip()
+        if body.startswith("- ") and event is not None and key is not None:
+            triggers[event][key].append(body[2:].strip().strip("'\""))
+            continue
+        name, _, value = body.partition(":")
+        if event is None or indent <= event_indent:
+            event, event_indent, key = name.strip(), indent, None
+            triggers[event] = {}
+        else:
+            key = name.strip()
+            triggers[event][key] = _flow_list(value)
+    return triggers
+
+
+def trigger_phrase(triggers):
+    """Return (phrase, problems): how the README must say when the gates run,
+    e.g. "on every pull request and every push to `main`", or the triggers
+    this check cannot phrase."""
+    problems = [f"{WORKFLOW_NAME} triggers on `{e}`, which this check cannot "
+                "phrase; extend trigger_phrase()"
+                for e in sorted(set(triggers) - {"pull_request", "push"})]
+    for event in ("pull_request", "push"):
+        for key in sorted(set(triggers.get(event, {})) - {"branches"}):
+            problems.append(f"{WORKFLOW_NAME} filters `{event}` by `{key}`, which "
+                            "this check cannot phrase; extend trigger_phrase()")
+    parts = []
+    for event, noun, prep in (("pull_request", "pull request", "into"),
+                              ("push", "push", "to")):
+        if event not in triggers:
+            continue
+        branches = triggers[event].get("branches")
+        if branches:
+            parts.append(f"every {noun} {prep} "
+                         + " or ".join(f"`{b}`" for b in branches))
+        else:
+            parts.append(f"every {noun}")
+    if not parts:
+        problems.append(f"{WORKFLOW_NAME} triggers on neither `push` nor "
+                        "`pull_request`")
+    return "on " + " and ".join(parts), problems
+
+
+def ci_trigger_failures(readme, workflow):
+    """Check the README's continuous-verification sentence against the
+    workflow's triggers. `workflow` is the workflow text, None when missing."""
+    if workflow is None:
+        return [f"{WORKFLOW_NAME} is missing; the README's statement of when "
+                "the gates run cannot be checked"]
+    triggers = workflow_triggers(workflow)
+    if not triggers:
+        return [f"no `on:` triggers found in {WORKFLOW_NAME}"]
+    phrase, problems = trigger_phrase(triggers)
+    if problems:
+        return problems
+    body = section(readme, CONTINUOUS)
+    if body is None:
+        return [f"no `{CONTINUOUS}` section found in README"]
+    text = " ".join(body.split())
+    failures = []
+    # The phrase must end where the clause ends, or "on every pull request and
+    # every push" would be found inside "... every push to `main`".
+    if not re.search(re.escape(phrase) + r"(?=[.,;:)]|$)", text):
+        failures.append(
+            f"README `{CONTINUOUS}` does not say the gates run \"{phrase}\", "
+            f"which is what {WORKFLOW_NAME} triggers on"
+        )
+    if triggers.get("push", {}).get("branches"):
+        for claim in EVERY_PUSH_CLAIM.finditer(text):
+            failures.append(
+                f"README `{CONTINUOUS}` says \"{claim.group(0)}\", but "
+                f"{WORKFLOW_NAME} runs on pushes to "
+                + " or ".join(f"`{b}`" for b in triggers["push"]["branches"])
+                + " only"
+            )
+    return failures
+
+
 def section(text, heading):
     """Return the body under `heading` up to the next heading, or None.
 
@@ -252,6 +864,127 @@ def section(text, heading):
             break
         body.append(line)
     return "\n".join(body)
+
+
+VERSION_PINNING = "## Version pinning"
+# A link to anything in an opena2a-standards repository, and the same link
+# naming a file at a full commit id, optionally with a #fragment.
+STANDARDS_LINK = re.compile(r"https://github\.com/opena2a-standards/[^\s()<>\[\]|]*")
+PINNED_LINK = re.compile(
+    r"https://github\.com/opena2a-standards/[^/\s]+/blob/[0-9a-f]{40}/[^\s()<>\[\]|#?]+"
+    r"(?:#[^\s()<>\[\]|]*)?"
+)
+
+
+def version_pin_failures(readme):
+    """Every opena2a-standards link in the Version pinning table that does
+    not name a file at a commit, and the table missing or carrying no such
+    link at all."""
+    body = section(readme, VERSION_PINNING)
+    if body is None:
+        return [f"no `{VERSION_PINNING}` section found in README"]
+    failures = []
+    linked = 0
+    for line in body.splitlines():
+        if not line.startswith("|"):
+            continue
+        component = line.strip("|").split("|")[0].strip()
+        for url in STANDARDS_LINK.findall(line):
+            linked += 1
+            if not PINNED_LINK.fullmatch(url):
+                failures.append(
+                    f"README Version pinning row {component!r} links {url} at no "
+                    f"commit; link the document at the commit whose text states the "
+                    f"version (.../blob/<40-hex commit>/<file>)"
+                )
+    if not linked:
+        failures.append(
+            f"README `{VERSION_PINNING}` links no opena2a-standards document; "
+            f"refusing to pass vacuously"
+        )
+    return failures
+
+
+# The README's account of how the generator signs. It described only the v1.0
+# pipe-delimited payload while every v1.1 fixture is signed over JCS(TBS) by
+# canonicalPayloadV11, and it never mentioned that the generator panics unless
+# those bytes equal two jcs-vectors vectors. Both lists are read from the
+# generator, so a new signing form or cross-check cannot go undocumented.
+REPRODUCING = "## Reproducing the fixtures"
+GENERATOR = pathlib.Path("scripts") / "generate-fixtures" / "main.go"
+# A signing form the generator defines, and a canonical-bytes constant it
+# compares a v1.1 credential against before it builds any fixture.
+PAYLOAD_FUNC = re.compile(r"^func (canonicalPayload\w*)\(", re.M)
+CROSS_CHECK_HEX = re.compile(r'^const (jcs\w*CanonicalHex) = "([0-9a-f]+)"', re.M)
+NAMED_FUNC = re.compile(r"`(canonicalPayload\w*)`")
+NAMED_VECTOR = re.compile(r"jcs-vectors/vectors/[\w.-]+\.json")
+
+
+def generator_signing(root):
+    """Read the fixture generator. Return (the canonicalPayload* functions it
+    defines, the jcs-vectors file each jcs*CanonicalHex constant equals the
+    expected.canonicalHex of, failures)."""
+    try:
+        src = (root / GENERATOR).read_text(encoding="utf-8")
+    except OSError as exc:
+        return [], [], [f"{GENERATOR.as_posix()} cannot be read ({exc})"]
+    pinned = {}
+    for path in sorted((root / "jcs-vectors" / "vectors").glob("*.json")):
+        try:
+            hex_ = json.loads(path.read_text(encoding="utf-8"))["expected"]["canonicalHex"]
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        pinned.setdefault(hex_, path.relative_to(root).as_posix())
+    failures = []
+    vectors = []
+    for name, hex_ in CROSS_CHECK_HEX.findall(src):
+        if hex_ in pinned:
+            vectors.append(pinned[hex_])
+        else:
+            failures.append(
+                f"{GENERATOR.as_posix()} constant {name} equals the "
+                f"expected.canonicalHex of no jcs-vectors/vectors/*.json"
+            )
+    funcs = PAYLOAD_FUNC.findall(src)
+    if not funcs:
+        failures.append(
+            f"{GENERATOR.as_posix()} defines no canonicalPayload* function; "
+            f"refusing to pass vacuously"
+        )
+    return funcs, vectors, failures
+
+
+def reproduction_failures(readme, signing):
+    """The Reproducing the fixtures section must name every signing form the
+    generator defines and every jcs-vectors vector it cross-checks against,
+    and name no form or vector the generator does not have."""
+    funcs, vectors, failures = signing
+    failures = list(failures)
+    body = section(readme, REPRODUCING)
+    if body is None:
+        return failures + [f"no `{REPRODUCING}` section found in README"]
+    where = f"README `{REPRODUCING}`"
+    for name in funcs:
+        if f"`{name}`" not in body:
+            failures.append(
+                f"{where} does not name `{name}`, a canonical payload "
+                f"{GENERATOR.as_posix()} signs fixtures over"
+            )
+    for name in sorted(set(NAMED_FUNC.findall(body)) - set(funcs)):
+        failures.append(f"{where} names `{name}`, which {GENERATOR.as_posix()} does not define")
+    for path in vectors:
+        if path not in body:
+            failures.append(
+                f"{where} does not name {path}, a vector "
+                f"{GENERATOR.as_posix()} cross-checks its v1.1 bytes against"
+            )
+    for path in sorted(set(NAMED_VECTOR.findall(body)) - set(vectors)):
+        failures.append(
+            f"{where} names {path}, which {GENERATOR.as_posix()} does not "
+            f"cross-check against"
+        )
+    return failures
+
 
 # The sibling-repositories table row that describes this repository.
 THIS_REPO_ROW = re.compile(r"^\| `atx-conformance` \(this repo\) \|.*$", re.M)
@@ -292,10 +1025,10 @@ def _claims(failures, text, pattern, actual, missing, wrong):
             failures.append(wrong(stated))
 
 
-def check(readme, cosigners, fixtures, vectors):
+def check(readme, cosigners, fixtures, vectors, signing):
     """Return the failures for README text, COSIGNERS text (None when the
-    file is missing), the fixture map from load_fixtures and the JCS vector
-    count."""
+    file is missing), the fixture map from load_fixtures, the JCS vector
+    count and the generator reading from generator_signing."""
     actual = len(fixtures)
     if actual == 0:
         return ["no fixtures found; refusing to pass vacuously"]
@@ -330,6 +1063,8 @@ def check(readme, cosigners, fixtures, vectors):
                     f"COSIGNERS.md claims ({n} fixtures) but fixtures/ holds {actual}"
                 )
         failures.extend(criterion_c_failures(readme, cosigners))
+
+    failures.extend(trust_score_failures(readme))
 
     # "must report `24 pass, 0 fail`" in the continuous-verification list and
     # "summary: 24 pass, 0 fail (24 fixtures)" under Expected output. Matching
@@ -433,6 +1168,9 @@ def check(readme, cosigners, fixtures, vectors):
     for name in sorted(set(fixtures) - set(listed)):
         failures.append(f"README fixture table has no row for fixtures/{name}")
 
+    failures.extend(version_pin_failures(readme))
+    failures.extend(reproduction_failures(readme, signing))
+    failures.extend(tracker_failures(readme, cosigners))
     return failures
 
 
@@ -497,13 +1235,284 @@ def _row_case(label, texts, run, edit, expect):
     return False, label, f"expected a failure containing {want!r}, got {new}"
 
 
-def self_test(readme, cosigners, fixtures, vectors, verbose):
-    texts = {"README.md": readme, "COSIGNERS.md": cosigners or ""}
-    baseline = set(check(readme, cosigners, fixtures, vectors))
+def _trigger_cases(readme, workflow):
+    """Alter the README trigger sentence or the workflow's `on:` block in
+    memory; ci_trigger_failures() must report each one."""
+    baseline = set(ci_trigger_failures(readme, workflow))
 
-    def run(altered, cos=True):
+    def case(label, altered_readme, altered_workflow, want):
+        new = [f for f in ci_trigger_failures(altered_readme, altered_workflow)
+               if f not in baseline]
+        if any(want in f for f in new):
+            return True, label, ""
+        return False, label, f"expected a failure containing {want!r}, got {new}"
+
+    cases = []
+    label = "README trigger sentence restored to the retracted wording"
+    phrase = None
+    if workflow is not None and workflow_triggers(workflow):
+        phrase = trigger_phrase(workflow_triggers(workflow))[0]
+    site = phrase and re.search(r"\s+".join(map(re.escape, phrase.split())), readme)
+    if not site:
+        missing = f"no trigger sentence ({phrase!r}) found in README.md"
+        cases.append((False, label, missing))
+        cases.append((False, "README trigger sentence overclaiming beside the right one",
+                      missing))
+    else:
+        altered = readme[:site.start()] + RETRACTED_TRIGGERS + readme[site.end():]
+        cases.append(case(label, altered, workflow, "does not say the gates run"))
+        # The same sentence with the correct phrase appended after it: the
+        # overclaim alone must still fail.
+        altered = readme[:site.end()] + ", and " + RETRACTED_TRIGGERS + readme[site.end():]
+        cases.append(case("README trigger sentence overclaiming beside the right one",
+                          altered, workflow, "says \"each push\""))
+
+    label = "workflow push trigger without a branch filter"
+    branches = workflow and re.search(r"^(\s+push:[ \t]*\n)\s+branches:.*\n", workflow, re.M)
+    if not branches:
+        cases.append((False, label, f"no `push:` branch filter found in {WORKFLOW_NAME}"))
+    else:
+        altered = workflow[:branches.start()] + branches.group(1) + workflow[branches.end():]
+        cases.append(case(label, readme, altered, "does not say the gates run"))
+
+    label = "workflow triggering on an event the check cannot phrase"
+    on = workflow and re.search(r"^on:[ \t]*\n", workflow, re.M)
+    if not on:
+        cases.append((False, label, f"no block `on:` key found in {WORKFLOW_NAME}"))
+    else:
+        altered = workflow[:on.end()] + "  workflow_dispatch:\n" + workflow[on.end():]
+        cases.append(case(label, readme, altered, "cannot phrase"))
+
+    cases.append(case(f"{WORKFLOW_NAME} missing", readme, None, "is missing"))
+    return cases
+
+
+def _key_source_cases(readme, vectors, used_key_ids):
+    """Drop a key source from each README site, restore the retracted §7.3
+    label, name an unknown key and empty vectors/ in memory;
+    key_source_failures() must report each one."""
+    baseline = set(key_source_failures(readme, vectors, used_key_ids))
+
+    def case(label, altered_readme, altered_vectors, altered_ids, want):
+        new = [f for f in key_source_failures(altered_readme, altered_vectors,
+                                              altered_ids) if f not in baseline]
+        if any(want in f for f in new):
+            return True, label, ""
+        return False, label, f"expected a failure containing {want!r}, got {new}"
+
+    ed25519 = [v for v in vectors if v["algorithm"] == "Ed25519"
+               and isinstance(v["source"], str)]
+    derived = next((v for v in ed25519 if not RFC8032_SOURCE.match(v["source"])), None)
+    rfc = max((v for v in ed25519 if RFC8032_SOURCE.match(v["source"])),
+              key=lambda v: int(RFC8032_SOURCE.match(v["source"]).group(2)),
+              default=None)
+
+    cases = []
+    for site_label, pattern in KEY_SOURCE_SITES:
+        site = pattern.search(readme)
+        for kind, v in (("derived", derived), ("RFC 8032", rfc)):
+            label = f"{site_label} omitting the {kind} key source"
+            if site is None or v is None:
+                cases.append((False, label, f"no {site_label} row in README.md"
+                              if site is None else f"no {kind} Ed25519 vector in vectors/"))
+                continue
+            line = site.group(0)
+            if v is derived:
+                cut = line.replace(v["source"], "")
+            else:
+                cut = re.sub(rf"\b{RFC8032_SOURCE.match(v['source']).group(2)}\b", "", line)
+            altered = readme[:site.start()] + cut + readme[site.end():]
+            cases.append(case(label, altered, vectors, used_key_ids,
+                              f"{site_label} does not name the key source of "
+                              f"vectors/{v['name']}"))
+
+    label = "Test 1024 vector restored to the retracted §7.3 label"
+    target = next((v for v in ed25519 if v["source"].startswith("RFC 8032")
+                   and " Test 1024" in v["source"]), None)
+    if target is None:
+        cases.append((False, label, "no RFC 8032 Test 1024 vector in vectors/"))
+    else:
+        altered = [dict(v, source=RETRACTED_KEY_SOURCE) if v is target else v
+                   for v in vectors]
+        cases.append(case(label, readme, altered, used_key_ids,
+                          f"vectors/{target['name']} cites RFC 8032 §7.3 but its "
+                          "ref links §7.1"))
+
+    cases.append(case("fixture naming a key no vector provides", readme, vectors,
+                      used_key_ids | {"did:opena2a:authority:nobody.example#key-1"},
+                      "nobody.example#key-1, which no vectors/*.json provides"))
+    cases.append(case("vectors/ holding no Ed25519 keypair", readme,
+                      [v for v in vectors if v["algorithm"] != "Ed25519"],
+                      set(), "no Ed25519 keypair found in vectors/"))
+    return cases
+
+
+# (site name, pattern locating the site; group 1 is the text naming versions)
+VERSION_SITES = (
+    (INTRO_SITE, r"\A# [^\n]*\n+(.+?)(?=\n\s*\n)"),
+    (PIN_SITE, r"^\| ATX schema \| ([^|\n]*) \|"),
+)
+
+
+def _version_cases(readme, versions):
+    """Narrow each version label to its first version, then widen it with a
+    version no fixture accepts; each must add a failure naming the site."""
+    baseline = set(version_label_failures(readme, versions))
+    cases = []
+    for where, pattern in VERSION_SITES:
+        match = re.search(pattern, readme, re.M | re.S)
+        tokens = list(ATX_VERSION.finditer(match.group(1))) if match else []
+        edits = (
+            ("names only its first version",
+             lambda s, t: s[:t[0].end()] + s[t[-1].end():]),
+            ("names a version no fixture accepts",
+             lambda s, t: s[:t[-1].end()] + ", v9.9" + s[t[-1].end():]),
+        )
+        for what, edit in edits:
+            label = f"{where} {what}"
+            if not tokens:
+                cases.append((False, label, "site not found in README.md, or "
+                              "it names no ATX version"))
+                continue
+            site = edit(match.group(1), tokens)
+            altered = readme[:match.start(1)] + site + readme[match.end(1):]
+            new = [f for f in version_label_failures(altered, versions)
+                   if f not in baseline]
+            cases.append((any(f.startswith(where) for f in new), label,
+                          f"README.md reading {site!r} there still passes"))
+    return cases
+
+
+# A module and a version no go.mod here states, for the cases that invent one.
+GO_INVENTED = "example.com/not/required"
+GO_ALTERED_VERSION = "v9.9.9"
+
+
+def _go_dependency_cases(readme, go_mod, verify_go):
+    """Drop and restate each direct requirement at each site that states the
+    Go verifier's dependencies, list a module go.mod does not require, and add
+    a requirement no site names; each must add a failure naming the site."""
+    if go_mod is None or verify_go is None:
+        return [(False, "Go verifier dependency sites",
+                 f"{GO_MOD_NAME} or verifiers/go/verify.go is missing")]
+    baseline = set(go_dependency_failures(readme, go_mod, verify_go))
+    cases = []
+
+    def case(label, where, needle, readme=readme, go_mod=go_mod, verify_go=verify_go):
+        new = [f for f in go_dependency_failures(readme, go_mod, verify_go)
+               if f not in baseline]
+        cases.append((any(f.startswith(where) and needle in f for f in new), label,
+                      f"expected a {where} failure naming {needle}, got {new}"))
+
+    def missing(label, name):
+        cases.append((False, label, f"site not found in {name}: a dependency "
+                                    f"stated there is not covered by this self-test"))
+
+    parsed = direct_requirements(
+        "require (\n\ta.example/m v1.0.0\n\tb.example/n v2.0.0 // indirect\n)\n"
+        "require c.example/o v3.0.0\nrequire d.example/p v4.0.0 // indirect\n")
+    cases.append((parsed == {"a.example/m": "v1.0.0", "c.example/o": "v3.0.0"},
+                  "go.mod direct requirements, block and single-line forms",
+                  f"read {parsed}"))
+
+    go_at = readme.find("\n### Go")
+    pin_at = readme.find(f"\n{VERSION_PINNING}\n")
+    header = verify_go.partition("\npackage ")[0]
+    for module in sorted(direct_requirements(go_mod)):
+        name = re.escape(module)
+
+        item = re.search(rf"^- `{name} ([^`\n]*)`[^\n]*\n", readme, re.M)
+        if item is None:
+            missing(f"{GO_LIST_SITE} entry for {module}", "README.md")
+        else:
+            case(f"{GO_LIST_SITE} without {module}", GO_LIST_SITE, module,
+                 readme=readme[:item.start()] + readme[item.end():])
+            case(f"{GO_LIST_SITE} stating another {module} version",
+                 GO_LIST_SITE, GO_ALTERED_VERSION,
+                 readme=readme[:item.start(1)] + GO_ALTERED_VERSION + readme[item.end(1):])
+
+        row = re.compile(rf"^\|[^|\n]*\| ([^|\n]*) \|[^\n]*{name}[^\n]*\n", re.M)
+        row = row.search(readme, pin_at + 1) if pin_at >= 0 else None
+        if row is None:
+            missing(f"{GO_PIN_SITE} row for {module}", "README.md")
+        else:
+            case(f"{GO_PIN_SITE} without the {module} row", GO_PIN_SITE, module,
+                 readme=readme[:row.start()] + readme[row.end():])
+            case(f"{GO_PIN_SITE} stating another {module} version",
+                 GO_PIN_SITE, GO_ALTERED_VERSION,
+                 readme=readme[:row.start(1)] + GO_ALTERED_VERSION + readme[row.end(1):])
+
+        if module not in header:
+            missing(f"{GO_HEADER_SITE} naming {module}", "verifiers/go/verify.go")
+        else:
+            case(f"{GO_HEADER_SITE} without {module}", GO_HEADER_SITE, module,
+                 verify_go=verify_go.replace(module, "a module", 1))
+
+    first = (re.compile(r"^- `[^\n]*\n", re.M).search(readme, go_at + 1)
+             if go_at >= 0 else None)
+    if first is None:
+        missing(f"{GO_LIST_SITE}", "README.md")
+    else:
+        case(f"{GO_LIST_SITE} listing a module go.mod does not require",
+             GO_LIST_SITE, GO_INVENTED,
+             readme=(readme[:first.start()] + f"- `{GO_INVENTED} {GO_ALTERED_VERSION}`\n"
+                     + readme[first.start():]))
+
+    grown = go_mod + f"\nrequire {GO_INVENTED} {GO_ALTERED_VERSION}\n"
+    for where in (GO_LIST_SITE, GO_PIN_SITE, GO_HEADER_SITE):
+        case(f"{where} when go.mod gains a requirement", where, GO_INVENTED,
+             go_mod=grown)
+    return cases
+
+
+def _pin_case(label, texts, run, edit, expect):
+    """Alter the first link at a commit in the Version pinning table."""
+    readme = texts["README.md"]
+    start = readme.find(VERSION_PINNING + "\n")
+    if start < 0:
+        return False, label, f"no `{VERSION_PINNING}` section found in README.md"
+    end = re.compile(r"^#{1,6} ", re.M).search(readme, start + len(VERSION_PINNING))
+    link = PINNED_LINK.search(readme, start, end.start() if end else len(readme))
+    if link is None:
+        return False, label, f"no link at a commit found under `{VERSION_PINNING}` in README.md"
+    url = edit(link.group(0))
+    altered = dict(texts)
+    altered["README.md"] = readme[:link.start()] + url + readme[link.end():]
+    new = run(altered)
+    want = expect(url)
+    if any(want in f for f in new):
+        return True, label, ""
+    return False, label, f"expected a failure containing {want!r}, got {new}"
+
+
+def _repro_case(label, texts, run, edit, expect):
+    """Alter the body of the Reproducing the fixtures section."""
+    readme = texts["README.md"]
+    start = readme.find(REPRODUCING + "\n")
+    if start < 0:
+        return False, label, f"no `{REPRODUCING}` section found in README.md"
+    start += len(REPRODUCING) + 1
+    end = re.compile(r"^#{1,6} ", re.M).search(readme, start)
+    end = end.start() if end else len(readme)
+    body = edit(readme[start:end])
+    if body == readme[start:end]:
+        return False, label, f"nothing to alter under `{REPRODUCING}` in README.md"
+    altered = dict(texts)
+    altered["README.md"] = readme[:start] + body + readme[end:]
+    new = run(altered)
+    if any(expect in f for f in new):
+        return True, label, ""
+    return False, label, f"expected a failure containing {expect!r}, got {new}"
+
+
+def self_test(readme, cosigners, fixtures, vectors, versions, go_mod, verify_go,
+              signing, verbose, workflow, key_vectors, used_key_ids):
+    texts = {"README.md": readme, "COSIGNERS.md": cosigners or ""}
+    baseline = set(check(readme, cosigners, fixtures, vectors, signing))
+
+    def run(altered, cos=True, sig=signing):
         cos_text = altered["COSIGNERS.md"] if cos and cosigners is not None else None
-        got = check(altered["README.md"], cos_text, fixtures, vectors)
+        got = check(altered["README.md"], cos_text, fixtures, vectors, sig)
         return [f for f in got if f not in baseline]
 
     cases = [_number_case(i, label, name, pattern, texts, run)
@@ -547,6 +1556,122 @@ def self_test(readme, cosigners, fixtures, vectors, verbose):
     cases.append((any("COSIGNERS.md is missing" in f for f in new),
                   "COSIGNERS.md missing", f"a missing COSIGNERS.md still passes: {new}"))
 
+    if TRUST_HEADING not in readme:
+        cases.append((False, "trustScore called algorithm output",
+                      f"no `{TRUST_HEADING}` heading in README.md"))
+        cases.append((False, "trustScore not called illustrative",
+                      f"no `{TRUST_HEADING}` heading in README.md"))
+    else:
+        start = readme.index(TRUST_HEADING) + len(TRUST_HEADING)
+        altered = dict(texts)
+        altered["README.md"] = (readme[:start] + "\n\nThe value " + RETRACTED_TRUST_CLAIM
+                                + ".\n" + readme[start:])
+        new = run(altered)
+        cases.append((any("trustScore is" in f for f in new),
+                      "trustScore called algorithm output",
+                      f"the retracted trustScore sentence still passes: {new}"))
+        body = section(readme, TRUST_HEADING)
+        altered = dict(texts)
+        altered["README.md"] = readme.replace(
+            body, body.replace(TRUST_PLACEHOLDER, "computed"), 1)
+        new = run(altered)
+        cases.append((any(f"trustScore {TRUST_PLACEHOLDER}" in f for f in new),
+                      "trustScore not called illustrative",
+                      f"a section that drops `{TRUST_PLACEHOLDER}` still passes: {new}"))
+
+    cases.extend(_trigger_cases(readme, workflow))
+    cases.extend(_key_source_cases(readme, key_vectors, used_key_ids))
+    cases.extend(_version_cases(readme, versions))
+    cases.extend(_go_dependency_cases(readme, go_mod, verify_go))
+
+    cases.append(_pin_case(
+        "version pinning link on a branch instead of a commit", texts, run,
+        lambda url: re.sub(r"/blob/[0-9a-f]{40}/", "/blob/main/", url),
+        lambda url: f"links {url} at no commit"))
+    cases.append(_pin_case(
+        "version pinning link to a repository instead of a document", texts, run,
+        lambda url: url.split("/blob/")[0],
+        lambda url: f"links {url} at no commit"))
+    altered = dict(texts)
+    altered["README.md"] = readme.replace(VERSION_PINNING + "\n", "## Versions\n", 1)
+    new = run(altered)
+    cases.append((any(f"no `{VERSION_PINNING}` section" in f for f in new),
+                  "version pinning section removed",
+                  f"a README without the section still passes: {new}"))
+
+    funcs, vecs, _ = signing
+    for name in funcs:
+        cases.append(_repro_case(
+            f"reproduction steps not naming `{name}`", texts, run,
+            lambda body, n=name: body.replace(f"`{n}`", "the payload function"),
+            f"does not name `{name}`"))
+    for path in vecs:
+        cases.append(_repro_case(
+            f"reproduction steps not naming {path}", texts, run,
+            lambda body, p=path: body.replace(p, "a jcs-vectors vector"),
+            f"does not name {path}"))
+    if vecs:
+        cases.append(_repro_case(
+            "reproduction steps naming a vector the generator does not cross-check",
+            texts, run,
+            lambda body: body.replace(vecs[0], "jcs-vectors/vectors/99-not-a-vector.json"),
+            "names jcs-vectors/vectors/99-not-a-vector.json, which"))
+    else:
+        cases.append((False, "reproduction steps naming a vector the generator does not cross-check",
+                      f"{GENERATOR.as_posix()} cross-checks against no jcs-vectors vector"))
+    new = run(texts, sig=(funcs + ["canonicalPayloadV12"], vecs, []))
+    cases.append((any("does not name `canonicalPayloadV12`" in f for f in new),
+                  "generator signing form missing from the reproduction steps",
+                  f"a generator form the README does not name still passes: {new}"))
+    altered = dict(texts)
+    altered["README.md"] = readme.replace(REPRODUCING + "\n", "## Regenerating\n", 1)
+    new = run(altered)
+    cases.append((any(f"no `{REPRODUCING}` section" in f for f in new),
+                  "reproduction section removed",
+                  f"a README without the section still passes: {new}"))
+
+    label = "implementations section with no open tracker link"
+    impl = readme.find(IMPLEMENTATIONS)
+    nxt = readme.find("\n## ", impl + 1) if impl >= 0 else -1
+    if impl < 0 or nxt < 0 or OPEN_TRACKER not in readme[impl:nxt]:
+        cases.append((False, label, f"no `{OPEN_TRACKER}` link in the README "
+                                    f"`{IMPLEMENTATIONS}` section"))
+    else:
+        altered = dict(texts)
+        altered["README.md"] = (readme[:impl]
+                                + readme[impl:nxt].replace(OPEN_TRACKER, "https://example.invalid/")
+                                + readme[nxt:])
+        new = run(altered)
+        cases.append((any("does not link this repository's issue tracker" in f for f in new),
+                      label, f"removing the link still passes: {new}"))
+
+    for label, sentence in (
+            ("README sending readers to closed A2A#1876 to track implementations",
+             RETRACTED_TRACKING),
+            ("README sending readers to closed A2A#1876 for coordination",
+             RETRACTED_COORDINATION),
+            ("README saying implementations are tracked on A2A#1876 while noting it closed",
+             "Second-party implementations are tracked on\n"
+             "[a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876)\n"
+             "(closed as not planned on 2026-06-15).")):
+        altered = dict(texts)
+        altered["README.md"] = readme + "\n" + sentence + "\n"
+        new = run(altered)
+        cases.append((any("sends readers to a2aproject/A2A#1876, which is closed" in f
+                          for f in new),
+                      label, f"appending it to README.md still passes: {new}"))
+
+    citation = ("Criterion (c) was stated on\n"
+                "[a2aproject/A2A#1885](https://github.com/a2aproject/A2A/issues/1885).")
+    for name in ("README.md", "COSIGNERS.md"):
+        altered = dict(texts)
+        altered[name] = texts[name] + "\n" + citation + "\n"
+        new = run(altered)
+        cases.append((any(f"{name} cites a2aproject/A2A#1885 without saying it is closed" in f
+                          for f in new),
+                      f"{name} citing closed A2A#1885 with no `(closed` note",
+                      f"appending the citation to {name} still passes: {new}"))
+
     failed = 0
     for ok, label, detail in cases:
         if verbose or not ok:
@@ -570,8 +1695,19 @@ def main():
     readme = README.read_text(encoding="utf-8")
     cosigners = COSIGNERS.read_text(encoding="utf-8") if COSIGNERS.exists() else None
     vectors = count_vectors(ROOT)
+    workflow = WORKFLOW.read_text(encoding="utf-8") if WORKFLOW.exists() else None
+    key_vectors, vector_failures = load_key_vectors(ROOT)
+    failures += vector_failures
+    fixture_paths = sorted(FIXTURES.glob("*.json"))
+    used_key_ids = fixture_key_ids(fixture_paths)
+    versions = accepted_versions(fixture_paths)
+    go_mod = GO_MOD.read_text(encoding="utf-8") if GO_MOD.exists() else None
+    verify_go = VERIFY_GO.read_text(encoding="utf-8") if VERIFY_GO.exists() else None
+    signing = generator_signing(ROOT)
 
-    failed, total = self_test(readme, cosigners, fixtures, vectors, only_self_test)
+    failed, total = self_test(readme, cosigners, fixtures, vectors, versions,
+                              go_mod, verify_go, signing, only_self_test, workflow,
+                              key_vectors, used_key_ids)
     if failed:
         print(f"self-test FAILED: {failed} of {total} case(s) not caught by the check",
               file=sys.stderr)
@@ -582,10 +1718,13 @@ def main():
 
     # The check runs even when the self-test failed: a site the self-test
     # cannot find is often a count the README dropped, and the check names it.
-    failures += check(readme, cosigners, fixtures, vectors)
-    fixture_paths = sorted(FIXTURES.glob("*.json"))
+    failures += check(readme, cosigners, fixtures, vectors, signing)
     failures.extend(threshold_claims(readme, fixture_paths))
     failures.extend(behavioral_profile_failures(readme, fixture_paths))
+    failures.extend(ci_trigger_failures(readme, workflow))
+    failures.extend(key_source_failures(readme, key_vectors, used_key_ids))
+    failures.extend(version_label_failures(readme, versions))
+    failures.extend(go_dependency_failures(readme, go_mod, verify_go))
 
     if failures:
         sys.stdout.flush()
@@ -600,7 +1739,16 @@ def main():
           f"(each with one fixture-table row), {vectors} JCS vectors, all stated "
           f"as passing; README names the MANIFEST.sha256 byte check; "
           f"behavioralProfile scope note matches; criterion (c) claim matches "
-          f"the cosignature registry")
+          f"the cosignature registry; trustScore is called illustrative; "
+          f"CI trigger sentence matches {WORKFLOW_NAME}; "
+          f"both README key-source lists name every Ed25519 key in vectors/; "
+          f"intro and version-pinning row name ATX {_versions(versions)}; "
+          f"Go verifier dependency list, version-pinning rows and verify.go "
+          f"header name every direct requirement of {GO_MOD_NAME}; "
+          f"every Version pinning link names a commit; "
+          f"the reproduction steps name every signing form and jcs-vectors "
+          f"cross-check in the generator; coordination links point at an open "
+          f"issue tracker")
     return 0
 
 
