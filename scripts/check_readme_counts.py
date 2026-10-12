@@ -83,6 +83,14 @@ jcs-vectors. The section must name every canonicalPayload* function the
 generator defines and every jcs-vectors file it cross-checks against, and no
 other.
 
+It also holds where README.md and COSIGNERS.md send readers to coordinate.
+Both kept naming a2aproject/A2A#1876 as the place second-party
+implementations and coordination are tracked after that issue was closed as
+not planned; its re-file #1885 is closed too. A closed upstream issue may be
+cited only with `(closed` written right after it and never in a sentence that
+says something is tracked or coordinated there, and the implementations
+section must link this repository's issue tracker.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
 declares, the behavioralProfile note matches the fixtures, no criterion (c)
@@ -90,8 +98,9 @@ claim outruns the registry, the trustScore is called illustrative, the
 trigger sentence matches the workflow, both key-source lists name every
 Ed25519 key, both version labels name exactly the accepted versions, each
 Go dependency site names every direct requirement at its pinned version,
-every Version pinning link names a commit and the reproduction steps match
-the generator, 1 otherwise, 2 on an unknown argument.
+every Version pinning link names a commit, the reproduction steps match
+the generator and no coordination link points at a closed issue, 1
+otherwise, 2 on an unknown argument.
 """
 
 import collections
@@ -482,6 +491,40 @@ def go_dependency_failures(readme, go_mod, verify_go):
     return failures
 
 
+# Upstream A2A issues this suite once named as the place where second-party
+# implementations and coordination are tracked. Both are closed: 1876 as not
+# planned on 2026-06-15, and 1885, its re-file, on 2026-06-23. The README kept
+# sending readers to 1876 for both after it closed. A mention may stay as a
+# citation of where criterion (c) was stated, but only with `(closed` written
+# right after it, and never in a sentence that says something is tracked,
+# coordinated or happening there.
+CLOSED_TRACKERS = ("1876", "1885")
+_CLOSED = "|".join(CLOSED_TRACKERS)
+CLOSED_TRACKER_REF = re.compile(
+    rf"\[[^\]\n]*\]\(https://github\.com/a2aproject/A2A/issues/({_CLOSED})\)"
+    rf"|https://github\.com/a2aproject/A2A/issues/({_CLOSED})\b"
+    rf"|`?(?:a2aproject/)?A2A#({_CLOSED})\b`?"
+)
+CLOSED_NOTE = re.compile(r"\s*\(closed\b", re.IGNORECASE)
+TRACKING_CLAIM = re.compile(r"\b(?:tracked|tracking|coordinated|happens)\b", re.IGNORECASE)
+# The two sentences README.md published after 1876 closed, with their original
+# line wraps. The gate must keep failing each of them.
+RETRACTED_TRACKING = (
+    "Independent second-party implementations are tracked on the sibling issue\n"
+    "[a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876)."
+)
+RETRACTED_COORDINATION = (
+    "Substantive coordination on the\n"
+    "ATX wire format itself happens in "
+    "[`opena2a-org/atx-spec`](https://github.com/opena2a-standards/atx-spec)\n"
+    "and in the A2A coordination map on\n"
+    "[a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876)."
+)
+# The open location the implementations section must send readers to instead.
+OPEN_TRACKER = "https://github.com/opena2a-standards/atx-conformance/issues"
+IMPLEMENTATIONS = "## Implementations that validate against this suite"
+
+
 def registry_cosigners(cosigners):
     """Return the Cosigner cell of every data row in the registry table, or
     None when the heading or the table header row cannot be found."""
@@ -561,6 +604,61 @@ def trust_score_failures(readme):
         failures.append(
             f"README `{TRUST_HEADING}` does not call the fixture trustScore "
             f"{TRUST_PLACEHOLDER}; nothing in this suite computes it"
+        )
+    return failures
+
+
+def closed_tracker_mentions(name, text):
+    """Mentions of a closed upstream issue in `text` that sit in a sentence
+    sending the reader there to track or coordinate something, or that do not
+    say the issue is closed. Matched per paragraph over whitespace-collapsed
+    text so a line wrap cannot hide either."""
+    failures = []
+    for para in re.split(r"\n\s*\n", text):
+        flat = " ".join(para.split())
+        for ref in CLOSED_TRACKER_REF.finditer(flat):
+            issue = f"a2aproject/A2A#{next(g for g in ref.groups() if g)}"
+            start = flat.rfind(". ", 0, ref.start())
+            end = flat.find(". ", ref.end())
+            sentence = flat[start + 2 if start >= 0 else 0:end if end >= 0 else len(flat)]
+            claim = TRACKING_CLAIM.search(sentence)
+            if claim:
+                failures.append(
+                    f"{name} sends readers to {issue}, which is closed (the "
+                    f"sentence says \"{claim.group(0)}\"); point them to this "
+                    f"repository's issue tracker ({OPEN_TRACKER}) instead"
+                )
+            elif not CLOSED_NOTE.match(flat, ref.end()):
+                failures.append(
+                    f"{name} cites {issue} without saying it is closed; write "
+                    f"`(closed ...)` right after it so no reader takes it for a "
+                    f"live tracking location"
+                )
+    return failures
+
+
+def tracker_failures(readme, cosigners):
+    """Check README.md and COSIGNERS.md (None when missing) for coordination
+    links that point at a closed upstream issue, and the README
+    implementations section for a link to an open one."""
+    failures = []
+    for retracted in (RETRACTED_TRACKING, RETRACTED_COORDINATION):
+        if not closed_tracker_mentions("x", retracted):
+            failures.append(
+                "closed-tracker pattern no longer matches a sentence it was "
+                "written for; the gate cannot fire"
+            )
+    failures.extend(closed_tracker_mentions("README.md", readme))
+    if cosigners is not None:
+        failures.extend(closed_tracker_mentions("COSIGNERS.md", cosigners))
+    implementations = section(readme, IMPLEMENTATIONS)
+    if implementations is None:
+        failures.append(f"no `{IMPLEMENTATIONS}` section found in README")
+    elif OPEN_TRACKER not in implementations:
+        failures.append(
+            f"README `{IMPLEMENTATIONS}` does not link this repository's issue "
+            f"tracker ({OPEN_TRACKER}), the open place to report a second-party "
+            f"implementation or arrange a cosignature"
         )
     return failures
 
@@ -1072,6 +1170,7 @@ def check(readme, cosigners, fixtures, vectors, signing):
 
     failures.extend(version_pin_failures(readme))
     failures.extend(reproduction_failures(readme, signing))
+    failures.extend(tracker_failures(readme, cosigners))
     return failures
 
 
@@ -1531,6 +1630,48 @@ def self_test(readme, cosigners, fixtures, vectors, versions, go_mod, verify_go,
                   "reproduction section removed",
                   f"a README without the section still passes: {new}"))
 
+    label = "implementations section with no open tracker link"
+    impl = readme.find(IMPLEMENTATIONS)
+    nxt = readme.find("\n## ", impl + 1) if impl >= 0 else -1
+    if impl < 0 or nxt < 0 or OPEN_TRACKER not in readme[impl:nxt]:
+        cases.append((False, label, f"no `{OPEN_TRACKER}` link in the README "
+                                    f"`{IMPLEMENTATIONS}` section"))
+    else:
+        altered = dict(texts)
+        altered["README.md"] = (readme[:impl]
+                                + readme[impl:nxt].replace(OPEN_TRACKER, "https://example.invalid/")
+                                + readme[nxt:])
+        new = run(altered)
+        cases.append((any("does not link this repository's issue tracker" in f for f in new),
+                      label, f"removing the link still passes: {new}"))
+
+    for label, sentence in (
+            ("README sending readers to closed A2A#1876 to track implementations",
+             RETRACTED_TRACKING),
+            ("README sending readers to closed A2A#1876 for coordination",
+             RETRACTED_COORDINATION),
+            ("README saying implementations are tracked on A2A#1876 while noting it closed",
+             "Second-party implementations are tracked on\n"
+             "[a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876)\n"
+             "(closed as not planned on 2026-06-15).")):
+        altered = dict(texts)
+        altered["README.md"] = readme + "\n" + sentence + "\n"
+        new = run(altered)
+        cases.append((any("sends readers to a2aproject/A2A#1876, which is closed" in f
+                          for f in new),
+                      label, f"appending it to README.md still passes: {new}"))
+
+    citation = ("Criterion (c) was stated on\n"
+                "[a2aproject/A2A#1885](https://github.com/a2aproject/A2A/issues/1885).")
+    for name in ("README.md", "COSIGNERS.md"):
+        altered = dict(texts)
+        altered[name] = texts[name] + "\n" + citation + "\n"
+        new = run(altered)
+        cases.append((any(f"{name} cites a2aproject/A2A#1885 without saying it is closed" in f
+                          for f in new),
+                      f"{name} citing closed A2A#1885 with no `(closed` note",
+                      f"appending the citation to {name} still passes: {new}"))
+
     failed = 0
     for ok, label, detail in cases:
         if verbose or not ok:
@@ -1606,7 +1747,8 @@ def main():
           f"header name every direct requirement of {GO_MOD_NAME}; "
           f"every Version pinning link names a commit; "
           f"the reproduction steps name every signing form and jcs-vectors "
-          f"cross-check in the generator")
+          f"cross-check in the generator; coordination links point at an open "
+          f"issue tracker")
     return 0
 
 

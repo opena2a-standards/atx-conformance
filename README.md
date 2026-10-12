@@ -394,14 +394,17 @@ breaking change for downstream verifiers.
 | `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 25 / 25 PASS |
 | `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 25 / 25 PASS |
 
-Independent second-party implementations are tracked on the sibling issue
-[a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876).
+To list an independent second-party implementation here, or to arrange a
+cosignature, open an issue on this repository's
+[issue tracker](https://github.com/opena2a-standards/atx-conformance/issues).
+The cosignature itself is recorded by pull request, as
+[`COSIGNERS.md`](./COSIGNERS.md#how-to-cosign) describes.
 
 ## Sibling repositories
 
 Two peer conformance suites cover the other OpenA2A specs in scope of the
 A2A coordination map's criterion (c) thread
-[`a2aproject/A2A#1885`](https://github.com/a2aproject/A2A/issues/1885):
+[`a2aproject/A2A#1885`](https://github.com/a2aproject/A2A/issues/1885) (closed on 2026-06-23):
 
 | Repo | Spec | Status |
 |---|---|---|
@@ -483,10 +486,11 @@ scripts/check_circl_pin.sh       CI gate: one cloudflare/circl version per Go mo
 
 ## Contributing
 
-Issues and PRs welcome on this repository. Substantive coordination on the
-ATX wire format itself happens in [`opena2a-org/atx-spec`](https://github.com/opena2a-standards/atx-spec)
-and in the A2A coordination map on
-[a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876).
+Issues and PRs welcome on this repository. Second-party implementations and
+cosigners are coordinated on its
+[issue tracker](https://github.com/opena2a-standards/atx-conformance/issues).
+Substantive coordination on the ATX wire format itself happens in
+[`opena2a-org/atx-spec`](https://github.com/opena2a-standards/atx-spec).
 
 ## License
 
