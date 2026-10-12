@@ -226,7 +226,7 @@ All fixtures use:
 - Trusted issuer DID: `did:opena2a:authority:opena2a.org`
 - Test agent: `agent_conformance_test_001` (DID `did:opena2a:agent:agent_conformance_test_001`)
 - Pinned verifier clock: `2026-05-24T00:00:00Z`
-- Ed25519 keypair source: [RFC 8032 §7.1 Test 1](https://datatracker.ietf.org/doc/html/rfc8032#section-7.1) (primary) and Tests 2 / 3 (cosigners)
+- Ed25519 keypair sources: [RFC 8032 §7.1](https://datatracker.ietf.org/doc/html/rfc8032#section-7.1) Test 1 (primary), Tests 2 / 3 (cosigners) and Test 1024 (untrusted issuer); the trusted secondary issuer `partner.example` is not an RFC vector, its seed is `SHA-256("opena2a-atx-conformance/issuer-secondary/key-1/v1")` ([`vectors/issuer-secondary.json`](./vectors/issuer-secondary.json))
 - ML-DSA-65 keypair source: fixed test seed (incrementing bytes `00..1f`), public key pinned in [`vectors/mldsa65-seed.json`](./vectors/mldsa65-seed.json)
 
 | Fixture | Expected | Exercises |
@@ -355,7 +355,7 @@ breaking change for downstream verifiers.
 | ATX schema | v1.0 | [`opena2a-standards/atx-spec/core.md`](https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md) |
 | AIP spec | v1.0 (in flight on PR 1496) | [`opena2a-standards/agent-identity-protocol`](https://github.com/opena2a-standards/agent-identity-protocol) |
 | `did:opena2a` method | v0.1 (W3C registration filed, PR `w3c/did-extensions#717`) | [`opena2a-standards/did-method-opena2a`](https://github.com/opena2a-standards/did-method-opena2a/blob/main/did-method-opena2a.md) |
-| Ed25519 test vector source | RFC 8032 §7.1 Tests 1, 2, 3, 1024 | [datatracker.ietf.org/doc/html/rfc8032](https://datatracker.ietf.org/doc/html/rfc8032) |
+| Ed25519 keypair sources | RFC 8032 §7.1 Tests 1, 2, 3, 1024; secondary issuer seed `SHA-256("opena2a-atx-conformance/issuer-secondary/key-1/v1")` (not an RFC vector) | [datatracker.ietf.org/doc/html/rfc8032](https://datatracker.ietf.org/doc/html/rfc8032) |
 | ML-DSA-65 | FIPS 204 final | [csrc.nist.gov/pubs/fips/204/final](https://csrc.nist.gov/pubs/fips/204/final) |
 | CIRCL (ML-DSA-65 implementation) | v1.6.2 | [github.com/cloudflare/circl](https://github.com/cloudflare/circl) |
 | cryptography (Python Ed25519) | >= 42.0.0 | [pyca/cryptography](https://github.com/pyca/cryptography) |

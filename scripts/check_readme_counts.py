@@ -49,12 +49,19 @@ It also holds the README's statement of when the gates run to the `on:`
 block of .github/workflows/conformance.yml. The README said "on each push and
 pull request" while the workflow runs on pushes to main only.
 
+It also holds the README's two Ed25519 key-source lists to vectors/. Both
+named RFC 8032 Tests 1, 2, 3 and 1024 only, while the trusted partner.example
+key two fixtures sign with is derived from a SHA-256 label. Every key id the
+fixtures name must be a vector's keyId, every Ed25519 vector's source must be
+named in both lists, and an RFC 8032 source must cite the section its own ref
+links (issuer-untrusted.json cited Test 1024 under §7.3; it is in §7.1).
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
 declares, the behavioralProfile note matches the fixtures, no criterion (c)
-claim outruns the registry, the trustScore is called illustrative and the
-trigger sentence matches the workflow, 1
-otherwise, 2 on an unknown argument.
+claim outruns the registry, the trustScore is called illustrative, the
+trigger sentence matches the workflow and both key-source lists name every
+Ed25519 key, 1 otherwise, 2 on an unknown argument.
 """
 
 import collections
@@ -145,6 +152,118 @@ RETRACTED_TRIGGERS = "on each push and pull request"
 # filter; "every push to `main`" does not match.
 EVERY_PUSH_CLAIM = re.compile(r"\b(?:each|every|any|all)\s+push(?:es)?\b(?!\s+to\s)",
                               re.IGNORECASE)
+
+# Each Ed25519 keypair the generator signs with is a vectors/*.json file whose
+# `provenance.source` says where its seed comes from, and the README restates
+# those sources in two places. Both listed RFC 8032 Tests 1, 2, 3 and 1024 only,
+# while the trusted `partner.example` key two fixtures sign with is derived from
+# a SHA-256 label. Each site must name every vector's source: an RFC 8032
+# vector by its section and test number, any other vector by its source string.
+VECTORS = ROOT / "vectors"
+KEY_SOURCE_SITES = (
+    ("README fixture conventions list",
+     re.compile(r"^- Ed25519 keypair sources?:.*$", re.M)),
+    ("README version-pinning table",
+     re.compile(r"^\| Ed25519 keypair sources? \|.*$", re.M)),
+)
+RFC8032_SOURCE = re.compile(r"^RFC 8032 §(\d+(?:\.\d+)*)\b.*?\bTest (\d+)\b")
+RFC8032_REF = re.compile(r"/rfc8032#section-(\d+(?:\.\d+)*)$")
+# "Test 1", "Tests 2 / 3", "Tests 2 and 3", "Tests 1, 2, 3, 1024".
+TEST_LIST = re.compile(r"\bTests?\s+(\d+(?:\s*(?:,|/|and)\s*\d+)*)")
+# issuer-untrusted.json cited Test 1024 under §7.3, which holds the Ed25519ph
+# vectors, while its own `ref` linked §7.1, where Test 1024 is. A source is
+# held to the section its ref links.
+RETRACTED_KEY_SOURCE = "RFC 8032 §7.3 Abbreviated Test 1024 (first 32 bytes)"
+AUTHORITY_KEY_ID = re.compile(r"did:opena2a:authority:[\w.-]+#[\w-]+")
+
+
+def load_key_vectors(root):
+    """Return (vectors, failures): one dict per vectors/*.json file with its
+    name, algorithm, keyId and provenance source and ref."""
+    vectors, failures = [], []
+    for path in sorted((root / "vectors").glob("*.json")):
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            failures.append(f"vectors/{path.name} cannot be read as JSON ({exc})")
+            continue
+        if not isinstance(doc, dict):
+            failures.append(f"vectors/{path.name} is not a JSON object")
+            continue
+        prov = doc.get("provenance")
+        prov = prov if isinstance(prov, dict) else {}
+        vectors.append({
+            "name": path.name,
+            "algorithm": doc.get("algorithm"),
+            "keyId": doc.get("keyId"),
+            "source": prov.get("source"),
+            "ref": prov.get("ref"),
+        })
+    return vectors, failures
+
+
+def fixture_key_ids(paths):
+    """Every authority key id named anywhere in the given fixture files."""
+    ids = set()
+    for path in paths:
+        ids.update(AUTHORITY_KEY_ID.findall(path.read_text(encoding="utf-8")))
+    return ids
+
+
+def key_source_failures(readme, vectors, used_key_ids):
+    """Check every Ed25519 vector's provenance, and that both README key-source
+    sites name it. `used_key_ids` are the key ids the fixtures name; each must
+    be the keyId of a vector, or the key it names has no listed source."""
+    failures = []
+    known = {v["keyId"] for v in vectors}
+    for key_id in sorted(used_key_ids - known):
+        failures.append(f"fixtures name key {key_id}, which no vectors/*.json "
+                        "provides, so its source is listed nowhere")
+    ed25519 = [v for v in vectors if v["algorithm"] == "Ed25519"]
+    if not ed25519:
+        return failures + ["no Ed25519 keypair found in vectors/; refusing to "
+                           "pass vacuously"]
+
+    sites = []
+    for label, pattern in KEY_SOURCE_SITES:
+        found = pattern.findall(readme)
+        if not found:
+            failures.append(f"no {label} row found in README (pattern "
+                            f"{pattern.pattern!r})")
+        sites.extend((label, line) for line in found)
+
+    for v in ed25519:
+        where = f"vectors/{v['name']}"
+        source = v["source"]
+        if not isinstance(source, str) or not source.strip():
+            failures.append(f"{where} has no provenance.source")
+            continue
+        rfc = RFC8032_SOURCE.match(source)
+        if source.startswith("RFC 8032") and not rfc:
+            failures.append(f"{where} source {source!r} names no `§N Test N`")
+            continue
+        if rfc:
+            section, test = rfc.groups()
+            link = RFC8032_REF.search(v["ref"] or "")
+            if not link:
+                failures.append(f"{where} cites RFC 8032 §{section} but its ref "
+                                "links no RFC 8032 section")
+            elif link.group(1) != section:
+                failures.append(f"{where} cites RFC 8032 §{section} but its ref "
+                                f"links §{link.group(1)}")
+        for label, line in sites:
+            if rfc:
+                tests = {n for group in TEST_LIST.findall(line)
+                         for n in re.findall(r"\d+", group)}
+                named = f"RFC 8032 §{section}" in line and test in tests
+                want = f"RFC 8032 §{section} Test {test}"
+            else:
+                named = source in line
+                want = source
+            if not named:
+                failures.append(f"{label} does not name the key source of "
+                                f"{where} ({v['keyId']}): {want}")
+    return failures
 
 
 def registry_cosigners(cosigners):
@@ -730,7 +849,68 @@ def _trigger_cases(readme, workflow):
     return cases
 
 
-def self_test(readme, cosigners, fixtures, vectors, verbose, workflow):
+def _key_source_cases(readme, vectors, used_key_ids):
+    """Drop a key source from each README site, restore the retracted §7.3
+    label, name an unknown key and empty vectors/ in memory;
+    key_source_failures() must report each one."""
+    baseline = set(key_source_failures(readme, vectors, used_key_ids))
+
+    def case(label, altered_readme, altered_vectors, altered_ids, want):
+        new = [f for f in key_source_failures(altered_readme, altered_vectors,
+                                              altered_ids) if f not in baseline]
+        if any(want in f for f in new):
+            return True, label, ""
+        return False, label, f"expected a failure containing {want!r}, got {new}"
+
+    ed25519 = [v for v in vectors if v["algorithm"] == "Ed25519"
+               and isinstance(v["source"], str)]
+    derived = next((v for v in ed25519 if not RFC8032_SOURCE.match(v["source"])), None)
+    rfc = max((v for v in ed25519 if RFC8032_SOURCE.match(v["source"])),
+              key=lambda v: int(RFC8032_SOURCE.match(v["source"]).group(2)),
+              default=None)
+
+    cases = []
+    for site_label, pattern in KEY_SOURCE_SITES:
+        site = pattern.search(readme)
+        for kind, v in (("derived", derived), ("RFC 8032", rfc)):
+            label = f"{site_label} omitting the {kind} key source"
+            if site is None or v is None:
+                cases.append((False, label, f"no {site_label} row in README.md"
+                              if site is None else f"no {kind} Ed25519 vector in vectors/"))
+                continue
+            line = site.group(0)
+            if v is derived:
+                cut = line.replace(v["source"], "")
+            else:
+                cut = re.sub(rf"\b{RFC8032_SOURCE.match(v['source']).group(2)}\b", "", line)
+            altered = readme[:site.start()] + cut + readme[site.end():]
+            cases.append(case(label, altered, vectors, used_key_ids,
+                              f"{site_label} does not name the key source of "
+                              f"vectors/{v['name']}"))
+
+    label = "Test 1024 vector restored to the retracted §7.3 label"
+    target = next((v for v in ed25519 if v["source"].startswith("RFC 8032")
+                   and " Test 1024" in v["source"]), None)
+    if target is None:
+        cases.append((False, label, "no RFC 8032 Test 1024 vector in vectors/"))
+    else:
+        altered = [dict(v, source=RETRACTED_KEY_SOURCE) if v is target else v
+                   for v in vectors]
+        cases.append(case(label, readme, altered, used_key_ids,
+                          f"vectors/{target['name']} cites RFC 8032 §7.3 but its "
+                          "ref links §7.1"))
+
+    cases.append(case("fixture naming a key no vector provides", readme, vectors,
+                      used_key_ids | {"did:opena2a:authority:nobody.example#key-1"},
+                      "nobody.example#key-1, which no vectors/*.json provides"))
+    cases.append(case("vectors/ holding no Ed25519 keypair", readme,
+                      [v for v in vectors if v["algorithm"] != "Ed25519"],
+                      set(), "no Ed25519 keypair found in vectors/"))
+    return cases
+
+
+def self_test(readme, cosigners, fixtures, vectors, verbose, workflow,
+              key_vectors, used_key_ids):
     texts = {"README.md": readme, "COSIGNERS.md": cosigners or ""}
     baseline = set(check(readme, cosigners, fixtures, vectors))
 
@@ -804,6 +984,7 @@ def self_test(readme, cosigners, fixtures, vectors, verbose, workflow):
                       f"a section that drops `{TRUST_PLACEHOLDER}` still passes: {new}"))
 
     cases.extend(_trigger_cases(readme, workflow))
+    cases.extend(_key_source_cases(readme, key_vectors, used_key_ids))
 
     failed = 0
     for ok, label, detail in cases:
@@ -829,9 +1010,13 @@ def main():
     cosigners = COSIGNERS.read_text(encoding="utf-8") if COSIGNERS.exists() else None
     vectors = count_vectors(ROOT)
     workflow = WORKFLOW.read_text(encoding="utf-8") if WORKFLOW.exists() else None
+    key_vectors, vector_failures = load_key_vectors(ROOT)
+    failures += vector_failures
+    fixture_paths = sorted(FIXTURES.glob("*.json"))
+    used_key_ids = fixture_key_ids(fixture_paths)
 
     failed, total = self_test(readme, cosigners, fixtures, vectors, only_self_test,
-                              workflow)
+                              workflow, key_vectors, used_key_ids)
     if failed:
         print(f"self-test FAILED: {failed} of {total} case(s) not caught by the check",
               file=sys.stderr)
@@ -843,10 +1028,10 @@ def main():
     # The check runs even when the self-test failed: a site the self-test
     # cannot find is often a count the README dropped, and the check names it.
     failures += check(readme, cosigners, fixtures, vectors)
-    fixture_paths = sorted(FIXTURES.glob("*.json"))
     failures.extend(threshold_claims(readme, fixture_paths))
     failures.extend(behavioral_profile_failures(readme, fixture_paths))
     failures.extend(ci_trigger_failures(readme, workflow))
+    failures.extend(key_source_failures(readme, key_vectors, used_key_ids))
 
     if failures:
         sys.stdout.flush()
@@ -862,7 +1047,8 @@ def main():
           f"as passing; README names the MANIFEST.sha256 byte check; "
           f"behavioralProfile scope note matches; criterion (c) claim matches "
           f"the cosignature registry; trustScore is called illustrative; "
-          f"CI trigger sentence matches {WORKFLOW_NAME}")
+          f"CI trigger sentence matches {WORKFLOW_NAME}; "
+          f"both README key-source lists name every Ed25519 key in vectors/")
     return 0
 
 
