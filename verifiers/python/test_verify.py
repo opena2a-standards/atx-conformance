@@ -14,8 +14,8 @@ behavioralProfile and scanSummary members outside their Go type, the signature
 base64 alphabet, a fixture whose expected member is not an object, and a
 report line standard output cannot encode. They also pin the decode of the
 fixture wrapper: members outside their Go type, names in another case or
-repeated, a public key that is not hex, nesting at Go's depth limit, bytes
-that are not UTF-8, the single-pass string-literal scan, and --help. Two tests
+repeated, a public key that is not hex, nesting at Go's depth limit (in
+declaredPurpose too, which the JCS serializer walks), bytes that are not UTF-8, the single-pass string-literal scan, and --help. Two tests
 read verify.py itself: it imports no name it does not use, and its module
 docstring lists only the checks the verifier runs. Needs the same dependencies
 as verify.py. Run from this directory:
@@ -862,13 +862,17 @@ GO_HEX_DECODES = (
 
 # Nesting at the edge of Go's encoding/json depth limit, 10000 levels with
 # the fixture object: (where, how many arrays nest there, Go verdict, or None
-# where the file fails to load).
+# where the file fails to load). declaredPurpose enters the v1.1 TBS as
+# written, so there the arrays are canonicalized at that depth too.
 GO_NESTING_VERDICTS = (
     (("deep",), 5000, "ACCEPT"),
     (("deep",), 9999, "ACCEPT"),
     (("deep",), 10000, None),
     (("atx", "extra"), 5000, "ACCEPT"),
     (("atx", "extra"), 9999, None),
+    (("atx", "declaredPurpose"), 3000, "SIGNATURE_INVALID"),
+    (("atx", "declaredPurpose"), 9998, "SIGNATURE_INVALID"),
+    (("atx", "declaredPurpose"), 9999, None),
 )
 
 # Bytes that are not UTF-8 inside a string: Go decodes each byte of an
@@ -1361,6 +1365,39 @@ class SerializerRefusal(unittest.TestCase):
                 message = str(raised.exception)
                 self.assertIn("Got float 0.5.", message)
                 self.assertIn("string-encoded as %.6f", message)
+
+
+class SerializerNesting(unittest.TestCase):
+    def test_nesting_past_the_recursion_limit_serializes(self):
+        # Go's JCS library canonicalizes a declaredPurpose of any depth its
+        # decoder accepts; a serializer that recursed once per level raised
+        # RecursionError at about a third of that.
+        n = 3 * sys.getrecursionlimit()
+        arrays: list = []
+        objects: dict = {}
+        for _ in range(n):
+            arrays = [arrays]
+            objects = {"a": objects}
+        for path in SERIALIZERS:
+            with self.subTest(serializer=str(path.relative_to(ROOT))):
+                serializer = _load_serializer(path)
+                self.assertEqual(serializer.canonicalize(arrays), b"[" * (n + 1) + b"]" * (n + 1))
+                self.assertEqual(serializer.canonicalize(objects), b'{"a":' * n + b"{}" + b"}" * n)
+
+    def test_order_and_separators(self):
+        value = {"b": [1, [], {}, "x", None, True, False], "a": {"d": [[2], 3], "c": "é"}, "": -4}
+        want = '{"":-4,"a":{"c":"é","d":[[2],3]},"b":[1,[],{},"x",null,true,false]}'.encode("utf-8")
+        for path in SERIALIZERS:
+            with self.subTest(serializer=str(path.relative_to(ROOT))):
+                self.assertEqual(_load_serializer(path).canonicalize(value), want)
+
+    def test_first_number_in_canonical_order_is_refused(self):
+        # Members serialize in sorted order, so "a" comes before "b".
+        for path in SERIALIZERS:
+            with self.subTest(serializer=str(path.relative_to(ROOT))):
+                with self.assertRaises(NotImplementedError) as raised:
+                    _load_serializer(path).canonicalize({"b": 0.25, "a": [1, 0.5]})
+                self.assertIn("Got float 0.5.", str(raised.exception))
 
 
 class Imports(unittest.TestCase):

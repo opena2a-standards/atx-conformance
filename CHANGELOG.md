@@ -211,6 +211,13 @@ whenever one lands; README "Versioning and stability" says they should not.
 - `python3 verify.py --help` (or `-h`) prints the usage line and exits 0,
   where it reported `--help` as a missing path and exited 2 (#173). No
   fixture changes.
+- The vendored RFC 8785 serializer (`verifiers/python/rfc8785.py` and its
+  copy in `jcs-vectors/python/`) serializes arrays and objects without
+  recursion. A v1.1 credential whose `declaredPurpose` nested about 3000
+  arrays ended in a `RecursionError` verify error, where the Go verifier
+  reports `SIGNATURE_INVALID`; the Python verifier now reports that too, up
+  to the 10000 levels Go's decoder accepts. Its canonical bytes for every
+  other value do not change (#175). No fixture changes.
 
 ## e2f9dc4 (#26, 2026-09-09): capabilities rewritten in 22 existing fixtures
 
