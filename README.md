@@ -267,9 +267,23 @@ Depends on:
 ### Expected output
 
 Both verifiers report `summary: 23 pass, 0 fail (23 fixtures)` against the
-shipped fixture set. Any divergence on bytes (the fixture file was modified)
-or on verifier semantics (the verifier has drifted from the spec) shows up
-as one or more FAIL lines.
+shipped fixture set. A verifier prints a FAIL line when its result on a
+fixture differs from the fixture's expected outcome, which is how drift in
+verifier semantics (the verifier no longer follows the spec) shows up.
+
+The verifiers check verdicts, not bytes. An edit that leaves the verdict
+unchanged still reports PASS: a change to an unsigned v1.0 field, to a v1.1
+field outside the signed `JCS(TBS)` payload, or to a fixture's
+`description`. The byte check is `MANIFEST.sha256`. Run it from the
+repository root:
+
+```bash
+shasum -a 256 -c MANIFEST.sha256
+```
+
+Each line reads `OK` when that fixture's bytes match the published set. A
+modified fixture reads `FAILED` and the command exits non-zero. On Linux,
+`sha256sum -c MANIFEST.sha256` does the same.
 
 ## Reproducing the fixtures
 

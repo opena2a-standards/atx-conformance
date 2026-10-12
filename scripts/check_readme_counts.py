@@ -7,7 +7,11 @@ PASS"). Both are measurements over fixtures/, so they are enforced here
 rather than maintained by hand. They drifted apart once already: the table
 still claimed 11 / 11 after the fixture set had grown to 20.
 
-Exit 0 when every stated count matches the fixture set, 1 otherwise.
+The README's expected-output section also says what a verifier result does
+and does not measure, so it must name the MANIFEST.sha256 byte check.
+
+Exit 0 when every stated count matches the fixture set and the byte check is
+named, 1 otherwise.
 """
 
 import pathlib
@@ -22,6 +26,32 @@ FIXTURES = ROOT / "fixtures"
 # A number a stranger is asked to verify against is exactly the number that
 # must not be maintained by hand.
 COSIGNERS = ROOT / "COSIGNERS.md"
+# The verifiers compare verdicts, not bytes: an edit outside a fixture's signed
+# payload still reports PASS. The expected-output section once said a modified
+# fixture "shows up as one or more FAIL lines", which sent a reader to the
+# verifiers for a check only MANIFEST.sha256 performs.
+EXPECTED_OUTPUT = "### Expected output"
+BYTE_CHECK = "shasum -a 256 -c MANIFEST.sha256"
+
+
+def section(text, heading):
+    """Return the body under `heading` up to the next heading, or None.
+
+    Lines inside fenced code blocks are never headings, so a `# comment` in a
+    shell example does not end the section early.
+    """
+    lines = text.splitlines()
+    if heading not in lines:
+        return None
+    body = []
+    fenced = False
+    for line in lines[lines.index(heading) + 1:]:
+        if line.startswith("```"):
+            fenced = not fenced
+        elif not fenced and re.match(r"#{1,6} ", line):
+            break
+        body.append(line)
+    return "\n".join(body)
 
 
 def main():
@@ -85,6 +115,15 @@ def main():
         if got != total:
             failures.append(f"README table row {got} / {total} PASS is not a full pass")
 
+    expected_output = section(readme, EXPECTED_OUTPUT)
+    if expected_output is None:
+        failures.append(f"no `{EXPECTED_OUTPUT}` section found in README")
+    elif BYTE_CHECK not in expected_output:
+        failures.append(
+            f"README `{EXPECTED_OUTPUT}` does not name the byte check "
+            f"`{BYTE_CHECK}`; the verifiers check verdicts, not bytes"
+        )
+
     if failures:
         print("README counts do not match fixtures/:\n", file=sys.stderr)
         for f in failures:
@@ -92,7 +131,7 @@ def main():
         return 1
 
     print(f"README and COSIGNERS counts match fixtures/: {actual} fixtures, "
-          f"all stated as passing")
+          f"all stated as passing; README names the MANIFEST.sha256 byte check")
     return 0
 
 
