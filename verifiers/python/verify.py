@@ -363,7 +363,24 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
 
     # Step 5: signature verification.
     # Spec mandate: every declared signature MUST verify.
-    payload = canonical_payload_v11(atx) if version == SUPPORTED_ATC_VERSION_V11 else canonical_payload(atx)
+    if version == SUPPORTED_ATC_VERSION_V11:
+        try:
+            payload = canonical_payload_v11(atx)
+        except NotImplementedError as exc:
+            # The vendored JCS serializer refuses non-integer numbers
+            # (rfc8785.py); a schema-valid v1.1 TBS carries none. One can still
+            # arrive in content the signer never signed, e.g. a number
+            # injected into declaredPurpose, which enters the TBS verbatim.
+            # Without the canonical bytes no declared signature can verify, so
+            # reject in the category a verifier that does canonicalize the
+            # number reaches (the Go reference) instead of raising out of the
+            # run.
+            return VerifyResult(
+                reject_category="SIGNATURE_INVALID",
+                reason=f"no signature can be verified: the to-be-signed object cannot be canonicalized ({exc})",
+            )
+    else:
+        payload = canonical_payload(atx)
     eds, pqs = index_public_keys(
         vs["publicKeys"], _authority_set_for(atx, vs.get("trustedIssuers", []))
     )
