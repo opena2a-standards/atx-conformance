@@ -82,6 +82,50 @@ whenever one lands; README "Versioning and stability" says they should not.
   and both verifiers report ACCEPT. `scripts/check_readme_counts.py` fails
   when that README claims future fields are signed or stops stating the
   projection rule (#158). No fixture changes.
+- `jcs-vectors/README.md`, `jcs-vectors/ts/package.json` and
+  `jcs-vectors/ts/check.mjs` say `canonicalize` is listed in RFC 8785
+  Appendix G, where they called it the RFC 8785 reference implementation:
+  the RFC designates none. `scripts/check_readme_counts.py` fails when any
+  of the three calls it the reference implementation or stops citing
+  Appendix G (#160). No fixture or vector changes.
+- `jcs-vectors/run-agreement.sh` fails its Go verifier leg unless
+  `TestJCSVectorsThroughVerifierProjection` ran and passed. `go test -run`
+  exits 0 when no test matches, so with that test renamed the gate still
+  printed PASS. The leg also runs a name no test has and fails if that is
+  reported as run (#165). No fixture or vector changes.
+- README.md and the `jcs-byte-agreement` description in `conformance.json`
+  name the two verifier legs of the byte-agreement gate (`verifiers/go`,
+  `verifiers/python`) and say it needs the Python verifier's dependencies,
+  where they described three canonicalizers only. `jcs-vectors/README.md`
+  and the header of `jcs-vectors/run-agreement.sh` say the gate runs no
+  issuer, offline-verifier or broker code, where they said it runs no code
+  from another repository: its legs run `gowebpki/jcs`, `cloudflare/circl`
+  and `canonicalize`. `jcs-vectors/README.md` and `jcs-vectors/pin/main.go`
+  call `gowebpki/jcs` a Go implementation of RFC 8785, where they called it
+  a reference port. `scripts/check_readme_counts.py` fails on each of the
+  three earlier wordings (#165). `conformance.json` changes in that one
+  description; no fixture or vector changes.
+- `scripts/check_readme_counts.py` runs its checks from one list in which
+  each check carries its own wiring case, and its self-test fails when a
+  listed check has no case, when a case stays green with its check's call
+  removed, or when a function that reports failures is run by no entry. The
+  self-test also runs the whole script in a child process on a copy of the
+  tree with one README count altered and requires exit 1; before, it passed
+  with `main()` running no check. Four patterns that took about 2 to 4
+  seconds on 20,000 blank lines or one 16,000-character word are bounded,
+  with a timing case each; the zero-dependency check's restriction to
+  statements that name the Python verifier has a case; and the script's own
+  statement of how many vectors carry `behavioralProfile.observationDays`
+  says four, where it said five (#165). No fixture changes.
+- `scripts/schema_validation.py` reports a tracked document that lacks a
+  member its self-test alters as a red case naming the member, and goes on
+  to the format pass; it ended in a `KeyError` traceback before that pass
+  ran. Its format summary counts a schema file that cannot be used apart
+  from the documents, where one such file was subtracted from the documents
+  that pass. Its self-test covers six more constraints of the two format
+  schemas, one altered document each (#165). No fixture changes.
+- `verifiers/python/verify.py` no longer imports `os` and
+  `dataclasses.field`, which it did not use (#165). No fixture changes.
 
 ## e2f9dc4 (#26, 2026-09-09): capabilities rewritten in 22 existing fixtures
 

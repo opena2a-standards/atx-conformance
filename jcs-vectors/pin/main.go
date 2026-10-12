@@ -4,7 +4,7 @@
 //
 // For each vector it:
 //  1. Canonicalizes the authored TBS object with github.com/gowebpki/jcs
-//     (the webpki.org RFC 8785 reference port).
+//     (a Go implementation of RFC 8785).
 //  2. Signs the canonical bytes with the suite's Ed25519 issuer-primary seed
 //     (RFC 8032 §7.1 Test 1) and the ML-DSA-65 seed, both deterministic.
 //  3. Writes vectors/NN-name.json with the TBS plus the pinned expected

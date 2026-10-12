@@ -83,10 +83,13 @@ claims this README makes about them -- not every sentence below:
    `MANIFEST.sha256` must reproduce exactly (byte-pin).
 3. The JCS byte-agreement gate
    ([`jcs-vectors/run-agreement.sh`](./jcs-vectors/run-agreement.sh)) must
-   pass across the independent Go, Python, and TypeScript canonicalizers,
-   and every Go module in the repository must pin one `cloudflare/circl`
-   version ([`scripts/check_circl_pin.sh`](./scripts/check_circl_pin.sh)),
-   so the vectors and the verifier share one crypto tree.
+   pass across the independent Go, Python, and TypeScript canonicalizers
+   and across both reference verifiers' own v1.1 projection
+   (`verifiers/go`, `verifiers/python`; the gate needs the Python
+   verifier's dependencies), and every Go module in the repository must pin
+   one `cloudflare/circl` version
+   ([`scripts/check_circl_pin.sh`](./scripts/check_circl_pin.sh)), so the
+   vectors and the verifier share one crypto tree.
 4. The cross-implementation parity gate
    ([`scripts/parity/parity.py`](./scripts/parity/parity.py)) asserts the Go
    and Python verifiers agree per fixture on gate status, verdict, and
@@ -152,10 +155,11 @@ integrity-protected. The normative projection and determinism rules are in
 [`atx-spec/core.md`](https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md)
 §1.3a.2. The verifiers dispatch on `atcVersion`; the v1.0 pipe form is frozen and
 unchanged. Cross-language byte agreement on `JCS(TBS)` is proven by
-[`jcs-vectors/`](jcs-vectors/) (Go, Python, and TypeScript canonicalizers must
-agree byte-for-byte). The `fixtures/v1_1-*.json` fixtures exercise the v1.1 path,
-including `v1_1-tampered-capabilities.json`, which is REJECTED precisely because
-capabilities are now signed.
+[`jcs-vectors/`](jcs-vectors/) (the Go, Python, and TypeScript canonicalizers
+and the v1.1 projection of both reference verifiers, `verifiers/go` and
+`verifiers/python`, must agree byte-for-byte). The `fixtures/v1_1-*.json`
+fixtures exercise the v1.1 path, including `v1_1-tampered-capabilities.json`,
+which is REJECTED precisely because capabilities are now signed.
 
 ### Hybrid signing: what this suite requires
 

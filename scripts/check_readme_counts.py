@@ -23,6 +23,12 @@ README and COSIGNERS.md is altered in memory, one at a time, and the check
 must fail on it. A site the check cannot see is reported by name instead of
 silently passing.
 
+Those cases call the checks directly, so the self-test also runs this whole
+script in a child process on a copy of the tree with one README count
+altered, and that run must exit 1 naming the count: a main() that stopped
+running the checks would exit 0 there. The child skips that one case
+(CHECK_README_COUNTS_CHILD is set for it), so the runs do not nest.
+
 Usage:
     python3 scripts/check_readme_counts.py              # self-test, then the check
     python3 scripts/check_readme_counts.py --self-test  # the self-test alone, per case
@@ -95,6 +101,21 @@ All three called erdtman/canonicalize the RFC 8785 reference implementation,
 while RFC 8785 designates none and lists canonicalize in Appendix G among the
 open-source implementations verified to be compatible with JCS. Each must cite
 Appendix G and must not call the library the reference implementation.
+jcs-vectors/README.md and jcs-vectors/pin/main.go called gowebpki/jcs, the Go
+leg's library, a reference port in the same way; neither may.
+
+It also holds what jcs-vectors/README.md and jcs-vectors/run-agreement.sh say
+the byte-agreement gate runs. Both said it runs no code from another
+repository while its Go and TypeScript legs run the modules
+jcs-vectors/go.mod requires and the package jcs-vectors/ts/package.json
+depends on. What both meant is that it runs no issuer, offline-verifier or
+broker code.
+
+It also holds how README.md and conformance.json describe that gate to the
+legs jcs-vectors/run-agreement.sh runs. Both described it as agreement across
+three canonicalizers after it began running each conformance verifier's own
+v1.1 path over the vectors. Each description must name every verifiers/
+directory the script runs a leg in.
 
 It also holds where README.md and COSIGNERS.md send readers to coordinate.
 Both kept naming a2aproject/A2A#1876 as the place second-party
@@ -108,7 +129,7 @@ It also holds what jcs-vectors/README.md, verifiers/python/verify.py and
 jcs-vectors/pin/main.go say about the JSON numbers left in the v1.1 TBS to
 the vectors' canonical strings. All three said `trustLevel` was the only one
 while every vector also carries scanSummary.criticalFindings and
-scanSummary.highFindings, and five carry behavioralProfile.observationDays.
+scanSummary.highFindings, and four carry behavioralProfile.observationDays.
 None may name one member as the only JSON number while the vectors carry
 another, the README must state that every JSON number left in the TBS is an
 integer, and every number in every vector must be one.
@@ -130,19 +151,25 @@ Go dependency site names every direct requirement (the two README sites at
 its pinned version; the verify.go header states no versions, so it is held
 to module names alone), no Python dependency site calls the Python verifier
 zero-dependency while requirements.txt names a package, each jcs-vectors
-file describing canonicalize cites RFC 8785 Appendix G and calls it no
-reference implementation, every Version pinning link names a commit, the
-reproduction steps match the generator, no coordination link points at a
-closed issue, every statement of the TBS numbers matches the vectors and
-the jcs-vectors README scopes signing to the TBS projection, 1 otherwise,
-2 on an unknown argument.
+file describing canonicalize cites RFC 8785 Appendix G, none calls an RFC
+8785 library a reference implementation or port, neither description of what
+the byte-agreement gate runs says it runs no code from another repository,
+every description of that gate names each verifier leg, every Version
+pinning link names a commit, the reproduction steps match the generator, no
+coordination link points at a closed issue, every statement of the TBS
+numbers matches the vectors and the jcs-vectors README scopes signing to the
+TBS projection, 1 otherwise, 2 on an unknown argument.
 """
 
 import collections
 import json
+import os
 import pathlib
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -559,8 +586,10 @@ PY_DEPENDENCY_SITES = (
     "jcs-vectors/python/rfc8785.py",
 )
 # A requirement line opens with the package name; comments and `-r`-style
-# options open with another character.
-PY_REQUIREMENT = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)", re.M)
+# options open with another character. The indent is `[ \t]*`: `\s*` also
+# matches newlines, so under re.M every line start in a run of blank lines
+# rescanned the rest of the run, and 20,000 blank lines took 2 s.
+PY_REQUIREMENT = re.compile(r"^[ \t]*([A-Za-z0-9][A-Za-z0-9._-]*)", re.M)
 ZERO_DEPENDENCY = re.compile(r"\bzero[- ]dep", re.I)
 
 
@@ -618,43 +647,190 @@ JCS_LIBRARY_SITES = (
      "// from the vector's `tbs` object using erdtman/canonicalize (the RFC 8785\n"
      "// reference implementation, the same library the Secretless broker ATX verifier"),
 )
+# The Go leg runs github.com/gowebpki/jcs, which the jcs-vectors README and the
+# vector pinner called a reference port in the same way. Each is paired with
+# the wording it published.
+JCS_PORT_SITES = (
+    ("jcs-vectors/README.md", "(webpki.org reference port)"),
+    ("jcs-vectors/pin/main.go", "//     (the webpki.org RFC 8785 reference port)."),
+)
 JCS_REFERENCE_CLAIM = re.compile(
     r"\bRFC\s*8785(?:'s)?\s+reference\s+impl(?:ementation)?\b"
-    r"|\breference\s+impl(?:ementation)?\s+(?:of|for)\s+RFC\s*8785\b",
+    r"|\breference\s+impl(?:ementation)?\s+(?:of|for)\s+RFC\s*8785\b"
+    r"|\b(?:RFC\s*8785(?:'s)?\s+)?reference\s+port\b",
     re.IGNORECASE,
 )
 JCS_APPENDIX_G = "RFC 8785 Appendix G"
+# A line-leading `//` or `#` comment marker and its indent. The indent is
+# `[ \t]*`: `\s*` also matches newlines, so under re.M every line start in a
+# run of blank lines rescanned the rest of the run, and 20,000 blank lines
+# took 2 s.
+COMMENT_MARKER = re.compile(r"^[ \t]*(?://+|#+)", re.M)
 
 
 def _flat_prose(text):
     """`text` with line-leading `//` and `#` markers removed and whitespace
     collapsed, so neither a line wrap nor a comment continuation splits a
     phrase."""
-    return " ".join(re.sub(r"^\s*(?://+|#+)", "", text, flags=re.M).split())
+    return " ".join(COMMENT_MARKER.sub("", text).split())
 
 
 def jcs_library_failures(sites):
-    """Each file that describes the TypeScript leg's library (missing from
-    `sites` when the file is) must say RFC 8785 Appendix G lists it, and must
-    not call it the RFC 8785 reference implementation."""
+    """No file that describes an RFC 8785 library the gate runs (missing from
+    `sites` when the file is) may call it a reference implementation or a
+    reference port, and each file that describes the TypeScript leg's library
+    must say RFC 8785 Appendix G lists it."""
     failures = []
-    for path, retracted in JCS_LIBRARY_SITES:
+    cited = [path for path, _ in JCS_LIBRARY_SITES]
+    paths = []
+    for path, retracted in JCS_LIBRARY_SITES + JCS_PORT_SITES:
         if not JCS_REFERENCE_CLAIM.search(_flat_prose(retracted)):
             failures.append(f"RFC 8785 reference claim pattern no longer matches "
                             f"the wording {path} published; the gate cannot fire")
+        if path not in paths:
+            paths.append(path)
+    for path in paths:
         if path not in sites:
-            failures.append(f"{path} is missing; what it says about canonicalize "
-                            f"and RFC 8785 cannot be checked")
+            failures.append(f"{path} is missing; what it says about an RFC 8785 "
+                            f"library cannot be checked")
             continue
         flat = _flat_prose(sites[path])
-        claim = JCS_REFERENCE_CLAIM.search(flat)
-        if claim:
-            failures.append(f"{path} calls canonicalize \"{claim.group(0)}\", but "
-                            f"RFC 8785 designates no reference implementation; say "
-                            f"it is listed in {JCS_APPENDIX_G}")
-        if JCS_APPENDIX_G not in flat:
+        for claim in JCS_REFERENCE_CLAIM.finditer(flat):
+            failures.append(f"{path} calls an RFC 8785 library \"{claim.group(0)}\", "
+                            f"but RFC 8785 designates no reference implementation")
+        if path in cited and JCS_APPENDIX_G not in flat:
             failures.append(f"{path} does not say canonicalize is listed in "
                             f"{JCS_APPENDIX_G}")
+    return failures
+
+
+# jcs-vectors/README.md and the header of jcs-vectors/run-agreement.sh said the
+# gate runs no code from another repository, while its Go and TypeScript legs
+# run the modules jcs-vectors/go.mod requires and the package
+# jcs-vectors/ts/package.json depends on. What both meant is that the gate runs
+# no issuer, offline-verifier or broker code. Each file is paired with the
+# wording it published, with its original line wrap.
+GATE_SCRIPT_NAME = "jcs-vectors/run-agreement.sh"
+GATE_GO_MOD_NAME = "jcs-vectors/go.mod"
+GATE_PACKAGE_NAME = "jcs-vectors/ts/package.json"
+OUTSIDE_CODE_SITES = (
+    ("jcs-vectors/README.md", "It runs no code from another repository."),
+    (GATE_SCRIPT_NAME,
+     "# script exits 0. It runs no code outside this repository: an issuer, offline\n"
+     "# verifier or broker is held to these bytes only by running vectors/ in its own"),
+)
+OUTSIDE_CODE_CLAIM = re.compile(
+    r"\bruns?\s+no\s+code\s+(?:from\s+(?:another|any\s+other|other)|outside\s+(?:this|the))"
+    r"\s+repositor(?:y|ies)\b",
+    re.IGNORECASE,
+)
+
+
+def gate_libraries(go_mod, package):
+    """The third-party libraries the gate's Go and TypeScript legs run: the
+    direct requirements of jcs-vectors/go.mod and the dependencies of
+    jcs-vectors/ts/package.json (each the file's text, None when missing)."""
+    try:
+        dependencies = json.loads(package or "{}").get("dependencies", {})
+    except (ValueError, AttributeError):
+        dependencies = {}
+    return (sorted(direct_requirements(go_mod or ""))
+            + sorted(dependencies if isinstance(dependencies, dict) else ()))
+
+
+def outside_code_failures(sites, libraries):
+    """Neither file that says what the gate runs (missing from `sites` when
+    the file is) may say it runs no code from another repository while its
+    legs run `libraries`, from gate_libraries."""
+    failures = []
+    for path, retracted in OUTSIDE_CODE_SITES:
+        if not OUTSIDE_CODE_CLAIM.search(_flat_prose(retracted)):
+            failures.append(f"outside-code claim pattern no longer matches the "
+                            f"wording {path} published; the gate cannot fire")
+        if path not in sites:
+            failures.append(f"{path} is missing; what it says the byte-agreement "
+                            f"gate runs cannot be checked")
+            continue
+        claim = OUTSIDE_CODE_CLAIM.search(_flat_prose(sites[path]))
+        if claim and libraries:
+            failures.append(f"{path} says the gate \"{claim.group(0)}\", but its "
+                            f"legs run {', '.join(libraries)}; say it runs no "
+                            f"issuer, offline-verifier or broker code")
+    return failures
+
+
+# The gate also runs each conformance verifier's own v1.1 path over the
+# vectors. README.md, in the continuous-verification list and the v1.1 section,
+# and the profile's description of the gate kept calling it agreement across
+# three canonicalizers. Each must name every directory the gate script runs a
+# verifier leg in, read from the leg's banner line.
+VERIFIER_LEG = re.compile(r'^echo "=== \[verifier/\w+\] (verifiers/[\w-]+) ', re.M)
+PROFILE = ROOT / "conformance.json"
+PROFILE_NAME = "conformance.json"
+README_GATE_SITE = "README description of the JCS byte-agreement gate"
+PROFILE_GATE_SITE = f"{PROFILE_NAME} description of {GATE_SCRIPT_NAME}"
+CANONICALIZERS = re.compile(r"\bcanonicalizers\b", re.IGNORECASE)
+# The two sentences README.md published, with their original line wraps, and
+# the description the profile carried.
+RETRACTED_GATE_CLAIMS = (
+    "The JCS byte-agreement gate\n"
+    "   ([`jcs-vectors/run-agreement.sh`](./jcs-vectors/run-agreement.sh)) must\n"
+    "   pass across the independent Go, Python, and TypeScript canonicalizers,\n"
+    "   and every Go module in the repository must pin one `cloudflare/circl`\n"
+    "   version ([`scripts/check_circl_pin.sh`](./scripts/check_circl_pin.sh)),\n"
+    "   so the vectors and the verifier share one crypto tree.",
+    "Cross-language byte agreement on `JCS(TBS)` is proven by\n"
+    "[`jcs-vectors/`](jcs-vectors/) (Go, Python, and TypeScript canonicalizers must\n"
+    "agree byte-for-byte).",
+)
+RETRACTED_PROFILE_GATE = (
+    "three independent canonicalizers (Go gowebpki/jcs, vendored Python RFC 8785, "
+    "TypeScript erdtman/canonicalize) must reproduce each vector's pinned "
+    "canonical bytes exactly"
+)
+
+
+def verifier_legs(gate_script):
+    """The directories jcs-vectors/run-agreement.sh runs a verifier leg in."""
+    return VERIFIER_LEG.findall(gate_script)
+
+
+def gate_descriptions(readme, profile):
+    """(site, text) for each description of the byte-agreement gate: every
+    README statement that names jcs-vectors/ and its canonicalizers, and the
+    description of each additionalGates entry of conformance.json (its text,
+    None when missing) whose path is the gate script. The repository layout,
+    a fenced block, lists what the directory holds and is not one."""
+    found = [(README_GATE_SITE, claim) for claim in statements(readme)
+             if "jcs-vectors/" in claim and CANONICALIZERS.search(claim)
+             and not claim.startswith("```")]
+    try:
+        gates = json.loads(profile or "{}").get("additionalGates", [])
+    except (ValueError, AttributeError):
+        gates = []
+    for gate in gates if isinstance(gates, list) else []:
+        if isinstance(gate, dict) and gate.get("path") == GATE_SCRIPT_NAME:
+            found.append((PROFILE_GATE_SITE, str(gate.get("description", ""))))
+    return found
+
+
+def gate_leg_failures(readme, profile, gate_script):
+    """Each description of the byte-agreement gate must name every directory
+    jcs-vectors/run-agreement.sh (its text, None when missing) runs a verifier
+    leg in. `profile` is conformance.json's text, None when missing."""
+    if gate_script is None:
+        return [f"{GATE_SCRIPT_NAME} is missing; the legs its descriptions must "
+                f"name cannot be read"]
+    failures = []
+    if profile is None:
+        failures.append(f"{PROFILE_NAME} is missing; its description of "
+                        f"{GATE_SCRIPT_NAME} cannot be checked")
+    for site, text in gate_descriptions(readme, profile):
+        for leg in verifier_legs(gate_script):
+            if not _names(text, leg):
+                failures.append(f"{site} (\"{text[:60]}...\") does not name {leg}, "
+                                f"whose own v1.1 path {GATE_SCRIPT_NAME} also runs "
+                                f"over the vectors")
     return failures
 
 
@@ -1185,7 +1361,7 @@ def reproduction_failures(readme, signing):
 # jcs-vectors/README.md said `trustLevel` was the only JSON number left in the
 # TBS, and the Python verifier and the vector pinner said the same in comments,
 # while every vector also carries scanSummary.criticalFindings and
-# scanSummary.highFindings as JSON numbers and five carry
+# scanSummary.highFindings as JSON numbers and four carry
 # behavioralProfile.observationDays. The agreement argument rests on every one
 # of them being an integer, so that is what the README must state, and no site
 # may name one member as the only number unless the vectors carry no other.
@@ -1202,9 +1378,25 @@ TBS_NUMBER_SITES = (
 INTEGER_SITE = "jcs-vectors/README.md"
 INTEGER_CLAIM = "every JSON number left in the TBS is an integer"
 # "`trustLevel` (an integer) is the only JSON number", matched over prose with
-# comment markers and line wraps removed; group 1 is the member named.
+# comment markers and line wraps removed; group 1 is the member named. The
+# member name and the parenthesis after it are bounded: unbounded, each was
+# rescanned from every position in one long word or in a run of unclosed
+# parentheses, and a 16,000-character word took 4 s.
+MEMBER_NAME_MAX = 64
+ASIDE_MAX = 200
 ONLY_NUMBER_CLAIM = re.compile(
-    r"`?(\w+)`?(?:\s+\([^)]*\))?\s+(?:is\s+)?the\s+only\s+JSON\s+number\b",
+    rf"`?(\w{{1,{MEMBER_NAME_MAX}}})`?(?:\s+\([^)]{{0,{ASIDE_MAX}}}\))?"
+    r"\s+(?:is\s+)?the\s+only\s+JSON\s+number\b",
+    re.IGNORECASE,
+)
+# This file says, in its docstring and above TBS_NUMBER_SITES, how many of the
+# vectors have the observationDays member. Both said five while four do, so
+# the self-test holds the count to the vectors.
+OBSERVATION_DAYS = "behavioralProfile.observationDays"
+COUNT_WORDS = ("zero", "one", "two", "three", "four", "five", "six", "seven",
+               "eight", "nine", "ten", "eleven", "twelve")
+CARRIER_COUNT = re.compile(
+    rf"\b({'|'.join(COUNT_WORDS)}|\d+)\s+carry\s+{re.escape(OBSERVATION_DAYS)}",
     re.IGNORECASE,
 )
 
@@ -1216,7 +1408,7 @@ class _NonInteger(str):
 def _prose(text):
     """Collapse whitespace and drop line-leading `//` and `#` comment markers,
     so a claim wrapped across comment lines reads as one sentence."""
-    return " ".join(re.sub(r"(?m)^\s*(?://+|#+)", " ", text).split())
+    return " ".join(COMMENT_MARKER.sub(" ", text).split())
 
 
 def _tbs_numbers(value, path="", member=""):
@@ -1338,7 +1530,27 @@ def _tbs_number_cases(sites, canonical):
         got = new(altered_canonical=altered)
         cases.append((any("not an integer" in f for f in got),
                       label, f"trustLevel 3.5 in {name} still passes: {got}"))
+
+    label = f"this script's count of the vectors that carry {OBSERVATION_DAYS}"
+    carrying = sum(1 for text in canonical.values()
+                   if any(path == OBSERVATION_DAYS
+                          for path, _, _ in _tbs_numbers(_parsed(text))))
+    source = pathlib.Path(__file__).read_text(encoding="utf-8")
+    stated = [word.lower() for word in CARRIER_COUNT.findall(_prose(source))]
+    counts = [COUNT_WORDS.index(word) if word in COUNT_WORDS else int(word)
+              for word in stated]
+    cases.append((bool(counts) and all(n == carrying for n in counts), label,
+                  f"it says {', '.join(stated) or 'nothing'}, and {carrying} of "
+                  f"the {len(canonical)} vectors carry it"))
     return cases
+
+
+def _parsed(text):
+    """A vector's canonical string as a parsed TBS, or None when it has none."""
+    try:
+        return json.loads(text)
+    except (TypeError, ValueError):
+        return None
 
 
 # The sibling-repositories table row that describes this repository.
@@ -1534,25 +1746,27 @@ def check(readme, cosigners, fixtures, vectors, signing):
 Tree = collections.namedtuple("Tree", (
     "readme cosigners fixtures vectors signing fixture_paths workflow "
     "key_vectors used_key_ids versions go_mod verify_go py_requirements "
-    "py_dependency_texts jcs_sites tbs_sites tbs_canonical jcs_readme"))
+    "py_dependency_texts jcs_sites tbs_sites tbs_canonical jcs_readme "
+    "gate_sites gate_libraries profile"))
+
+# One check tree_failures() runs: its name, the call (`run(tree)` returns
+# failures) and the alteration the self-test makes to prove the call is still
+# made. `wiring(tree)` returns the text a new failure must contain and the
+# Tree fields to replace, or a sentence saying why the site to alter was not
+# found. Both halves sit in one CHECKS entry, below the alterations, so a
+# check cannot be added without a wiring case or lose its case and then its
+# call: the case list once fell three checks behind the calls.
+Check = collections.namedtuple("Check", "name run wiring")
 
 
-def tree_failures(tree):
-    """Every failure the check reports for `tree`: check() and the checks run
-    beside it. main() and the self-test's wiring cases both call this, so a
-    check dropped from here fails a case instead of going unrun."""
-    failures = check(tree.readme, tree.cosigners, tree.fixtures, tree.vectors, tree.signing)
-    failures.extend(threshold_claims(tree.readme, tree.fixture_paths))
-    failures.extend(behavioral_profile_failures(tree.readme, tree.fixture_paths))
-    failures.extend(ci_trigger_failures(tree.readme, tree.workflow))
-    failures.extend(key_source_failures(tree.readme, tree.key_vectors, tree.used_key_ids))
-    failures.extend(version_label_failures(tree.readme, tree.versions))
-    failures.extend(go_dependency_failures(tree.readme, tree.go_mod, tree.verify_go))
-    failures.extend(python_dependency_failures(tree.py_requirements,
-                                               tree.py_dependency_texts))
-    failures.extend(jcs_library_failures(tree.jcs_sites))
-    failures.extend(tbs_number_failures(tree.tbs_sites, tree.tbs_canonical))
-    failures.extend(jcs_scope_failures(tree.jcs_readme))
+def tree_failures(tree, checks=None):
+    """Every failure the check reports for `tree`: one call per entry of
+    `checks`, CHECKS unless the self-test passes an altered list. main() and
+    the self-test's wiring cases both call this, so a check dropped from
+    CHECKS fails a case instead of going unrun."""
+    failures = []
+    for entry in CHECKS if checks is None else checks:
+        failures.extend(entry.run(tree))
     return failures
 
 
@@ -1905,6 +2119,11 @@ def _python_dependency_cases(requirements, texts):
     new = added(python_dependency_failures(requirements, appended(site, serializer)))
     cases.append((not new, f"{site} calling the serializer alone zero-dependency",
                   f"a true statement about the serializer fails: {new}"))
+    other = "The TypeScript verifier is zero-dependency."
+    new = added(python_dependency_failures(requirements, appended(site, other)))
+    cases.append((not new, f"{site} calling a verifier other than the Python one "
+                           f"zero-dependency",
+                  f"a statement that does not name the Python verifier fails: {new}"))
 
     new = python_dependency_failures(None, texts)
     cases.append((any(f.startswith(f"{PY_REQUIREMENTS_NAME} is missing") for f in new),
@@ -1933,13 +2152,110 @@ def _jcs_library_cases(sites):
             continue
         case(f"{path} restored to the retracted reference claim",
              dict(sites, **{path: text + "\n" + retracted + "\n"}),
-             f"{path} calls canonicalize")
+             f"{path} calls an RFC 8785 library")
         case(f"{path} not citing {JCS_APPENDIX_G}",
              dict(sites, **{path: text.replace(JCS_APPENDIX_G, "RFC 8785")}),
              f"{path} does not say canonicalize is listed in")
         case(f"{path} missing",
              {p: t for p, t in sites.items() if p != path},
              f"{path} is missing")
+
+    cited = [path for path, _ in JCS_LIBRARY_SITES]
+    for path, retracted in JCS_PORT_SITES:
+        label = f"{path} restored to the retracted reference-port claim"
+        if path not in sites:
+            cases.append((False, label, f"{path} not found"))
+            continue
+        case(label, dict(sites, **{path: sites[path] + "\n" + retracted + "\n"}),
+             f"{path} calls an RFC 8785 library")
+        if path not in cited:
+            case(f"{path} missing",
+                 {p: t for p, t in sites.items() if p != path},
+                 f"{path} is missing")
+    return cases
+
+
+def _outside_code_cases(sites, libraries):
+    """Restore each file's retracted claim and remove the file; each must add
+    a failure naming the file. The same claim must pass when the legs run no
+    third-party library, so the check holds the claim to what they run."""
+    baseline = set(outside_code_failures(sites, libraries))
+    cases = [(bool(libraries),
+              "libraries the gate's Go and TypeScript legs run can be read",
+              f"read none from {GATE_GO_MOD_NAME} and {GATE_PACKAGE_NAME}")]
+    for path, retracted in OUTSIDE_CODE_SITES:
+        label = f"{path} restored to the retracted no-outside-code claim"
+        if path not in sites:
+            cases.append((False, label, f"{path} not found"))
+            continue
+        restored = dict(sites, **{path: sites[path] + "\n" + retracted + "\n"})
+        new = [f for f in outside_code_failures(restored, libraries) if f not in baseline]
+        cases.append((any(f.startswith(f"{path} says the gate") for f in new), label,
+                      f"appending its published wording still passes: {new}"))
+        new = outside_code_failures(restored, [])
+        cases.append((not any(f.startswith(f"{path} says the gate") for f in new),
+                      f"{path} no-outside-code claim when the legs run no library",
+                      f"expected no failure with no library to run, got {new}"))
+        new = [f for f in outside_code_failures(
+            {p: t for p, t in sites.items() if p != path}, libraries) if f not in baseline]
+        cases.append((any(f.startswith(f"{path} is missing") for f in new),
+                      f"{path} missing, where it says what the gate runs",
+                      f"a missing {path} still passes: {new}"))
+    return cases
+
+
+# A verifier leg banner no gate script here carries, for the cases that add one.
+INVENTED_LEG = "verifiers/invented"
+
+
+def _gate_leg_cases(readme, profile, gate_script):
+    """Restore each retracted description of the gate, give the gate script a
+    verifier leg no description names, and remove the script and the profile;
+    each must add a failure naming the site."""
+    if gate_script is None or profile is None:
+        return [(False, "byte-agreement gate descriptions",
+                 f"{GATE_SCRIPT_NAME} or {PROFILE_NAME} is missing")]
+    baseline = set(gate_leg_failures(readme, profile, gate_script))
+    legs = verifier_legs(gate_script)
+    sites = [site for site, _ in gate_descriptions(readme, profile)]
+    cases = [(bool(legs), f"{GATE_SCRIPT_NAME} verifier leg banners can be read",
+              "no `=== [verifier/<name>] verifiers/<dir> ` banner found")]
+    for site in (README_GATE_SITE, PROFILE_GATE_SITE):
+        cases.append((site in sites, f"{site} found",
+                      "site not found: a description of the gate is not covered "
+                      "by this self-test"))
+
+    def case(label, where, needle, readme=readme, profile=profile, gate_script=gate_script):
+        new = [f for f in gate_leg_failures(readme, profile, gate_script)
+               if f not in baseline]
+        cases.append((any(f.startswith(where) and needle in f for f in new), label,
+                      f"expected a failure opening {where!r} and naming {needle!r}, "
+                      f"got {new}"))
+
+    first = legs[0] if legs else INVENTED_LEG
+    for claim in RETRACTED_GATE_CLAIMS:
+        case(f"README describing the gate as canonicalizers alone: "
+             f"{claim.splitlines()[0][:40]}...",
+             README_GATE_SITE, f"does not name {first}",
+             readme=readme + "\n\n" + claim + "\n")
+    label = f"{PROFILE_NAME} describing the gate as canonicalizers alone"
+    try:
+        doc = json.loads(profile)
+        for gate in doc["additionalGates"]:
+            if gate["path"] == GATE_SCRIPT_NAME:
+                gate["description"] = RETRACTED_PROFILE_GATE
+    except (ValueError, KeyError, TypeError):
+        cases.append((False, label, f"{PROFILE_NAME} has no additionalGates entry to alter"))
+    else:
+        case(label, PROFILE_GATE_SITE, f"does not name {first}", profile=json.dumps(doc))
+    grown = gate_script + f'\necho "=== [verifier/invented] {INVENTED_LEG} check ==="\n'
+    for site in (README_GATE_SITE, PROFILE_GATE_SITE):
+        case(f"{site} when the gate script gains a verifier leg",
+             site, f"does not name {INVENTED_LEG}", gate_script=grown)
+    case(f"{GATE_SCRIPT_NAME} missing, where its legs are read",
+         GATE_SCRIPT_NAME, "is missing", gate_script=None)
+    case(f"{PROFILE_NAME} missing, where it describes the gate",
+         PROFILE_NAME, "is missing", profile=None)
     return cases
 
 
@@ -1983,74 +2299,247 @@ def _repro_case(label, texts, run, edit, expect):
     return False, label, f"expected a failure containing {expect!r}, got {new}"
 
 
-def _wiring_cases(tree):
-    """Alter one input per check that tree_failures() runs and run it whole.
-    The cases above call each check directly, so they stay green when main()
-    stops running one; these fail instead."""
-    baseline = set(tree_failures(tree))
-    readme = tree.readme
-    cases = []
-
-    def case(label, want, **altered):
-        new = [f for f in tree_failures(tree._replace(**altered)) if f not in baseline]
-        cases.append((any(want in f for f in new), f"main() running the {label} check",
-                      f"expected a failure containing {want!r}, got {new}"))
-
-    row = FIXTURE_ROW.search(readme)
+def _wire_count(tree):
+    row = FIXTURE_ROW.search(tree.readme)
     if row is None:
-        cases.append((False, "main() running the count check",
-                      "no fixture-table row found in README.md"))
-    else:
-        end = readme.index("\n", row.start()) + 1
-        case("count", f"has no row for fixtures/{row.group(1)}",
-             readme=readme[:row.start()] + readme[end:])
+        return "no fixture-table row found in README.md"
+    end = tree.readme.index("\n", row.start()) + 1
+    return (f"has no row for fixtures/{row.group(1)}",
+            {"readme": tree.readme[:row.start()] + tree.readme[end:]})
 
-    scope = re.search(r"^## Scope\n.*?^\|[-| ]+\|\n", readme, re.M | re.S)
+
+def _wire_threshold(tree):
+    scope = re.search(r"^## Scope\n.*?^\|[-| ]+\|\n", tree.readme, re.M | re.S)
     if scope is None:
-        cases.append((False, "main() running the threshold check",
-                      "no `## Scope` table found in README.md"))
-    else:
-        claim = "Threshold 2-of-3 cosignature path"
-        case("threshold", f"lists {claim!r} as covered",
-             readme=(readme[:scope.end()] + f"| {claim} | every fixture |\n"
-                     + readme[scope.end():]),
-             fixture_paths=[p for p in tree.fixture_paths if not declares_threshold(p)])
+        return "no `## Scope` table found in README.md"
+    claim = "Threshold 2-of-3 cosignature path"
+    return (f"lists {claim!r} as covered",
+            {"readme": (tree.readme[:scope.end()] + f"| {claim} | every fixture |\n"
+                        + tree.readme[scope.end():]),
+             "fixture_paths": [p for p in tree.fixture_paths
+                               if not declares_threshold(p)]})
 
-    case("behavioralProfile", "behavioralProfile is omitted",
-         readme=readme.replace("- Behavioral profile validation.",
-                               "- Behavioral profile validation. It is omitted.", 1))
-    case("CI trigger", f"{WORKFLOW_NAME} is missing", workflow=None)
-    case("key source", "nobody.example#key-1, which no vectors/*.json provides",
-         used_key_ids=tree.used_key_ids | {"did:opena2a:authority:nobody.example#key-1"})
-    case("version label", f"{INTRO_SITE} omits v9.9",
-         versions=set(tree.versions) | {"9.9"})
+
+def _wire_behavioral_profile(tree):
+    return ("behavioralProfile is omitted",
+            {"readme": tree.readme.replace(
+                "- Behavioral profile validation.",
+                "- Behavioral profile validation. It is omitted.", 1)})
+
+
+def _wire_ci_trigger(tree):
+    return f"{WORKFLOW_NAME} is missing", {"workflow": None}
+
+
+def _wire_key_source(tree):
+    return ("nobody.example#key-1, which no vectors/*.json provides",
+            {"used_key_ids": tree.used_key_ids
+             | {"did:opena2a:authority:nobody.example#key-1"}})
+
+
+def _wire_version_label(tree):
+    return f"{INTRO_SITE} omits v9.9", {"versions": set(tree.versions) | {"9.9"}}
+
+
+def _wire_go_dependency(tree):
     if tree.go_mod is None:
-        cases.append((False, "main() running the Go dependency check",
-                      f"{GO_MOD_NAME} is missing"))
-    else:
-        case("Go dependency", GO_INVENTED,
-             go_mod=tree.go_mod + f"\nrequire {GO_INVENTED} {GO_ALTERED_VERSION}\n")
+        return f"{GO_MOD_NAME} is missing"
+    return GO_INVENTED, {"go_mod": (tree.go_mod
+                                    + f"\nrequire {GO_INVENTED} {GO_ALTERED_VERSION}\n")}
+
+
+def _wire_python_dependency(tree):
     site = PY_DEPENDENCY_SITES[0]
     if tree.py_dependency_texts.get(site) is None:
-        cases.append((False, "main() running the Python dependency check",
-                      f"{site} is missing"))
-    else:
-        case("Python dependency", f"{site} calls the Python verifier zero-dependency",
-             py_requirements=(tree.py_requirements or "") + "\ncryptography\n",
-             py_dependency_texts={**tree.py_dependency_texts,
-                                  site: (tree.py_dependency_texts[site]
-                                         + "\n\nThe Python verifier is zero-dependency.\n")})
+        return f"{site} is missing"
+    return (f"{site} calls the Python verifier zero-dependency",
+            {"py_requirements": (tree.py_requirements or "") + "\ncryptography\n",
+             "py_dependency_texts": {
+                 **tree.py_dependency_texts,
+                 site: (tree.py_dependency_texts[site]
+                        + "\n\nThe Python verifier is zero-dependency.\n")}})
+
+
+def _wire_jcs_library(tree):
     path, retracted = JCS_LIBRARY_SITES[0]
-    case("RFC 8785 library", f"{path} calls canonicalize",
-         jcs_sites={**tree.jcs_sites,
-                    path: tree.jcs_sites.get(path, "") + "\n" + retracted + "\n"})
+    return (f"{path} calls an RFC 8785 library",
+            {"jcs_sites": {**tree.jcs_sites,
+                           path: tree.jcs_sites.get(path, "") + "\n" + retracted + "\n"}})
+
+
+def _wire_tbs_number(tree):
     site, retracted = TBS_NUMBER_SITES[0]
-    case("TBS number", f"{site} says `trustLevel` is the only JSON number",
-         tbs_sites={**tree.tbs_sites,
-                    site: (tree.tbs_sites.get(site) or "") + "\n" + retracted + "\n"})
-    case("signing scope", "is signed, but the TBS is an explicit projection",
-         jcs_readme=(tree.jcs_readme or "") + "\n" + RETRACTED_FUTURE_CLAIM + ".\n")
+    return (f"{site} says `trustLevel` is the only JSON number",
+            {"tbs_sites": {**tree.tbs_sites,
+                           site: (tree.tbs_sites.get(site) or "") + "\n" + retracted + "\n"}})
+
+
+def _wire_signing_scope(tree):
+    return ("is signed, but the TBS is an explicit projection",
+            {"jcs_readme": (tree.jcs_readme or "") + "\n" + RETRACTED_FUTURE_CLAIM + ".\n"})
+
+
+def _wire_outside_code(tree):
+    path, retracted = OUTSIDE_CODE_SITES[0]
+    if not tree.gate_libraries:
+        return f"no library read from {GATE_GO_MOD_NAME} or {GATE_PACKAGE_NAME}"
+    return (f"{path} says the gate",
+            {"gate_sites": {**tree.gate_sites,
+                            path: tree.gate_sites.get(path, "") + "\n" + retracted + "\n"}})
+
+
+def _wire_gate_leg(tree):
+    script = tree.gate_sites.get(GATE_SCRIPT_NAME)
+    if script is None:
+        return f"{GATE_SCRIPT_NAME} is missing"
+    banner = f'\necho "=== [verifier/invented] {INVENTED_LEG} check ==="\n'
+    return (f"does not name {INVENTED_LEG}",
+            {"gate_sites": {**tree.gate_sites, GATE_SCRIPT_NAME: script + banner}})
+
+
+CHECKS = (
+    Check("count",
+          lambda t: check(t.readme, t.cosigners, t.fixtures, t.vectors, t.signing),
+          _wire_count),
+    Check("threshold", lambda t: threshold_claims(t.readme, t.fixture_paths),
+          _wire_threshold),
+    Check("behavioralProfile",
+          lambda t: behavioral_profile_failures(t.readme, t.fixture_paths),
+          _wire_behavioral_profile),
+    Check("CI trigger", lambda t: ci_trigger_failures(t.readme, t.workflow),
+          _wire_ci_trigger),
+    Check("key source",
+          lambda t: key_source_failures(t.readme, t.key_vectors, t.used_key_ids),
+          _wire_key_source),
+    Check("version label", lambda t: version_label_failures(t.readme, t.versions),
+          _wire_version_label),
+    Check("Go dependency",
+          lambda t: go_dependency_failures(t.readme, t.go_mod, t.verify_go),
+          _wire_go_dependency),
+    Check("Python dependency",
+          lambda t: python_dependency_failures(t.py_requirements, t.py_dependency_texts),
+          _wire_python_dependency),
+    Check("RFC 8785 library", lambda t: jcs_library_failures(t.jcs_sites),
+          _wire_jcs_library),
+    Check("TBS number", lambda t: tbs_number_failures(t.tbs_sites, t.tbs_canonical),
+          _wire_tbs_number),
+    Check("signing scope", lambda t: jcs_scope_failures(t.jcs_readme),
+          _wire_signing_scope),
+    Check("outside code",
+          lambda t: outside_code_failures(t.gate_sites, t.gate_libraries),
+          _wire_outside_code),
+    Check("gate leg",
+          lambda t: gate_leg_failures(t.readme, t.profile,
+                                      t.gate_sites.get(GATE_SCRIPT_NAME)),
+          _wire_gate_leg),
+)
+
+
+def _wiring_case(tree, entry, checks=None):
+    """Make `entry`'s alteration and run tree_failures() whole over `checks`
+    (CHECKS when None); the altered tree must add the failure that check
+    reports."""
+    label = f"tree_failures() running the {entry.name} check"
+    if entry.wiring is None:
+        return False, label, f"the {entry.name} check has no wiring case"
+    wired = entry.wiring(tree)
+    if isinstance(wired, str):
+        return False, label, wired
+    want, altered = wired
+    baseline = set(tree_failures(tree, checks))
+    new = [f for f in tree_failures(tree._replace(**altered), checks)
+           if f not in baseline]
+    return (any(want in f for f in new), label,
+            f"expected a failure containing {want!r}, got {new}")
+
+
+def _wiring_cases(tree):
+    """One case per entry of CHECKS: alter the one input the check reads and
+    run tree_failures() whole. The cases above call each check directly, so
+    they stay green when tree_failures() stops running one; these fail
+    instead. Then each case is run again with its own check's call replaced
+    by one that reports nothing, and must go red: a case that stays green
+    there does not hold the call it is named for. An entry with no alteration
+    is itself a red case."""
+    cases = [_wiring_case(tree, entry) for entry in CHECKS]
+    for index, entry in enumerate(CHECKS):
+        silent = (CHECKS[:index] + (entry._replace(run=lambda t: []),)
+                  + CHECKS[index + 1:])
+        green, _, _ = _wiring_case(tree, entry, silent)
+        cases.append((not green,
+                      f"the {entry.name} wiring case is red once tree_failures() "
+                      f"stops running that check",
+                      "it stays green with the check's call replaced by one "
+                      "that reports nothing"))
+    green, _, detail = _wiring_case(tree, Check("unwired", lambda t: [], None))
+    cases.append((not green and "has no wiring case" in detail,
+                  "a check listed with no wiring case is reported",
+                  f"got {detail!r}"))
+    unrun = _unrun_checks(CHECKS)
+    cases.append((not unrun, "every function that reports failures is run from CHECKS",
+                  f"no entry of CHECKS, nor check(), calls {', '.join(unrun)}"))
+    cases.append((bool(_unrun_checks(CHECKS[:-1])),
+                  "an entry dropped from CHECKS leaves its function reported as unrun",
+                  f"CHECKS without its {CHECKS[-1].name} entry still calls every function"))
     return cases
+
+
+def _unrun_checks(checks):
+    """The functions of this module that report failures (check(),
+    threshold_claims() and every `*_failures`) and that neither an entry of
+    `checks` nor check() calls. An entry carries its own wiring case, so one
+    deleted whole takes its case with it; this is what still names it."""
+    called = set(check.__code__.co_names)
+    for entry in checks:
+        called.update(entry.run.__code__.co_names)
+    reporting = {"check", "threshold_claims"} | {
+        name for name, value in globals().items()
+        if name.endswith("_failures") and callable(value)}
+    return sorted(reporting - called - {"tree_failures"})
+
+
+# Set for the child run below, which skips that one case so the runs do not nest.
+CHILD_ENV = "CHECK_README_COUNTS_CHILD"
+CHILD_TIMEOUT = 120
+# A count no fixture set here holds, and not one the self-test writes itself.
+CHILD_COUNT = "7777"
+# Left out of the copy: nothing the script reads, and the bulk of a checkout.
+UNCOPIED = (".git", "node_modules", "__pycache__", ".venv", "venv")
+
+
+def _whole_script_case(tree):
+    """Run this script in a child process on a copy of the tree whose README
+    states one wrong count; it must exit 1 and name that count. Every other
+    case calls the checks directly, so they hold tree_failures() to each check
+    and only this run holds main() to tree_failures()."""
+    label = "main() exiting 1 on a copy of the tree with one README count altered"
+    site = re.search(r"must report\s+`(\d+) pass", tree.readme)
+    if site is None:
+        return False, label, "no `must report `N pass`` site found in README.md"
+    want = f"README claims `{CHILD_COUNT} pass` but fixtures/ holds {len(tree.fixtures)}"
+    with tempfile.TemporaryDirectory(prefix="readme-counts-") as tmp:
+        copy = pathlib.Path(tmp) / "tree"
+        try:
+            # The temporary directory is left out by name too, so a TMPDIR
+            # inside the repository is not copied into itself.
+            shutil.copytree(
+                ROOT, copy, ignore_dangling_symlinks=True,
+                ignore=shutil.ignore_patterns(*UNCOPIED, pathlib.Path(tmp).name))
+            (copy / "README.md").write_text(
+                tree.readme[:site.start(1)] + CHILD_COUNT + tree.readme[site.end(1):],
+                encoding="utf-8")
+        except (OSError, shutil.Error) as exc:
+            return False, label, f"could not copy the tree to run it: {exc}"
+        script = copy / pathlib.Path(__file__).resolve().relative_to(ROOT)
+        try:
+            child = subprocess.run(
+                [sys.executable, str(script)], capture_output=True, text=True,
+                timeout=CHILD_TIMEOUT, check=False, env={**os.environ, CHILD_ENV: "1"})
+        except subprocess.TimeoutExpired:
+            return False, label, f"the child run did not end within {CHILD_TIMEOUT} s"
+    return (child.returncode == 1 and want in child.stderr, label,
+            f"expected exit 1 and {want!r} on stderr, got exit {child.returncode} "
+            f"and {child.stderr.strip()[-300:]!r}")
 
 
 def self_test(tree, verbose):
@@ -2134,6 +2623,9 @@ def self_test(tree, verbose):
     cases.extend(_go_dependency_cases(readme, tree.go_mod, tree.verify_go))
     cases.extend(_python_dependency_cases(tree.py_requirements, tree.py_dependency_texts))
     cases.extend(_jcs_library_cases(tree.jcs_sites))
+    cases.extend(_outside_code_cases(tree.gate_sites, tree.gate_libraries))
+    cases.extend(_gate_leg_cases(readme, tree.profile,
+                                 tree.gate_sites.get(GATE_SCRIPT_NAME)))
     cases.extend(_wiring_cases(tree))
 
     cases.append(_pin_case(
@@ -2235,6 +2727,26 @@ def self_test(tree, verbose):
     took = time.perf_counter() - started
     cases.append((took < 1.5, "closed-tracker scan over a 40,000-character run of `[`",
                   f"took {took:.1f} s; the link-text match backtracks over the run"))
+    # Each of these took 1.5 s or more while its pattern rescanned the run from
+    # every position in it; bounded, each takes under 0.05 s.
+    blank = "\n" * 20000
+    for label, scan in (
+            ("line-leading comment markers stripped from 20,000 blank lines (_flat_prose)",
+             lambda: _flat_prose(blank)),
+            ("line-leading comment markers stripped from 20,000 blank lines (_prose)",
+             lambda: _prose(blank)),
+            ("requirements.txt package names read from 20,000 blank lines",
+             lambda: python_requirements(blank)),
+            ("only-number claim scan over one 16,000-character word",
+             lambda: list(ONLY_NUMBER_CLAIM.finditer("a" * 16000))),
+            ("only-number claim scan over 40,000 unclosed parentheses",
+             lambda: list(ONLY_NUMBER_CLAIM.finditer("a (" * 40000)))):
+        started = time.perf_counter()
+        scan()
+        took = time.perf_counter() - started
+        cases.append((took < 0.5, label,
+                      f"took {took:.1f} s; the pattern rescans the run from every "
+                      f"position in it"))
     cases.extend(_tbs_number_cases(tree.tbs_sites, tree.tbs_canonical))
 
     jcs_readme = tree.jcs_readme
@@ -2254,6 +2766,9 @@ def self_test(tree, verbose):
         new = [f for f in jcs_scope_failures(altered) if f not in jcs_baseline]
         cases.append((any(want in f for f in new), label,
                       f"the altered {JCS_README_NAME} still passes: {new}"))
+
+    if not os.environ.get(CHILD_ENV):
+        cases.append(_whole_script_case(tree))
 
     failed = 0
     for ok, label, detail in cases:
@@ -2297,12 +2812,19 @@ def main():
             site: (ROOT / site).read_text(encoding="utf-8") if (ROOT / site).exists() else None
             for site in PY_DEPENDENCY_SITES},
         jcs_sites={path: (ROOT / path).read_text(encoding="utf-8")
-                   for path, _ in JCS_LIBRARY_SITES if (ROOT / path).exists()},
+                   for path, _ in JCS_LIBRARY_SITES + JCS_PORT_SITES
+                   if (ROOT / path).exists()},
         tbs_sites={site: (ROOT / site).read_text(encoding="utf-8")
                    if (ROOT / site).exists() else None
                    for site, _ in TBS_NUMBER_SITES},
         tbs_canonical=load_canonical_strings(ROOT),
         jcs_readme=JCS_README.read_text(encoding="utf-8") if JCS_README.exists() else None,
+        gate_sites={path: (ROOT / path).read_text(encoding="utf-8")
+                    for path, _ in OUTSIDE_CODE_SITES if (ROOT / path).exists()},
+        gate_libraries=gate_libraries(*(
+            (ROOT / name).read_text(encoding="utf-8") if (ROOT / name).exists() else None
+            for name in (GATE_GO_MOD_NAME, GATE_PACKAGE_NAME))),
+        profile=PROFILE.read_text(encoding="utf-8") if PROFILE.exists() else None,
     )
 
     failed, total = self_test(tree, only_self_test)
@@ -2340,7 +2862,12 @@ def main():
           f"no jcs-vectors README or RFC 8785 serializer docstring calls the "
           f"Python verifier zero-dependency; "
           f"each jcs-vectors file describing canonicalize cites "
-          f"{JCS_APPENDIX_G} and calls it no reference implementation; "
+          f"{JCS_APPENDIX_G} and none calls an RFC 8785 library a reference "
+          f"implementation or port; "
+          f"neither {JCS_README_NAME} nor {GATE_SCRIPT_NAME} says the gate runs "
+          f"no code from another repository; "
+          f"every description of the byte-agreement gate names each verifier "
+          f"leg {GATE_SCRIPT_NAME} runs; "
           f"every Version pinning link names a commit; "
           f"the reproduction steps name every signing form and jcs-vectors "
           f"cross-check in the generator; coordination links point at an open "

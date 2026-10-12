@@ -7,14 +7,16 @@ member outside the type the Go reference verifier decodes it into, an absent or
 null member, timestamps at the edges of Go's RFC 3339 grammar, a
 behavioralProfile.generatedAt outside it, a NaN or Infinity literal, a fixture
 the verifier raises on, a path that does not exist, and the verifier's own v1.1
-projection over every jcs-vectors vector. Needs the same dependencies as
-verify.py. Run from this directory:
+projection over every jcs-vectors vector. One test reads verify.py itself: it
+imports no name it does not use. Needs the same dependencies as verify.py. Run
+from this directory:
 
     python3 -m unittest -v test_verify
 """
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import importlib.util
 import io
@@ -543,6 +545,21 @@ class SerializerRefusal(unittest.TestCase):
                 message = str(raised.exception)
                 self.assertIn("Got float 0.5.", message)
                 self.assertIn("string-encoded as %.6f", message)
+
+
+class Imports(unittest.TestCase):
+    def test_verify_uses_every_name_it_imports(self):
+        # verify.py imported `os` and dataclasses.field and used neither.
+        tree = ast.parse(Path(verify.__file__).read_text(encoding="utf-8"))
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "__future__":
+                continue
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                imported.update((alias.asname or alias.name).split(".")[0]
+                                for alias in node.names)
+        used = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+        self.assertEqual(sorted(imported - used), [])
 
 
 class JCSVectorsThroughVerifierProjection(unittest.TestCase):
