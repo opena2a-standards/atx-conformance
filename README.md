@@ -490,7 +490,7 @@ Issues and PRs welcome on this repository. Second-party implementations and
 cosigners are coordinated on its
 [issue tracker](https://github.com/opena2a-standards/atx-conformance/issues).
 Substantive coordination on the ATX wire format itself happens in
-[`opena2a-org/atx-spec`](https://github.com/opena2a-standards/atx-spec).
+[`opena2a-standards/atx-spec`](https://github.com/opena2a-standards/atx-spec).
 
 ## License
 

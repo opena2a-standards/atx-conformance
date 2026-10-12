@@ -1,4 +1,4 @@
-// generate-fixtures produces the ATX v1.0 conformance fixture set.
+// generate-fixtures produces the ATX v1.0 and v1.1 conformance fixture set.
 //
 // Every fixture is byte-stable: same seeds, same canonicalization, same JSON
 // encoding settings. Re-running the generator must produce identical bytes;

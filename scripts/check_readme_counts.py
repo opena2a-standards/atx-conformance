@@ -97,10 +97,11 @@ declares, the behavioralProfile note matches the fixtures, no criterion (c)
 claim outruns the registry, the trustScore is called illustrative, the
 trigger sentence matches the workflow, both key-source lists name every
 Ed25519 key, both version labels name exactly the accepted versions, each
-Go dependency site names every direct requirement at its pinned version,
-every Version pinning link names a commit, the reproduction steps match
-the generator and no coordination link points at a closed issue, 1
-otherwise, 2 on an unknown argument.
+Go dependency site names every direct requirement (the two README sites at
+its pinned version; the verify.go header states no versions, so it is held
+to module names alone), every Version pinning link names a commit, the
+reproduction steps match the generator and no coordination link points at a
+closed issue, 1 otherwise, 2 on an unknown argument.
 """
 
 import collections
@@ -108,6 +109,7 @@ import json
 import pathlib
 import re
 import sys
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 README = ROOT / "README.md"
@@ -351,7 +353,7 @@ def accepted_versions(paths):
 def intro_paragraph(readme):
     """The first paragraph after the title, whitespace-collapsed, or None."""
     lines = readme.splitlines()
-    starts = [i for i, l in enumerate(lines) if l.startswith("# ")]
+    starts = [i for i, line in enumerate(lines) if line.startswith("# ")]
     if not starts:
         return None
     para = []
@@ -500,8 +502,11 @@ def go_dependency_failures(readme, go_mod, verify_go):
 # coordinated or happening there.
 CLOSED_TRACKERS = ("1876", "1885")
 _CLOSED = "|".join(CLOSED_TRACKERS)
+# The link text is bounded: unbounded, every `[` in a run of them scanned to
+# the end of the run, so a paragraph of 40,000 `[` took seconds.
+LINK_TEXT_MAX = 200
 CLOSED_TRACKER_REF = re.compile(
-    rf"\[[^\]\n]*\]\(https://github\.com/a2aproject/A2A/issues/({_CLOSED})\)"
+    rf"\[[^\]\n]{{0,{LINK_TEXT_MAX}}}\]\(https://github\.com/a2aproject/A2A/issues/({_CLOSED})\)"
     rf"|https://github\.com/a2aproject/A2A/issues/({_CLOSED})\b"
     rf"|`?(?:a2aproject/)?A2A#({_CLOSED})\b`?"
 )
@@ -530,7 +535,7 @@ def registry_cosigners(cosigners):
     None when the heading or the table header row cannot be found."""
     lines = cosigners.splitlines()
     try:
-        start = [l.strip() for l in lines].index(REGISTRY_HEADING)
+        start = [line.strip() for line in lines].index(REGISTRY_HEADING)
     except ValueError:
         return None
     rows = []
@@ -752,8 +757,8 @@ def workflow_triggers(workflow):
     repository uses and the inline `on: push` / `on: [push, pull_request]`
     forms; a filter listed as a block sequence is read item by item."""
     lines = workflow.splitlines()
-    start = next((i for i, l in enumerate(lines)
-                  if re.match(r"""^(?:on|'on'|"on"):(?:\s|$)""", l)), None)
+    start = next((i for i, line in enumerate(lines)
+                  if re.match(r"""^(?:on|'on'|"on"):(?:\s|$)""", line)), None)
     if start is None:
         return None
     inline = lines[start].split(":", 1)[1].split("#", 1)[0].strip()
@@ -866,7 +871,6 @@ def section(text, heading):
     return "\n".join(body)
 
 
-VERSION_PINNING = "## Version pinning"
 # A link to anything in an opena2a-standards repository, and the same link
 # naming a file at a full commit id, optionally with a #fragment.
 STANDARDS_LINK = re.compile(r"https://github\.com/opena2a-standards/[^\s()<>\[\]|]*")
@@ -1171,6 +1175,27 @@ def check(readme, cosigners, fixtures, vectors, signing):
     failures.extend(version_pin_failures(readme))
     failures.extend(reproduction_failures(readme, signing))
     failures.extend(tracker_failures(readme, cosigners))
+    return failures
+
+
+# Everything the check reads from the tree, so one altered input can be run
+# through the same checks main() runs.
+Tree = collections.namedtuple("Tree", (
+    "readme cosigners fixtures vectors signing fixture_paths workflow "
+    "key_vectors used_key_ids versions go_mod verify_go"))
+
+
+def tree_failures(tree):
+    """Every failure the check reports for `tree`: check() and the checks run
+    beside it. main() and the self-test's wiring cases both call this, so a
+    check dropped from here fails a case instead of going unrun."""
+    failures = check(tree.readme, tree.cosigners, tree.fixtures, tree.vectors, tree.signing)
+    failures.extend(threshold_claims(tree.readme, tree.fixture_paths))
+    failures.extend(behavioral_profile_failures(tree.readme, tree.fixture_paths))
+    failures.extend(ci_trigger_failures(tree.readme, tree.workflow))
+    failures.extend(key_source_failures(tree.readme, tree.key_vectors, tree.used_key_ids))
+    failures.extend(version_label_failures(tree.readme, tree.versions))
+    failures.extend(go_dependency_failures(tree.readme, tree.go_mod, tree.verify_go))
     return failures
 
 
@@ -1505,8 +1530,59 @@ def _repro_case(label, texts, run, edit, expect):
     return False, label, f"expected a failure containing {expect!r}, got {new}"
 
 
-def self_test(readme, cosigners, fixtures, vectors, versions, go_mod, verify_go,
-              signing, verbose, workflow, key_vectors, used_key_ids):
+def _wiring_cases(tree):
+    """Alter one input per check that tree_failures() runs and run it whole.
+    The cases above call each check directly, so they stay green when main()
+    stops running one; these fail instead."""
+    baseline = set(tree_failures(tree))
+    readme = tree.readme
+    cases = []
+
+    def case(label, want, **altered):
+        new = [f for f in tree_failures(tree._replace(**altered)) if f not in baseline]
+        cases.append((any(want in f for f in new), f"main() running the {label} check",
+                      f"expected a failure containing {want!r}, got {new}"))
+
+    row = FIXTURE_ROW.search(readme)
+    if row is None:
+        cases.append((False, "main() running the count check",
+                      "no fixture-table row found in README.md"))
+    else:
+        end = readme.index("\n", row.start()) + 1
+        case("count", f"has no row for fixtures/{row.group(1)}",
+             readme=readme[:row.start()] + readme[end:])
+
+    scope = re.search(r"^## Scope\n.*?^\|[-| ]+\|\n", readme, re.M | re.S)
+    if scope is None:
+        cases.append((False, "main() running the threshold check",
+                      "no `## Scope` table found in README.md"))
+    else:
+        claim = "Threshold 2-of-3 cosignature path"
+        case("threshold", f"lists {claim!r} as covered",
+             readme=(readme[:scope.end()] + f"| {claim} | every fixture |\n"
+                     + readme[scope.end():]),
+             fixture_paths=[p for p in tree.fixture_paths if not declares_threshold(p)])
+
+    case("behavioralProfile", "behavioralProfile is omitted",
+         readme=readme.replace("- Behavioral profile validation.",
+                               "- Behavioral profile validation. It is omitted.", 1))
+    case("CI trigger", f"{WORKFLOW_NAME} is missing", workflow=None)
+    case("key source", "nobody.example#key-1, which no vectors/*.json provides",
+         used_key_ids=tree.used_key_ids | {"did:opena2a:authority:nobody.example#key-1"})
+    case("version label", f"{INTRO_SITE} omits v9.9",
+         versions=set(tree.versions) | {"9.9"})
+    if tree.go_mod is None:
+        cases.append((False, "main() running the Go dependency check",
+                      f"{GO_MOD_NAME} is missing"))
+    else:
+        case("Go dependency", GO_INVENTED,
+             go_mod=tree.go_mod + f"\nrequire {GO_INVENTED} {GO_ALTERED_VERSION}\n")
+    return cases
+
+
+def self_test(tree, verbose):
+    readme, cosigners, fixtures, vectors, signing = (
+        tree.readme, tree.cosigners, tree.fixtures, tree.vectors, tree.signing)
     texts = {"README.md": readme, "COSIGNERS.md": cosigners or ""}
     baseline = set(check(readme, cosigners, fixtures, vectors, signing))
 
@@ -1579,10 +1655,11 @@ def self_test(readme, cosigners, fixtures, vectors, versions, go_mod, verify_go,
                       "trustScore not called illustrative",
                       f"a section that drops `{TRUST_PLACEHOLDER}` still passes: {new}"))
 
-    cases.extend(_trigger_cases(readme, workflow))
-    cases.extend(_key_source_cases(readme, key_vectors, used_key_ids))
-    cases.extend(_version_cases(readme, versions))
-    cases.extend(_go_dependency_cases(readme, go_mod, verify_go))
+    cases.extend(_trigger_cases(readme, tree.workflow))
+    cases.extend(_key_source_cases(readme, tree.key_vectors, tree.used_key_ids))
+    cases.extend(_version_cases(readme, tree.versions))
+    cases.extend(_go_dependency_cases(readme, tree.go_mod, tree.verify_go))
+    cases.extend(_wiring_cases(tree))
 
     cases.append(_pin_case(
         "version pinning link on a branch instead of a commit", texts, run,
@@ -1623,6 +1700,11 @@ def self_test(readme, cosigners, fixtures, vectors, versions, go_mod, verify_go,
     cases.append((any("does not name `canonicalPayloadV12`" in f for f in new),
                   "generator signing form missing from the reproduction steps",
                   f"a generator form the README does not name still passes: {new}"))
+    cases.append(_repro_case(
+        "reproduction steps naming a signing form the generator does not define",
+        texts, run,
+        lambda body: body + "\nThe generator also signs over `canonicalPayloadV99`.\n",
+        "names `canonicalPayloadV99`, which"))
     altered = dict(texts)
     altered["README.md"] = readme.replace(REPRODUCING + "\n", "## Regenerating\n", 1)
     new = run(altered)
@@ -1672,6 +1754,13 @@ def self_test(readme, cosigners, fixtures, vectors, versions, go_mod, verify_go,
                       f"{name} citing closed A2A#1885 with no `(closed` note",
                       f"appending the citation to {name} still passes: {new}"))
 
+    # Linear in the run: about 0.2 s. Unbounded link text took 3.5 s or more.
+    started = time.perf_counter()
+    closed_tracker_mentions("README.md", "[" * 40000)
+    took = time.perf_counter() - started
+    cases.append((took < 1.5, "closed-tracker scan over a 40,000-character run of `[`",
+                  f"took {took:.1f} s; the link-text match backtracks over the run"))
+
     failed = 0
     for ok, label, detail in cases:
         if verbose or not ok:
@@ -1692,22 +1781,25 @@ def main():
     only_self_test = "--self-test" in sys.argv
 
     fixtures, failures = load_fixtures(ROOT)
-    readme = README.read_text(encoding="utf-8")
-    cosigners = COSIGNERS.read_text(encoding="utf-8") if COSIGNERS.exists() else None
-    vectors = count_vectors(ROOT)
-    workflow = WORKFLOW.read_text(encoding="utf-8") if WORKFLOW.exists() else None
     key_vectors, vector_failures = load_key_vectors(ROOT)
     failures += vector_failures
     fixture_paths = sorted(FIXTURES.glob("*.json"))
-    used_key_ids = fixture_key_ids(fixture_paths)
-    versions = accepted_versions(fixture_paths)
-    go_mod = GO_MOD.read_text(encoding="utf-8") if GO_MOD.exists() else None
-    verify_go = VERIFY_GO.read_text(encoding="utf-8") if VERIFY_GO.exists() else None
-    signing = generator_signing(ROOT)
+    tree = Tree(
+        readme=README.read_text(encoding="utf-8"),
+        cosigners=COSIGNERS.read_text(encoding="utf-8") if COSIGNERS.exists() else None,
+        fixtures=fixtures,
+        vectors=count_vectors(ROOT),
+        signing=generator_signing(ROOT),
+        fixture_paths=fixture_paths,
+        workflow=WORKFLOW.read_text(encoding="utf-8") if WORKFLOW.exists() else None,
+        key_vectors=key_vectors,
+        used_key_ids=fixture_key_ids(fixture_paths),
+        versions=accepted_versions(fixture_paths),
+        go_mod=GO_MOD.read_text(encoding="utf-8") if GO_MOD.exists() else None,
+        verify_go=VERIFY_GO.read_text(encoding="utf-8") if VERIFY_GO.exists() else None,
+    )
 
-    failed, total = self_test(readme, cosigners, fixtures, vectors, versions,
-                              go_mod, verify_go, signing, only_self_test, workflow,
-                              key_vectors, used_key_ids)
+    failed, total = self_test(tree, only_self_test)
     if failed:
         print(f"self-test FAILED: {failed} of {total} case(s) not caught by the check",
               file=sys.stderr)
@@ -1718,13 +1810,7 @@ def main():
 
     # The check runs even when the self-test failed: a site the self-test
     # cannot find is often a count the README dropped, and the check names it.
-    failures += check(readme, cosigners, fixtures, vectors, signing)
-    failures.extend(threshold_claims(readme, fixture_paths))
-    failures.extend(behavioral_profile_failures(readme, fixture_paths))
-    failures.extend(ci_trigger_failures(readme, workflow))
-    failures.extend(key_source_failures(readme, key_vectors, used_key_ids))
-    failures.extend(version_label_failures(readme, versions))
-    failures.extend(go_dependency_failures(readme, go_mod, verify_go))
+    failures += tree_failures(tree)
 
     if failures:
         sys.stdout.flush()
@@ -1736,13 +1822,13 @@ def main():
         return 1
 
     print(f"README and COSIGNERS counts match the tree: {len(fixtures)} fixtures "
-          f"(each with one fixture-table row), {vectors} JCS vectors, all stated "
+          f"(each with one fixture-table row), {tree.vectors} JCS vectors, all stated "
           f"as passing; README names the MANIFEST.sha256 byte check; "
           f"behavioralProfile scope note matches; criterion (c) claim matches "
           f"the cosignature registry; trustScore is called illustrative; "
           f"CI trigger sentence matches {WORKFLOW_NAME}; "
           f"both README key-source lists name every Ed25519 key in vectors/; "
-          f"intro and version-pinning row name ATX {_versions(versions)}; "
+          f"intro and version-pinning row name ATX {_versions(tree.versions)}; "
           f"Go verifier dependency list, version-pinning rows and verify.go "
           f"header name every direct requirement of {GO_MOD_NAME}; "
           f"every Version pinning link names a commit; "

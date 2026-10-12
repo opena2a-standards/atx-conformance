@@ -36,6 +36,12 @@ whenever one lands; README "Versioning and stability" says they should not.
   `scripts/check_readme_counts.py` fails when the README calls the value the
   algorithm's output or stops calling it illustrative (#146). No fixture
   changes.
+- `scripts/check_readme_counts.py` runs its checks through one function that
+  its self-test also runs, so the self-test fails when a check stops being
+  run; it passed with the version-label check removed. Its self-test also
+  covers a README naming a `canonicalPayload*` function the generator does
+  not define, and `scripts/conformance_profile.py --check` covers a
+  requirement whose § number does not open it (#153). No fixture changes.
 
 ## e2f9dc4 (#26, 2026-09-09): capabilities rewritten in 22 existing fixtures
 
