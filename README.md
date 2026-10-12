@@ -232,6 +232,7 @@ All fixtures use:
 | `fixtures/v1_1-declared-purpose-array-injected.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 signed with no declaredPurpose, carrying an attacker-appended ARRAY value. Present non-empty values — including non-objects — enter the TBS verbatim, so the recomputed bytes no longer match the signature. |
 | `fixtures/v1_1-declared-purpose-string-injected.json` | REJECT (SIGNATURE_INVALID) | Same unsigned-injection defense with a STRING value. |
 | `fixtures/v1_1-duplicate-purpose-member.json` | REJECT (PARSE_ERROR) | ATX v1.1 whose declaredPurpose bytes carry the `category` member TWICE — a decoy followed by the signed value, with a REAL signature over the last-wins interpretation. A last-wins parser without a duplicate check wrongly ACCEPTs (smuggling); a first-wins parser rejects with the wrong category. Verifiers MUST strict-parse the whole credential and reject duplicate members at any depth (RFC 8259 §4). |
+| `fixtures/v1_1-case-variant-member.json` | REJECT (PARSE_ERROR) | ATX v1.1 carrying a decoy top-level `TRUSTLEVEL` member (value 9) before the signed `trustLevel` member (value 4), two names that fold to the same field. Go's `encoding/json` matches field names case-insensitively and keeps the last, so a lenient Go verifier reads the signed value and wrongly ACCEPTs; a case-insensitive first-wins parser reads 9, and a case-sensitive parser keeps both as distinct members. A case-sensitive duplicate check flags neither. Verifiers MUST fold member names and reject fold-colliding members with PARSE_ERROR before interpreting any field. |
 
 ## Running the verifiers
 
@@ -370,12 +371,25 @@ set.
 ```
 LICENSE                          Apache 2.0
 README.md                        this file
+COSIGNERS.md                     how a second party cosigns a verifier run, and the
+                                 cosignature log
 MANIFEST.sha256                  per-fixture SHA-256 (path-sorted)
-fixtures/                        the 8 conformance fixtures (byte-stable JSON)
+conformance.json                 requirement-to-fixture profile (generated from the
+                                 fixtures, drift-checked in CI)
+fixtures/                        the 24 conformance fixtures (byte-stable JSON)
+jcs-vectors/                     JCS(TBS) byte-agreement vectors and the Go, Python
+                                 and TypeScript canonicalizers that must agree on them
+schemas/vendor/atx-spec/         vendored atx-spec credential schema and core.md
+                                 (pinned ref)
 vectors/                         test keypair vectors (TEST-ONLY)
 verifiers/go/                    Go reference verifier (full hybrid)
 verifiers/python/                Python reference verifier (full hybrid)
 scripts/generate-fixtures/       deterministic fixture generator (Go)
+scripts/parity/                  Go/Python per-fixture parity gate
+scripts/*.py                     CI gates: README counts, spec references, schema
+                                 validation, conformance profile, implementation
+                                 status
+scripts/check_circl_pin.sh       CI gate: one cloudflare/circl version per Go module
 ```
 
 ## Versioning and stability
