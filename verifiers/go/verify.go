@@ -497,17 +497,24 @@ func verify(f fixture) result {
 		}
 	}
 
+	return verifySignatures(&a, f.VerifierState)
+}
+
+// verifySignatures runs steps 5 to 8 on a credential that has passed steps 0
+// to 4. It is separate from verify so the unit tests can check that a fixture
+// rejected at an earlier step still carries signatures that verify.
+func verifySignatures(a *atx, state verifierState) result {
 	// Step 5: signature verification.
 	// Spec mandate: every declared signature MUST verify.
 	var payload []byte
 	if a.ATCVersion == "1.1" {
-		pb, err := canonicalPayloadV11(&a)
+		pb, err := canonicalPayloadV11(a)
 		if err != nil {
 			return result{RejectCategory: "VERIFIER_CONFIG_ERROR", Reason: "v1.1 canonicalization failed: " + err.Error()}
 		}
 		payload = pb
 	} else {
-		payload = canonicalPayload(&a)
+		payload = canonicalPayload(a)
 	}
 	res := result{SigsExpected: len(a.Signatures)}
 
@@ -515,7 +522,7 @@ func verify(f fixture) result {
 	// the credential's issuer (key↔issuer binding). A key whose keyId's controller
 	// DID is not in the authority set is not an eligible signer for this
 	// credential, so one trusted authority cannot impersonate another.
-	edKeys, pqKeys := indexPublicKeys(f.VerifierState.PublicKeys, authoritySetFor(&a, f.VerifierState.TrustedIssuers))
+	edKeys, pqKeys := indexPublicKeys(state.PublicKeys, authoritySetFor(a, state.TrustedIssuers))
 
 	for _, sig := range a.Signatures {
 		sigBytes, err := base64.StdEncoding.DecodeString(sig.Value)

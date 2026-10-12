@@ -136,6 +136,14 @@ whenever one lands; README "Versioning and stability" says they should not.
   `expiresAt`, the verifier clock `clockRfc3339`, and a v1.1 credential's
   `behavioralProfile.generatedAt`. No fixture carries such a timestamp
   (#167). No fixture changes.
+- README.md's Scope table states how many fixtures reach Ed25519 signature
+  verification (step 5), where it said every fixture: a fixture that rejects
+  at steps 0 to 4 never has its signature checked when a verifier runs over
+  `fixtures/`. `scripts/check_readme_counts.py` fails when that row states
+  another count, or says "every fixture" while a fixture rejects before step
+  5. `TestEarlyRejectFixturesCarryValidSignatures` in `verifiers/go` runs
+  each such fixture through steps 5 to 8 with its gate lifted and requires
+  its signatures to verify (#138). No fixture changes.
 
 ## e2f9dc4 (#26, 2026-09-09): capabilities rewritten in 22 existing fixtures
 

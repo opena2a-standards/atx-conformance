@@ -182,6 +182,92 @@ func TestStrictParseDepthGuard(t *testing.T) {
 	}
 }
 
+// earlyRejectCategories are the reject categories of steps 0 to 4, which
+// verify returns before it reaches signature verification (step 5).
+var earlyRejectCategories = map[string]bool{
+	"PARSE_ERROR":         true, // step 0
+	"UNSUPPORTED_VERSION": true, // step 1
+	"EXPIRED":             true, // step 2
+	"REVOKED":             true, // step 3
+	"UNTRUSTED_ISSUER":    true, // step 4
+}
+
+// TestEarlyRejectFixturesCarryValidSignatures pins the "otherwise valid"
+// property of the fixtures that reject before step 5. Running the verifiers
+// over fixtures/ never checks their signatures, so a fixture whose signature
+// broke would still pass and would then test its gate on a credential that a
+// verifier skipping that gate also rejects. Each such fixture is run through
+// steps 5 to 8 with its gate lifted: last-wins decoding instead of the strict
+// parse, atcVersion set to "1.0", and its issuer trusted (its DID added to the
+// trusted set and its keys from keypairRefs to the verifier's keys). The clock
+// and the revocation state are not read after step 4. atx-conformance#138.
+func TestEarlyRejectFixturesCarryValidSignatures(t *testing.T) {
+	paths, err := filepath.Glob(filepath.Join("..", "..", "fixtures", "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("no fixtures found; refusing to pass vacuously")
+	}
+	early := 0
+	for _, path := range paths {
+		f, err := loadFixture(path)
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		if !earlyRejectCategories[verify(f).RejectCategory] {
+			continue
+		}
+		early++
+
+		var a atx
+		err = json.Unmarshal(f.ATX, &a)
+		for _, member := range []*json.RawMessage{&a.DeclaredPurpose, &a.BehavioralProfile, &a.ScanSummary} {
+			if err == nil {
+				*member, err = lastWins(*member)
+			}
+		}
+		if err != nil {
+			t.Errorf("%s: credential does not decode with the strict parse lifted: %v", path, err)
+			continue
+		}
+		if a.ATCVersion != "1.0" && a.ATCVersion != "1.1" {
+			a.ATCVersion = "1.0"
+		}
+		state := f.VerifierState
+		state.TrustedIssuers = append(append([]string{}, state.TrustedIssuers...), a.IssuerDID)
+		state.PublicKeys = append([]keypairRef{}, state.PublicKeys...)
+		for _, ref := range f.KeypairRefs {
+			if controllerDID(ref.KeyID) == a.IssuerDID {
+				state.PublicKeys = append(state.PublicKeys, ref)
+			}
+		}
+
+		got := verifySignatures(&a, state)
+		if !got.Accepted || got.SigsValid != got.SigsExpected {
+			t.Errorf("%s: rejects before step 5, but with that gate lifted its signatures do not verify: %s", path, got)
+		}
+	}
+	if early == 0 {
+		t.Fatal("no fixture rejects before step 5; refusing to pass vacuously")
+	}
+	t.Logf("%d of %d fixtures reject before step 5; their signatures were checked with the gate lifted", early, len(paths))
+}
+
+// lastWins re-encodes a raw member as a parser without the strict check reads
+// it: a repeated member keeps its last value. The v1.1 canonicalizer refuses
+// duplicate members, so the strict parse is lifted here rather than there.
+func lastWins(raw json.RawMessage) (json.RawMessage, error) {
+	if len(raw) == 0 {
+		return raw, nil
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil, err
+	}
+	return json.Marshal(v)
+}
+
 // TestJCSVectorsThroughVerifierProjection runs this verifier's own v1.1 path
 // (credential parse, TBS projection, JCS) over every jcs-vectors vector and
 // requires the pinned expected.canonicalHex byte-for-byte. The byte-agreement
