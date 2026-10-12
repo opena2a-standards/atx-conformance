@@ -295,6 +295,20 @@ Depends on:
   `behavioralProfile` as null, so a signature made over the profile fails as
   `SIGNATURE_INVALID`. To build with the release CI uses, run
   `GOTOOLCHAIN=go1.22.12 go run . ../../fixtures`.
+
+  A timestamp written with a JSON escape (the `Z` written as a `\u` escape,
+  for example) fails to decode under every release, as it does in the Python
+  verifier: the verifier decodes each timestamp with `time.Time`'s own
+  `UnmarshalJSON`, which parses the bytes between the quotes. A plain
+  `time.Time` field decodes the escaped form when built with Go 1.27.
+
+  The release also sets the Unicode version of the case folding the
+  duplicate-member check applies to a non-ASCII member name. Two names whose
+  lowercase mapping a later Unicode version added are a duplicate, and the
+  credential a `PARSE_ERROR`, under one release and not under another: U+1C89
+  and U+1C8A, mapped in Unicode 16.0, are a duplicate under Go 1.27 (Unicode
+  17.0) and not under Go 1.22 through 1.26 (Unicode 15.0). No fixture carries
+  a non-ASCII member name.
 - `github.com/cloudflare/circl v1.6.2` (resolved by `go mod tidy`)
 - `github.com/gowebpki/jcs v1.0.1` (RFC 8785 canonicalization of the v1.1
   signed payload; resolved the same way)
@@ -309,7 +323,11 @@ python verify.py ../../fixtures
 
 Depends on:
 
-- Python 3.11 or later
+- Python 3.11 or later. As with the Go release, the Python release sets the
+  Unicode version of the case folding the duplicate-member check applies to a
+  non-ASCII member name: U+1C89 and U+1C8A are a duplicate under Python 3.14
+  (Unicode 16.0) and not under Python 3.12 (Unicode 15.0), which CI uses.
+  `python verify.py --help` prints the usage line.
 - `cryptography >= 42.0.0`
 - `dilithium-py >= 1.1.0` (ML-DSA-65 per FIPS 204)
 

@@ -162,6 +162,55 @@ whenever one lands; README "Versioning and stability" says they should not.
   npm's output discarded and no summary. `jcs-vectors/test_run_agreement.py`
   runs the script with stub commands and checks both outcomes of the
   install (#170). No fixture or vector changes.
+- `verifiers/python/verify.py` reaches the Go verifier's verdict, where it
+  reached another or stopped with an error, on six inputs: a credential
+  member whose name differs from its field's only in case (`Revoked` is read
+  as `revoked`), an `issuedAt` or `expiresAt` written with a JSON escape (a
+  `PARSE_ERROR`), an unpaired UTF-16 surrogate escape in a string member
+  (decoded to U+FFFD), a `trustScore` of `-0` (signed as `-0.000000`), a
+  signature value with a character outside the base64 alphabet
+  (`SIGNATURE_INVALID`; `base64.b64decode` discarded the character), and a
+  `behavioralProfile` or `scanSummary` member outside its Go type (projected
+  into the v1.1 signed payload as the Go verifier projects it) (#167). No
+  fixture changes.
+- The Go verifier decodes every timestamp with `time.Time`'s own
+  `UnmarshalJSON`, so one written with a JSON escape fails to decode under
+  every Go release. Built with Go 1.27, it reported ACCEPT on a credential
+  whose `issuedAt` or v1.1 `behavioralProfile.generatedAt` was written with
+  one and loaded such a CRL entry `revokedAt`, where Go 1.22 through 1.26 and
+  the Python verifier report `PARSE_ERROR`, `SIGNATURE_INVALID` and a load
+  error; it now reports those too. Its result under Go 1.22, which CI uses,
+  does not change (#173). No fixture changes.
+- README's dependency lists say the Go or Python release sets the Unicode
+  version of the case folding the duplicate-member check applies to a
+  non-ASCII member name: U+1C89 and U+1C8A are a duplicate, and the
+  credential a `PARSE_ERROR`, under Go 1.27 and Python 3.14 and not under
+  Go 1.22 through 1.26 or Python 3.12. The Go list also says a timestamp
+  written with a JSON escape fails to decode under every release (#173). No
+  fixture changes.
+- `verifiers/python/verify.py` decodes the fixture wrapper as the Go
+  verifier's fixture struct does. A fixture member outside its Go type fails
+  to load (a `name` of `{"a": 1}` reported PASS), and so does a CRL time
+  outside the timestamp grammar. A `verifierState` member name in another
+  case names the member (`TrustedIssuers` reported `UNTRUSTED_ISSUER`, now
+  ACCEPT). Of two names in the wrapper that differ only in case, the last in
+  the document wins (an `expected` of `{"verifyResult": "ACCEPT",
+  "VerifyResult": "REJECT", "verifyResult": "ACCEPT"}` was read as REJECT). A
+  public key whose `publicKeyHex` is not an even run of hex digits is
+  skipped, where `"zz"` ended the fixture in a verify error and hex with a
+  space inside it was used. A fixture with no `atx` is a `PARSE_ERROR`,
+  where it was a verify error (#173). No fixture changes.
+- `verifiers/python/verify.py` reads a fixture file as Go's
+  `encoding/json` does: a byte that is not UTF-8 inside a string decodes to
+  U+FFFD, one for each byte of the invalid sequence, where the file failed to
+  load; arrays and objects nested up to 10000 levels deep, the fixture
+  object included, load, where 5000 under one member failed to load, and
+  deeper ones fail to load as they do in Go. Its string-literal scan is a
+  single pass: the regular expression it replaces took time quadratic in the
+  length of an unterminated string literal (#173). No fixture changes.
+- `python3 verify.py --help` (or `-h`) prints the usage line and exits 0,
+  where it reported `--help` as a missing path and exited 2 (#173). No
+  fixture changes.
 
 ## e2f9dc4 (#26, 2026-09-09): capabilities rewritten in 22 existing fixtures
 

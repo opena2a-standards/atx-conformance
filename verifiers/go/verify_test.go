@@ -69,6 +69,7 @@ func TestFoldKey(t *testing.T) {
 		{"agentId", "agentid"},
 		{"Kelvin", "kelvin"}, // U+212A Kelvin sign folds to ASCII k
 		{"ſmart", "smart"},   // U+017F long s folds to ASCII s
+		{"Éclair", "éclair"}, // any other rune: the unicode.ToLower fallback
 	}
 	for _, c := range cases {
 		if got := foldKey(c.in); got != c.want {
@@ -101,6 +102,7 @@ func TestRawDuplicateMember(t *testing.T) {
 		{"case variant nested", `{"a":{"Category":"x","category":"y"}}`, true},
 		{"same-name in array", `{"a":[{"k":1,"k":2}]}`, true},
 		{"kelvin fold collision", "{\"K\":1,\"k\":2}", true},
+		{"non-ASCII case variant", `{"É":1,"é":2}`, true},
 		{"distinct keys", `{"trustLevel":4,"trustScore":9}`, false},
 		{"distinct nested", `{"a":{"x":1},"b":{"x":2}}`, false},
 		{"empty object", `{}`, false},
@@ -381,15 +383,15 @@ func mustHexDecode(t *testing.T, s string) []byte {
 	return b
 }
 
-// TestTimestampDecode pins what the time.Time decoder behind issuedAt and
-// expiresAt accepts. The Python reference verifier ports this grammar
-// (_parse_rfc3339 in ../python/verify.py) and test_verify.py carries the same
-// table, so a Go release that changes how the decoder treats one of these
-// inputs, for example by enabling the strict RFC 3339 checks the standard
-// library has disabled (golang/go#54580), fails here before the two verifiers
-// drift apart. An offset hour above 24 or an offset minute above 60 is in
-// neither table: Go 1.22, which CI builds with, decodes it, and Go 1.23 and
-// later reject it.
+// TestTimestampDecode pins what the timestamp decoder behind issuedAt,
+// expiresAt and every other timestamp this verifier decodes accepts. The
+// Python reference verifier ports this grammar (_parse_rfc3339 in
+// ../python/verify.py) and test_verify.py carries the same table, so a Go
+// release that changes how the decoder treats one of these inputs, for example
+// by enabling the strict RFC 3339 checks the standard library has disabled
+// (golang/go#54580), fails here before the two verifiers drift apart. An
+// offset hour above 24 or an offset minute above 60 is in neither table: Go
+// 1.22, which CI builds with, decodes it, and Go 1.23 and later reject it.
 func TestTimestampDecode(t *testing.T) {
 	accepted := []struct {
 		in, utc     string
@@ -411,7 +413,7 @@ func TestTimestampDecode(t *testing.T) {
 	}
 	for _, c := range accepted {
 		raw, _ := json.Marshal(c.in)
-		var got time.Time
+		var got timestamp
 		if err := json.Unmarshal(raw, &got); err != nil {
 			t.Errorf("%q: decode error %v, want %s", c.in, err, c.utc)
 			continue
@@ -437,12 +439,49 @@ func TestTimestampDecode(t *testing.T) {
 	}
 	for _, in := range rejected {
 		raw, _ := json.Marshal(in)
-		var got time.Time
+		var got timestamp
 		if err := json.Unmarshal(raw, &got); err == nil {
 			t.Errorf("%q decoded to %s, want a decode error", in, got.UTC().Format(time.RFC3339))
 		}
 	}
+	// A timestamp written with a JSON escape, as raw JSON. Built with Go 1.27,
+	// encoding/json decodes these into a plain time.Time field; the timestamp
+	// decoder refuses them under every release, as the Python verifier does.
+	for _, raw := range []string{
+		"\"2026-05-23T00:00:00\\u005a\"",
+		"\"\\u0032099-12-31T23:59:59Z\"",
+	} {
+		var got timestamp
+		if err := json.Unmarshal([]byte(raw), &got); err == nil {
+			t.Errorf("%s decoded to %s, want a decode error", raw, got.UTC().Format(time.RFC3339))
+		}
+	}
 	if s := (time.Time{}).UTC().Format(time.RFC3339); s != "0001-01-01T00:00:00Z" {
 		t.Errorf("zero time formats as %s, want 0001-01-01T00:00:00Z", s)
+	}
+}
+
+// TestEscapedTimestampFailsToDecode pins that a timestamp written with a JSON
+// escape fails to decode wherever this verifier decodes one: the credential's
+// issuedAt is a PARSE_ERROR, a CRL entry's revokedAt fails to load the
+// fixture, and a v1.1 behavioralProfile.generatedAt projects the profile as
+// null. With plain time.Time fields, a Go 1.27 build decoded all three.
+func TestEscapedTimestampFailsToDecode(t *testing.T) {
+	const escaped = "\"2026-05-23T00:00:00\\u005a\""
+	got := verify(fixture{ATX: json.RawMessage(`{"atcVersion":"1.1","issuedAt":` + escaped + `}`)})
+	if got.RejectCategory != "PARSE_ERROR" {
+		t.Errorf("escaped issuedAt: %s, want PARSE_ERROR", got)
+	}
+	var f fixture
+	crl := `{"verifierState":{"crl":{"entries":[{"revokedAt":` + escaped + `}]}}}`
+	if err := json.Unmarshal([]byte(crl), &f); err == nil {
+		t.Error("escaped CRL revokedAt: the fixture loaded, want a load error")
+	}
+	if p := projectBehavioralProfileV11(json.RawMessage(`{"generatedAt":` + escaped + `}`)); string(p) != "null" {
+		t.Errorf("escaped behavioralProfile.generatedAt projected as %s, want null", p)
+	}
+	// Control: the same instant without the escape decodes.
+	if p := projectBehavioralProfileV11(json.RawMessage(`{"generatedAt":"2026-05-23T00:00:00Z"}`)); string(p) == "null" {
+		t.Error("unescaped behavioralProfile.generatedAt projected as null")
 	}
 }

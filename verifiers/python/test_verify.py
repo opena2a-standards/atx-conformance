@@ -12,10 +12,13 @@ makes of a member name in another case, a timestamp written with a JSON
 escape, an unpaired surrogate escape and a trustScore of -0, the projection of
 behavioralProfile and scanSummary members outside their Go type, the signature
 base64 alphabet, a fixture whose expected member is not an object, and a
-report line standard output cannot encode. Two tests read verify.py itself: it
-imports no name it does not use, and its module docstring lists only the checks
-the verifier runs. Needs the same dependencies as verify.py. Run from this
-directory:
+report line standard output cannot encode. They also pin the decode of the
+fixture wrapper: members outside their Go type, names in another case or
+repeated, a public key that is not hex, nesting at Go's depth limit, bytes
+that are not UTF-8, the single-pass string-literal scan, and --help. Two tests
+read verify.py itself: it imports no name it does not use, and its module
+docstring lists only the checks the verifier runs. Needs the same dependencies
+as verify.py. Run from this directory:
 
     python3 -m unittest -v test_verify
 """
@@ -31,6 +34,7 @@ import re
 import string
 import sys
 import tempfile
+import time
 import unittest
 from datetime import date
 from pathlib import Path
@@ -44,6 +48,8 @@ import verify  # noqa: E402
 
 BASELINE_V11 = ROOT / "fixtures" / "v1_1-baseline-valid.json"
 BASELINE_V10 = ROOT / "fixtures" / "baseline-valid.json"
+# The fixture whose verifier state carries a CRL.
+BASELINE_CRL = ROOT / "fixtures" / "revoked-crl-only.json"
 JCS_VECTORS = ROOT / "jcs-vectors" / "vectors"
 
 # The outcome the Go reference verifier reaches on a malformed typed member.
@@ -188,6 +194,36 @@ def _write_wrapper(directory: Path, name: str, baseline: Path, member: str, lite
     return out
 
 
+def _write_fixture_at(
+    directory: Path, name: str, baseline: Path, path: tuple, literal, rename: str | None = None
+) -> Path:
+    """_write_at for a member of the fixture itself, keeping its expected
+    member: path starts at the fixture object, so ("verifierState", "crl",
+    "entries", 0, "revokedAt") is the first CRL entry's revokedAt. A literal
+    of bytes is written as those bytes, unchecked."""
+    fixture = json.loads(baseline.read_text())
+    parent = fixture
+    for step in path[:-1]:
+        parent = parent[step]
+    value = parent.pop(path[-1], None)
+    if literal is KEEP:
+        literal = json.dumps(value)
+    if literal is not None:
+        parent[rename or path[-1]] = "@@MEMBER@@"
+    text = json.dumps(fixture).encode("utf-8")
+    if isinstance(literal, str):
+        literal = literal.encode("utf-8")
+    out = directory / name
+    out.write_bytes(text.replace(b'"@@MEMBER@@"', literal or b""))
+    return out
+
+
+def _fixture_verdict(baseline: Path, path: tuple, literal, rename: str | None = None) -> verify.VerifyResult:
+    with tempfile.TemporaryDirectory() as tmp:
+        written = _write_fixture_at(Path(tmp), "fixture.json", baseline, path, literal, rename)
+        return verify.verify_fixture(verify.load_fixture(written))
+
+
 def _run_main(*args: str) -> tuple[int, str, str]:
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -257,7 +293,9 @@ class InjectedNumberPurpose(unittest.TestCase):
 # rejects them as PARSE_ERROR: a value of another JSON type or out of range for
 # a string, int64, float64, bool, []string or []signature field, and a
 # timestamp outside the grammar of Go's time.Parse(time.RFC3339) or written
-# with a JSON escape, which Go's time.Time decoder does not decode.
+# with a JSON escape. The Go verifier decodes each timestamp with time.Time's
+# own UnmarshalJSON, which refuses the escaped form under every Go release; a
+# plain time.Time field decodes it when built with Go 1.27.
 MALFORMED_MEMBERS = (
     ("expiresAt", '"2099-12-31T23:59:59\\u005a"'),
     ("expiresAt", '"\\u0032099-12-31T23:59:59Z"'),
@@ -435,7 +473,9 @@ GO_VERDICTS = (
 
 # The verdict the Go reference verifier reaches when the v1.1 baseline's
 # behavioralProfile.generatedAt holds the raw JSON literal. Recorded from
-# `go run .` in ../go with Go 1.22.12 and with Go 1.26.3, which agree on each.
+# `go run .` in ../go with Go 1.22.12 and with Go 1.26.3, which agree on each;
+# the escaped row holds with Go 1.27.2 too, since the Go verifier decodes the
+# timestamp with time.Time's own UnmarshalJSON.
 # A generatedAt Go's time.Time decoder refuses makes the Go verifier project
 # the whole behavioralProfile as null, so the signature rejects; one that
 # decodes to the signed instant projects as signed.
@@ -739,6 +779,110 @@ GO_UNLOADABLE_EXPECTED = (
     ('{"verifyResult": "REJECT", "reasonContains": 7}', "expected.reasonContains 7 is not a JSON string"),
 )
 
+# The tables below were recorded from `go run .` in ../go, built with Go
+# 1.22.12 and with Go 1.27.2, which agree on every row.
+
+# A fixture member outside the type the Go verifier's fixture struct gives it,
+# on the CRL baseline: the file fails to load there. (path from the fixture
+# object, raw literal, the member this verifier's load error names).
+GO_UNLOADABLE_WRAPPERS = (
+    (("name",), '{"a": 1}', "name"),
+    (("description",), "7", "description"),
+    (("keypairRefs",), '"x"', "keypairRefs"),
+    (("keypairRefs",), "[7]", "keypairRefs[0]"),
+    (("keypairRefs", 0, "publicKeyHex"), "7", "keypairRefs[0].publicKeyHex"),
+    (("verifierState",), "[]", "verifierState"),
+    (("verifierState", "clockRfc3339"), "7", "verifierState.clockRfc3339"),
+    (("verifierState", "trustedIssuers"), '"x"', "verifierState.trustedIssuers"),
+    (("verifierState", "trustedIssuers"), "[7]", "verifierState.trustedIssuers[0]"),
+    (("verifierState", "publicKeys"), '{"x": 1}', "verifierState.publicKeys"),
+    (("verifierState", "publicKeys", 0, "keyId"), "7", "verifierState.publicKeys[0].keyId"),
+    (("verifierState", "crl"), '"x"', "verifierState.crl"),
+    (("verifierState", "crl", "version"), "1.5", "verifierState.crl.version"),
+    (("verifierState", "crl", "version"), '"1"', "verifierState.crl.version"),
+    (("verifierState", "crl", "issuedAt"), '"2026-05-23"', "verifierState.crl.issuedAt"),
+    (("verifierState", "crl", "nextUpdate"), "7", "verifierState.crl.nextUpdate"),
+    (("verifierState", "crl", "entries"), "[7]", "verifierState.crl.entries[0]"),
+    (("verifierState", "crl", "entries", 0, "agentId"), "7", "verifierState.crl.entries[0].agentId"),
+    (
+        ("verifierState", "crl", "entries", 0, "revokedAt"),
+        '"2026-05-23T12:00:00\\u005a"',
+        "verifierState.crl.entries[0].revokedAt",
+    ),
+    (("verifierState", "crl", "signature"), "7", "verifierState.crl.signature"),
+)
+
+# The verdict when a fixture member is renamed to another case (rename), holds
+# the raw literal, or is absent (None). Go matches a fixture member name to its
+# field in any case, leaves a null or absent member at its zero value, and
+# holds no credential at all when atx is absent. (baseline, path, raw literal,
+# rename, Go verdict).
+GO_WRAPPER_VERDICTS = (
+    (BASELINE_V11, ("verifierState", "trustedIssuers"), KEEP, "TrustedIssuers", "ACCEPT"),
+    (BASELINE_V11, ("verifierState", "clockRfc3339"), KEEP, "CLOCKRFC3339", "ACCEPT"),
+    (BASELINE_V11, ("verifierState", "publicKeys"), KEEP, "PublicKeys", "ACCEPT"),
+    (BASELINE_V11, ("verifierState", "publicKeys", 0, "publicKeyHex"), KEEP, "PUBLICKEYHEX", "ACCEPT"),
+    (BASELINE_V11, ("verifierState",), KEEP, "VerifierState", "ACCEPT"),
+    (BASELINE_V11, ("atx",), KEEP, "ATX", "ACCEPT"),
+    (BASELINE_V11, ("name",), "null", None, "ACCEPT"),
+    (BASELINE_V11, ("keypairRefs",), "null", None, "ACCEPT"),
+    (BASELINE_V11, ("verifierState", "trustedIssuers"), None, None, "UNTRUSTED_ISSUER"),
+    (BASELINE_V11, ("verifierState", "clockRfc3339"), None, None, "VERIFIER_CONFIG_ERROR"),
+    (BASELINE_V11, ("verifierState",), "null", None, "VERIFIER_CONFIG_ERROR"),
+    (BASELINE_V11, ("atx",), None, None, "PARSE_ERROR"),
+    (BASELINE_CRL, ("verifierState", "crl"), KEEP, "CRL", "REVOKED"),
+    (BASELINE_CRL, ("verifierState", "crl", "entries"), KEEP, "Entries", "REVOKED"),
+    (BASELINE_CRL, ("verifierState", "crl", "entries", 0, "agentId"), KEEP, "AGENTID", "REVOKED"),
+    (BASELINE_CRL, ("verifierState", "crl"), "null", None, "ACCEPT"),
+    (BASELINE_CRL, ("verifierState", "crl", "entries"), "[null]", None, "ACCEPT"),
+    (BASELINE_CRL, ("verifierState", "crl", "revokedAt"), '"not-a-date"', None, "REVOKED"),
+)
+
+# An expected member that repeats a name with a case variant between the
+# repeats. Go keeps the last of the names that fold together in document
+# order. (raw literal, the verifyResult Go reads).
+GO_REPEATED_EXPECTED_NAMES = (
+    ('{"verifyResult": "ACCEPT", "VerifyResult": "REJECT", "verifyResult": "ACCEPT"}', "ACCEPT"),
+    ('{"verifyResult": "REJECT", "VerifyResult": "ACCEPT", "verifyResult": "REJECT"}', "REJECT"),
+    ('{"VerifyResult": "REJECT", "verifyResult": "ACCEPT"}', "ACCEPT"),
+    ('{"verifyResult": "REJECT", "VERIFYRESULT": "ACCEPT"}', "ACCEPT"),
+)
+
+# What Go's hex.DecodeString makes of a public key's publicKeyHex, None where
+# it returns an error and the Go verifier skips the key.
+GO_HEX_DECODES = (
+    ("", b""),
+    ("ABcd", b"\xab\xcd"),
+    ("zz", None),
+    ("abc", None),
+    ("ab cd", None),
+    (" abcd", None),
+    ("abcd\n", None),
+)
+
+# Nesting at the edge of Go's encoding/json depth limit, 10000 levels with
+# the fixture object: (where, how many arrays nest there, Go verdict, or None
+# where the file fails to load).
+GO_NESTING_VERDICTS = (
+    (("deep",), 5000, "ACCEPT"),
+    (("deep",), 9999, "ACCEPT"),
+    (("deep",), 10000, None),
+    (("atx", "extra"), 5000, "ACCEPT"),
+    (("atx", "extra"), 9999, None),
+)
+
+# Bytes that are not UTF-8 inside a string: Go decodes each byte of an
+# invalid sequence to U+FFFD. (raw bytes of the name member's literal, the
+# name Go holds).
+GO_INVALID_UTF8_DECODES = (
+    (b'"ab\xffcd"', "ab�cd"),
+    (b'"ab\xe2\x82cd"', "ab��cd"),
+    (b'"\xed\xa0\x80"', "���"),
+    (b'"\xf0\x9f\x98"', "���"),
+    (b'"\xc0\xaf"', "��"),
+    (b'"\xf0\x9f\x98\x80"', "\U0001f600"),
+)
+
 
 def _outcome(got: verify.VerifyResult) -> str:
     return "ACCEPT" if got.accepted else got.reject_category
@@ -863,6 +1007,15 @@ class GoMemberNameFolding(unittest.TestCase):
             with self.subTest(path=path, name=name, value=literal):
                 got = _at_verdict(BASELINE_V11, path, literal, rename=name)
                 self.assertEqual(_outcome(got), outcome, got.reason)
+
+    def test_non_ascii_names_fold_through_lowercase(self):
+        # Beyond ASCII and the two letters Go folds onto ASCII, a name folds
+        # through its lowercase form, as Go's unicode.ToLower folds it, so
+        # two such names in the credential are a duplicate there as here.
+        self.assertEqual(verify._fold_key("Éclair"), "éclair")
+        got = _at_verdict(BASELINE_V11, ("extra",), '{"É": 1, "é": 2}')
+        self.assertEqual(got.reject_category, "PARSE_ERROR", got.reason)
+        self.assertIn("duplicate member", got.reason)
 
     def test_another_name_is_not_the_member(self):
         # Control: folding joins case variants only. "revoked_" is no member
@@ -1223,6 +1376,161 @@ class Imports(unittest.TestCase):
                                 for alias in node.names)
         used = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
         self.assertEqual(sorted(imported - used), [])
+
+
+class FixtureWrapper(unittest.TestCase):
+    def test_wrapper_outside_its_go_type_is_a_load_error(self):
+        for path, literal, member in GO_UNLOADABLE_WRAPPERS:
+            with self.subTest(path=path, value=literal), tempfile.TemporaryDirectory() as tmp:
+                written = _write_fixture_at(Path(tmp), "w.json", BASELINE_CRL, path, literal)
+                with self.assertRaises(ValueError) as raised:
+                    verify._expected_outcome(verify.load_fixture(written))
+                self.assertTrue(str(raised.exception).startswith(member + " "), raised.exception)
+
+    def test_wrapper_member_reaches_the_go_verdict(self):
+        for baseline, path, literal, rename, outcome in GO_WRAPPER_VERDICTS:
+            with self.subTest(baseline=baseline.name, path=path, value=literal, name=rename):
+                got = _fixture_verdict(baseline, path, literal, rename)
+                self.assertEqual(_outcome(got), outcome, got.reason)
+
+    def test_repeated_expected_name_keeps_the_last_in_document_order(self):
+        for literal, verify_result in GO_REPEATED_EXPECTED_NAMES:
+            with self.subTest(expected=literal), tempfile.TemporaryDirectory() as tmp:
+                path = _write_wrapper(Path(tmp), "e.json", BASELINE_V11, "expected", literal)
+                got = verify._expected_outcome(verify.load_fixture(path))
+                self.assertEqual(got["verifyResult"], verify_result)
+
+    def test_null_fixture_is_the_zero_value(self):
+        # Go loads a fixture file holding null into its zero value, which has
+        # no credential and expects no verdict.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "null.json"
+            path.write_text("null")
+            fixture = verify.load_fixture(path)
+            self.assertEqual(verify._expected_outcome(fixture)["verifyResult"], "")
+            got = verify.verify_fixture(fixture)
+        self.assertEqual(got.reject_category, "PARSE_ERROR", got.reason)
+
+    def test_directory_run_reaches_the_summary_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            _write_fixture_at(directory, "a-name.json", BASELINE_V11, ("name",), '{"a": 1}')
+            _write_fixture_at(
+                directory, "b-trusted.json", BASELINE_V11,
+                ("verifierState", "trustedIssuers"), KEEP, "TrustedIssuers",
+            )
+            (directory / "c-baseline-valid.json").write_text(BASELINE_V11.read_text())
+            code, text, err = _run_main(str(directory))
+        self.assertEqual(code, 1, text + err)
+        self.assertIn("a-name.json  (load error: name {'a': 1} is not a JSON string)", text)
+        self.assertEqual(text.count("observed: ACCEPT"), 2, text)
+        self.assertEqual(text.splitlines()[-1], "summary: 2 pass, 1 fail (3 fixtures)")
+
+
+class PublicKeyHex(unittest.TestCase):
+    def test_hex_decodes_as_go_decodes_it(self):
+        for text, decoded in GO_HEX_DECODES:
+            with self.subTest(hex=text):
+                self.assertEqual(verify._decode_hex(text), decoded)
+
+    def test_key_go_cannot_decode_is_skipped(self):
+        # A key that is not hex ahead of the signing key is skipped, and the
+        # signing key still verifies. The signing key itself written with a
+        # space inside its hex is skipped too, so no key verifies.
+        def prepend_non_hex_key(keys):
+            keys.insert(0, {**keys[0], "publicKeyHex": "zz"})
+
+        def space_in_signing_key(keys):
+            text = keys[0]["publicKeyHex"]
+            keys[0]["publicKeyHex"] = text[:2] + " " + text[2:]
+
+        for edit, outcome in (
+            (prepend_non_hex_key, "ACCEPT"),
+            (space_in_signing_key, "SIGNATURE_INVALID"),
+        ):
+            with self.subTest(edit=edit.__name__):
+                fixture = json.loads(BASELINE_V11.read_text())
+                edit(fixture["verifierState"]["publicKeys"])
+                got = verify.verify_fixture(fixture)
+                self.assertEqual(_outcome(got), outcome, got.reason)
+
+
+class NestingDepth(unittest.TestCase):
+    def test_nesting_reaches_the_go_verdict(self):
+        # 9999 arrays under the fixture object are the 10000 levels Go
+        # decodes; one more fails to load. The json.loads of Python 3.12 and
+        # 3.13 stops short of that depth, so there this also runs the
+        # pure-Python parse.
+        for path, n, outcome in GO_NESTING_VERDICTS:
+            with self.subTest(path=path, depth=n), tempfile.TemporaryDirectory() as tmp:
+                literal = "[" * n + "]" * n
+                written = _write_fixture_at(Path(tmp), "deep.json", BASELINE_V11, path, literal)
+                if outcome is None:
+                    with self.assertRaises(ValueError) as raised:
+                        verify.load_fixture(written)
+                    self.assertIn("nested deeper than 10000 levels", str(raised.exception))
+                else:
+                    got = verify.verify_fixture(verify.load_fixture(written))
+                    self.assertEqual(_outcome(got), outcome, got.reason)
+
+    def test_brackets_inside_a_string_do_not_nest(self):
+        self.assertEqual(len(verify._string_literals('{"a": "' + "[" * 20000 + '"}')), 2)
+
+
+class StringLiteralScan(unittest.TestCase):
+    def test_literals_and_names_are_found(self):
+        text = '{"k" : "v\\"w", "n": ["x\\\\", 1], "e": "\\u0041"}'
+        literals = verify._string_literals(text)
+        self.assertEqual(
+            [(text[start:end], is_name) for start, end, is_name in literals],
+            [('"k"', True), ('"v\\"w"', False), ('"n"', True), ('"x\\\\"', False),
+             ('"e"', True), ('"\\u0041"', False)],
+        )
+        self.assertEqual(
+            verify._escaped_values_nulled(text, literals),
+            '{"k" : null, "n": [null, 1], "e": null}',
+        )
+
+    def test_unterminated_literal_ends_the_scan(self):
+        self.assertEqual(verify._string_literals('{"a": "b\\"}'), [(1, 4, True)])
+
+    def test_unterminated_literal_is_scanned_in_linear_time(self):
+        # A quote and 200,000 escaped quotes. A regular expression searched
+        # over the text retries from each of them: the pattern this scan
+        # replaced took 3.4 s at 20,000 in one measurement, and four times
+        # that at twice the count.
+        text = '"' + '\\"' * 200_000
+        started = time.perf_counter()
+        literals = verify._string_literals(text)
+        verify._escaped_values_nulled(text, literals)
+        self.assertEqual(literals, [])
+        self.assertLess(time.perf_counter() - started, 2.0)
+
+
+class InvalidUTF8(unittest.TestCase):
+    def test_invalid_byte_decodes_as_go_decodes_it(self):
+        for raw, name in GO_INVALID_UTF8_DECODES:
+            with self.subTest(raw=raw), tempfile.TemporaryDirectory() as tmp:
+                written = _write_fixture_at(Path(tmp), "u.json", BASELINE_V11, ("name",), raw)
+                fixture = verify.load_fixture(written)
+                self.assertEqual(fixture["name"], name)
+                self.assertTrue(verify.verify_fixture(fixture).accepted)
+
+    def test_invalid_byte_outside_a_string_fails_to_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            written = _write_fixture_at(Path(tmp), "u.json", BASELINE_V11, ("name",), b'"ab"\xff')
+            with self.assertRaises(ValueError):
+                verify.load_fixture(written)
+
+
+class Help(unittest.TestCase):
+    def test_help_prints_the_usage_line_and_exits_0(self):
+        for flag in ("--help", "-h"):
+            with self.subTest(flag=flag):
+                self.assertEqual(_run_main(flag), (0, "usage: verify.py <fixture.json|dir>...\n", ""))
+
+    def test_no_argument_is_a_usage_error(self):
+        self.assertEqual(_run_main(), (2, "", "usage: verify.py <fixture.json|dir>...\n"))
 
 
 class JCSVectorsThroughVerifierProjection(unittest.TestCase):

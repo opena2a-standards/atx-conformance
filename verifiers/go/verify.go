@@ -80,17 +80,28 @@ type verifierState struct {
 
 type crl struct {
 	Version    int        `json:"version"`
-	IssuedAt   time.Time  `json:"issuedAt"`
-	NextUpdate time.Time  `json:"nextUpdate"`
+	IssuedAt   timestamp  `json:"issuedAt"`
+	NextUpdate timestamp  `json:"nextUpdate"`
 	Entries    []crlEntry `json:"entries"`
 	Signature  string     `json:"signature"`
 }
 
 type crlEntry struct {
 	AgentID   string    `json:"agentId"`
-	RevokedAt time.Time `json:"revokedAt"`
+	RevokedAt timestamp `json:"revokedAt"`
 	Reason    string    `json:"reason"`
 }
+
+// timestamp is a time.Time decoded by time.Time's own UnmarshalJSON, which
+// parses the bytes between the quotes, so a timestamp written with a JSON
+// escape fails to decode. encoding/json decodes a plain time.Time field that
+// way up to Go 1.26; built with Go 1.27, it unescapes the string first and
+// decodes the escaped form too. Every timestamp this verifier decodes from a
+// fixture is one of these, so the Go release does not change which ones
+// decode (the Python verifier follows the same rule).
+type timestamp struct{ time.Time }
+
+func (t *timestamp) UnmarshalJSON(b []byte) error { return t.Time.UnmarshalJSON(b) }
 
 type expectedOutcome struct {
 	VerifyResult   string `json:"verifyResult"`
@@ -124,8 +135,8 @@ type atx struct {
 	ScanSummary          json.RawMessage `json:"scanSummary"`
 	TrustScore           float64         `json:"trustScore"`
 	TrustLevel           int             `json:"trustLevel"`
-	IssuedAt             time.Time       `json:"issuedAt"`
-	ExpiresAt            time.Time       `json:"expiresAt"`
+	IssuedAt             timestamp       `json:"issuedAt"`
+	ExpiresAt            timestamp       `json:"expiresAt"`
 	IssuerDID            string          `json:"issuerDid"`
 	IssuerChain          []string        `json:"issuerChain"`
 	Signatures           []signature     `json:"signatures"`
@@ -272,7 +283,7 @@ func projectBehavioralProfileV11(raw json.RawMessage) json.RawMessage {
 	}
 	var wire struct {
 		Checksum        string    `json:"checksum"`
-		GeneratedAt     time.Time `json:"generatedAt"`
+		GeneratedAt     timestamp `json:"generatedAt"`
 		ObservationDays int       `json:"observationDays"`
 	}
 	if err := json.Unmarshal(raw, &wire); err != nil {
@@ -416,7 +427,13 @@ func scanValueForDuplicates(dec *json.Decoder, depth int) (name string, dup, abo
 // only other non-ASCII runes, which collapse onto no struct field; there it may
 // diverge from encoding/json — and from the Python reference, whose str.lower
 // can expand a rune Go's simple ToLower does not — but only on inputs no honest
-// credential produces. Ported from opena2a-registry pkg/atcverify (registry #307).
+// credential produces. unicode.ToLower uses the Unicode tables of the Go
+// release the verifier is built with, so a pair of names whose case mapping a
+// later Unicode version added is a duplicate under one release and not under
+// another: U+1C89 and U+1C8A (Unicode 16.0) under Go 1.27 (Unicode 17.0) and
+// not under Go 1.22 through 1.26 (Unicode 15.0). README "Running the
+// verifiers" says the same. Ported from opena2a-registry pkg/atcverify
+// (registry #307).
 func foldKey(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
@@ -469,7 +486,7 @@ func verify(f fixture) result {
 	}
 
 	// Step 2: expiry
-	if now.After(a.ExpiresAt) {
+	if now.After(a.ExpiresAt.Time) {
 		return result{
 			RejectCategory: "EXPIRED",
 			Reason:         fmt.Sprintf("expired at %s, verifier clock is %s", a.ExpiresAt.UTC().Format(time.RFC3339), now.Format(time.RFC3339)),
