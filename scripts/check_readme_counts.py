@@ -61,12 +61,19 @@ paragraph and the `ATX schema` row of the version-pinning table, to the
 versions the fixtures expect to ACCEPT. Both said "v1.0" alone while most
 fixtures were v1.1 and the vendored schema was the v1.1 schema.
 
+It also holds the Go verifier's stated dependencies to the direct requirements
+of verifiers/go/go.mod, in the three places that state them: the dependency
+list under the README's Go heading, the version-pinning table and the header
+comment of verifiers/go/verify.go. All three named cloudflare/circl alone
+while go.mod also required gowebpki/jcs.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
 declares, the behavioralProfile note matches the fixtures, no criterion (c)
 claim outruns the registry, the trustScore is called illustrative, the
 trigger sentence matches the workflow, both key-source lists name every
-Ed25519 key and both version labels name exactly the accepted versions, 1
+Ed25519 key, both version labels name exactly the accepted versions and each
+Go dependency site names every direct requirement at its pinned version, 1
 otherwise, 2 on an unknown argument.
 """
 
@@ -283,6 +290,20 @@ INTRO_SITE = "README intro paragraph"
 PIN_SITE = f"README `{VERSION_PINNING}` `ATX schema` row"
 ATX_VERSION = re.compile(r"\bv(\d+\.\d+)\b")
 
+# The three places a reader learns what the Go verifier depends on. Each named
+# cloudflare/circl alone after go.mod had come to require gowebpki/jcs for the
+# v1.1 signed payload, so each is held to the direct requirements of go.mod.
+GO_MOD = ROOT / "verifiers" / "go" / "go.mod"
+VERIFY_GO = ROOT / "verifiers" / "go" / "verify.go"
+GO_MOD_NAME = "verifiers/go/go.mod"
+GO_HEADING = re.compile(r"^### Go\b.*$", re.M)
+# A dependency-list item naming a module at a version: "- `<module> <version>`".
+GO_MODULE_ITEM = re.compile(r"^- `([^`\s]+/[^`\s]+) (v[^`\s]+)`", re.M)
+GO_PACKAGE_CLAUSE = re.compile(r"^package \w+", re.M)
+GO_LIST_SITE = "README Go verifier dependency list"
+GO_PIN_SITE = f"README `{VERSION_PINNING}` table"
+GO_HEADER_SITE = "verifiers/go/verify.go header comment"
+
 
 def accepted_versions(paths):
     """The atcVersion of every fixture whose expected verifyResult is ACCEPT."""
@@ -348,6 +369,99 @@ def version_label_failures(readme, versions):
         if problems:
             failures.append(f"{where} {' and '.join(problems)}; the fixtures "
                             f"accept ATX {_versions(versions)}")
+    return failures
+
+
+def direct_requirements(go_mod):
+    """Map each module a go.mod requires directly to its pinned version."""
+    required = {}
+    block = False
+    for line in go_mod.splitlines():
+        code, _, comment = line.partition("//")
+        words = code.split()
+        if words == ["require", "("]:
+            block = True
+            continue
+        if words == [")"]:
+            block = False
+            continue
+        if words[:1] == ["require"]:
+            words = words[1:]
+        elif not block:
+            continue
+        if len(words) == 2 and "indirect" not in comment:
+            required[words[0]] = words[1]
+    return required
+
+
+def go_header(source):
+    """The comment above a Go file's package clause."""
+    clause = GO_PACKAGE_CLAUSE.search(source)
+    return source[:clause.start()] if clause else ""
+
+
+def _names(text, module):
+    """Whether `text` names `module`, not a longer module name starting with it."""
+    return re.search(re.escape(module) + r"(?![\w-])", text) is not None
+
+
+def go_dependency_failures(readme, go_mod, verify_go):
+    """Each place that states the Go verifier's dependencies must name every
+    direct requirement of go.mod (None when a file is missing). The README
+    sites state versions, so those must be the pinned ones; the verify.go
+    header is prose, so it is checked for omissions only."""
+    if go_mod is None:
+        return [f"{GO_MOD_NAME} is missing; the Go verifier's stated "
+                f"dependencies cannot be checked"]
+    required = direct_requirements(go_mod)
+    if not required:
+        return [f"{GO_MOD_NAME} states no direct requirement; refusing to pass "
+                f"the Go verifier's stated dependencies vacuously"]
+    failures = []
+
+    heading = GO_HEADING.search(readme)
+    body = section(readme, heading.group(0)) if heading else None
+    if body is None:
+        failures.append(f"{GO_LIST_SITE} not found: README has no `### Go` section")
+    else:
+        listed = dict(GO_MODULE_ITEM.findall(body))
+        for module, version in sorted(required.items()):
+            if module not in listed:
+                failures.append(f"{GO_LIST_SITE} omits `{module} {version}`, "
+                                f"which {GO_MOD_NAME} requires")
+            elif listed[module] != version:
+                failures.append(f"{GO_LIST_SITE} states `{module} {listed[module]}` "
+                                f"but {GO_MOD_NAME} pins {version}")
+        for module in sorted(set(listed) - set(required)):
+            failures.append(f"{GO_LIST_SITE} lists `{module}`, which "
+                            f"{GO_MOD_NAME} does not require directly")
+
+    pinning = section(readme, VERSION_PINNING)
+    if pinning is None:
+        failures.append(f"{GO_PIN_SITE} not found; the Go module versions it "
+                        f"states cannot be checked")
+    else:
+        rows = [[c.strip() for c in line.strip().strip("|").split("|")]
+                for line in pinning.splitlines() if line.startswith("|")]
+        for module, version in sorted(required.items()):
+            stated = [r[1] for r in rows if len(r) >= 3 and _names(r[2], module)]
+            if not stated:
+                failures.append(f"{GO_PIN_SITE} has no row for {module}, which "
+                                f"{GO_MOD_NAME} pins at {version}")
+            for found in stated:
+                if found != version:
+                    failures.append(f"{GO_PIN_SITE} states {module} {found} but "
+                                    f"{GO_MOD_NAME} pins {version}")
+
+    if verify_go is None:
+        failures.append(f"{GO_HEADER_SITE} not found: verifiers/go/verify.go "
+                        f"is missing")
+    else:
+        header = go_header(verify_go)
+        for module in sorted(required):
+            if not _names(header, module):
+                failures.append(f"{GO_HEADER_SITE} does not name {module}, "
+                                f"which {GO_MOD_NAME} requires")
     return failures
 
 
@@ -1030,8 +1144,90 @@ def _version_cases(readme, versions):
     return cases
 
 
-def self_test(readme, cosigners, fixtures, vectors, versions, verbose, workflow,
-              key_vectors, used_key_ids):
+# A module and a version no go.mod here states, for the cases that invent one.
+GO_INVENTED = "example.com/not/required"
+GO_ALTERED_VERSION = "v9.9.9"
+
+
+def _go_dependency_cases(readme, go_mod, verify_go):
+    """Drop and restate each direct requirement at each site that states the
+    Go verifier's dependencies, list a module go.mod does not require, and add
+    a requirement no site names; each must add a failure naming the site."""
+    if go_mod is None or verify_go is None:
+        return [(False, "Go verifier dependency sites",
+                 f"{GO_MOD_NAME} or verifiers/go/verify.go is missing")]
+    baseline = set(go_dependency_failures(readme, go_mod, verify_go))
+    cases = []
+
+    def case(label, where, needle, readme=readme, go_mod=go_mod, verify_go=verify_go):
+        new = [f for f in go_dependency_failures(readme, go_mod, verify_go)
+               if f not in baseline]
+        cases.append((any(f.startswith(where) and needle in f for f in new), label,
+                      f"expected a {where} failure naming {needle}, got {new}"))
+
+    def missing(label, name):
+        cases.append((False, label, f"site not found in {name}: a dependency "
+                                    f"stated there is not covered by this self-test"))
+
+    parsed = direct_requirements(
+        "require (\n\ta.example/m v1.0.0\n\tb.example/n v2.0.0 // indirect\n)\n"
+        "require c.example/o v3.0.0\nrequire d.example/p v4.0.0 // indirect\n")
+    cases.append((parsed == {"a.example/m": "v1.0.0", "c.example/o": "v3.0.0"},
+                  "go.mod direct requirements, block and single-line forms",
+                  f"read {parsed}"))
+
+    go_at = readme.find("\n### Go")
+    pin_at = readme.find(f"\n{VERSION_PINNING}\n")
+    header = verify_go.partition("\npackage ")[0]
+    for module in sorted(direct_requirements(go_mod)):
+        name = re.escape(module)
+
+        item = re.search(rf"^- `{name} ([^`\n]*)`[^\n]*\n", readme, re.M)
+        if item is None:
+            missing(f"{GO_LIST_SITE} entry for {module}", "README.md")
+        else:
+            case(f"{GO_LIST_SITE} without {module}", GO_LIST_SITE, module,
+                 readme=readme[:item.start()] + readme[item.end():])
+            case(f"{GO_LIST_SITE} stating another {module} version",
+                 GO_LIST_SITE, GO_ALTERED_VERSION,
+                 readme=readme[:item.start(1)] + GO_ALTERED_VERSION + readme[item.end(1):])
+
+        row = re.compile(rf"^\|[^|\n]*\| ([^|\n]*) \|[^\n]*{name}[^\n]*\n", re.M)
+        row = row.search(readme, pin_at + 1) if pin_at >= 0 else None
+        if row is None:
+            missing(f"{GO_PIN_SITE} row for {module}", "README.md")
+        else:
+            case(f"{GO_PIN_SITE} without the {module} row", GO_PIN_SITE, module,
+                 readme=readme[:row.start()] + readme[row.end():])
+            case(f"{GO_PIN_SITE} stating another {module} version",
+                 GO_PIN_SITE, GO_ALTERED_VERSION,
+                 readme=readme[:row.start(1)] + GO_ALTERED_VERSION + readme[row.end(1):])
+
+        if module not in header:
+            missing(f"{GO_HEADER_SITE} naming {module}", "verifiers/go/verify.go")
+        else:
+            case(f"{GO_HEADER_SITE} without {module}", GO_HEADER_SITE, module,
+                 verify_go=verify_go.replace(module, "a module", 1))
+
+    first = (re.compile(r"^- `[^\n]*\n", re.M).search(readme, go_at + 1)
+             if go_at >= 0 else None)
+    if first is None:
+        missing(f"{GO_LIST_SITE}", "README.md")
+    else:
+        case(f"{GO_LIST_SITE} listing a module go.mod does not require",
+             GO_LIST_SITE, GO_INVENTED,
+             readme=(readme[:first.start()] + f"- `{GO_INVENTED} {GO_ALTERED_VERSION}`\n"
+                     + readme[first.start():]))
+
+    grown = go_mod + f"\nrequire {GO_INVENTED} {GO_ALTERED_VERSION}\n"
+    for where in (GO_LIST_SITE, GO_PIN_SITE, GO_HEADER_SITE):
+        case(f"{where} when go.mod gains a requirement", where, GO_INVENTED,
+             go_mod=grown)
+    return cases
+
+
+def self_test(readme, cosigners, fixtures, vectors, versions, go_mod, verify_go,
+              verbose, workflow, key_vectors, used_key_ids):
     texts = {"README.md": readme, "COSIGNERS.md": cosigners or ""}
     baseline = set(check(readme, cosigners, fixtures, vectors))
 
@@ -1107,6 +1303,7 @@ def self_test(readme, cosigners, fixtures, vectors, versions, verbose, workflow,
     cases.extend(_trigger_cases(readme, workflow))
     cases.extend(_key_source_cases(readme, key_vectors, used_key_ids))
     cases.extend(_version_cases(readme, versions))
+    cases.extend(_go_dependency_cases(readme, go_mod, verify_go))
 
     failed = 0
     for ok, label, detail in cases:
@@ -1137,9 +1334,12 @@ def main():
     fixture_paths = sorted(FIXTURES.glob("*.json"))
     used_key_ids = fixture_key_ids(fixture_paths)
     versions = accepted_versions(fixture_paths)
+    go_mod = GO_MOD.read_text(encoding="utf-8") if GO_MOD.exists() else None
+    verify_go = VERIFY_GO.read_text(encoding="utf-8") if VERIFY_GO.exists() else None
 
     failed, total = self_test(readme, cosigners, fixtures, vectors, versions,
-                              only_self_test, workflow, key_vectors, used_key_ids)
+                              go_mod, verify_go, only_self_test, workflow,
+                              key_vectors, used_key_ids)
     if failed:
         print(f"self-test FAILED: {failed} of {total} case(s) not caught by the check",
               file=sys.stderr)
@@ -1156,6 +1356,7 @@ def main():
     failures.extend(ci_trigger_failures(readme, workflow))
     failures.extend(key_source_failures(readme, key_vectors, used_key_ids))
     failures.extend(version_label_failures(readme, versions))
+    failures.extend(go_dependency_failures(readme, go_mod, verify_go))
 
     if failures:
         sys.stdout.flush()
@@ -1173,7 +1374,9 @@ def main():
           f"the cosignature registry; trustScore is called illustrative; "
           f"CI trigger sentence matches {WORKFLOW_NAME}; "
           f"both README key-source lists name every Ed25519 key in vectors/; "
-          f"intro and version-pinning row name ATX {_versions(versions)}")
+          f"intro and version-pinning row name ATX {_versions(versions)}; "
+          f"Go verifier dependency list, version-pinning rows and verify.go "
+          f"header name every direct requirement of {GO_MOD_NAME}")
     return 0
 
 

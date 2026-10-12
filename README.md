@@ -275,6 +275,8 @@ Depends on:
 
 - Go 1.22 or later
 - `github.com/cloudflare/circl v1.6.2` (resolved by `go mod tidy`)
+- `github.com/gowebpki/jcs v1.0.1` (RFC 8785 canonicalization of the v1.1
+  signed payload; resolved the same way)
 
 ### Python (full hybrid Ed25519 plus ML-DSA-65)
 
@@ -358,6 +360,7 @@ breaking change for downstream verifiers.
 | Ed25519 keypair sources | RFC 8032 §7.1 Tests 1, 2, 3, 1024; secondary issuer seed `SHA-256("opena2a-atx-conformance/issuer-secondary/key-1/v1")` (not an RFC vector) | [datatracker.ietf.org/doc/html/rfc8032](https://datatracker.ietf.org/doc/html/rfc8032) |
 | ML-DSA-65 | FIPS 204 final | [csrc.nist.gov/pubs/fips/204/final](https://csrc.nist.gov/pubs/fips/204/final) |
 | CIRCL (ML-DSA-65 implementation) | v1.6.2 | [github.com/cloudflare/circl](https://github.com/cloudflare/circl) |
+| gowebpki/jcs (Go RFC 8785 canonicalization) | v1.0.1 | [github.com/gowebpki/jcs](https://github.com/gowebpki/jcs) |
 | cryptography (Python Ed25519) | >= 42.0.0 | [pyca/cryptography](https://github.com/pyca/cryptography) |
 | dilithium-py (Python ML-DSA-65) | >= 1.1.0 | [GiacomoPope/dilithium-py](https://github.com/GiacomoPope/dilithium-py) |
 | Conformance fixture format | v1 (this repo) | [`fixtures/baseline-valid.json#$schema`](./fixtures/baseline-valid.json) |
