@@ -198,9 +198,9 @@ configuration outside the fixture files.
 
 ### Trust scoring: 9-factor reference
 
-The `trustScore` field in each fixture (87.5 on the baseline) is composite
-output from the 9-factor algorithm specified in AIP-SPEC §6.1 with the
-audited weights:
+The `trustScore` field in each fixture (87.5 on the baseline) is an
+illustrative value; the 9-factor weights specified in AIP-SPEC §6.1 are
+reproduced for reference:
 
 | Factor | Weight |
 |---|---|
@@ -215,8 +215,9 @@ audited weights:
 | User feedback | 2 |
 | Total | 100 |
 
-The fixture value is illustrative; this suite does not verify the
-trust-score computation itself.
+No factor inputs in this suite produce the fixture value, and it is stated
+on a 0 to 100 scale, while AIP-SPEC §6.1 states the composite score on 0.0
+to 1.0. This suite does not verify the trust-score computation itself.
 
 ## Fixtures
 

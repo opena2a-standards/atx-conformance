@@ -40,10 +40,16 @@ registry in COSIGNERS.md. The README said the suite "closes criterion (c)"
 self-cosignature. Criterion (c) is closed by a second-party row, so the README
 may state it as closed only once such a row is recorded.
 
+It also holds the README's trust-scoring note to what the suite contains. The
+README called each fixture's trustScore composite output from the AIP-SPEC
+§6.1 9-factor algorithm while no fixture carries factor inputs, so it must
+call the value illustrative and must not call it the algorithm's output.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
-declares, the behavioralProfile note matches the fixtures and no criterion (c)
-claim outruns the registry, 1 otherwise, 2 on an unknown argument.
+declares, the behavioralProfile note matches the fixtures, no criterion (c)
+claim outruns the registry and the trustScore is called illustrative, 1
+otherwise, 2 on an unknown argument.
 """
 
 import collections
@@ -101,6 +107,26 @@ CRITERION_C_CLAIM = re.compile(
 RETRACTED_CLAIM = "It closes criterion (c)\non the OpenA2A maturity bar"
 REGISTRY_HEADING = "## Cosignature registry"
 
+# The README called each fixture's `trustScore` (87.5) "composite output from
+# the 9-factor algorithm specified in AIP-SPEC §6.1". No fixture carries the
+# factor inputs that would produce it, and AIP-SPEC §6.1 states the composite
+# on 0.0 to 1.0 while the fixtures use 0 to 100. The value is a placeholder,
+# so the README may reproduce the weights but not call the value their output.
+# Matched over whitespace-collapsed text so a line wrap cannot hide it.
+TRUST_SCORE_CLAIM = re.compile(
+    r"\b(?:output|result|computed|calculated|produced|derived)\s+"
+    r"(?:from|of|by|with|using)\s+the\s+9-factor\s+(?:algorithm|formula|model)",
+    re.IGNORECASE,
+)
+# The sentence README.md published, with its original line wrap. The claim
+# pattern must keep matching it, or the gate cannot fire on the text it was
+# written for.
+RETRACTED_TRUST_CLAIM = (
+    "is composite\noutput from the 9-factor algorithm specified in AIP-SPEC §6.1"
+)
+TRUST_HEADING = "### Trust scoring: 9-factor reference"
+TRUST_PLACEHOLDER = "illustrative"
+
 
 def registry_cosigners(cosigners):
     """Return the Cosigner cell of every data row in the registry table, or
@@ -155,6 +181,32 @@ def criterion_c_failures(readme, cosigners):
             "records no second-party cosignature (self-cosignatures do not "
             "count); state it as designed to close criterion (c) once one is "
             "recorded"
+        )
+    return failures
+
+
+def trust_score_failures(readme):
+    """Check that the README calls the fixture trustScore a placeholder."""
+    failures = []
+    if not TRUST_SCORE_CLAIM.search(" ".join(RETRACTED_TRUST_CLAIM.split())):
+        failures.append(
+            "trustScore claim pattern no longer matches the sentence it was "
+            "written for; the gate cannot fire"
+        )
+    claim = TRUST_SCORE_CLAIM.search(" ".join(readme.split()))
+    if claim:
+        failures.append(
+            f"README states the fixture trustScore is \"{claim.group(0)}\", but "
+            "no fixture carries factor inputs that produce it; call it an "
+            "illustrative value"
+        )
+    body = section(readme, TRUST_HEADING)
+    if body is None:
+        failures.append(f"no `{TRUST_HEADING}` section found in README")
+    elif TRUST_PLACEHOLDER not in body:
+        failures.append(
+            f"README `{TRUST_HEADING}` does not call the fixture trustScore "
+            f"{TRUST_PLACEHOLDER}; nothing in this suite computes it"
         )
     return failures
 
@@ -330,6 +382,8 @@ def check(readme, cosigners, fixtures, vectors):
                     f"COSIGNERS.md claims ({n} fixtures) but fixtures/ holds {actual}"
                 )
         failures.extend(criterion_c_failures(readme, cosigners))
+
+    failures.extend(trust_score_failures(readme))
 
     # "must report `24 pass, 0 fail`" in the continuous-verification list and
     # "summary: 24 pass, 0 fail (24 fixtures)" under Expected output. Matching
@@ -547,6 +601,29 @@ def self_test(readme, cosigners, fixtures, vectors, verbose):
     cases.append((any("COSIGNERS.md is missing" in f for f in new),
                   "COSIGNERS.md missing", f"a missing COSIGNERS.md still passes: {new}"))
 
+    if TRUST_HEADING not in readme:
+        cases.append((False, "trustScore called algorithm output",
+                      f"no `{TRUST_HEADING}` heading in README.md"))
+        cases.append((False, "trustScore not called illustrative",
+                      f"no `{TRUST_HEADING}` heading in README.md"))
+    else:
+        start = readme.index(TRUST_HEADING) + len(TRUST_HEADING)
+        altered = dict(texts)
+        altered["README.md"] = (readme[:start] + "\n\nThe value " + RETRACTED_TRUST_CLAIM
+                                + ".\n" + readme[start:])
+        new = run(altered)
+        cases.append((any("trustScore is" in f for f in new),
+                      "trustScore called algorithm output",
+                      f"the retracted trustScore sentence still passes: {new}"))
+        body = section(readme, TRUST_HEADING)
+        altered = dict(texts)
+        altered["README.md"] = readme.replace(
+            body, body.replace(TRUST_PLACEHOLDER, "computed"), 1)
+        new = run(altered)
+        cases.append((any(f"trustScore {TRUST_PLACEHOLDER}" in f for f in new),
+                      "trustScore not called illustrative",
+                      f"a section that drops `{TRUST_PLACEHOLDER}` still passes: {new}"))
+
     failed = 0
     for ok, label, detail in cases:
         if verbose or not ok:
@@ -600,7 +677,7 @@ def main():
           f"(each with one fixture-table row), {vectors} JCS vectors, all stated "
           f"as passing; README names the MANIFEST.sha256 byte check; "
           f"behavioralProfile scope note matches; criterion (c) claim matches "
-          f"the cosignature registry")
+          f"the cosignature registry; trustScore is called illustrative")
     return 0
 
 

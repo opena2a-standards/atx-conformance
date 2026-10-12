@@ -29,6 +29,13 @@ whenever one lands; README "Versioning and stability" says they should not.
   issuer-trust rule it tests (#140). Every fixture's bytes and
   `MANIFEST.sha256` line change; no `atx`, `verifierState` or `expected`
   member does.
+- README calls the fixture `trustScore` (87.5) an illustrative value and
+  reproduces the AIP-SPEC §6.1 9-factor weights for reference, where it said
+  the value was composite output from that algorithm: no fixture carries
+  factor inputs, and AIP-SPEC §6.1 states the composite on 0.0 to 1.0.
+  `scripts/check_readme_counts.py` fails when the README calls the value the
+  algorithm's output or stops calling it illustrative (#146). No fixture
+  changes.
 
 ## e2f9dc4 (#26, 2026-09-09): capabilities rewritten in 22 existing fixtures
 
