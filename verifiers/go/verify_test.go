@@ -5,10 +5,53 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 )
+
+// TestReadmeCrossReferencesResolve pins that every README §"..." cross-reference
+// in this verifier and in the fixture generator names a heading README.md
+// carries. A reference split across two comment lines reads as one.
+// atx-conformance#161: both sources cited §"Signed vs unsigned fields.", a
+// section README never had.
+func TestReadmeCrossReferencesResolve(t *testing.T) {
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatalf("cannot read README.md: %v", err)
+	}
+	headings := map[string]bool{}
+	fenced := false
+	for _, line := range strings.Split(string(readme), "\n") {
+		switch {
+		case strings.HasPrefix(line, "```"):
+			fenced = !fenced
+		case !fenced && strings.HasPrefix(line, "#"):
+			headings[strings.TrimSpace(strings.TrimLeft(line, "#"))] = true
+		}
+	}
+
+	continuation := regexp.MustCompile(`\n[ \t]*//[ \t]*`)
+	reference := regexp.MustCompile(`README\s+§"([^"]+)"`)
+	found := 0
+	for _, src := range []string{"verify.go", "../../scripts/generate-fixtures/main.go"} {
+		body, err := os.ReadFile(src) //nolint:gosec // G304: src ranges over the two fixed repository paths above
+		if err != nil {
+			t.Fatalf("cannot read %s: %v", src, err)
+		}
+		text := continuation.ReplaceAllString(string(body), " ")
+		for _, m := range reference.FindAllStringSubmatch(text, -1) {
+			found++
+			if !headings[m[1]] {
+				t.Errorf("%s cites README §%q, which is not a README heading", src, m[1])
+			}
+		}
+	}
+	if found == 0 {
+		t.Fatal("no README cross-reference found; refusing to pass vacuously")
+	}
+}
 
 // TestFoldKey pins the field-fold used by the fold-aware duplicate detector to
 // encoding/json's own folding: ASCII case-insensitive plus the only two
@@ -26,6 +69,7 @@ func TestFoldKey(t *testing.T) {
 		{"agentId", "agentid"},
 		{"Kelvin", "kelvin"}, // U+212A Kelvin sign folds to ASCII k
 		{"ſmart", "smart"},   // U+017F long s folds to ASCII s
+		{"Éclair", "éclair"}, // any other rune: the unicode.ToLower fallback
 	}
 	for _, c := range cases {
 		if got := foldKey(c.in); got != c.want {
@@ -58,6 +102,7 @@ func TestRawDuplicateMember(t *testing.T) {
 		{"case variant nested", `{"a":{"Category":"x","category":"y"}}`, true},
 		{"same-name in array", `{"a":[{"k":1,"k":2}]}`, true},
 		{"kelvin fold collision", "{\"K\":1,\"k\":2}", true},
+		{"non-ASCII case variant", `{"É":1,"é":2}`, true},
 		{"distinct keys", `{"trustLevel":4,"trustScore":9}`, false},
 		{"distinct nested", `{"a":{"x":1},"b":{"x":2}}`, false},
 		{"empty object", `{}`, false},
@@ -182,6 +227,92 @@ func TestStrictParseDepthGuard(t *testing.T) {
 	}
 }
 
+// earlyRejectCategories are the reject categories of steps 0 to 4, which
+// verify returns before it reaches signature verification (step 5).
+var earlyRejectCategories = map[string]bool{
+	"PARSE_ERROR":         true, // step 0
+	"UNSUPPORTED_VERSION": true, // step 1
+	"EXPIRED":             true, // step 2
+	"REVOKED":             true, // step 3
+	"UNTRUSTED_ISSUER":    true, // step 4
+}
+
+// TestEarlyRejectFixturesCarryValidSignatures pins the "otherwise valid"
+// property of the fixtures that reject before step 5. Running the verifiers
+// over fixtures/ never checks their signatures, so a fixture whose signature
+// broke would still pass and would then test its gate on a credential that a
+// verifier skipping that gate also rejects. Each such fixture is run through
+// steps 5 to 8 with its gate lifted: last-wins decoding instead of the strict
+// parse, atcVersion set to "1.0", and its issuer trusted (its DID added to the
+// trusted set and its keys from keypairRefs to the verifier's keys). The clock
+// and the revocation state are not read after step 4. atx-conformance#138.
+func TestEarlyRejectFixturesCarryValidSignatures(t *testing.T) {
+	paths, err := filepath.Glob(filepath.Join("..", "..", "fixtures", "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("no fixtures found; refusing to pass vacuously")
+	}
+	early := 0
+	for _, path := range paths {
+		f, err := loadFixture(path)
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		if !earlyRejectCategories[verify(f).RejectCategory] {
+			continue
+		}
+		early++
+
+		var a atx
+		err = json.Unmarshal(f.ATX, &a)
+		for _, member := range []*json.RawMessage{&a.DeclaredPurpose, &a.BehavioralProfile, &a.ScanSummary} {
+			if err == nil {
+				*member, err = lastWins(*member)
+			}
+		}
+		if err != nil {
+			t.Errorf("%s: credential does not decode with the strict parse lifted: %v", path, err)
+			continue
+		}
+		if a.ATCVersion != "1.0" && a.ATCVersion != "1.1" {
+			a.ATCVersion = "1.0"
+		}
+		state := f.VerifierState
+		state.TrustedIssuers = append(append([]string{}, state.TrustedIssuers...), a.IssuerDID)
+		state.PublicKeys = append([]keypairRef{}, state.PublicKeys...)
+		for _, ref := range f.KeypairRefs {
+			if controllerDID(ref.KeyID) == a.IssuerDID {
+				state.PublicKeys = append(state.PublicKeys, ref)
+			}
+		}
+
+		got := verifySignatures(&a, state)
+		if !got.Accepted || got.SigsValid != got.SigsExpected {
+			t.Errorf("%s: rejects before step 5, but with that gate lifted its signatures do not verify: %s", path, got)
+		}
+	}
+	if early == 0 {
+		t.Fatal("no fixture rejects before step 5; refusing to pass vacuously")
+	}
+	t.Logf("%d of %d fixtures reject before step 5; their signatures were checked with the gate lifted", early, len(paths))
+}
+
+// lastWins re-encodes a raw member as a parser without the strict check reads
+// it: a repeated member keeps its last value. The v1.1 canonicalizer refuses
+// duplicate members, so the strict parse is lifted here rather than there.
+func lastWins(raw json.RawMessage) (json.RawMessage, error) {
+	if len(raw) == 0 {
+		return raw, nil
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil, err
+	}
+	return json.Marshal(v)
+}
+
 // TestJCSVectorsThroughVerifierProjection runs this verifier's own v1.1 path
 // (credential parse, TBS projection, JCS) over every jcs-vectors vector and
 // requires the pinned expected.canonicalHex byte-for-byte. The byte-agreement
@@ -252,15 +383,15 @@ func mustHexDecode(t *testing.T, s string) []byte {
 	return b
 }
 
-// TestTimestampDecode pins what the time.Time decoder behind issuedAt and
-// expiresAt accepts. The Python reference verifier ports this grammar
-// (_parse_rfc3339 in ../python/verify.py) and test_verify.py carries the same
-// table, so a Go release that changes how the decoder treats one of these
-// inputs, for example by enabling the strict RFC 3339 checks the standard
-// library has disabled (golang/go#54580), fails here before the two verifiers
-// drift apart. An offset hour above 24 or an offset minute above 60 is in
-// neither table: Go 1.22, which CI builds with, decodes it, and Go 1.23 and
-// later reject it.
+// TestTimestampDecode pins what the timestamp decoder behind issuedAt,
+// expiresAt and every other timestamp this verifier decodes accepts. The
+// Python reference verifier ports this grammar (_parse_rfc3339 in
+// ../python/verify.py) and test_verify.py carries the same table, so a Go
+// release that changes how the decoder treats one of these inputs, for example
+// by enabling the strict RFC 3339 checks the standard library has disabled
+// (golang/go#54580), fails here before the two verifiers drift apart. An
+// offset hour above 24 or an offset minute above 60 is in neither table: Go
+// 1.22, which CI builds with, decodes it, and Go 1.23 and later reject it.
 func TestTimestampDecode(t *testing.T) {
 	accepted := []struct {
 		in, utc     string
@@ -282,7 +413,7 @@ func TestTimestampDecode(t *testing.T) {
 	}
 	for _, c := range accepted {
 		raw, _ := json.Marshal(c.in)
-		var got time.Time
+		var got timestamp
 		if err := json.Unmarshal(raw, &got); err != nil {
 			t.Errorf("%q: decode error %v, want %s", c.in, err, c.utc)
 			continue
@@ -308,12 +439,49 @@ func TestTimestampDecode(t *testing.T) {
 	}
 	for _, in := range rejected {
 		raw, _ := json.Marshal(in)
-		var got time.Time
+		var got timestamp
 		if err := json.Unmarshal(raw, &got); err == nil {
 			t.Errorf("%q decoded to %s, want a decode error", in, got.UTC().Format(time.RFC3339))
 		}
 	}
+	// A timestamp written with a JSON escape, as raw JSON. Built with Go 1.27,
+	// encoding/json decodes these into a plain time.Time field; the timestamp
+	// decoder refuses them under every release, as the Python verifier does.
+	for _, raw := range []string{
+		"\"2026-05-23T00:00:00\\u005a\"",
+		"\"\\u0032099-12-31T23:59:59Z\"",
+	} {
+		var got timestamp
+		if err := json.Unmarshal([]byte(raw), &got); err == nil {
+			t.Errorf("%s decoded to %s, want a decode error", raw, got.UTC().Format(time.RFC3339))
+		}
+	}
 	if s := (time.Time{}).UTC().Format(time.RFC3339); s != "0001-01-01T00:00:00Z" {
 		t.Errorf("zero time formats as %s, want 0001-01-01T00:00:00Z", s)
+	}
+}
+
+// TestEscapedTimestampFailsToDecode pins that a timestamp written with a JSON
+// escape fails to decode wherever this verifier decodes one: the credential's
+// issuedAt is a PARSE_ERROR, a CRL entry's revokedAt fails to load the
+// fixture, and a v1.1 behavioralProfile.generatedAt projects the profile as
+// null. With plain time.Time fields, a Go 1.27 build decoded all three.
+func TestEscapedTimestampFailsToDecode(t *testing.T) {
+	const escaped = "\"2026-05-23T00:00:00\\u005a\""
+	got := verify(fixture{ATX: json.RawMessage(`{"atcVersion":"1.1","issuedAt":` + escaped + `}`)})
+	if got.RejectCategory != "PARSE_ERROR" {
+		t.Errorf("escaped issuedAt: %s, want PARSE_ERROR", got)
+	}
+	var f fixture
+	crl := `{"verifierState":{"crl":{"entries":[{"revokedAt":` + escaped + `}]}}}`
+	if err := json.Unmarshal([]byte(crl), &f); err == nil {
+		t.Error("escaped CRL revokedAt: the fixture loaded, want a load error")
+	}
+	if p := projectBehavioralProfileV11(json.RawMessage(`{"generatedAt":` + escaped + `}`)); string(p) != "null" {
+		t.Errorf("escaped behavioralProfile.generatedAt projected as %s, want null", p)
+	}
+	// Control: the same instant without the escape decodes.
+	if p := projectBehavioralProfileV11(json.RawMessage(`{"generatedAt":"2026-05-23T00:00:00Z"}`)); string(p) == "null" {
+		t.Error("unescaped behavioralProfile.generatedAt projected as null")
 	}
 }

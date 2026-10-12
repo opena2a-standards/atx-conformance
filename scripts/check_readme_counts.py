@@ -36,6 +36,11 @@ Usage:
 The Scope table may name a k-of-n signature threshold as covered only when a
 fixture's verifierState declares the count it requires (THRESHOLD_FIELD).
 
+A covered Scope row for signature verification that claims a set of fixtures
+("every fixture", or "N of M") must state as "N of M" the count of fixtures
+that reach signature verification (step 5); "every fixture" alone holds only
+while no fixture rejects at steps 0 to 4.
+
 It also holds the README's scope note on `behavioralProfile` to the fixtures.
 That note said the field was omitted from the fixtures while every v1.1
 fixture carried it inside its signed bytes.
@@ -143,7 +148,9 @@ spec adds it to the TBS projection.
 
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
-declares, the behavioralProfile note matches the fixtures, no criterion (c)
+declares, each signature-verification Scope row that claims a set of fixtures
+states the count that reach step 5, the behavioralProfile note matches the
+fixtures, no criterion (c)
 claim outruns the registry, the trustScore is called illustrative, the
 trigger sentence matches the workflow, both key-source lists name every
 Ed25519 key, both version labels name exactly the accepted versions, each
@@ -196,6 +203,24 @@ BYTE_CHECK = "shasum -a 256 -c MANIFEST.sha256"
 # claim with no fixture behind it until some verifierState carries this field.
 THRESHOLD_FIELD = "requiredSignatures"
 THRESHOLD_CLAIM = re.compile(r"threshold|\b(?:\d+|k)-of-(?:\d+|n)\b", re.IGNORECASE)
+
+# The Scope table listed Ed25519 signature verification as covered by "every
+# fixture" while some fixtures reject at steps 0 to 4 (strict parse, schema
+# version, expiry, revocation, trusted issuer), so neither reference verifier
+# checks their signatures. Which fixtures reach step 5 follows from each
+# fixture's expected outcome: ACCEPT, or a reject category from step 5 on. A
+# category placed in neither map fails the check rather than being guessed.
+EARLY_REJECT_STEP = {
+    "PARSE_ERROR": 0,
+    "UNSUPPORTED_VERSION": 1,
+    "EXPIRED": 2,
+    "REVOKED": 3,
+    "UNTRUSTED_ISSUER": 4,
+}
+SIGNATURE_STEP_REJECTS = {"SIGNATURE_INVALID"}
+SIGNATURE_ROW = re.compile(r"signature verification", re.IGNORECASE)
+EVERY_FIXTURE = re.compile(r"\b(?:every|all|each)\s+fixtures?\b", re.IGNORECASE)
+N_OF_M = re.compile(r"\b(\d+) of (\d+)\b")
 
 # The "What this suite does NOT verify" bullet on behavioral profiles. It runs
 # from its lead-in to the next bullet or blank line.
@@ -1088,25 +1113,120 @@ def declares_threshold(path):
     return isinstance(state, dict) and THRESHOLD_FIELD in state
 
 
-def threshold_claims(readme, fixtures):
-    """Covered Scope-table rows that name a threshold no fixture declares."""
-    if any(declares_threshold(p) for p in fixtures):
-        return []
+def scope_rows(readme):
+    """(item, covered-by) cells of the README Scope table; None without one."""
     scope = re.search(r"^## Scope\n(.*?)(?=^## )", readme, re.MULTILINE | re.DOTALL)
     if not scope:
-        return ["no `## Scope` section found in README"]
-    failures = []
+        return None
+    rows = []
     for line in scope.group(1).splitlines():
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
         if not line.startswith("|") or len(cells) < 2 or set(cells[0]) <= set("-"):
             continue
-        if cells[1].lower().startswith("not covered"):
+        rows.append((cells[0], cells[1]))
+    return rows
+
+
+def threshold_claims(readme, fixtures):
+    """Covered Scope-table rows that name a threshold no fixture declares."""
+    if any(declares_threshold(p) for p in fixtures):
+        return []
+    rows = scope_rows(readme)
+    if rows is None:
+        return ["no `## Scope` section found in README"]
+    failures = []
+    for item, covered_by in rows:
+        if covered_by.lower().startswith("not covered"):
             continue
-        if THRESHOLD_CLAIM.search(cells[0]):
+        if THRESHOLD_CLAIM.search(item):
             failures.append(
-                f"README Scope table lists {cells[0]!r} as covered, but no "
+                f"README Scope table lists {item!r} as covered, but no "
                 f"fixture's verifierState declares {THRESHOLD_FIELD}, so no "
                 f"verifier is held to a threshold"
+            )
+    return failures
+
+
+def expected_outcomes(paths):
+    """Map each fixture name to its expected (verifyResult, rejectCategory),
+    or to None when the file states no `expected` object."""
+    outcomes = {}
+    for path in paths:
+        try:
+            fx = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            fx = None
+        expected = fx.get("expected") if isinstance(fx, dict) else None
+        outcomes[path.name] = (
+            (expected.get("verifyResult"), expected.get("rejectCategory"))
+            if isinstance(expected, dict) else None)
+    return outcomes
+
+
+def reaches_signature_step(outcome):
+    """True if a fixture with this expected outcome reaches step 5, False if
+    it rejects at steps 0 to 4, None if the outcome cannot be placed."""
+    if outcome is None:
+        return None
+    result, category = outcome
+    if result == "ACCEPT":
+        return True
+    if not isinstance(category, str):
+        return None
+    if category in EARLY_REJECT_STEP:
+        return False
+    if category in SIGNATURE_STEP_REJECTS:
+        return True
+    return None
+
+
+def signature_coverage_failures(readme, outcomes):
+    """Covered signature-verification Scope rows whose fixture count is wrong.
+    `outcomes` is the map expected_outcomes() returns."""
+    rows = scope_rows(readme)
+    if rows is None:
+        return ["no `## Scope` section found in README; its signature-"
+                "verification row cannot be held to the fixtures"]
+    claims = [
+        (item, covered_by)
+        for item, covered_by in rows
+        if SIGNATURE_ROW.search(item)
+        and not covered_by.lower().startswith("not covered")
+        and (EVERY_FIXTURE.search(covered_by) or N_OF_M.search(covered_by))
+    ]
+    if not claims:
+        return []
+    failures, reached, early = [], [], []
+    for name in sorted(outcomes):
+        step = reaches_signature_step(outcomes[name])
+        if step is None:
+            failures.append(
+                f"fixtures/{name}: expected outcome is neither ACCEPT nor "
+                f"a reject category placed before or at step 5, so the "
+                f"fixtures that reach signature verification cannot be counted"
+            )
+        elif step:
+            reached.append(name)
+        else:
+            early.append(name)
+    if failures:
+        return failures
+    total = len(outcomes)
+    for item, covered_by in claims:
+        stated = N_OF_M.findall(covered_by)
+        for n, m in stated:
+            if (int(n), int(m)) != (len(reached), total):
+                failures.append(
+                    f"README Scope table states {item!r} is covered by {n} of "
+                    f"{m} fixtures, but {len(reached)} of {total} reach "
+                    f"signature verification (step 5)"
+                )
+        if not stated and early:
+            failures.append(
+                f"README Scope table lists {item!r} as covered by every "
+                f"fixture, but {len(early)} of {total} reject before signature "
+                f"verification (step 5): {', '.join(early)}; state the count "
+                f"as `{len(reached)} of {total}`"
             )
     return failures
 
@@ -1747,7 +1867,7 @@ Tree = collections.namedtuple("Tree", (
     "readme cosigners fixtures vectors signing fixture_paths workflow "
     "key_vectors used_key_ids versions go_mod verify_go py_requirements "
     "py_dependency_texts jcs_sites tbs_sites tbs_canonical jcs_readme "
-    "gate_sites gate_libraries profile"))
+    "gate_sites gate_libraries profile outcomes"))
 
 # One check tree_failures() runs: its name, the call (`run(tree)` returns
 # failures) and the alteration the self-test makes to prove the call is still
@@ -2299,6 +2419,85 @@ def _repro_case(label, texts, run, edit, expect):
     return False, label, f"expected a failure containing {expect!r}, got {new}"
 
 
+# The Scope row that states how many fixtures reach signature verification, as
+# a reader finds it: group 1 is its covered-by cell, group 2 the count that
+# reach step 5 and group 3 the fixture total.
+SIGNATURE_COUNT_SITE = re.compile(
+    r"^\| [^|\n]*signature verification[^|\n]*\| ([^|\n]*?\b(\d+) of (\d+)\b[^|\n]*?) \|$",
+    re.M | re.I)
+# Counts no fixture set here holds, and not ones the other cases write.
+SIGNATURE_BAD_REACHED = "9101"
+SIGNATURE_BAD_TOTAL = "9102"
+
+
+def _signature_coverage_cases(readme, outcomes):
+    """Alter each count in the Scope row that states how many fixtures reach
+    signature verification, put the row back to "every fixture", and change
+    one fixture's expected outcome in memory; each must add a failure. With
+    no fixture rejecting before step 5, "every fixture" must pass."""
+    labels = (
+        "Scope signature row count of fixtures that reach step 5",
+        "Scope signature row fixture total",
+        "Scope signature row saying every fixture while one rejects before step 5",
+        "Scope signature row saying every fixture while none rejects before step 5",
+        "fixture expected to reject before step 5 where it was expected to reach it",
+        "fixture whose reject category is placed at no step",
+    )
+    site = SIGNATURE_COUNT_SITE.search(readme)
+    names = sorted(outcomes)
+    if site is None or not names:
+        why = ("no fixture found, so no expected outcome can be altered"
+               if site is not None else
+               "no Scope row stating `N of M` for signature verification found "
+               "in README.md: a count stated there is not covered by this "
+               "self-test")
+        return [(False, label, why) for label in labels]
+    baseline = set(signature_coverage_failures(readme, outcomes))
+
+    def new(text, altered):
+        return [f for f in signature_coverage_failures(text, altered)
+                if f not in baseline]
+
+    def stating(group, text):
+        return readme[:site.start(group)] + text + readme[site.end(group):]
+
+    cases = []
+    for label, group, bad, want in (
+            (labels[0], 2, SIGNATURE_BAD_REACHED,
+             f"covered by {SIGNATURE_BAD_REACHED} of"),
+            (labels[1], 3, SIGNATURE_BAD_TOTAL,
+             f"of {SIGNATURE_BAD_TOTAL} fixtures, but")):
+        got = new(stating(group, bad), outcomes)
+        cases.append((any(want in f for f in got), label,
+                      f"README.md stating {bad} instead of {site.group(group)} "
+                      f"still passes: {got}"))
+
+    every = stating(1, "every fixture")
+    early = {**outcomes, names[0]: ("REJECT", "EXPIRED")}
+    got = new(every, early)
+    cases.append((any("as covered by every fixture, but" in f for f in got),
+                  labels[2], f"the row reading `every fixture` still passes: {got}"))
+    got = signature_coverage_failures(every, {n: ("ACCEPT", None) for n in names})
+    cases.append((not got, labels[3],
+                  f"the row reading `every fixture` fails with every fixture "
+                  f"expected to ACCEPT: {got}"))
+
+    reaching = [n for n in names if reaches_signature_step(outcomes[n])]
+    if not reaching:
+        cases.append((False, labels[4], "no fixture is expected to reach step 5"))
+    else:
+        want = f"but {len(reaching) - 1} of {len(names)} reach signature verification"
+        got = new(readme, {**outcomes, reaching[0]: ("REJECT", "EXPIRED")})
+        cases.append((any(want in f for f in got), labels[4],
+                      f"expected a failure containing {want!r}, got {got}"))
+
+    want = f"fixtures/{names[0]}: expected outcome is neither ACCEPT"
+    got = new(readme, {**outcomes, names[0]: ("REJECT", "NOT_A_CATEGORY")})
+    cases.append((any(want in f for f in got), labels[5],
+                  f"expected a failure containing {want!r}, got {got}"))
+    return cases
+
+
 def _wire_count(tree):
     row = FIXTURE_ROW.search(tree.readme)
     if row is None:
@@ -2318,6 +2517,17 @@ def _wire_threshold(tree):
                         + tree.readme[scope.end():]),
              "fixture_paths": [p for p in tree.fixture_paths
                                if not declares_threshold(p)]})
+
+
+def _wire_signature_coverage(tree):
+    scope = re.search(r"^## Scope\n.*?^\|[-| ]+\|\n", tree.readme, re.M | re.S)
+    if scope is None:
+        return "no `## Scope` table found in README.md"
+    stated = f"{SIGNATURE_BAD_REACHED} of {SIGNATURE_BAD_TOTAL}"
+    return (f"covered by {stated} fixtures",
+            {"readme": (tree.readme[:scope.end()]
+                        + f"| Ed25519 signature verification | {stated} |\n"
+                        + tree.readme[scope.end():])})
 
 
 def _wire_behavioral_profile(tree):
@@ -2403,6 +2613,9 @@ CHECKS = (
           _wire_count),
     Check("threshold", lambda t: threshold_claims(t.readme, t.fixture_paths),
           _wire_threshold),
+    Check("signature coverage",
+          lambda t: signature_coverage_failures(t.readme, t.outcomes),
+          _wire_signature_coverage),
     Check("behavioralProfile",
           lambda t: behavioral_profile_failures(t.readme, t.fixture_paths),
           _wire_behavioral_profile),
@@ -2617,6 +2830,7 @@ def self_test(tree, verbose):
                       "trustScore not called illustrative",
                       f"a section that drops `{TRUST_PLACEHOLDER}` still passes: {new}"))
 
+    cases.extend(_signature_coverage_cases(readme, tree.outcomes))
     cases.extend(_trigger_cases(readme, tree.workflow))
     cases.extend(_key_source_cases(readme, tree.key_vectors, tree.used_key_ids))
     cases.extend(_version_cases(readme, tree.versions))
@@ -2825,6 +3039,7 @@ def main():
             (ROOT / name).read_text(encoding="utf-8") if (ROOT / name).exists() else None
             for name in (GATE_GO_MOD_NAME, GATE_PACKAGE_NAME))),
         profile=PROFILE.read_text(encoding="utf-8") if PROFILE.exists() else None,
+        outcomes=expected_outcomes(fixture_paths),
     )
 
     failed, total = self_test(tree, only_self_test)
@@ -2852,6 +3067,8 @@ def main():
     print(f"README and COSIGNERS counts match the tree: {len(fixtures)} fixtures "
           f"(each with one fixture-table row), {tree.vectors} JCS vectors, all stated "
           f"as passing; README names the MANIFEST.sha256 byte check; "
+          f"each signature-verification Scope row that claims a set of "
+          f"fixtures states the count that reach step 5; "
           f"behavioralProfile scope note matches; criterion (c) claim matches "
           f"the cosignature registry; trustScore is called illustrative; "
           f"CI trigger sentence matches {WORKFLOW_NAME}; "

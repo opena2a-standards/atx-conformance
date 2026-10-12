@@ -10,12 +10,17 @@
 // reproduce ACCEPT / REJECT.
 //
 // Spec it implements:
-//   - ATX v1.0 §1.1 schema (https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md)
+//   - ATX §1.1 schema, atcVersion "1.0" and "1.1" (https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md)
 //   - AIP §3 Hybrid Ed25519 + ML-DSA-65 (mandate at v1)
-//   - Canonicalization: pipe-delimited 11-field string matching
-//     opena2a-registry/pkg/atcverify/verify.go canonicalPayload() VERBATIM
-//   - ATX v1.1 (atcVersion "1.1"): signed over the RFC 8785 JCS form of the
-//     v1.1 TBS projection
+//   - Canonicalization: v1.0 signs the pipe-delimited 11-field string matching
+//     opena2a-registry/pkg/atcverify/verify.go canonicalPayload() VERBATIM;
+//     v1.1 signs JCS(TBS), the RFC 8785 form of the to-be-signed projection
+//     (core.md §1.3a.2). See README
+//     §"Canonicalization: v1.0 signs 11 fields; v1.1 signs JCS(TBS)".
+//
+// Not performed: the distinct signer-authority count for trust level 3+
+// (core.md §1.3 step 7). The asserted trustLevel is reported, never checked;
+// see conformance.json notCovered.
 //
 // Usage:
 //
@@ -75,17 +80,28 @@ type verifierState struct {
 
 type crl struct {
 	Version    int        `json:"version"`
-	IssuedAt   time.Time  `json:"issuedAt"`
-	NextUpdate time.Time  `json:"nextUpdate"`
+	IssuedAt   timestamp  `json:"issuedAt"`
+	NextUpdate timestamp  `json:"nextUpdate"`
 	Entries    []crlEntry `json:"entries"`
 	Signature  string     `json:"signature"`
 }
 
 type crlEntry struct {
 	AgentID   string    `json:"agentId"`
-	RevokedAt time.Time `json:"revokedAt"`
+	RevokedAt timestamp `json:"revokedAt"`
 	Reason    string    `json:"reason"`
 }
+
+// timestamp is a time.Time decoded by time.Time's own UnmarshalJSON, which
+// parses the bytes between the quotes, so a timestamp written with a JSON
+// escape fails to decode. encoding/json decodes a plain time.Time field that
+// way up to Go 1.26; built with Go 1.27, it unescapes the string first and
+// decodes the escaped form too. Every timestamp this verifier decodes from a
+// fixture is one of these, so the Go release does not change which ones
+// decode (the Python verifier follows the same rule).
+type timestamp struct{ time.Time }
+
+func (t *timestamp) UnmarshalJSON(b []byte) error { return t.Time.UnmarshalJSON(b) }
 
 type expectedOutcome struct {
 	VerifyResult   string `json:"verifyResult"`
@@ -119,8 +135,8 @@ type atx struct {
 	ScanSummary          json.RawMessage `json:"scanSummary"`
 	TrustScore           float64         `json:"trustScore"`
 	TrustLevel           int             `json:"trustLevel"`
-	IssuedAt             time.Time       `json:"issuedAt"`
-	ExpiresAt            time.Time       `json:"expiresAt"`
+	IssuedAt             timestamp       `json:"issuedAt"`
+	ExpiresAt            timestamp       `json:"expiresAt"`
 	IssuerDID            string          `json:"issuerDid"`
 	IssuerChain          []string        `json:"issuerChain"`
 	Signatures           []signature     `json:"signatures"`
@@ -131,10 +147,10 @@ type atx struct {
 // VERBATIM. It is duplicated here so the conformance verifier has zero
 // dependency on the production codebase.
 //
-// The signature covers exactly 11 fields. capabilities, scanSummary,
+// The v1.0 signature covers exactly 11 fields. capabilities, scanSummary,
 // publisher, publisherDid, transparencyLogIndex, behavioralProfile,
 // revoked-related fields, and createdAt are NOT signed. See README
-// §"Signed vs unsigned fields."
+// §"Canonicalization: v1.0 signs 11 fields; v1.1 signs JCS(TBS)".
 func canonicalPayload(a *atx) []byte {
 	return []byte(fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d|%.6f|%s|%s|%s",
 		a.AgentID,
@@ -267,7 +283,7 @@ func projectBehavioralProfileV11(raw json.RawMessage) json.RawMessage {
 	}
 	var wire struct {
 		Checksum        string    `json:"checksum"`
-		GeneratedAt     time.Time `json:"generatedAt"`
+		GeneratedAt     timestamp `json:"generatedAt"`
 		ObservationDays int       `json:"observationDays"`
 	}
 	if err := json.Unmarshal(raw, &wire); err != nil {
@@ -411,7 +427,13 @@ func scanValueForDuplicates(dec *json.Decoder, depth int) (name string, dup, abo
 // only other non-ASCII runes, which collapse onto no struct field; there it may
 // diverge from encoding/json — and from the Python reference, whose str.lower
 // can expand a rune Go's simple ToLower does not — but only on inputs no honest
-// credential produces. Ported from opena2a-registry pkg/atcverify (registry #307).
+// credential produces. unicode.ToLower uses the Unicode tables of the Go
+// release the verifier is built with, so a pair of names whose case mapping a
+// later Unicode version added is a duplicate under one release and not under
+// another: U+1C89 and U+1C8A (Unicode 16.0) under Go 1.27 (Unicode 17.0) and
+// not under Go 1.22 through 1.26 (Unicode 15.0). README "Running the
+// verifiers" says the same. Ported from opena2a-registry pkg/atcverify
+// (registry #307).
 func foldKey(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
@@ -430,8 +452,9 @@ func foldKey(s string) string {
 	return b.String()
 }
 
-// verify implements the 8-step ATX v1.0 verification algorithm with hybrid
-// signing enforcement per AIP §3.
+// verify runs the ATX v1.0 and v1.1 verification algorithm with hybrid
+// signing enforcement per AIP §3. Step 7 (distinct signer-authority count) is
+// not performed; see the comment at that step.
 func verify(f fixture) result {
 	// Step 0: strict parse. Duplicate members reject before interpretation
 	// (see rawDuplicateMember).
@@ -463,7 +486,7 @@ func verify(f fixture) result {
 	}
 
 	// Step 2: expiry
-	if now.After(a.ExpiresAt) {
+	if now.After(a.ExpiresAt.Time) {
 		return result{
 			RejectCategory: "EXPIRED",
 			Reason:         fmt.Sprintf("expired at %s, verifier clock is %s", a.ExpiresAt.UTC().Format(time.RFC3339), now.Format(time.RFC3339)),
@@ -497,17 +520,24 @@ func verify(f fixture) result {
 		}
 	}
 
+	return verifySignatures(&a, f.VerifierState)
+}
+
+// verifySignatures runs steps 5 to 8 on a credential that has passed steps 0
+// to 4. It is separate from verify so the unit tests can check that a fixture
+// rejected at an earlier step still carries signatures that verify.
+func verifySignatures(a *atx, state verifierState) result {
 	// Step 5: signature verification.
 	// Spec mandate: every declared signature MUST verify.
 	var payload []byte
 	if a.ATCVersion == "1.1" {
-		pb, err := canonicalPayloadV11(&a)
+		pb, err := canonicalPayloadV11(a)
 		if err != nil {
 			return result{RejectCategory: "VERIFIER_CONFIG_ERROR", Reason: "v1.1 canonicalization failed: " + err.Error()}
 		}
 		payload = pb
 	} else {
-		payload = canonicalPayload(&a)
+		payload = canonicalPayload(a)
 	}
 	res := result{SigsExpected: len(a.Signatures)}
 
@@ -515,7 +545,7 @@ func verify(f fixture) result {
 	// the credential's issuer (key↔issuer binding). A key whose keyId's controller
 	// DID is not in the authority set is not an eligible signer for this
 	// credential, so one trusted authority cannot impersonate another.
-	edKeys, pqKeys := indexPublicKeys(f.VerifierState.PublicKeys, authoritySetFor(&a, f.VerifierState.TrustedIssuers))
+	edKeys, pqKeys := indexPublicKeys(state.PublicKeys, authoritySetFor(a, state.TrustedIssuers))
 
 	for _, sig := range a.Signatures {
 		sigBytes, err := base64.StdEncoding.DecodeString(sig.Value)
