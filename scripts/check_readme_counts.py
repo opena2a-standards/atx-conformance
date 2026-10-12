@@ -45,10 +45,15 @@ README called each fixture's trustScore composite output from the AIP-SPEC
 §6.1 9-factor algorithm while no fixture carries factor inputs, so it must
 call the value illustrative and must not call it the algorithm's output.
 
+It also holds the README's statement of when the gates run to the `on:`
+block of .github/workflows/conformance.yml. The README said "on each push and
+pull request" while the workflow runs on pushes to main only.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
 declares, the behavioralProfile note matches the fixtures, no criterion (c)
-claim outruns the registry and the trustScore is called illustrative, 1
+claim outruns the registry, the trustScore is called illustrative and the
+trigger sentence matches the workflow, 1
 otherwise, 2 on an unknown argument.
 """
 
@@ -126,6 +131,20 @@ RETRACTED_TRUST_CLAIM = (
 )
 TRUST_HEADING = "### Trust scoring: 9-factor reference"
 TRUST_PLACEHOLDER = "illustrative"
+
+# The README's continuous-verification section says when the gates run. It said
+# "on each push and pull request" while the workflow runs on pull requests and
+# on pushes to main only, so a push to any other branch without a pull request
+# ran no gate. The sentence is held to the workflow's `on:` block.
+WORKFLOW = ROOT / ".github" / "workflows" / "conformance.yml"
+WORKFLOW_NAME = ".github/workflows/conformance.yml"
+CONTINUOUS = "## Continuous verification"
+# The wording published before the triggers were gated.
+RETRACTED_TRIGGERS = "on each push and pull request"
+# A claim that every push runs the gates. Only true when push has no branch
+# filter; "every push to `main`" does not match.
+EVERY_PUSH_CLAIM = re.compile(r"\b(?:each|every|any|all)\s+push(?:es)?\b(?!\s+to\s)",
+                              re.IGNORECASE)
 
 
 def registry_cosigners(cosigners):
@@ -282,6 +301,114 @@ def threshold_claims(readme, fixtures):
                 f"README Scope table lists {cells[0]!r} as covered, but no "
                 f"fixture's verifierState declares {THRESHOLD_FIELD}, so no "
                 f"verifier is held to a threshold"
+            )
+    return failures
+
+
+def _flow_list(value):
+    """Parse a YAML scalar or flow sequence (`main`, `[main, dev]`)."""
+    value = value.strip()
+    if value.startswith("[") and value.endswith("]"):
+        value = value[1:-1]
+    return [v.strip().strip("'\"") for v in value.split(",") if v.strip()]
+
+
+def workflow_triggers(workflow):
+    """Return {event: {filter: [value, ...]}} for the top-level `on:` key of
+    the workflow text, or None when it has none. Covers the block form this
+    repository uses and the inline `on: push` / `on: [push, pull_request]`
+    forms; a filter listed as a block sequence is read item by item."""
+    lines = workflow.splitlines()
+    start = next((i for i, l in enumerate(lines)
+                  if re.match(r"""^(?:on|'on'|"on"):(?:\s|$)""", l)), None)
+    if start is None:
+        return None
+    inline = lines[start].split(":", 1)[1].split("#", 1)[0].strip()
+    if inline:
+        return {event: {} for event in _flow_list(inline)}
+    triggers = {}
+    event = key = None
+    event_indent = 0
+    for line in lines[start + 1:]:
+        text = line.split("#", 1)[0].rstrip()
+        if not text.strip():
+            continue
+        if not line[0].isspace():
+            break
+        indent = len(text) - len(text.lstrip())
+        body = text.strip()
+        if body.startswith("- ") and event is not None and key is not None:
+            triggers[event][key].append(body[2:].strip().strip("'\""))
+            continue
+        name, _, value = body.partition(":")
+        if event is None or indent <= event_indent:
+            event, event_indent, key = name.strip(), indent, None
+            triggers[event] = {}
+        else:
+            key = name.strip()
+            triggers[event][key] = _flow_list(value)
+    return triggers
+
+
+def trigger_phrase(triggers):
+    """Return (phrase, problems): how the README must say when the gates run,
+    e.g. "on every pull request and every push to `main`", or the triggers
+    this check cannot phrase."""
+    problems = [f"{WORKFLOW_NAME} triggers on `{e}`, which this check cannot "
+                "phrase; extend trigger_phrase()"
+                for e in sorted(set(triggers) - {"pull_request", "push"})]
+    for event in ("pull_request", "push"):
+        for key in sorted(set(triggers.get(event, {})) - {"branches"}):
+            problems.append(f"{WORKFLOW_NAME} filters `{event}` by `{key}`, which "
+                            "this check cannot phrase; extend trigger_phrase()")
+    parts = []
+    for event, noun, prep in (("pull_request", "pull request", "into"),
+                              ("push", "push", "to")):
+        if event not in triggers:
+            continue
+        branches = triggers[event].get("branches")
+        if branches:
+            parts.append(f"every {noun} {prep} "
+                         + " or ".join(f"`{b}`" for b in branches))
+        else:
+            parts.append(f"every {noun}")
+    if not parts:
+        problems.append(f"{WORKFLOW_NAME} triggers on neither `push` nor "
+                        "`pull_request`")
+    return "on " + " and ".join(parts), problems
+
+
+def ci_trigger_failures(readme, workflow):
+    """Check the README's continuous-verification sentence against the
+    workflow's triggers. `workflow` is the workflow text, None when missing."""
+    if workflow is None:
+        return [f"{WORKFLOW_NAME} is missing; the README's statement of when "
+                "the gates run cannot be checked"]
+    triggers = workflow_triggers(workflow)
+    if not triggers:
+        return [f"no `on:` triggers found in {WORKFLOW_NAME}"]
+    phrase, problems = trigger_phrase(triggers)
+    if problems:
+        return problems
+    body = section(readme, CONTINUOUS)
+    if body is None:
+        return [f"no `{CONTINUOUS}` section found in README"]
+    text = " ".join(body.split())
+    failures = []
+    # The phrase must end where the clause ends, or "on every pull request and
+    # every push" would be found inside "... every push to `main`".
+    if not re.search(re.escape(phrase) + r"(?=[.,;:)]|$)", text):
+        failures.append(
+            f"README `{CONTINUOUS}` does not say the gates run \"{phrase}\", "
+            f"which is what {WORKFLOW_NAME} triggers on"
+        )
+    if triggers.get("push", {}).get("branches"):
+        for claim in EVERY_PUSH_CLAIM.finditer(text):
+            failures.append(
+                f"README `{CONTINUOUS}` says \"{claim.group(0)}\", but "
+                f"{WORKFLOW_NAME} runs on pushes to "
+                + " or ".join(f"`{b}`" for b in triggers["push"]["branches"])
+                + " only"
             )
     return failures
 
@@ -551,7 +678,59 @@ def _row_case(label, texts, run, edit, expect):
     return False, label, f"expected a failure containing {want!r}, got {new}"
 
 
-def self_test(readme, cosigners, fixtures, vectors, verbose):
+def _trigger_cases(readme, workflow):
+    """Alter the README trigger sentence or the workflow's `on:` block in
+    memory; ci_trigger_failures() must report each one."""
+    baseline = set(ci_trigger_failures(readme, workflow))
+
+    def case(label, altered_readme, altered_workflow, want):
+        new = [f for f in ci_trigger_failures(altered_readme, altered_workflow)
+               if f not in baseline]
+        if any(want in f for f in new):
+            return True, label, ""
+        return False, label, f"expected a failure containing {want!r}, got {new}"
+
+    cases = []
+    label = "README trigger sentence restored to the retracted wording"
+    phrase = None
+    if workflow is not None and workflow_triggers(workflow):
+        phrase = trigger_phrase(workflow_triggers(workflow))[0]
+    site = phrase and re.search(r"\s+".join(map(re.escape, phrase.split())), readme)
+    if not site:
+        missing = f"no trigger sentence ({phrase!r}) found in README.md"
+        cases.append((False, label, missing))
+        cases.append((False, "README trigger sentence overclaiming beside the right one",
+                      missing))
+    else:
+        altered = readme[:site.start()] + RETRACTED_TRIGGERS + readme[site.end():]
+        cases.append(case(label, altered, workflow, "does not say the gates run"))
+        # The same sentence with the correct phrase appended after it: the
+        # overclaim alone must still fail.
+        altered = readme[:site.end()] + ", and " + RETRACTED_TRIGGERS + readme[site.end():]
+        cases.append(case("README trigger sentence overclaiming beside the right one",
+                          altered, workflow, "says \"each push\""))
+
+    label = "workflow push trigger without a branch filter"
+    branches = workflow and re.search(r"^(\s+push:[ \t]*\n)\s+branches:.*\n", workflow, re.M)
+    if not branches:
+        cases.append((False, label, f"no `push:` branch filter found in {WORKFLOW_NAME}"))
+    else:
+        altered = workflow[:branches.start()] + branches.group(1) + workflow[branches.end():]
+        cases.append(case(label, readme, altered, "does not say the gates run"))
+
+    label = "workflow triggering on an event the check cannot phrase"
+    on = workflow and re.search(r"^on:[ \t]*\n", workflow, re.M)
+    if not on:
+        cases.append((False, label, f"no block `on:` key found in {WORKFLOW_NAME}"))
+    else:
+        altered = workflow[:on.end()] + "  workflow_dispatch:\n" + workflow[on.end():]
+        cases.append(case(label, readme, altered, "cannot phrase"))
+
+    cases.append(case(f"{WORKFLOW_NAME} missing", readme, None, "is missing"))
+    return cases
+
+
+def self_test(readme, cosigners, fixtures, vectors, verbose, workflow):
     texts = {"README.md": readme, "COSIGNERS.md": cosigners or ""}
     baseline = set(check(readme, cosigners, fixtures, vectors))
 
@@ -624,6 +803,8 @@ def self_test(readme, cosigners, fixtures, vectors, verbose):
                       "trustScore not called illustrative",
                       f"a section that drops `{TRUST_PLACEHOLDER}` still passes: {new}"))
 
+    cases.extend(_trigger_cases(readme, workflow))
+
     failed = 0
     for ok, label, detail in cases:
         if verbose or not ok:
@@ -647,8 +828,10 @@ def main():
     readme = README.read_text(encoding="utf-8")
     cosigners = COSIGNERS.read_text(encoding="utf-8") if COSIGNERS.exists() else None
     vectors = count_vectors(ROOT)
+    workflow = WORKFLOW.read_text(encoding="utf-8") if WORKFLOW.exists() else None
 
-    failed, total = self_test(readme, cosigners, fixtures, vectors, only_self_test)
+    failed, total = self_test(readme, cosigners, fixtures, vectors, only_self_test,
+                              workflow)
     if failed:
         print(f"self-test FAILED: {failed} of {total} case(s) not caught by the check",
               file=sys.stderr)
@@ -663,6 +846,7 @@ def main():
     fixture_paths = sorted(FIXTURES.glob("*.json"))
     failures.extend(threshold_claims(readme, fixture_paths))
     failures.extend(behavioral_profile_failures(readme, fixture_paths))
+    failures.extend(ci_trigger_failures(readme, workflow))
 
     if failures:
         sys.stdout.flush()
@@ -677,7 +861,8 @@ def main():
           f"(each with one fixture-table row), {vectors} JCS vectors, all stated "
           f"as passing; README names the MANIFEST.sha256 byte check; "
           f"behavioralProfile scope note matches; criterion (c) claim matches "
-          f"the cosignature registry; trustScore is called illustrative")
+          f"the cosignature registry; trustScore is called illustrative; "
+          f"CI trigger sentence matches {WORKFLOW_NAME}")
     return 0
 
 

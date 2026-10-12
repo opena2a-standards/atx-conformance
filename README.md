@@ -73,9 +73,9 @@ cites FIPS 204 only when its credential carries an ML-DSA-65 signature.
 ## Continuous verification
 
 [`.github/workflows/conformance.yml`](./.github/workflows/conformance.yml)
-runs the following gates on each push and pull request. They cover the
-counts, the verifier results, the fixture bytes and the claims this
-README makes about them -- not every sentence below:
+runs the following gates on every pull request and every push to `main`.
+They cover the counts, the verifier results, the fixture bytes and the
+claims this README makes about them -- not every sentence below:
 
 1. Both reference verifiers run against `fixtures/` and must report
    `25 pass, 0 fail`.
