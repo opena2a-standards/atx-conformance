@@ -386,6 +386,7 @@ LICENSE                          Apache 2.0
 README.md                        this file
 COSIGNERS.md                     how a second party cosigns a verifier run, and the
                                  cosignature log
+CHANGELOG.md                     changes to existing fixtures, by commit
 MANIFEST.sha256                  per-fixture SHA-256 (path-sorted)
 conformance.json                 requirement-to-fixture profile (generated from the
                                  fixtures, drift-checked in CI)
@@ -418,6 +419,12 @@ scripts/check_circl_pin.sh       CI gate: one cloudflare/circl version per Go mo
   credential, its signatures, the verifier state and the expected outcome.
   A fixture that needs to change in any of those ships under a new name.
   That is what makes `MANIFEST.sha256` a useful regression check.
+  [`scripts/check_fixture_immutability.py`](./scripts/check_fixture_immutability.py)
+  compares the `atx`, `verifierState` and `expected` members of every
+  fixture name with the merge base of `HEAD` and `origin/main`, and fails
+  when one of them changed. The rule was broken once, in e2f9dc4 (#26);
+  [`CHANGELOG.md`](./CHANGELOG.md) lists the 22 fixtures that commit changed
+  under their existing names.
 - A fixture's `description` and its `spec` citation list are
   documentation, and may be corrected in place. Doing so changes that
   fixture's hash and its manifest line, so a consumer pinning this

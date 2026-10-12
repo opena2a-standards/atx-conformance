@@ -1,0 +1,54 @@
+# Changelog
+
+This repository has no tags or releases. A consumer pins it at a commit, so
+entries name the commit that made the change. Changes to an existing fixture's
+credential, signatures, verifier state or expected outcome are listed here
+whenever one lands; README "Versioning and stability" says they should not.
+
+## Unreleased
+
+### Added
+
+- `scripts/check_fixture_immutability.py` fails when the `atx`,
+  `verifierState` or `expected` member of an existing fixture name differs
+  from the merge base of `HEAD` and `origin/main`. Run it with `--base A
+  --head B` to audit a past commit range, and with `--self-test` to see it
+  fail on each kind of change it covers.
+
+## e2f9dc4 (#26, 2026-09-09): capabilities rewritten in 22 existing fixtures
+
+Commit e2f9dc4 changed `atx.capabilities` to the AIP `namespace:action`
+grammar in 22 fixtures and kept their names, contrary to the immutability
+rule. A consumer pinned to a commit before e2f9dc4 holds different credential
+bytes under these names. `verifierState` and `expected` did not change in any
+of them, so each fixture's expected outcome is the same before and after.
+
+Measured with
+`python3 scripts/check_fixture_immutability.py --base e2f9dc4^ --head e2f9dc4`:
+
+- In every one of the 22, the first two entries of `atx.capabilities`
+  changed from `read:public`, `write:owned` to `db:read`, `db:write`.
+  `atx-v1_1/tampered-capabilities` carries a third entry, which changed from
+  `admin:all` to `system:exec`.
+- The 13 v1.1 fixtures were re-signed, so their `atx.signatures` values
+  changed too. The 9 v1.0 fixtures kept their signature values, because the
+  v1.0 signed form does not include `capabilities`.
+- In `atx-v1_1/declared-purpose-valid`, `atx-v1_1/duplicate-purpose-member`
+  and `atx-v1_1/tampered-declared-purpose`, the
+  `atx.declaredPurpose.capabilityJustification` members were renamed to
+  match (`read:public` to `db:read`, `write:owned` to `db:write`).
+
+Fixtures changed in place:
+
+- v1.0: `atx-v1/baseline-valid`, `atx-v1/baseline-valid-hybrid`,
+  `atx-v1/cross-issuer-key`, `atx-v1/expired`, `atx-v1/malformed-schema`,
+  `atx-v1/revoked`, `atx-v1/tampered-signature`,
+  `atx-v1/threshold-2of3-cosignature`, `atx-v1/wrong-issuer`
+- v1.1: `atx-v1_1/baseline-valid`, `atx-v1_1/baseline-valid-hybrid`,
+  `atx-v1_1/case-variant-member`, `atx-v1_1/cross-issuer-key`,
+  `atx-v1_1/declared-purpose-array-injected`,
+  `atx-v1_1/declared-purpose-empty-whitespace`,
+  `atx-v1_1/declared-purpose-string-injected`,
+  `atx-v1_1/declared-purpose-valid`, `atx-v1_1/duplicate-purpose-member`,
+  `atx-v1_1/hybrid-mldsa-tampered`, `atx-v1_1/tampered-capabilities`,
+  `atx-v1_1/tampered-declared-purpose`, `atx-v1_1/untrusted-chain-authority`
