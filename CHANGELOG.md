@@ -215,11 +215,12 @@ whenever one lands; README "Versioning and stability" says they should not.
   fixture changes.
 - The vendored RFC 8785 serializer (`verifiers/python/rfc8785.py` and its
   copy in `jcs-vectors/python/`) serializes arrays and objects without
-  recursion. A v1.1 credential whose `declaredPurpose` nested about 3000
-  arrays ended in a `RecursionError` verify error, where the Go verifier
-  reports `SIGNATURE_INVALID`; the Python verifier now reports that too, up
-  to the 10000 levels Go's decoder accepts. Its canonical bytes for every
-  other value do not change (#175). No fixture changes.
+  recursion. A v1.1 credential whose `declaredPurpose` nested 497 or more
+  levels of arrays or objects (331 or more on Python 3.11) ended in a
+  `RecursionError` verify error, where the Go verifier reports
+  `SIGNATURE_INVALID`; the Python verifier now reports that too, up to the
+  10000 levels Go's decoder accepts. Its canonical bytes for every other
+  value do not change (#175). No fixture changes.
 - `test_verify.py` bounds how the string-literal scan's time grows from
   2,500 to 40,000 escaped quotes, each length timed at its fastest of five
   runs, where it bounded one scan of 200,000 at 2 seconds of wall-clock
@@ -227,6 +228,23 @@ whenever one lands; README "Versioning and stability" says they should not.
   checks that the regular expression the scan replaced exceeds the bound,
   and that the scan stays within it on a clock that runs 3,600 times fast,
   as it would read on a host that much slower (#177). No fixture changes.
+- `verifiers/python/verify.py` writes a member's value into its decode error
+  to 8 levels of arrays and objects, then `[...]` or `{...}`, where it wrote
+  out the whole value. A credential, or a member Go decodes into a typed
+  field (`capabilities`, `publisher`, `trustScore`, `signatures`, among
+  others), holding deeply nested arrays now reports `PARSE_ERROR`, and one
+  of `scanSummary` or `behavioralProfile` `SIGNATURE_INVALID`, as the Go
+  verifier does, up to Go's 10000-level limit. Before, where `repr()` of
+  the value raised `RecursionError`, these ended in a `RecursionError`
+  verify error: from about 1000 levels on Python 3.11 and about 1500 on
+  3.12.0 to 3.12.2, and on 3.12.3 to 3.12.12 only the credential did, at
+  9999 levels. Where it did not, a `PARSE_ERROR` reason carried the whole
+  value, about 20,000 characters at Go's limit. A fixture wrapper member
+  nested that deep, such as `expected.verifyResult`, still fails to load,
+  and the load error now names the member where on Python 3.11 and 3.12.0
+  to 3.12.2 it gave only the `RecursionError` message. The depths are as
+  measured on macOS; CPython's C recursion limit, which sets the 3.12 ones,
+  is lower on some platforms (#179). No fixture changes.
 
 ## e2f9dc4 (#26, 2026-09-09): capabilities rewritten in 22 existing fixtures
 

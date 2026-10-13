@@ -650,6 +650,28 @@ class _NegativeZero(int):
     __slots__ = ()
 
 
+# The levels of arrays and objects a decode error writes out. On Python 3.11,
+# 3.12 and 3.13, repr() raises RecursionError on a value nested short of the
+# 10000 levels Go's encoding/json decodes, where the Go reference verifier's
+# error names the member and not its value.
+_REPR_DEPTH = 8
+
+
+def _value_repr(value: Any, depth: int = _REPR_DEPTH) -> str:
+    """repr(value) for a value as load_fixture loads it, with each non-empty
+    array or object more than depth levels down written as [...] or {...}."""
+    if isinstance(value, list) and value:
+        if depth == 0:
+            return "[...]"
+        return "[" + ", ".join(_value_repr(item, depth - 1) for item in value) + "]"
+    if isinstance(value, dict) and value:
+        if depth == 0:
+            return "{...}"
+        members = (f"{key!r}: {_value_repr(item, depth - 1)}" for key, item in value.items())
+        return "{" + ", ".join(members) + "}"
+    return repr(value)
+
+
 def _decode_member(name: str, go_type: str, value: Any) -> Any:
     """Type-check one member against go_type, its type in the Go reference
     verifier, and return the value Go's encoding/json decodes it to, or raise
@@ -660,7 +682,7 @@ def _decode_member(name: str, go_type: str, value: Any) -> Any:
             return ""
         if isinstance(value, str):
             return _go_string(value)
-        raise _DecodeError(f"{name} {value!r} is not a JSON string")
+        raise _DecodeError(f"{name} {_value_repr(value)} is not a JSON string")
     if go_type == "int64":
         if value is None:
             return 0
@@ -670,7 +692,7 @@ def _decode_member(name: str, go_type: str, value: Any) -> Any:
             and _INT64_MIN <= value <= _INT64_MAX
         ):
             return int(value)
-        raise _DecodeError(f"{name} {value!r} is not a JSON integer in int64 range")
+        raise _DecodeError(f"{name} {_value_repr(value)} is not a JSON integer in int64 range")
     if go_type == "float64":
         if value is None:
             return 0.0
@@ -678,11 +700,11 @@ def _decode_member(name: str, go_type: str, value: Any) -> Any:
             return -0.0
         if _finite_number(value):
             return float(value)
-        raise _DecodeError(f"{name} {value!r} is not a finite JSON number")
+        raise _DecodeError(f"{name} {_value_repr(value)} is not a finite JSON number")
     if go_type == "bool":
         if value is None or isinstance(value, bool):
             return bool(value)
-        raise _DecodeError(f"{name} {value!r} is not a JSON boolean")
+        raise _DecodeError(f"{name} {_value_repr(value)} is not a JSON boolean")
     if go_type == "time.Time":
         if value is None:
             return _GO_ZERO_TIME
@@ -691,20 +713,20 @@ def _decode_member(name: str, go_type: str, value: Any) -> Any:
                 raise ValueError("written with a JSON escape")
             return _parse_rfc3339(value)
         except ValueError as exc:
-            raise _DecodeError(f"{name} {value!r} is not an RFC 3339 date-time ({exc})") from None
+            raise _DecodeError(f"{name} {_value_repr(value)} is not an RFC 3339 date-time ({exc})") from None
     if go_type.startswith("*"):
         return None if value is None else _decode_member(name, go_type[1:], value)
     if go_type.startswith("[]"):
         if value is None:
             return []
         if not isinstance(value, list):
-            raise _DecodeError(f"{name} {value!r} is not a JSON array")
+            raise _DecodeError(f"{name} {_value_repr(value)} is not a JSON array")
         return [_decode_member(f"{name}[{i}]", go_type[2:], item) for i, item in enumerate(value)]
     # A struct. A null leaves every member at its zero value.
     if value is None:
         value = {}
     if not isinstance(value, dict):
-        raise _DecodeError(f"{name} {value!r} is not a JSON object")
+        raise _DecodeError(f"{name} {_value_repr(value)} is not a JSON object")
     return _decode_members(_STRUCT_TYPES[go_type], value, f"{name}.")
 
 
@@ -759,7 +781,7 @@ def _decode_credential(atx: Any) -> dict[str, Any]:
     if atx is None:
         atx = {}
     if not isinstance(atx, dict):
-        raise _DecodeError(f"credential {atx!r} is not a JSON object")
+        raise _DecodeError(f"credential {_value_repr(atx)} is not a JSON object")
     decoded = dict(atx)
     decoded.update(_decode_members(_MEMBER_TYPES, atx))
     members = _members_by_folded_name(atx)
