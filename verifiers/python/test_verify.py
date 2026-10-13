@@ -15,7 +15,9 @@ base64 alphabet, a fixture whose expected member is not an object, and a
 report line standard output cannot encode. They also pin the decode of the
 fixture wrapper: members outside their Go type, names in another case or
 repeated, a public key that is not hex, nesting at Go's depth limit (in
-declaredPurpose too, which the JCS serializer walks), bytes that are not UTF-8, the single-pass string-literal scan, and --help. Two tests
+declaredPurpose too, which the JCS serializer walks, and in a typed member,
+whose decode error writes the value to a bounded depth), bytes that are not
+UTF-8, the single-pass string-literal scan, and --help. Two tests
 read verify.py itself: it imports no name it does not use, and its module
 docstring lists only the checks the verifier runs. Needs the same dependencies
 as verify.py. Run from this directory:
@@ -863,7 +865,10 @@ GO_HEX_DECODES = (
 # Nesting at the edge of Go's encoding/json depth limit, 10000 levels with
 # the fixture object: (where, how many arrays nest there, Go verdict, or None
 # where the file fails to load). declaredPurpose enters the v1.1 TBS as
-# written, so there the arrays are canonicalized at that depth too.
+# written, so there the arrays are canonicalized at that depth too. A member
+# Go decodes into a typed field is a PARSE_ERROR when it holds an array, and
+# one of scanSummary or behavioralProfile, which the v1.1 projection decodes
+# without failing, leaves a payload the signature does not cover.
 GO_NESTING_VERDICTS = (
     (("deep",), 5000, "ACCEPT"),
     (("deep",), 9999, "ACCEPT"),
@@ -873,6 +878,28 @@ GO_NESTING_VERDICTS = (
     (("atx", "declaredPurpose"), 3000, "SIGNATURE_INVALID"),
     (("atx", "declaredPurpose"), 9998, "SIGNATURE_INVALID"),
     (("atx", "declaredPurpose"), 9999, None),
+    (("atx",), 9999, "PARSE_ERROR"),
+    (("atx",), 10000, None),
+    (("atx", "publisher"), 9998, "PARSE_ERROR"),
+    (("atx", "publisher"), 9999, None),
+    (("atx", "transparencyLogIndex"), 9998, "PARSE_ERROR"),
+    (("atx", "trustScore"), 9998, "PARSE_ERROR"),
+    (("atx", "revoked"), 9998, "PARSE_ERROR"),
+    (("atx", "issuedAt"), 9998, "PARSE_ERROR"),
+    (("atx", "capabilities"), 9998, "PARSE_ERROR"),
+    (("atx", "issuerChain"), 9998, "PARSE_ERROR"),
+    (("atx", "signatures"), 9998, "PARSE_ERROR"),
+    (("atx", "scanSummary", "hma"), 9997, "SIGNATURE_INVALID"),
+    (("atx", "scanSummary", "hma"), 9998, None),
+    (("atx", "behavioralProfile", "checksum"), 9997, "SIGNATURE_INVALID"),
+)
+
+# A fixture member the Go verifier's fixture struct decodes into a string,
+# holding arrays nested to Go's depth limit: the file fails to load there.
+# (path from the fixture object, how many arrays nest there).
+GO_NESTED_WRAPPERS = (
+    (("expected", "verifyResult"), 9998),
+    (("verifierState", "clockRfc3339"), 9998),
 )
 
 # Bytes that are not UTF-8 inside a string: Go decodes each byte of an
@@ -1370,8 +1397,11 @@ class SerializerRefusal(unittest.TestCase):
 class SerializerNesting(unittest.TestCase):
     def test_nesting_past_the_recursion_limit_serializes(self):
         # Go's JCS library canonicalizes a declaredPurpose of any depth its
-        # decoder accepts; a serializer that recursed once per level raised
-        # RecursionError at about a third of that.
+        # decoder accepts, up to 10000 levels. The serializer this one
+        # replaced recursed through two frames per level (_serialize and its
+        # generator expression) and, at the default recursion limit of 1000,
+        # raised RecursionError from 497 nested arrays or objects in a
+        # declaredPurpose (from 331 on Python 3.11).
         n = 3 * sys.getrecursionlimit()
         arrays: list = []
         objects: dict = {}
@@ -1508,7 +1538,37 @@ class NestingDepth(unittest.TestCase):
                     self.assertIn("nested deeper than 10000 levels", str(raised.exception))
                 else:
                     got = verify.verify_fixture(verify.load_fixture(written))
-                    self.assertEqual(_outcome(got), outcome, got.reason)
+                    self.assertEqual(_outcome(got), outcome, got.reason[:200])
+                    # Go's error names the member and not its value. Writing
+                    # the whole value out raised RecursionError here on
+                    # Python 3.11 to 3.13, and on 3.14 ran to 20,000
+                    # characters.
+                    self.assertLess(len(got.reason), 200, got.reason[:200])
+
+    def test_nested_wrapper_member_is_a_load_error(self):
+        for path, n in GO_NESTED_WRAPPERS:
+            with self.subTest(path=path, depth=n), tempfile.TemporaryDirectory() as tmp:
+                written = _write_fixture_at(Path(tmp), "deep.json", BASELINE_V11, path, "[" * n + "]" * n)
+                with self.assertRaises(ValueError) as raised:
+                    verify._expected_outcome(verify.load_fixture(written))
+                message = str(raised.exception)
+                self.assertTrue(message.startswith(".".join(path) + " "), message[:200])
+                self.assertLess(len(message), 200, message[:200])
+
+    def test_decode_error_writes_the_value_to_a_bounded_depth(self):
+        depth = verify._REPR_DEPTH
+        arrays: list = [1]
+        objects: dict = {"a": None}
+        for _ in range(depth - 1):
+            arrays = [arrays, "x"]
+            objects = {"a": objects, "b": []}
+        for value in (7, -1.5, "x", True, None, [], {}, arrays, objects):
+            with self.subTest(value=value):
+                self.assertEqual(verify._value_repr(value), repr(value))
+        self.assertEqual(verify._value_repr([[[1]]], 2), "[[[...]]]")
+        self.assertEqual(verify._value_repr([[[]]], 2), "[[[]]]")
+        self.assertEqual(verify._value_repr({"a": {"b": {"c": 1}}}, 2), "{'a': {'b': {...}}}")
+        self.assertEqual(verify._value_repr({"a": {"b": {}}}, 2), "{'a': {'b': {}}}")
 
     def test_brackets_inside_a_string_do_not_nest(self):
         self.assertEqual(len(verify._string_literals('{"a": "' + "[" * 20000 + '"}')), 2)
