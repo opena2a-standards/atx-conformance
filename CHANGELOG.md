@@ -205,12 +205,28 @@ whenever one lands; README "Versioning and stability" says they should not.
   U+FFFD, one for each byte of the invalid sequence, where the file failed to
   load; arrays and objects nested up to 10000 levels deep, the fixture
   object included, load, where 5000 under one member failed to load, and
-  deeper ones fail to load as they do in Go. Its string-literal scan is a
-  single pass: the regular expression it replaces took time quadratic in the
-  length of an unterminated string literal (#173). No fixture changes.
+  deeper ones fail to load as they do in Go. Its string-literal scan now
+  runs before the file is parsed, where it can meet an unterminated string
+  literal, so it is a single pass, linear in that literal's length. The
+  regular expression it replaces ran only after `json.loads` had accepted
+  the file, so never on an unterminated literal (#173). No fixture changes.
 - `python3 verify.py --help` (or `-h`) prints the usage line and exits 0,
   where it reported `--help` as a missing path and exited 2 (#173). No
   fixture changes.
+- The vendored RFC 8785 serializer (`verifiers/python/rfc8785.py` and its
+  copy in `jcs-vectors/python/`) serializes arrays and objects without
+  recursion. A v1.1 credential whose `declaredPurpose` nested about 3000
+  arrays ended in a `RecursionError` verify error, where the Go verifier
+  reports `SIGNATURE_INVALID`; the Python verifier now reports that too, up
+  to the 10000 levels Go's decoder accepts. Its canonical bytes for every
+  other value do not change (#175). No fixture changes.
+- `test_verify.py` bounds how the string-literal scan's time grows from
+  2,500 to 40,000 escaped quotes, each length timed at its fastest of five
+  runs, where it bounded one scan of 200,000 at 2 seconds of wall-clock
+  time, which a loaded host could exceed with no code change. It also
+  checks that the regular expression the scan replaced exceeds the bound,
+  and that the scan stays within it on a clock that runs 3,600 times fast,
+  as it would read on a host that much slower (#177). No fixture changes.
 
 ## e2f9dc4 (#26, 2026-09-09): capabilities rewritten in 22 existing fixtures
 

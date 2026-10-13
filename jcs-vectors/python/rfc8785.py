@@ -9,6 +9,7 @@ ATX v1.1 TBS objects exercise:
   * minimal JSON string escaping (only ", \\, and the control range escape;
     every other code point, including all non-ASCII, emits as raw UTF-8)
   * integer numbers serialized as their shortest decimal form
+  * arrays and objects at any nesting depth (serialized without recursion)
 
 ATX v1.1 deliberately carries NO JSON floating-point numbers in the TBS:
 trustScore is string-encoded (%.6f) precisely so the ECMAScript/Ryu number
@@ -72,23 +73,54 @@ def _utf16_key(name: str) -> bytes:
     return name.encode("utf-16-be")
 
 
+class _Text(str):
+    """Serialized text that _serialize has queued between the values it has
+    still to serialize."""
+
+    __slots__ = ()
+
+
 def _serialize(value: Any) -> str:
-    if value is None:
-        return "null"
-    if value is True:
-        return "true"
-    if value is False:
-        return "false"
-    if isinstance(value, str):
-        return _escape_string(value)
-    if isinstance(value, (int, float)):
-        return _serialize_number(value)
-    if isinstance(value, list):
-        return "[" + ",".join(_serialize(v) for v in value) + "]"
-    if isinstance(value, dict):
-        items = sorted(value.items(), key=lambda kv: _utf16_key(kv[0]))
-        return "{" + ",".join(_escape_string(k) + ":" + _serialize(v) for k, v in items) + "}"
-    raise TypeError("unsupported JSON value of type %s" % type(value).__name__)
+    # Without recursion, so a deeply nested array or object does not exhaust
+    # the stack. pending holds, last first, the values still to serialize and
+    # the _Text that goes between them; each value is serialized in the same
+    # order as a recursive descent would, so the same value raises first.
+    out = []
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if type(item) is _Text:
+            out.append(item)
+        elif item is None:
+            out.append("null")
+        elif item is True:
+            out.append("true")
+        elif item is False:
+            out.append("false")
+        elif isinstance(item, str):
+            out.append(_escape_string(item))
+        elif isinstance(item, (int, float)):
+            out.append(_serialize_number(item))
+        elif isinstance(item, list):
+            out.append("[")
+            pending.append(_Text("]"))
+            for i in range(len(item) - 1, -1, -1):
+                pending.append(item[i])
+                if i:
+                    pending.append(_Text(","))
+        elif isinstance(item, dict):
+            out.append("{")
+            pending.append(_Text("}"))
+            items = sorted(item.items(), key=lambda kv: _utf16_key(kv[0]))
+            for i in range(len(items) - 1, -1, -1):
+                name, member = items[i]
+                pending.append(member)
+                pending.append(_Text(_escape_string(name) + ":"))
+                if i:
+                    pending.append(_Text(","))
+        else:
+            raise TypeError("unsupported JSON value of type %s" % type(item).__name__)
+    return "".join(out)
 
 
 def canonicalize(value: Any) -> bytes:
