@@ -14,10 +14,11 @@ behavioralProfile and scanSummary members outside their Go type, the signature
 base64 alphabet, a fixture whose expected member is not an object, and a
 report line standard output cannot encode. They also pin the decode of the
 fixture wrapper: members outside their Go type, names in another case or
-repeated, a public key that is not hex, nesting at Go's depth limit (in
-declaredPurpose too, which the JCS serializer walks, and in a typed member,
-whose decode error writes the value to a bounded depth), bytes that are not
-UTF-8, the single-pass string-literal scan, and --help. Two tests
+repeated, a public key that is not hex, arrays and objects nested to Go's
+depth limit (in declaredPurpose too, which the JCS serializer walks, and in a
+typed member, whose decode error writes the value to 8 levels), an integer
+with more digits than int() converts, bytes that are not UTF-8, the
+single-pass string-literal scan, and --help. Two tests
 read verify.py itself: it imports no name it does not use, and its module
 docstring lists only the checks the verifier runs. Needs the same dependencies
 as verify.py. Run from this directory:
@@ -894,12 +895,75 @@ GO_NESTING_VERDICTS = (
     (("atx", "behavioralProfile", "checksum"), 9997, "SIGNATURE_INVALID"),
 )
 
+# The same edge with objects nested in place of the arrays, each the member
+# "a" of the one around it: (where, how many objects nest there, Go verdict,
+# or None where the file fails to load). A member Go decodes into a slice
+# (capabilities, issuerChain, signatures) is a PARSE_ERROR when it holds an
+# object, which no row of arrays reaches: an array there is refused at its
+# first entry.
+GO_OBJECT_NESTING_VERDICTS = (
+    (("atx", "extra"), 9998, "ACCEPT"),
+    (("atx", "extra"), 9999, None),
+    (("atx", "capabilities"), 3001, "PARSE_ERROR"),
+    (("atx", "capabilities"), 9998, "PARSE_ERROR"),
+    (("atx", "capabilities"), 9999, None),
+    (("atx", "issuerChain"), 9998, "PARSE_ERROR"),
+    (("atx", "signatures"), 9998, "PARSE_ERROR"),
+    (("atx", "publisher"), 9998, "PARSE_ERROR"),
+    (("atx", "trustScore"), 9998, "PARSE_ERROR"),
+    (("atx", "scanSummary", "hma"), 9997, "SIGNATURE_INVALID"),
+    (("atx", "behavioralProfile", "checksum"), 9997, "SIGNATURE_INVALID"),
+)
+
 # A fixture member the Go verifier's fixture struct decodes into a string,
 # holding arrays nested to Go's depth limit: the file fails to load there.
 # (path from the fixture object, how many arrays nest there).
 GO_NESTED_WRAPPERS = (
     (("expected", "verifyResult"), 9998),
     (("verifierState", "clockRfc3339"), 9998),
+)
+
+# A fixture member that struct decodes into a slice, holding objects nested
+# to Go's depth limit: the file fails to load there too. (path from the
+# fixture object, how many objects nest there).
+GO_OBJECT_NESTED_WRAPPERS = (
+    (("keypairRefs",), 9999),
+    (("verifierState", "trustedIssuers"), 9998),
+    (("verifierState", "publicKeys"), 9998),
+)
+
+# A JSON integer of 5001 digits. From Python 3.11, int() refuses a literal of
+# more than sys.get_int_max_str_digits() digits, 4300 unless the interpreter
+# is set otherwise.
+LONG_INTEGER = "1" + "0" * 5000
+
+# Where a fixture holds that integer, or the negative one as long: (path from
+# the fixture object, Go verdict, or None where the file fails to load). Go
+# keeps a member no struct declares as bytes it never decodes, so there the
+# fixture verifies as the baseline does. The number is out of range for a
+# member Go decodes into int64 or float64 and of the wrong type for any other
+# typed member. The v1.1 projection leaves a scanSummary member it cannot
+# decode at its zero value, which for criticalFindings is the 0 the baseline
+# signs.
+GO_LONG_INTEGER_VERDICTS = (
+    (("unknownMember",), "ACCEPT"),
+    (("atx", "unknownMember"), "ACCEPT"),
+    (("verifierState", "unknownMember"), "ACCEPT"),
+    (("atx", "scanSummary", "criticalFindings"), "ACCEPT"),
+    (("atx", "scanSummary", "hma"), "SIGNATURE_INVALID"),
+    (("atx", "behavioralProfile", "observationDays"), "SIGNATURE_INVALID"),
+    (("atx",), "PARSE_ERROR"),
+    (("atx", "trustLevel"), "PARSE_ERROR"),
+    (("atx", "transparencyLogIndex"), "PARSE_ERROR"),
+    (("atx", "trustScore"), "PARSE_ERROR"),
+    (("atx", "revoked"), "PARSE_ERROR"),
+    (("atx", "publisher"), "PARSE_ERROR"),
+    (("atx", "issuedAt"), "PARSE_ERROR"),
+    (("atx", "capabilities"), "PARSE_ERROR"),
+    (("atx", "signatures", 0, "value"), "PARSE_ERROR"),
+    (("name",), None),
+    (("expected", "verifyResult"), None),
+    (("verifierState", "clockRfc3339"), None),
 )
 
 # Bytes that are not UTF-8 inside a string: Go decodes each byte of an
@@ -917,6 +981,16 @@ GO_INVALID_UTF8_DECODES = (
 
 def _outcome(got: verify.VerifyResult) -> str:
     return "ACCEPT" if got.accepted else got.reject_category
+
+
+def _arrays(n: int) -> str:
+    """n arrays, each the one entry of the array around it."""
+    return "[" * n + "]" * n
+
+
+def _objects(n: int) -> str:
+    """n objects, each the member "a" of the object around it."""
+    return '{"a":' * (n - 1) + "{}" + "}" * (n - 1)
 
 
 class GoTimestampGrammar(unittest.TestCase):
@@ -1528,10 +1602,12 @@ class NestingDepth(unittest.TestCase):
         # decodes; one more fails to load. The json.loads of Python 3.12 and
         # 3.13 stops short of that depth, so there this also runs the
         # pure-Python parse.
-        for path, n, outcome in GO_NESTING_VERDICTS:
-            with self.subTest(path=path, depth=n), tempfile.TemporaryDirectory() as tmp:
-                literal = "[" * n + "]" * n
-                written = _write_fixture_at(Path(tmp), "deep.json", BASELINE_V11, path, literal)
+        cases = [(_arrays, row) for row in GO_NESTING_VERDICTS]
+        cases += [(_objects, row) for row in GO_OBJECT_NESTING_VERDICTS]
+        for nest, (path, n, outcome) in cases:
+            with self.subTest(nest=nest.__name__, path=path, depth=n), \
+                    tempfile.TemporaryDirectory() as tmp:
+                written = _write_fixture_at(Path(tmp), "deep.json", BASELINE_V11, path, nest(n))
                 if outcome is None:
                     with self.assertRaises(ValueError) as raised:
                         verify.load_fixture(written)
@@ -1546,9 +1622,12 @@ class NestingDepth(unittest.TestCase):
                     self.assertLess(len(got.reason), 200, got.reason[:200])
 
     def test_nested_wrapper_member_is_a_load_error(self):
-        for path, n in GO_NESTED_WRAPPERS:
-            with self.subTest(path=path, depth=n), tempfile.TemporaryDirectory() as tmp:
-                written = _write_fixture_at(Path(tmp), "deep.json", BASELINE_V11, path, "[" * n + "]" * n)
+        cases = [(_arrays, row) for row in GO_NESTED_WRAPPERS]
+        cases += [(_objects, row) for row in GO_OBJECT_NESTED_WRAPPERS]
+        for nest, (path, n) in cases:
+            with self.subTest(nest=nest.__name__, path=path, depth=n), \
+                    tempfile.TemporaryDirectory() as tmp:
+                written = _write_fixture_at(Path(tmp), "deep.json", BASELINE_V11, path, nest(n))
                 with self.assertRaises(ValueError) as raised:
                     verify._expected_outcome(verify.load_fixture(written))
                 message = str(raised.exception)
@@ -1570,8 +1649,124 @@ class NestingDepth(unittest.TestCase):
         self.assertEqual(verify._value_repr({"a": {"b": {"c": 1}}}, 2), "{'a': {'b': {...}}}")
         self.assertEqual(verify._value_repr({"a": {"b": {}}}, 2), "{'a': {'b': {}}}")
 
+    def test_decode_error_writes_8_levels_of_the_value(self):
+        # The count CHANGELOG states, in the reason itself: of ten levels,
+        # eight are written out and the ninth as [...] or {...}. A slice
+        # member holding an object is the "is not a JSON array" error.
+        arrays = "[" * 8 + "[...]" + "]" * 8
+        objects = "{'a': " * 8 + "{...}" + "}" * 8
+        for member, literal, reason in (
+            ("publisher", _arrays(10), f"publisher {arrays} is not a JSON string"),
+            ("publisher", _objects(10), f"publisher {objects} is not a JSON string"),
+            ("trustLevel", _objects(10), f"trustLevel {objects} is not a JSON integer in int64 range"),
+            ("capabilities", _objects(10), f"capabilities {objects} is not a JSON array"),
+            ("capabilities", f"[{_arrays(10)}]", f"capabilities[0] {arrays} is not a JSON string"),
+            ("issuerChain", _objects(10), f"issuerChain {objects} is not a JSON array"),
+            ("signatures", _objects(10), f"signatures {objects} is not a JSON array"),
+            ("signatures", f"[{_arrays(10)}]", f"signatures[0] {arrays} is not a JSON object"),
+        ):
+            with self.subTest(member=member, value=literal):
+                got = _at_verdict(BASELINE_V11, (member,), literal)
+                self.assertEqual(got.reject_category, "PARSE_ERROR")
+                self.assertEqual(got.reason, reason)
+        # Nine levels end in an empty array or object, which is written as it
+        # is, so the reason holds the whole value.
+        got = _at_verdict(BASELINE_V11, ("capabilities",), _objects(9))
+        self.assertEqual(
+            got.reason, "capabilities " + "{'a': " * 8 + "{}" + "}" * 8 + " is not a JSON array"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            written = _write_fixture_at(
+                Path(tmp), "deep.json", BASELINE_V11, ("verifierState", "trustedIssuers"), _objects(10)
+            )
+            with self.assertRaises(ValueError) as raised:
+                verify._expected_outcome(verify.load_fixture(written))
+        self.assertEqual(
+            str(raised.exception), f"verifierState.trustedIssuers {objects} is not a JSON array"
+        )
+
     def test_brackets_inside_a_string_do_not_nest(self):
         self.assertEqual(len(verify._string_literals('{"a": "' + "[" * 20000 + '"}')), 2)
+
+
+class LongInteger(unittest.TestCase):
+    def setUp(self):
+        # The default limit, whatever limit this interpreter was started with.
+        self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
+        sys.set_int_max_str_digits(4300)
+
+    def test_long_integer_reaches_the_go_verdict(self):
+        # At the default limit int() refuses the literal. With the limit
+        # lifted (0) it converts, and the verdict and the reason are the same.
+        for limit in (4300, 0):
+            sys.set_int_max_str_digits(limit)
+            for literal in (LONG_INTEGER, "-" + LONG_INTEGER):
+                for path, outcome in GO_LONG_INTEGER_VERDICTS:
+                    with self.subTest(limit=limit, negative=literal[0] == "-", path=path), \
+                            tempfile.TemporaryDirectory() as tmp:
+                        written = _write_fixture_at(Path(tmp), "long.json", BASELINE_V11, path, literal)
+                        fixture = verify.load_fixture(written)
+                        if outcome is None:
+                            with self.assertRaises(ValueError) as raised:
+                                verify._expected_outcome(fixture)
+                            self.assertEqual(
+                                str(raised.exception),
+                                f"{'.'.join(path)} {literal} is not a JSON string",
+                            )
+                            continue
+                        got = verify.verify_fixture(fixture)
+                        self.assertEqual(_outcome(got), outcome, got.reason[:200])
+                        if outcome == "PARSE_ERROR":
+                            # The reason writes the number as the file does.
+                            self.assertIn(f" {literal} is not ", got.reason)
+
+    def test_integer_at_the_limit_loads_as_an_int(self):
+        # 4300 digits convert. One more does not: the number is written back
+        # as its literal and is held as the infinity 1e5000 loads as.
+        at_limit = "9" * 4300
+        with self.assertRaises(ValueError):
+            int(at_limit + "0")
+        with tempfile.TemporaryDirectory() as tmp:
+            written = _write_fixture_at(
+                Path(tmp), "numbers.json", BASELINE_V11, ("numbers",),
+                f"[{at_limit}, -{at_limit}, {at_limit}0, -{at_limit}0, 1e5000]",
+            )
+            fixture = verify.load_fixture(written)
+        numbers = fixture["numbers"]
+        self.assertEqual([type(n) for n in numbers[:2]], [int, int])
+        self.assertEqual(numbers[:2], [int(at_limit), -int(at_limit)])
+        self.assertEqual([repr(n) for n in numbers[2:4]], [at_limit + "0", "-" + at_limit + "0"])
+        self.assertEqual(numbers[2:], [float("inf"), float("-inf"), float("inf")])
+        self.assertTrue(verify.verify_fixture(fixture).accepted)
+
+    def test_declared_purpose_rejects_as_it_does_for_a_shorter_integer(self):
+        # declaredPurpose enters the v1.1 signed payload as written, so no
+        # typed decode refuses the number there. An integer of 401 digits,
+        # which int() converts, is outside float64 range too. This is not the
+        # Go verdict for either: the Go verifier's JCS library refuses a
+        # number outside float64 range (VERIFIER_CONFIG_ERROR).
+        shorter = "1" + "0" * 400
+        for purpose in ("%s", "-%s", '{"x": %s}', "[7, %s]"):
+            with self.subTest(purpose=purpose):
+                got = _at_verdict(BASELINE_V11, ("declaredPurpose",), purpose % LONG_INTEGER)
+                control = _at_verdict(BASELINE_V11, ("declaredPurpose",), purpose % shorter)
+                self.assertFalse(got.accepted)
+                self.assertEqual(got.reject_category, control.reject_category)
+
+    def test_directory_run_reaches_the_summary_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            _write_fixture_at(
+                directory, "a-unknown-member.json", BASELINE_V11, ("atx", "unknownMember"), LONG_INTEGER
+            )
+            _write_at(directory, "b-trust-level.json", BASELINE_V11, ("trustLevel",), LONG_INTEGER)
+            (directory / "c-baseline-valid.json").write_text(BASELINE_V11.read_text())
+            code, text, _ = _run_main(str(directory))
+        self.assertEqual(code, 0, text[-400:])
+        self.assertNotIn("load error", text)
+        self.assertEqual(text.count("observed: ACCEPT"), 2)
+        self.assertEqual(text.count("observed: REJECT[PARSE_ERROR: trustLevel 1000"), 1)
+        self.assertEqual(text.splitlines()[-1], "summary: 3 pass, 0 fail (3 fixtures)")
 
 
 # Between the growth of the string-literal scan from 2,500 to 40,000 escaped

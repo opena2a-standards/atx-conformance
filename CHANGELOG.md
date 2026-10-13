@@ -238,13 +238,38 @@ whenever one lands; README "Versioning and stability" says they should not.
   the value raised `RecursionError`, these ended in a `RecursionError`
   verify error: from about 1000 levels on Python 3.11 and about 1500 on
   3.12.0 to 3.12.2, and on 3.12.3 to 3.12.12 only the credential did, at
-  9999 levels. Where it did not, a `PARSE_ERROR` reason carried the whole
-  value, about 20,000 characters at Go's limit. A fixture wrapper member
-  nested that deep, such as `expected.verifyResult`, still fails to load,
-  and the load error now names the member where on Python 3.11 and 3.12.0
-  to 3.12.2 it gave only the `RecursionError` message. The depths are as
-  measured on macOS; CPython's C recursion limit, which sets the 3.12 ones,
-  is lower on some platforms (#179). No fixture changes.
+  9999 levels. Where it did not, the `PARSE_ERROR` reason carried the whole
+  value, about 20,000 characters at Go's limit; `scanSummary` and
+  `behavioralProfile` members reported `SIGNATURE_INVALID` there, as they do
+  now. A fixture wrapper member nested that deep, such as
+  `expected.verifyResult`, still fails to load, and the load error now names
+  the member where on Python 3.11 and 3.12.0 to 3.12.2 it gave only the
+  `RecursionError` message. The depths are as measured on macOS; CPython's C
+  recursion limit, which sets the 3.12 ones, is lower on some platforms
+  (#179). No fixture changes.
+- `verifiers/python/verify.py` loads a fixture that holds a JSON integer of
+  more than 4300 digits, where the file failed with the load error `Exceeds
+  the limit (4300 digits) for integer string conversion`: from Python 3.11
+  `int()` refuses a literal that long unless the interpreter's limit is
+  raised, and the Go verifier loads it. The number is no longer converted.
+  In a member no Go struct declares (`atx.unknownMember`) the fixture
+  verifies as it does without the member; in a member Go decodes into a
+  typed field (`trustLevel`, `trustScore`, `publisher`, `capabilities`,
+  among others) the credential is a `PARSE_ERROR` whose reason writes the
+  number out; in `scanSummary.hma` or `behavioralProfile.observationDays` it
+  is `SIGNATURE_INVALID`; and in a fixture wrapper member such as
+  `expected.verifyResult` the file fails to load, with an error that names
+  the member. The Go verifier reports the same for each. In
+  `declaredPurpose` the credential is `SIGNATURE_INVALID`, as it is for a
+  shorter integer outside float64 range, where the Go verifier reports
+  `VERIFIER_CONFIG_ERROR` for both (#181). No fixture changes.
+- `test_verify.py` nests objects as well as arrays to Go's depth limit, so
+  it covers the decode error of a slice member (`capabilities`,
+  `issuerChain`, `signatures`, `verifierState.trustedIssuers`) that holds an
+  object, and it compares the whole reason of a decode error on a value ten
+  levels deep, so the 8 levels stated above are tested. Before, it passed
+  with that error writing out the whole value, and with the 8 changed to 7
+  or 60 (#181). No fixture changes.
 
 ## e2f9dc4 (#26, 2026-09-09): capabilities rewritten in 22 existing fixtures
 

@@ -73,6 +73,10 @@ lesson and scoped to the whole body because ATX signs it all):
     of an invalid sequence inside a string decodes to U+FFFD, and arrays and
     objects nested deeper than 10000 levels, the fixture object included,
     fail to load.
+  - a JSON integer of any length loads, as it does in the Go reference
+    verifier. Python's int() refuses one of more than 4300 digits by default;
+    such a number is kept as its literal, is out of range for every member
+    with a numeric type, and is not read in a member no Go struct declares.
 
 Usage:
     python verify.py ../../fixtures/baseline-valid.json
@@ -650,6 +654,27 @@ class _NegativeZero(int):
     __slots__ = ()
 
 
+class _LongInteger(float):
+    """A JSON integer with more digits than int() converts, as load_fixture
+    marks it: from Python 3.11 int() refuses a literal of more than
+    sys.get_int_max_str_digits() digits, 4300 unless the interpreter is set
+    otherwise and never fewer than 640. Go's encoding/json loads such a
+    number, and it is out of range for every member the Go reference verifier
+    decodes into an int64 or a float64, so its value is never needed. It is
+    held as the infinity a float literal that large (1e5000) loads as, and
+    written as its literal."""
+
+    __slots__ = ("literal",)
+
+    def __new__(cls, literal: str) -> "_LongInteger":
+        number = super().__new__(cls, "-inf" if literal.startswith("-") else "inf")
+        number.literal = literal
+        return number
+
+    def __repr__(self) -> str:
+        return self.literal
+
+
 # The levels of arrays and objects a decode error writes out. On Python 3.11,
 # 3.12 and 3.13, repr() raises RecursionError on a value nested short of the
 # 10000 levels Go's encoding/json decodes, where the Go reference verifier's
@@ -1024,8 +1049,15 @@ def _reject_constant(name: str) -> Any:
     raise ValueError(f"{name} is not a JSON value (RFC 8259 §6)")
 
 
-def _parse_int(literal: str) -> int:
-    return _NegativeZero() if literal == "-0" else int(literal)
+def _parse_int(literal: str) -> int | _LongInteger:
+    if literal == "-0":
+        return _NegativeZero()
+    try:
+        return int(literal)
+    except ValueError:
+        # json.loads passes the literal of a JSON integer, which int() refuses
+        # for the count of its digits alone.
+        return _LongInteger(literal)
 
 
 def _go_replace(exc: UnicodeError) -> tuple[str, int]:
@@ -1133,8 +1165,9 @@ def load_fixture(path: Path) -> dict[str, Any]:
     # the same shape as the first. It holds null at each of those values and
     # also at every null of the document, where the first parse holds None
     # and not a string: the isinstance test below is what keeps a literal
-    # null from being taken for an escaped string.
-    shadow = _parse_json(_escaped_values_nulled(text, literals))
+    # null from being taken for an escaped string. It reads integers as the
+    # first parse does, so one int() refuses does not fail it either.
+    shadow = _parse_json(_escaped_values_nulled(text, literals), parse_int=_parse_int)
     for (node, key), (other, _) in zip(_scalars(fixture), _scalars(shadow)):
         if other[key] is None and isinstance(node[key], str):
             node[key] = _EscapedString(node[key])
