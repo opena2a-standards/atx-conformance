@@ -13,7 +13,7 @@ Spec coverage:
   - Canonicalization: v1.0 signs the pipe-delimited 11-field string matching
     opena2a-registry/pkg/atcverify/verify.go canonicalPayload() VERBATIM;
     v1.1 signs JCS(TBS), the RFC 8785 form of the to-be-signed projection
-    (core.md section 1.3a.2). See README
+    (core.md section 1.3a.2). See docs/scope.md
     §"Canonicalization: v1.0 signs 11 fields; v1.1 signs JCS(TBS)".
   - Ed25519 and ML-DSA-65 (FIPS 204) hybrid signature verification over the
     same canonical payload (every declared signature must verify and at
@@ -230,7 +230,7 @@ def _parse_rfc3339(value: Any) -> _Instant:
     and second 0-59, and any two-digit offset hour and minute; a fraction keeps
     nine digits. Go 1.23 and later also reject an offset hour above 24 or an
     offset minute above 60; CI builds the Go reference verifier with Go 1.22,
-    which does not (README "Running the verifiers" says the same)."""
+    which does not (docs/running-the-verifiers.md says the same)."""
     if not isinstance(value, str):
         raise ValueError("not a JSON string")
     m = _RFC3339.fullmatch(value)
@@ -315,7 +315,7 @@ def _fold_key(s: str) -> str:
     of names whose case mapping a later Unicode version added folds together
     under one release and not under another: U+1C89 and U+1C8A (Unicode 16.0)
     are a duplicate under Python 3.14 and Go 1.27, and not under Python 3.12 or
-    Go 1.22 (README "Running the verifiers").
+    Go 1.22 (docs/running-the-verifiers.md).
     """
     out: list[str] = []
     for ch in s:

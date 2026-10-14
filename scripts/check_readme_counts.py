@@ -18,6 +18,15 @@ two were gated once, so the layout still said 8 fixtures after the set passed
 The README's expected-output section also says what a verifier result does
 and does not measure, so it must name the MANIFEST.sha256 byte check.
 
+The README's reference sections (the scope table and notes, the gates, the
+fixture table, the dependency lists, the reproduction steps, the version
+pins, the sibling rows and the repository layout) moved to the pages it
+links, listed in README_PAGES. Every count and claim below is read from
+README.md and those pages as one text, README.md first, so a passage that
+moved is held where it now stands; "README" in a failure means that text.
+The start-block capture in README.md states the expected result too, and is
+checked with the other sites.
+
 Every run starts with a self-test: each count-bearing site in the published
 README and COSIGNERS.md is altered in memory, one at a time, and the check
 must fail on it. A site the check cannot see is reported by name instead of
@@ -181,6 +190,18 @@ import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 README = ROOT / "README.md"
+# The pages README.md links that took its reference sections, read after it.
+README_PAGES = tuple(pathlib.Path(p) for p in (
+    "docs/scope.md",
+    "docs/continuous-verification.md",
+    "docs/fixtures.md",
+    "docs/running-the-verifiers.md",
+    "docs/reproducing-the-fixtures.md",
+    "docs/version-pinning.md",
+    "docs/versioning.md",
+    "docs/sibling-repositories.md",
+    "CONTRIBUTING.md",
+))
 FIXTURES = ROOT / "fixtures"
 JCS_VECTORS = ROOT / "jcs-vectors" / "vectors"
 # COSIGNERS.md tells an external cosigner what to observe before they sign.
@@ -1697,6 +1718,16 @@ def load_fixtures(root):
     return fixtures, failures
 
 
+def read_readme(root):
+    """README.md and then each of README_PAGES, joined into one text. A page
+    that is missing is left out, so each section it held is reported as not
+    found."""
+    texts = [(root / README.relative_to(ROOT)).read_text(encoding="utf-8")]
+    texts += [(root / rel).read_text(encoding="utf-8")
+              for rel in README_PAGES if (root / rel).exists()]
+    return "\n".join(texts)
+
+
 def count_vectors(root):
     return len(sorted((root / "jcs-vectors" / "vectors").glob("*.json")))
 
@@ -1903,8 +1934,11 @@ def tree_failures(tree, checks=None):
 NUMBER_SITES = (
     ("continuous verification `N pass, 0 fail`", "README.md",
      r"must report\s+`(\d+) pass"),
-    ("expected output `summary: N pass`", "README.md", r"summary: (\d+) pass"),
-    ("expected output `(N fixtures)`", "README.md", r"0 fail \((\d+) fixtures\)"),
+    ("expected output `summary: N pass`", "README.md", r"report\s+`summary: (\d+) pass"),
+    ("expected output `(N fixtures)`", "README.md", r"0 fail \((\d+) fixtures\)`"),
+    ("start-block capture `summary: N pass`", "README.md", r"^summary: (\d+) pass"),
+    ("start-block capture `(N fixtures)`", "README.md",
+     r"^summary: \d+ pass, 0 fail \((\d+) fixtures\)$"),
     ("implementations table passed count", "README.md", r"\| (\d+) / \d+ PASS"),
     ("implementations table total", "README.md", r"\| \d+ / (\d+) PASS"),
     ("repository layout fixture count", "README.md", r"^fixtures/\s+the (\d+) "),
@@ -2726,9 +2760,9 @@ def _whole_script_case(tree):
     case calls the checks directly, so they hold tree_failures() to each check
     and only this run holds main() to tree_failures()."""
     label = "main() exiting 1 on a copy of the tree with one README count altered"
-    site = re.search(r"must report\s+`(\d+) pass", tree.readme)
-    if site is None:
-        return False, label, "no `must report `N pass`` site found in README.md"
+    pattern = re.compile(r"must report\s+`(\d+) pass")
+    if pattern.search(tree.readme) is None:
+        return False, label, "no `must report `N pass`` site found in README.md or its pages"
     want = f"README claims `{CHILD_COUNT} pass` but fixtures/ holds {len(tree.fixtures)}"
     with tempfile.TemporaryDirectory(prefix="readme-counts-") as tmp:
         copy = pathlib.Path(tmp) / "tree"
@@ -2738,9 +2772,17 @@ def _whole_script_case(tree):
             shutil.copytree(
                 ROOT, copy, ignore_dangling_symlinks=True,
                 ignore=shutil.ignore_patterns(*UNCOPIED, pathlib.Path(tmp).name))
-            (copy / "README.md").write_text(
-                tree.readme[:site.start(1)] + CHILD_COUNT + tree.readme[site.end(1):],
-                encoding="utf-8")
+            # The count is altered in the file that states it.
+            for rel in (pathlib.Path("README.md"), *README_PAGES):
+                page = copy / rel
+                text = page.read_text(encoding="utf-8") if page.exists() else ""
+                site = pattern.search(text)
+                if site is not None:
+                    page.write_text(text[:site.start(1)] + CHILD_COUNT + text[site.end(1):],
+                                    encoding="utf-8")
+                    break
+            else:
+                return False, label, "the copied tree states no `must report `N pass`` site"
         except (OSError, shutil.Error) as exc:
             return False, label, f"could not copy the tree to run it: {exc}"
         script = copy / pathlib.Path(__file__).resolve().relative_to(ROOT)
@@ -3008,7 +3050,7 @@ def main():
     failures += vector_failures
     fixture_paths = sorted(FIXTURES.glob("*.json"))
     tree = Tree(
-        readme=README.read_text(encoding="utf-8"),
+        readme=read_readme(ROOT),
         cosigners=COSIGNERS.read_text(encoding="utf-8") if COSIGNERS.exists() else None,
         fixtures=fixtures,
         vectors=count_vectors(ROOT),

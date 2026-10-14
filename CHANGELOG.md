@@ -3,7 +3,8 @@
 This repository has no tags or releases. A consumer pins it at a commit, so
 entries name the commit that made the change. Changes to an existing fixture's
 credential, signatures, verifier state or expected outcome are listed here
-whenever one lands; README "Versioning and stability" says they should not.
+whenever one lands; [`docs/versioning.md`](docs/versioning.md) "Versioning
+and stability" says they should not.
 
 ## Unreleased
 
@@ -31,6 +32,22 @@ whenever one lands; README "Versioning and stability" says they should not.
 
 ### Changed
 
+- README.md is shortened to what the suite is, the command that runs the Go
+  verifier and its output, how to run both verifiers and check the fixture
+  bytes, the implementations table and one list of documentation links. Its
+  reference sections moved as written to `docs/scope.md` (Scope and Honest
+  scope notes), `docs/continuous-verification.md`, `docs/fixtures.md`,
+  `docs/running-the-verifiers.md` (the Go and Python dependency lists),
+  `docs/reproducing-the-fixtures.md`, `docs/version-pinning.md`,
+  `docs/versioning.md`, `docs/sibling-repositories.md` and `CONTRIBUTING.md`
+  (Contributing and Repository layout), and the full output of the README's
+  Go run is `docs/captures/go-verifier.txt`. `scripts/check_readme_counts.py`
+  reads README.md and those pages as one text and also holds the counts the
+  README's capture prints, `scripts/check_spec_refs.py` holds every `core.md`
+  link in those pages to the pin, `scripts/check_sibling_rows.py` reads
+  `docs/sibling-repositories.md`, and the verifiers and the generator cite
+  `docs/scope.md`, which `verify_test.go` and `test_verify.py` resolve in the
+  file cited. No fixture changes.
 - FIPS 204 is cited only by the four fixtures whose credential carries an
   ML-DSA-65 signature, where every fixture cited it before, and
   `atx-v1/wrong-issuer` also cites `core.md` section 13, which holds the

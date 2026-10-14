@@ -1991,9 +1991,11 @@ class JCSVectorsThroughVerifierProjection(unittest.TestCase):
                 self.assertEqual(got.hex(), vector["expected"]["canonicalHex"])
 
 
-def _readme_headings() -> set[str]:
+def _readme_headings(doc: str = "README") -> set[str]:
+    """The headings of README.md, or of the docs/ page `doc` names."""
+    path = ROOT / ("README.md" if doc == "README" else doc)
     headings, fenced = set(), False
-    for line in (ROOT / "README.md").read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         if line.startswith("```"):
             fenced = not fenced
         elif not fenced and line.startswith("#"):
@@ -2032,12 +2034,13 @@ class HeaderDocs(unittest.TestCase):
         # Join continuation lines so a reference split across two lines of a
         # docstring or comment reads as one.
         text = re.sub(r"\n[ \t]*(#[ \t]*)?", " ", (HERE / "verify.py").read_text(encoding="utf-8"))
-        refs = re.findall(r'README\s+§"([^"]+)"', text)
+        # A reference names README or the docs/ page that took the cited
+        # section from it.
+        refs = re.findall(r'(README|docs/[\w-]+\.md)\s+§"([^"]+)"', text)
         self.assertTrue(refs, "no README cross-reference found; refusing to pass vacuously")
-        headings = _readme_headings()
-        for ref in refs:
-            with self.subTest(ref=ref):
-                self.assertIn(ref, headings)
+        for doc, ref in refs:
+            with self.subTest(doc=doc, ref=ref):
+                self.assertIn(ref, _readme_headings(doc))
 
 
 if __name__ == "__main__":

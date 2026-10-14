@@ -1,0 +1,42 @@
+# atx-conformance: fixtures
+
+What every fixture shares and what each one exercises. The commands that
+run them are in the [README](../README.md#running-the-verifiers).
+
+## Fixtures
+
+All fixtures use:
+
+- Trusted issuer DID: `did:opena2a:authority:opena2a.org`
+- Test agent: `agent_conformance_test_001` (DID `did:opena2a:agent:agent_conformance_test_001`)
+- Pinned verifier clock: `2026-05-24T00:00:00Z`
+- Ed25519 keypair sources: [RFC 8032 §7.1](https://datatracker.ietf.org/doc/html/rfc8032#section-7.1) Test 1 (primary), Tests 2 / 3 (cosigners) and Test 1024 (untrusted issuer); the trusted secondary issuer `partner.example` is not an RFC vector, its seed is `SHA-256("opena2a-atx-conformance/issuer-secondary/key-1/v1")` ([`vectors/issuer-secondary.json`](../vectors/issuer-secondary.json))
+- ML-DSA-65 keypair source: fixed test seed (incrementing bytes `00..1f`), public key pinned in [`vectors/mldsa65-seed.json`](../vectors/mldsa65-seed.json)
+
+| Fixture | Expected | Exercises |
+|---|---|---|
+| `fixtures/baseline-valid.json` | ACCEPT | Single Ed25519 signature from primary issuer, trust level 4 with 2-link chain. The minimum viable accepted credential. |
+| `fixtures/baseline-valid-hybrid.json` | ACCEPT | Ed25519 plus ML-DSA-65 signatures from the same primary issuer over the same canonical payload. Both verifiers validate both signatures. |
+| `fixtures/revoked.json` | REJECT (REVOKED) | Credential `revoked: true`, with a CRL entry for the agent as well. This fixture pins the flag: both reference verifiers read it first and return, so the CRL entry is not what rejects it. |
+| `fixtures/revoked-crl-only.json` | REJECT (REVOKED) | The accepted v1.0 baseline credential (`revoked: false`, trusted issuer, unexpired, valid signature) with a CRL entry for its agent in the verifier state. CRL membership is the only thing that revokes it (§1.3 step 6). A verifier that reads the credential's own flag and never consults the CRL wrongly accepts. |
+| `fixtures/threshold-2of3-cosignature.json` | ACCEPT | Three Ed25519 signatures from three distinct keys (primary plus two cosigners). All three verify. No verifier reads a threshold: each declared signature must verify and one is enough, so this credential cut to any one of its signatures is also accepted. |
+| `fixtures/expired.json` | REJECT (EXPIRED) | `expiresAt: 2025-01-01T00:00:00Z`, earlier than the pinned clock. Otherwise valid. |
+| `fixtures/wrong-issuer.json` | REJECT (UNTRUSTED_ISSUER) | Real Ed25519 signature from an untrusted-issuer keypair (RFC 8032 §7.1 Test 1024 first 32 bytes), `issuerDid: did:opena2a:authority:attacker.example`. Signature is mathematically valid; issuer is not in trusted set. |
+| `fixtures/tampered-signature.json` | REJECT (SIGNATURE_INVALID) | One bit of the signature value flipped after signing. All other fields unchanged. |
+| `fixtures/malformed-schema.json` | REJECT (UNSUPPORTED_VERSION) | `atcVersion: "2.0"`. Verifier rejects at step 1 before any signature check. |
+| `fixtures/v1_1-baseline-valid.json` | ACCEPT | ATX v1.1. Single Ed25519 signature over `JCS(TBS)` (atx-spec §1.3a.2). Canonical bytes equal the `jcs-vectors` baseline. |
+| `fixtures/v1_1-no-transparency-log-index.json` | ACCEPT | ATX v1.1 omitting the optional `transparencyLogIndex`. The log assigns it after signing and it is outside `JCS(TBS)`, so this credential's canonical bytes and signature are identical to the v1.1 baseline's. A verifier that requires the field, or reads its presence as evidence of log inclusion, wrongly rejects. |
+| `fixtures/v1_1-baseline-valid-hybrid.json` | ACCEPT | ATX v1.1 with Ed25519 plus ML-DSA-65 over the same `JCS(TBS)` bytes. Both verifiers validate both signatures. |
+| `fixtures/v1_1-hybrid-mldsa-tampered.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 hybrid with the Ed25519 signature intact and one bit of the ML-DSA-65 signature flipped after signing. Every declared signature must verify, so a forged post-quantum signature cannot ride an intact classical one. A verifier that records ML-DSA-65 as present without verifying it wrongly accepts. |
+| `fixtures/v1_1-hybrid-pq-only.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 carrying one ML-DSA-65 signature that verifies and no Ed25519 signature. A credential that declares an ML-DSA-65 entry must also carry a verifying Ed25519 entry (core.md §13, Cryptographic agility). A verifier that checks only that every declared signature verifies wrongly accepts. |
+| `fixtures/v1_1-tampered-capabilities.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 whose `capabilities` were escalated to `system:exec` after signing. Rejected because v1.1 signs capabilities; the v1.0 form would have accepted it. |
+| `fixtures/v1_1-declared-purpose-valid.json` | ACCEPT | ATX v1.1 carrying a populated `declaredPurpose` (§1.5: vocabVersion, statement, category, taskScopes, capabilityJustification, autonomy, dataScopes, egressScopes). The presence-based member is signed as part of `JCS(TBS)`; canonical bytes equal the `jcs-vectors` `08-declared-purpose` vector. |
+| `fixtures/v1_1-tampered-declared-purpose.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 whose `declaredPurpose.category` was rewritten from `financial-operations` to `agent-orchestration` after signing. Rejected because v1.1 signs declaredPurpose; this is the integrity that makes a declared purpose binding and non-repudiable (no post-issuance purpose-laundering). |
+| `fixtures/cross-issuer-key.json` | REJECT (SIGNATURE_INVALID) | ATX v1.0 issued by the primary authority but signed by a DIFFERENT trusted authority's key. Signature is valid and the signer is independently trusted, yet the key is not controlled by the credential's issuer. A verifier that tries every configured key wrongly accepts. |
+| `fixtures/v1_1-cross-issuer-key.json` | REJECT (SIGNATURE_INVALID) | Same key-to-issuer binding property under v1.1: the secondary authority is neither the issuer nor in the signed issuerChain, so its key is not an eligible signer. |
+| `fixtures/v1_1-untrusted-chain-authority.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 with `issuerDid` = the primary authority and a signed `issuerChain` of [primary, attacker.example], signed only by the attacker key. The verifier trusts only the primary as an issuer but holds the attacker key in its `publicKeys` under a DID-URL `keyId`. The chain names the signer's own DID, yet it is signed by that same key and attacker.example is not a trusted issuer, so it contributes no eligible key. A verifier that takes its eligible authorities from the credential's own `issuerChain` wrongly accepts. |
+| `fixtures/v1_1-declared-purpose-empty-whitespace.json` | ACCEPT | ATX v1.1 signed with no declaredPurpose, carrying a whitespace-empty `{ }` appended after signing. Emptiness is a parse-level property (§1.3a.2 rule 5): any serialization of the empty object is treated as absent, so the signature still verifies. |
+| `fixtures/v1_1-declared-purpose-array-injected.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 signed with no declaredPurpose, carrying an attacker-appended ARRAY value. Present non-empty values — including non-objects — enter the TBS verbatim, so the recomputed bytes no longer match the signature. |
+| `fixtures/v1_1-declared-purpose-string-injected.json` | REJECT (SIGNATURE_INVALID) | Same unsigned-injection defense with a STRING value. |
+| `fixtures/v1_1-duplicate-purpose-member.json` | REJECT (PARSE_ERROR) | ATX v1.1 whose declaredPurpose bytes carry the `category` member TWICE — a decoy followed by the signed value, with a REAL signature over the last-wins interpretation. A last-wins parser without a duplicate check wrongly ACCEPTs (smuggling); a first-wins parser rejects with the wrong category. Verifiers MUST strict-parse the whole credential and reject duplicate members at any depth (RFC 8259 §4). |
+| `fixtures/v1_1-case-variant-member.json` | REJECT (PARSE_ERROR) | ATX v1.1 carrying a decoy top-level `TRUSTLEVEL` member (value 9) before the signed `trustLevel` member (value 4), two names that fold to the same field. Go's `encoding/json` matches field names case-insensitively and keeps the last, so a lenient Go verifier reads the signed value and wrongly ACCEPTs; a case-insensitive first-wins parser reads 9, and a case-sensitive parser keeps both as distinct members. A case-sensitive duplicate check flags neither. Verifiers MUST fold member names and reject fold-colliding members with PARSE_ERROR before interpreting any field. |

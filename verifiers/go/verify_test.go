@@ -11,29 +11,43 @@ import (
 	"time"
 )
 
-// TestReadmeCrossReferencesResolve pins that every README §"..." cross-reference
-// in this verifier and in the fixture generator names a heading README.md
-// carries. A reference split across two comment lines reads as one.
+// TestReadmeCrossReferencesResolve pins that every README §"..." or
+// docs/<page>.md §"..." cross-reference in this verifier and in the fixture
+// generator names a heading the file it cites carries. A reference split
+// across two comment lines reads as one.
 // atx-conformance#161: both sources cited §"Signed vs unsigned fields.", a
-// section README never had.
+// section README never had. The section they cite moved from README.md to
+// docs/scope.md with the README's other reference sections.
 func TestReadmeCrossReferencesResolve(t *testing.T) {
-	readme, err := os.ReadFile("../../README.md")
-	if err != nil {
-		t.Fatalf("cannot read README.md: %v", err)
-	}
-	headings := map[string]bool{}
-	fenced := false
-	for _, line := range strings.Split(string(readme), "\n") {
-		switch {
-		case strings.HasPrefix(line, "```"):
-			fenced = !fenced
-		case !fenced && strings.HasPrefix(line, "#"):
-			headings[strings.TrimSpace(strings.TrimLeft(line, "#"))] = true
+	headings := map[string]map[string]bool{}
+	headingsOf := func(doc string) map[string]bool {
+		if set, ok := headings[doc]; ok {
+			return set
 		}
+		path := "../../" + doc
+		if doc == "README" {
+			path = "../../README.md"
+		}
+		body, err := os.ReadFile(path) //nolint:gosec // G304: doc is "README" or "docs/<name>.md", as the reference pattern below matches it
+		if err != nil {
+			t.Fatalf("cannot read %s: %v", path, err)
+		}
+		set := map[string]bool{}
+		fenced := false
+		for _, line := range strings.Split(string(body), "\n") {
+			switch {
+			case strings.HasPrefix(line, "```"):
+				fenced = !fenced
+			case !fenced && strings.HasPrefix(line, "#"):
+				set[strings.TrimSpace(strings.TrimLeft(line, "#"))] = true
+			}
+		}
+		headings[doc] = set
+		return set
 	}
 
 	continuation := regexp.MustCompile(`\n[ \t]*//[ \t]*`)
-	reference := regexp.MustCompile(`README\s+§"([^"]+)"`)
+	reference := regexp.MustCompile(`(README|docs/[\w-]+\.md)\s+§"([^"]+)"`)
 	found := 0
 	for _, src := range []string{"verify.go", "../../scripts/generate-fixtures/main.go"} {
 		body, err := os.ReadFile(src) //nolint:gosec // G304: src ranges over the two fixed repository paths above
@@ -43,8 +57,8 @@ func TestReadmeCrossReferencesResolve(t *testing.T) {
 		text := continuation.ReplaceAllString(string(body), " ")
 		for _, m := range reference.FindAllStringSubmatch(text, -1) {
 			found++
-			if !headings[m[1]] {
-				t.Errorf("%s cites README §%q, which is not a README heading", src, m[1])
+			if !headingsOf(m[1])[m[2]] {
+				t.Errorf("%s cites %s §%q, which is not a heading of %s", src, m[1], m[2], m[1])
 			}
 		}
 	}
