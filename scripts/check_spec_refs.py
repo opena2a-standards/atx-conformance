@@ -62,8 +62,9 @@ cases build, so a core.md or workflow it cannot read fails by name before any
 case runs; a missing core.md or workflow fails there in the words the check
 uses for it. The self-test also fails a temporary tree it could not remove.
 
-Every link to atx-spec core.md in LINKED_DOCS (README.md and
-verifiers/go/verify.go) must also equal CORE_REF, apart from a query string, a
+Every link to atx-spec core.md in LINKED_DOCS (README.md, the docs/ pages
+that took its sections, and verifiers/go/verify.go) must also equal CORE_REF,
+apart from a query string, a
 #fragment, the punctuation a GitHub autolink drops after it (.,:!*_~) or a
 semicolon, trailing slashes, and the case of everything before the file name,
 so the prose links open the text the citations were checked against. A URL
@@ -137,8 +138,14 @@ Usage:
     python3 scripts/check_spec_refs.py --self-test   prove the check can fail
     python3 scripts/check_spec_refs.py --help        print this usage
 """
-# Files whose prose links core.md; each link must be CORE_REF.
-LINKED_DOCS = (Path("README.md"), Path("verifiers/go/verify.go"))
+# Files whose prose links core.md; each link must be CORE_REF. The docs/ pages
+# hold the README sections that moved out of README.md, links included.
+LINKED_DOCS = (Path("README.md"), Path("docs/scope.md"),
+               Path("docs/continuous-verification.md"), Path("docs/fixtures.md"),
+               Path("docs/running-the-verifiers.md"),
+               Path("docs/reproducing-the-fixtures.md"), Path("docs/version-pinning.md"),
+               Path("docs/versioning.md"), Path("docs/sibling-repositories.md"),
+               Path("verifiers/go/verify.go"))
 
 # The atx-spec commit core.md was vendored from, and the SHA-256 of core.md at
 # that commit. When the atx-spec pin in WORKFLOW moves, re-vendor core.md from

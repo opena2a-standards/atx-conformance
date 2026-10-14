@@ -22,249 +22,32 @@ self-cosignature anchors the baseline and does not count toward it.
 License: Apache 2.0. All keypairs, seeds, and credential identifiers in this
 repository are TEST-ONLY.
 
-## Scope
-
-What this suite verifies:
-
-| Item | Covered by |
-|---|---|
-| ATX v1.0 schema-version gate | `fixtures/malformed-schema.json` |
-| Expiry gate against a pinned verifier clock | `fixtures/expired.json` |
-| Revocation via the credential `revoked` flag | `fixtures/revoked.json` |
-| Revocation via CRL membership alone, the credential's own flag being false (§1.3 step 6) | `fixtures/revoked-crl-only.json` |
-| Trusted-issuer DID set | `fixtures/wrong-issuer.json` |
-| Ed25519 signature verification over the canonical payload | every fixture that passes steps 0 to 4 (strict parse, schema version, expiry, revocation, trusted issuer): 18 of 25. The others reject before step 5; `go test` in `verifiers/go` checks that their signatures verify once that gate is lifted |
-| Hybrid Ed25519 + ML-DSA-65 signature verification (FIPS 204) | `fixtures/baseline-valid-hybrid.json` |
-| Multi-signature: every declared signature must verify (three Ed25519 signatures from three distinct keys) | `fixtures/threshold-2of3-cosignature.json` |
-| Tampered-signature rejection | `fixtures/tampered-signature.json` |
-| Key-to-issuer binding (a trusted authority cannot sign for another; a chain DID that is not a trusted issuer contributes no eligible key) | `fixtures/cross-issuer-key.json`, `fixtures/v1_1-cross-issuer-key.json`, `fixtures/v1_1-untrusted-chain-authority.json` |
-| ATX v1.1 JCS(TBS) signing, signed-field integrity | `fixtures/v1_1-baseline-valid.json`, `fixtures/v1_1-tampered-capabilities.json` |
-| ATX v1.1 declaredPurpose carried under the signature (§1.5) | `fixtures/v1_1-declared-purpose-valid.json`, `fixtures/v1_1-tampered-declared-purpose.json` |
-| Degenerate declaredPurpose (§1.3a.2 rule 5, issue #11): parse-level emptiness, verbatim non-object inclusion | `fixtures/v1_1-declared-purpose-empty-whitespace.json`, `fixtures/v1_1-declared-purpose-array-injected.json`, `fixtures/v1_1-declared-purpose-string-injected.json` |
-| Strict credential parse: duplicate object members reject at any depth (RFC 8259 §4 parser-divergence smuggling) | `fixtures/v1_1-duplicate-purpose-member.json` |
-| Fold-aware strict parse: case-variant members that `encoding/json` collapses last-wins (e.g. `TRUSTLEVEL`/`trustLevel`) reject as PARSE_ERROR | `fixtures/v1_1-case-variant-member.json` |
-| Distinct signer-authority count for trust level 3 and above (§1.3 step 7) | not covered; see conformance.json notCovered |
-| k-of-n threshold issuance, such as 2-of-3 (§3.1 step 8): a credential with fewer valid signatures than the threshold rejects | not covered; see conformance.json notCovered |
-
-What this suite does NOT verify:
-
-- Content hash matching the agent binary. The `contentHash` field is in every
-  fixture for byte-stability, but no agent binary is shipped; verifiers stop
-  at step 5 (signature) without consulting content.
-- Transparency log inclusion proofs. The `transparencyLogIndex` is populated
-  for byte-stability; the conformance verifiers do not consult a log.
-- Build attestation predicate verification. `buildAttestation` is a string
-  field in ATX v1.0 (not a structured SLSA v1 predicate inline); verifiers
-  do not parse it.
-- Behavioral profile validation. The `behavioralProfile` field is carried and
-  signed in the v1.1 fixtures, but not validated.
-
-The full requirement-to-fixture mapping is machine-readable in
-[`conformance.json`](./conformance.json), regenerated from the fixtures by
-[`scripts/conformance_profile.py`](./scripts/conformance_profile.py) and
-CI-checked against drift. Each entry's `requirement`, copied from its
-fixture, names the step or rule that fixture tests and opens with the
-number of the `core.md` section it comes from: `atx-v1/expired` tests
-`§1.3 step 2`, the expiry check. The drift check fails when a fixture has
-no `requirement`, when its section is not one of the fixture's ATX `spec`
-citations, or when two fixtures name the same requirement. A fixture
-cites FIPS 204 only when its credential carries an ML-DSA-65 signature.
-
-## Continuous verification
-
-[`.github/workflows/conformance.yml`](./.github/workflows/conformance.yml)
-runs the following gates on every pull request and every push to `main`.
-They cover the counts, the verifier results, the fixture bytes and the
-claims this README makes about them -- not every sentence below:
-
-1. Both reference verifiers run against `fixtures/` and must report
-   `25 pass, 0 fail`.
-2. The fixture generator re-runs and the committed fixture bytes plus
-   `MANIFEST.sha256` must reproduce exactly (byte-pin).
-3. The JCS byte-agreement gate
-   ([`jcs-vectors/run-agreement.sh`](./jcs-vectors/run-agreement.sh)) must
-   pass across the independent Go, Python, and TypeScript canonicalizers
-   and across both reference verifiers' own v1.1 projection
-   (`verifiers/go`, `verifiers/python`; the gate needs the Python
-   verifier's dependencies), and every Go module in the repository must pin
-   one `cloudflare/circl` version
-   ([`scripts/check_circl_pin.sh`](./scripts/check_circl_pin.sh)), so the
-   vectors and the verifier share one crypto tree.
-4. The cross-implementation parity gate
-   ([`scripts/parity/parity.py`](./scripts/parity/parity.py)) asserts the Go
-   and Python verifiers agree per fixture on gate status, verdict, and
-   reject category, and publishes `parity-report.json` as a CI artifact.
-5. `conformance.json` must match the fixture set, and every ATX citation in
-   each fixture's `spec` list, each JCS vector's `spec` member and the
-   `requirements[].specRefs` of `conformance.json` must link to atx-spec
-   `core.md` at the pinned atx-spec commit and name one of its headings
-   exactly ([`scripts/check_spec_refs.py`](./scripts/check_spec_refs.py)).
-   A citation id must be a string, and one that differs from `ATX` only in
-   case or surrounding blanks fails rather than being skipped. Every link to
-   atx-spec `core.md` in this README and in `verifiers/go/verify.go` must be
-   the same pinned link. The top-level `spec.ref` of
-   `conformance.json` is written from that link, so the staleness check holds
-   it to the pin; the prose of `notCovered[].item` is not checked. Headings
-   are read from the copy vendored at `schemas/vendor/atx-spec/core.md` from
-   the same pinned atx-spec ref as the schema. That copy must carry the
-   SHA-256 of `core.md` at that ref, and the ref recorded with it must be the
-   one the schema drift gate checks out, so the copy cannot gain a heading by
-   being edited or fall behind a moved pin.
-6. Schema validation
-   ([`scripts/schema_validation.py`](./scripts/schema_validation.py)): every
-   fixture's `atx` member must validate against the atx-spec machine-readable
-   credential schema, vendored under `schemas/vendor/atx-spec/` and
-   byte-drift-gated against a pinned atx-spec ref; the `malformed-schema`
-   fixture must fail on exactly the `atcVersion` registry enum. Before that,
-   every fixture and `conformance.json` must name in `$schema` the `$id` of a
-   schema under `schemas/` and validate against it in full
-   (`schemas/fixture-v1.schema.json`,
-   `schemas/conformance-profile-v1.schema.json`); a self-test first proves the
-   check fails on altered copies of each.
-
-## Honest scope notes
-
-This is the section that future reviewers, second-implementation authors, and
-A2A coordination-map readers should read before forming judgments.
-
-### Canonicalization: v1.0 signs 11 fields; v1.1 signs JCS(TBS)
-
-ATX v1.0 signs a pipe-delimited canonical string, not the JSON body. The
-signature covers exactly 11 fields, defined normatively in
-[`atx-spec/core.md`](https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md)
-§1.3a.1:
-
+```bash
+cd verifiers/go && go run . ../../fixtures
 ```
-agentId | agentDid | version | contentHash | buildAttestation | issuerDid |
-trustLevel | trustScore (%.6f) | issuedAt (RFC 3339) | expiresAt (RFC 3339) |
-atcVersion (hardcoded "1.0")
+What `go run . ../../fixtures` prints ([full output](docs/captures/go-verifier.txt), trimmed):
+```text
+PASS  ../../fixtures/baseline-valid-hybrid.json
+       expected: ACCEPT
+       observed: ACCEPT
+       signatures: 2/2 valid (ed25519=true mldsa65=true)
+       trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+...
+PASS  ../../fixtures/wrong-issuer.json
+       expected: REJECT [UNTRUSTED_ISSUER]
+       observed: REJECT[UNTRUSTED_ISSUER: issuer DID did:opena2a:authority:attacker.example is not in the verifier's trusted set (untrusted issuer)]
+
+summary: 25 pass, 0 fail (25 fixtures)
 ```
 
-Fields NOT covered by the v1.0 signature include `capabilities`, `scanSummary`,
-`behavioralProfile`, `publisher`, `publisherDid`, `transparencyLogIndex`,
-`signatures`, `revoked`, `revokedAt`, `revocationReason`, `createdAt`, `id`,
-`issuerChain`. A consequence is that an attacker who can write to a stored v1.0
-credential could modify `capabilities` or `scanSummary` without breaking
-signature verification.
+The command exits 1 when any fixture's result differs from its expected
+outcome. On its first run, `go run` downloads the modules listed in
+[`verifiers/go/go.mod`](verifiers/go/go.mod).
 
-**ATX v1.1 closes this.** A v1.1 credential (`atcVersion: "1.1"`) signs
-`JCS(TBS)`: the [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) canonical form
-of a projected to-be-signed object that includes `capabilities`, `scanSummary`,
-`issuerChain`, `publisher`, and `behavioralProfile`, so those fields become
-integrity-protected. The normative projection and determinism rules are in
-[`atx-spec/core.md`](https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md)
-§1.3a.2. The verifiers dispatch on `atcVersion`; the v1.0 pipe form is frozen and
-unchanged. Cross-language byte agreement on `JCS(TBS)` is proven by
-[`jcs-vectors/`](jcs-vectors/) (the Go, Python, and TypeScript canonicalizers
-and the v1.1 projection of both reference verifiers, `verifiers/go` and
-`verifiers/python`, must agree byte-for-byte). The `fixtures/v1_1-*.json`
-fixtures exercise the v1.1 path, including `v1_1-tampered-capabilities.json`,
-which is REJECTED precisely because capabilities are now signed.
-
-### Hybrid signing: what this suite requires
-
-The ATX spec has every credential carry an Ed25519 and an ML-DSA-65
-signature (core.md §1.1). This suite does not require both: it accepts
-single-suite Ed25519 credentials, and 6 of its 8 ACCEPT fixtures
-(`baseline-valid.json` among them) carry Ed25519 signatures only. What it
-requires is that every declared signature verifies, and that a credential
-which declares an ML-DSA-65 entry also carries a verifying Ed25519 entry
-(core.md §13, Cryptographic agility).
-`baseline-valid-hybrid.json` and `v1_1-baseline-valid-hybrid.json` each
-carry an Ed25519 signature and an ML-DSA-65 signature over the same signed
-payload. In both, the ML-DSA-65 `value` is the base64 of a raw FIPS 204
-ML-DSA-65 signature (3309 bytes decoded); no container or combined-blob
-framing is used.
-
-Both reference verifiers verify both declared signature suites per the spec
-mandate: the Go verifier ([`verifiers/go`](./verifiers/go)) via
-`cloudflare/circl`, and the Python verifier
-([`verifiers/python`](./verifiers/python)) via `dilithium-py` (FIPS 204).
-Each verifies the ML-DSA-65 signature cryptographically over the same
-canonical payload the Ed25519 signature signs. The MUST-REJECT control
-`fixtures/v1_1-hybrid-mldsa-tampered.json` — the hybrid baseline with the
-Ed25519 entry intact and the ML-DSA-65 value flipped by one bit — pins that
-a forged post-quantum signature cannot ride an intact classical one. The
-MUST-REJECT control `fixtures/v1_1-hybrid-pq-only.json` — the hybrid
-baseline with the Ed25519 entry removed, leaving one ML-DSA-65 signature
-that verifies — pins that a post-quantum signature cannot verify a
-credential without its Ed25519 companion.
-
-### Trusted-issuer DID method used by this suite
-
-This suite uses the canonical post-consolidation DID method
-`did:opena2a:<type>:<id>` with type prefix `authority` for issuers, matching
-the 2026-05-23 unification across AIP-SPEC and ATX-SPEC. The `did:opena2a`
-method itself is formally documented at
-[`opena2a-standards/did-method-opena2a`](https://github.com/opena2a-standards/did-method-opena2a)
-(Apache-2.0) and is registered in the W3C DID Extensions registry
-([`w3c/did-extensions#717`](https://github.com/w3c/did-extensions/pull/717),
-merged 2026-07-04).
-Because the suite must run without any external trust configuration, the
-conformance verifiers take their trusted-issuer set from each fixture's
-`verifierState.trustedIssuers`; running the suite requires no issuer
-configuration outside the fixture files.
-
-### Trust scoring: 9-factor reference
-
-The `trustScore` field in each fixture (87.5 on the baseline) is an
-illustrative value; the 9-factor weights specified in AIP-SPEC §6.1 are
-reproduced for reference:
-
-| Factor | Weight |
-|---|---|
-| Verification status | 25 |
-| Uptime and availability | 15 |
-| Action success rate | 15 |
-| Security alerts | 15 |
-| Compliance | 10 |
-| Execution isolation | 10 |
-| Age and history | 5 |
-| Drift detection | 3 |
-| User feedback | 2 |
-| Total | 100 |
-
-No factor inputs in this suite produce the fixture value, and it is stated
-on a 0 to 100 scale, while AIP-SPEC §6.1 states the composite score on 0.0
-to 1.0. This suite does not verify the trust-score computation itself.
-
-## Fixtures
-
-All fixtures use:
-
-- Trusted issuer DID: `did:opena2a:authority:opena2a.org`
-- Test agent: `agent_conformance_test_001` (DID `did:opena2a:agent:agent_conformance_test_001`)
-- Pinned verifier clock: `2026-05-24T00:00:00Z`
-- Ed25519 keypair sources: [RFC 8032 §7.1](https://datatracker.ietf.org/doc/html/rfc8032#section-7.1) Test 1 (primary), Tests 2 / 3 (cosigners) and Test 1024 (untrusted issuer); the trusted secondary issuer `partner.example` is not an RFC vector, its seed is `SHA-256("opena2a-atx-conformance/issuer-secondary/key-1/v1")` ([`vectors/issuer-secondary.json`](./vectors/issuer-secondary.json))
-- ML-DSA-65 keypair source: fixed test seed (incrementing bytes `00..1f`), public key pinned in [`vectors/mldsa65-seed.json`](./vectors/mldsa65-seed.json)
-
-| Fixture | Expected | Exercises |
-|---|---|---|
-| `fixtures/baseline-valid.json` | ACCEPT | Single Ed25519 signature from primary issuer, trust level 4 with 2-link chain. The minimum viable accepted credential. |
-| `fixtures/baseline-valid-hybrid.json` | ACCEPT | Ed25519 plus ML-DSA-65 signatures from the same primary issuer over the same canonical payload. Both verifiers validate both signatures. |
-| `fixtures/revoked.json` | REJECT (REVOKED) | Credential `revoked: true`, with a CRL entry for the agent as well. This fixture pins the flag: both reference verifiers read it first and return, so the CRL entry is not what rejects it. |
-| `fixtures/revoked-crl-only.json` | REJECT (REVOKED) | The accepted v1.0 baseline credential (`revoked: false`, trusted issuer, unexpired, valid signature) with a CRL entry for its agent in the verifier state. CRL membership is the only thing that revokes it (§1.3 step 6). A verifier that reads the credential's own flag and never consults the CRL wrongly accepts. |
-| `fixtures/threshold-2of3-cosignature.json` | ACCEPT | Three Ed25519 signatures from three distinct keys (primary plus two cosigners). All three verify. No verifier reads a threshold: each declared signature must verify and one is enough, so this credential cut to any one of its signatures is also accepted. |
-| `fixtures/expired.json` | REJECT (EXPIRED) | `expiresAt: 2025-01-01T00:00:00Z`, earlier than the pinned clock. Otherwise valid. |
-| `fixtures/wrong-issuer.json` | REJECT (UNTRUSTED_ISSUER) | Real Ed25519 signature from an untrusted-issuer keypair (RFC 8032 §7.1 Test 1024 first 32 bytes), `issuerDid: did:opena2a:authority:attacker.example`. Signature is mathematically valid; issuer is not in trusted set. |
-| `fixtures/tampered-signature.json` | REJECT (SIGNATURE_INVALID) | One bit of the signature value flipped after signing. All other fields unchanged. |
-| `fixtures/malformed-schema.json` | REJECT (UNSUPPORTED_VERSION) | `atcVersion: "2.0"`. Verifier rejects at step 1 before any signature check. |
-| `fixtures/v1_1-baseline-valid.json` | ACCEPT | ATX v1.1. Single Ed25519 signature over `JCS(TBS)` (atx-spec §1.3a.2). Canonical bytes equal the `jcs-vectors` baseline. |
-| `fixtures/v1_1-no-transparency-log-index.json` | ACCEPT | ATX v1.1 omitting the optional `transparencyLogIndex`. The log assigns it after signing and it is outside `JCS(TBS)`, so this credential's canonical bytes and signature are identical to the v1.1 baseline's. A verifier that requires the field, or reads its presence as evidence of log inclusion, wrongly rejects. |
-| `fixtures/v1_1-baseline-valid-hybrid.json` | ACCEPT | ATX v1.1 with Ed25519 plus ML-DSA-65 over the same `JCS(TBS)` bytes. Both verifiers validate both signatures. |
-| `fixtures/v1_1-hybrid-mldsa-tampered.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 hybrid with the Ed25519 signature intact and one bit of the ML-DSA-65 signature flipped after signing. Every declared signature must verify, so a forged post-quantum signature cannot ride an intact classical one. A verifier that records ML-DSA-65 as present without verifying it wrongly accepts. |
-| `fixtures/v1_1-hybrid-pq-only.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 carrying one ML-DSA-65 signature that verifies and no Ed25519 signature. A credential that declares an ML-DSA-65 entry must also carry a verifying Ed25519 entry (core.md §13, Cryptographic agility). A verifier that checks only that every declared signature verifies wrongly accepts. |
-| `fixtures/v1_1-tampered-capabilities.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 whose `capabilities` were escalated to `system:exec` after signing. Rejected because v1.1 signs capabilities; the v1.0 form would have accepted it. |
-| `fixtures/v1_1-declared-purpose-valid.json` | ACCEPT | ATX v1.1 carrying a populated `declaredPurpose` (§1.5: vocabVersion, statement, category, taskScopes, capabilityJustification, autonomy, dataScopes, egressScopes). The presence-based member is signed as part of `JCS(TBS)`; canonical bytes equal the `jcs-vectors` `08-declared-purpose` vector. |
-| `fixtures/v1_1-tampered-declared-purpose.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 whose `declaredPurpose.category` was rewritten from `financial-operations` to `agent-orchestration` after signing. Rejected because v1.1 signs declaredPurpose; this is the integrity that makes a declared purpose binding and non-repudiable (no post-issuance purpose-laundering). |
-| `fixtures/cross-issuer-key.json` | REJECT (SIGNATURE_INVALID) | ATX v1.0 issued by the primary authority but signed by a DIFFERENT trusted authority's key. Signature is valid and the signer is independently trusted, yet the key is not controlled by the credential's issuer. A verifier that tries every configured key wrongly accepts. |
-| `fixtures/v1_1-cross-issuer-key.json` | REJECT (SIGNATURE_INVALID) | Same key-to-issuer binding property under v1.1: the secondary authority is neither the issuer nor in the signed issuerChain, so its key is not an eligible signer. |
-| `fixtures/v1_1-untrusted-chain-authority.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 with `issuerDid` = the primary authority and a signed `issuerChain` of [primary, attacker.example], signed only by the attacker key. The verifier trusts only the primary as an issuer but holds the attacker key in its `publicKeys` under a DID-URL `keyId`. The chain names the signer's own DID, yet it is signed by that same key and attacker.example is not a trusted issuer, so it contributes no eligible key. A verifier that takes its eligible authorities from the credential's own `issuerChain` wrongly accepts. |
-| `fixtures/v1_1-declared-purpose-empty-whitespace.json` | ACCEPT | ATX v1.1 signed with no declaredPurpose, carrying a whitespace-empty `{ }` appended after signing. Emptiness is a parse-level property (§1.3a.2 rule 5): any serialization of the empty object is treated as absent, so the signature still verifies. |
-| `fixtures/v1_1-declared-purpose-array-injected.json` | REJECT (SIGNATURE_INVALID) | ATX v1.1 signed with no declaredPurpose, carrying an attacker-appended ARRAY value. Present non-empty values — including non-objects — enter the TBS verbatim, so the recomputed bytes no longer match the signature. |
-| `fixtures/v1_1-declared-purpose-string-injected.json` | REJECT (SIGNATURE_INVALID) | Same unsigned-injection defense with a STRING value. |
-| `fixtures/v1_1-duplicate-purpose-member.json` | REJECT (PARSE_ERROR) | ATX v1.1 whose declaredPurpose bytes carry the `category` member TWICE — a decoy followed by the signed value, with a REAL signature over the last-wins interpretation. A last-wins parser without a duplicate check wrongly ACCEPTs (smuggling); a first-wins parser rejects with the wrong category. Verifiers MUST strict-parse the whole credential and reject duplicate members at any depth (RFC 8259 §4). |
-| `fixtures/v1_1-case-variant-member.json` | REJECT (PARSE_ERROR) | ATX v1.1 carrying a decoy top-level `TRUSTLEVEL` member (value 9) before the signed `trustLevel` member (value 4), two names that fold to the same field. Go's `encoding/json` matches field names case-insensitively and keeps the last, so a lenient Go verifier reads the signed value and wrongly ACCEPTs; a case-insensitive first-wins parser reads 9, and a case-sensitive parser keeps both as distinct members. A case-sensitive duplicate check flags neither. Verifiers MUST fold member names and reject fold-colliding members with PARSE_ERROR before interpreting any field. |
+The suite does not check `contentHash` against an agent binary, transparency
+log inclusion, build attestations or behavioral profiles;
+[docs/scope.md](docs/scope.md) lists what it covers and the notes to read
+before relying on a result.
 
 ## Running the verifiers
 
@@ -273,47 +56,7 @@ Both verifiers walk every `*.json` file in the directory you point them at
 fixture's observed result matches the expected result and the rejection
 category matches (when declared).
 
-### Go (full hybrid Ed25519 plus ML-DSA-65)
-
-```bash
-cd verifiers/go
-go run . ../../fixtures
-```
-
-Depends on:
-
-- Go 1.22 or later. The release can change a fixture's result when one of its
-  timestamps has a time zone offset with an hour above 24 or a minute above 60
-  (`+25:00`, `+23:61`); no fixture carries one. Go 1.22, which CI builds this
-  verifier with and which the Python verifier follows, decodes such a
-  timestamp. Go 1.23 and later reject it where the verifier decodes it: in a
-  CRL's `issuedAt` or `nextUpdate` or a CRL entry's `revokedAt` the fixture
-  fails to load, in the credential's `issuedAt` or `expiresAt` the rejection
-  is a `PARSE_ERROR`, in the verifier clock `clockRfc3339` it is a
-  `VERIFIER_CONFIG_ERROR`, and in a v1.1 credential's
-  `behavioralProfile.generatedAt` the signed payload carries
-  `behavioralProfile` as null, so a signature made over the profile fails as
-  `SIGNATURE_INVALID`. To build with the release CI uses, run
-  `GOTOOLCHAIN=go1.22.12 go run . ../../fixtures`.
-
-  A timestamp written with a JSON escape (the `Z` written as a `\u` escape,
-  for example) fails to decode under every release, as it does in the Python
-  verifier: the verifier decodes each timestamp with `time.Time`'s own
-  `UnmarshalJSON`, which parses the bytes between the quotes. A plain
-  `time.Time` field decodes the escaped form when built with Go 1.27.
-
-  The release also sets the Unicode version of the case folding the
-  duplicate-member check applies to a non-ASCII member name. Two names whose
-  lowercase mapping a later Unicode version added are a duplicate, and the
-  credential a `PARSE_ERROR`, under one release and not under another: U+1C89
-  and U+1C8A, mapped in Unicode 16.0, are a duplicate under Go 1.27 (Unicode
-  17.0) and not under Go 1.22 through 1.26 (Unicode 15.0). No fixture carries
-  a non-ASCII member name.
-- `github.com/cloudflare/circl v1.6.2` (resolved by `go mod tidy`)
-- `github.com/gowebpki/jcs v1.0.1` (RFC 8785 canonicalization of the v1.1
-  signed payload; resolved the same way)
-
-### Python (full hybrid Ed25519 plus ML-DSA-65)
+The Python verifier, from the repository root:
 
 ```bash
 cd verifiers/python
@@ -321,15 +64,12 @@ pip install -r requirements.txt
 python verify.py ../../fixtures
 ```
 
-Depends on:
-
-- Python 3.11 or later. As with the Go release, the Python release sets the
-  Unicode version of the case folding the duplicate-member check applies to a
-  non-ASCII member name: U+1C89 and U+1C8A are a duplicate under Python 3.14
-  (Unicode 16.0) and not under Python 3.12 (Unicode 15.0), which CI uses.
-  `python verify.py --help` prints the usage line.
-- `cryptography >= 42.0.0`
-- `dilithium-py >= 1.1.0` (ML-DSA-65 per FIPS 204)
+`pip install` downloads the packages `requirements.txt` names, and their
+dependencies, into the active Python environment. Each verifier needs a
+minimum toolchain release,
+and the release can change a result on inputs no fixture carries:
+[docs/running-the-verifiers.md](docs/running-the-verifiers.md) lists the
+minimums, the modules and packages each verifier pins, and those inputs.
 
 ### Expected output
 
@@ -352,80 +92,6 @@ Each line reads `OK` when that fixture's bytes match the published set. A
 modified fixture reads `FAILED` and the command exits non-zero. On Linux,
 `sha256sum -c MANIFEST.sha256` does the same.
 
-## Reproducing the fixtures
-
-The fixtures in this repository are deterministic. To regenerate them from
-the keypair vectors in [`vectors/`](./vectors):
-
-```bash
-cd scripts/generate-fixtures
-go run .
-```
-
-The generator:
-
-1. Loads each Ed25519 keypair vector. Verifies that the seed-derived public
-   key matches the vector's `publicKeyHex`. Panics on drift.
-2. Resolves the ML-DSA-65 public key from the seed (using CIRCL's
-   `mldsa65.NewKeyFromSeed`). Pins the resolved public key into
-   `vectors/mldsa65-seed.json` on first run; on subsequent runs, verifies
-   that the pinned value still matches.
-3. Cross-checks the v1.1 signing form against the byte-agreement gate in
-   [`jcs-vectors/`](./jcs-vectors) before it builds any fixture. The v1.1
-   baseline credential (`newBaselineV11ATX`) must canonicalize to the
-   `expected.canonicalHex` of `jcs-vectors/vectors/01-baseline.json`, and
-   the same credential carrying the present-case `declaredPurpose` to the
-   one in `jcs-vectors/vectors/08-declared-purpose.json`. Panics on
-   divergence, so the v1.1 fixtures cannot drift from the bytes the Go,
-   Python and TypeScript legs of that gate agree on.
-4. Builds each ATX credential from a shared template (`newBaselineATX` for
-   v1.0, `newBaselineV11ATX` for v1.1), then per-fixture mutates exactly
-   the fields needed to exercise that fixture's path (revoke, expire, swap
-   issuer, tamper signature, change schema version, set `declaredPurpose`,
-   add cosigners or ML-DSA-65 sig).
-5. Computes the canonical payload in the form the credential's version
-   signs:
-   - Every fixture not named `v1_1-*.json`, including
-     `malformed-schema.json` with `atcVersion` "2.0": the pipe-delimited
-     11-field form defined normatively in `atx-spec` `core.md` §1.3a.1
-     (`canonicalPayload`), duplicated verbatim in the generator and in each
-     reference verifier.
-   - Every `v1_1-*.json` fixture: `JCS(TBS)` per `core.md` §1.3a.2
-     (`canonicalPayloadV11`). The generator projects the credential into
-     the v1.1 to-be-signed object, which adds `publisher`, `publisherDid`,
-     `capabilities`, `behavioralProfile`, `scanSummary`, `issuerChain` and,
-     when present, `declaredPurpose` to the signed fields, and canonicalizes
-     it per RFC 8785 with `github.com/gowebpki/jcs`.
-6. Ed25519-signs and ML-DSA-65-signs that payload, as each fixture carries
-   those signatures (`v1_1-hybrid-pq-only.json` carries the ML-DSA-65
-   signature alone). A fixture that tests tampering changes the field or
-   signature it tampers with after this step, so its signature covers the
-   original bytes.
-7. Marshals each fixture to byte-stable JSON (`encoding/json` with 2-space
-   indent, fields in struct-declaration order).
-8. Writes the fixture file. Recomputes its SHA-256. Updates
-   `MANIFEST.sha256` in path-sorted order.
-
-Re-running the generator MUST produce byte-identical fixtures. If the bytes
-change, either (a) the generator changed, (b) the canonicalization shifted,
-or (c) the CIRCL ML-DSA-65 implementation changed. Any of those is a
-breaking change for downstream verifiers.
-
-## Version pinning
-
-| Component | Version | Source |
-|---|---|---|
-| ATX schema | v1.0 and v1.1 | [`opena2a-standards/atx-spec/core.md`](https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md) |
-| AIP spec | v1.2.0-draft | [`opena2a-standards/agent-identity-protocol/AIP-SPEC.md`](https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md) |
-| `did:opena2a` method | v0.2 (draft), registered in the W3C DID Extensions registry (`w3c/did-extensions#717`, merged 2026-07-04) | [`opena2a-standards/did-method-opena2a/did-method-opena2a.md`](https://github.com/opena2a-standards/did-method-opena2a/blob/c160d50d0f90d809bb60ccfae0b5ca9d7fda2ab2/did-method-opena2a.md) |
-| Ed25519 keypair sources | RFC 8032 §7.1 Tests 1, 2, 3, 1024; secondary issuer seed `SHA-256("opena2a-atx-conformance/issuer-secondary/key-1/v1")` (not an RFC vector) | [datatracker.ietf.org/doc/html/rfc8032](https://datatracker.ietf.org/doc/html/rfc8032) |
-| ML-DSA-65 | FIPS 204 final | [csrc.nist.gov/pubs/fips/204/final](https://csrc.nist.gov/pubs/fips/204/final) |
-| CIRCL (ML-DSA-65 implementation) | v1.6.2 | [github.com/cloudflare/circl](https://github.com/cloudflare/circl) |
-| gowebpki/jcs (Go RFC 8785 canonicalization) | v1.0.1 | [github.com/gowebpki/jcs](https://github.com/gowebpki/jcs) |
-| cryptography (Python Ed25519) | >= 42.0.0 | [pyca/cryptography](https://github.com/pyca/cryptography) |
-| dilithium-py (Python ML-DSA-65) | >= 1.1.0 | [GiacomoPope/dilithium-py](https://github.com/GiacomoPope/dilithium-py) |
-| Conformance fixture format | v1 (this repo) | [`schemas/fixture-v1.schema.json`](./schemas/fixture-v1.schema.json) |
-
 ## Implementations that validate against this suite
 
 | Implementation | Verifier | Status |
@@ -439,104 +105,35 @@ cosignature, open an issue on this repository's
 The cosignature itself is recorded by pull request, as
 [`COSIGNERS.md`](./COSIGNERS.md#how-to-cosign) describes.
 
-## Sibling repositories
+## Documentation
 
-Two peer conformance suites cover the other OpenA2A specs in scope of the
-A2A coordination map's criterion (c) thread
-[`a2aproject/A2A#1885`](https://github.com/a2aproject/A2A/issues/1885) (closed on 2026-06-23):
-
-| Repo | Spec | Status |
-|---|---|---|
-| `atx-conformance` (this repo) | ATX v1.0 + v1.1 credential schema | 25 fixtures (10 v1.0, 15 v1.1 JCS incl. 6 declaredPurpose), 2 verifiers (Go and Python, both full hybrid), `jcs-vectors/` byte-agreement gate (8 vectors, Go/Python/TS), `MANIFEST.sha256` pinned |
-| [`atp-conformance`](https://github.com/opena2a-standards/atp-conformance) | ATP v1.0.0-rc1 protocol | 14 fixtures (discovery, trust proof, Signed Tree Head, inclusion and consistency proof, revocation list, with must-reject controls), same 2-verifier pair, `MANIFEST.sha256` pinned |
-| [`aip-conformance`](https://github.com/opena2a-standards/aip-conformance) | AIP v1.2.0-draft identity protocol | §6.4 (VC `AgentTrustCredential`) covered by cross-linking this repo's fixtures; §5.1 challenge-response covered by 4 dedicated fixtures + Go/Python verifiers; §6.1 trust-score composition covered by 3 fixtures |
-
-The three suites share the same MANIFEST-pinned byte-stable shape and are
-structurally comparable to A2A-IDF's
-[`aim-did-rfc9421/*`](https://github.com/opena2a-standards/a2a-idf-conformance/tree/main/fixtures/composition/aim-did-rfc9421)
-set.
-
-The fixture and verifier counts in the two sibling rows, and any release
-version a sibling row names, are measurements of those repositories, not of
-this one. [`scripts/check_sibling_rows.py`](./scripts/check_sibling_rows.py)
-reads both repositories through the GitHub API and fails when a row no
-longer matches them. It needs network access and is run by hand, not by the
-gates above.
-
-## Repository layout
-
-```
-LICENSE                          Apache 2.0
-README.md                        this file
-COSIGNERS.md                     how a second party cosigns a verifier run, and the
-                                 cosignature log
-CHANGELOG.md                     changes to existing fixtures, by commit
-MANIFEST.sha256                  per-fixture SHA-256 (path-sorted)
-conformance.json                 requirement-to-fixture profile (generated from the
-                                 fixtures, drift-checked in CI)
-fixtures/                        the 25 conformance fixtures (byte-stable JSON)
-jcs-vectors/                     JCS(TBS) byte-agreement vectors and the Go, Python
-                                 and TypeScript canonicalizers that must agree on them
-schemas/*.schema.json            fixture-v1 and conformance-profile-v1 file formats
-schemas/vendor/atx-spec/         vendored atx-spec credential schema and core.md
-                                 (pinned ref)
-vectors/                         test keypair vectors (TEST-ONLY)
-verifiers/go/                    Go reference verifier (full hybrid)
-verifiers/python/                Python reference verifier (full hybrid)
-scripts/generate-fixtures/       deterministic fixture generator (Go)
-scripts/parity/                  Go/Python per-fixture parity gate
-scripts/*.py                     CI gates: README counts, spec references, schema
-                                 validation, conformance profile, implementation
-                                 status
-scripts/check_sibling_rows.py    sibling-repositories table against the sibling
-                                 repositories (network, run by hand)
-scripts/check_circl_pin.sh       CI gate: one cloudflare/circl version per Go module
-```
-
-## Versioning and stability
-
-- The conformance fixture file format (`$schema: fixture-v1`) is stable
-  across patch revisions of this repository. Adding new fixture fields is
-  a minor version bump; renaming or removing fields is a major version
-  bump. The format is defined by
-  [`schemas/fixture-v1.schema.json`](./schemas/fixture-v1.schema.json), and
-  `conformance.json` by
-  [`schemas/conformance-profile-v1.schema.json`](./schemas/conformance-profile-v1.schema.json).
-  The `$schema` URI a document carries is that file's `$id`, an identifier:
-  the host it names does not serve the file, so read the schema from this
-  repository at the commit you pin.
-- The set of fixtures may grow. New fixtures are additive and do not
-  invalidate prior `MANIFEST.sha256` entries; each new fixture appears as
-  a new line in the manifest.
-- Existing fixtures are immutable in the part that defines them: the
-  credential, its signatures, the verifier state and the expected outcome.
-  A fixture that needs to change in any of those ships under a new name.
-  That is what makes `MANIFEST.sha256` a useful regression check.
-  [`scripts/check_fixture_immutability.py`](./scripts/check_fixture_immutability.py)
-  compares the `atx`, `verifierState` and `expected` members of every
-  fixture name with the merge base of `HEAD` and `origin/main`, and fails
-  when one of them changed. The rule was broken once, in e2f9dc4 (#26);
-  [`CHANGELOG.md`](./CHANGELOG.md) lists the 22 fixtures that commit changed
-  under their existing names.
-- A fixture's `description`, its `requirement` and its `spec` citation
-  list are documentation, and may be corrected in place. Doing so changes that
-  fixture's hash and its manifest line, so a consumer pinning this
-  repository at a commit sees no change until they bump deliberately.
-  Documentation that is wrong and cannot be fixed without minting a
-  duplicate credential under a new name is the worse outcome of the two.
-- A citation correction usually touches every fixture at once: moving the
-  pinned atx-spec commit re-points every ATX citation, so every
-  `MANIFEST.sha256` line changes in that commit while each fixture's
-  credential, signatures, verifier state and expected outcome stay as they
-  were.
-
-## Contributing
-
-Issues and PRs welcome on this repository. Second-party implementations and
-cosigners are coordinated on its
-[issue tracker](https://github.com/opena2a-standards/atx-conformance/issues).
-Substantive coordination on the ATX wire format itself happens in
-[`opena2a-standards/atx-spec`](https://github.com/opena2a-standards/atx-spec).
+- [Scope](docs/scope.md): what the suite verifies, what it does not, and the
+  honest scope notes on canonicalization, hybrid signing, the issuer DID
+  method and trust scoring.
+- [Fixtures](docs/fixtures.md): the issuer, agent, verifier clock and keys
+  every fixture shares, and what each fixture exercises.
+- [Running the verifiers](docs/running-the-verifiers.md): toolchain
+  minimums, pinned modules and packages, and results that depend on the
+  toolchain release.
+- [Continuous verification](docs/continuous-verification.md): the gates CI
+  runs on every pull request.
+- [Reproducing the fixtures](docs/reproducing-the-fixtures.md): what the
+  generator does when you run `cd scripts/generate-fixtures && go run .`.
+- [Version pinning](docs/version-pinning.md): the spec, DID method, key and
+  library versions the suite is pinned to.
+- [Versioning and stability](docs/versioning.md): what may change in a
+  fixture and what ships under a new name.
+- [Sibling repositories](docs/sibling-repositories.md): the
+  [`atp-conformance`](https://github.com/opena2a-standards/atp-conformance)
+  and [`aip-conformance`](https://github.com/opena2a-standards/aip-conformance)
+  suites for the other OpenA2A specs.
+- [`conformance.json`](conformance.json): the machine-readable
+  requirement-to-fixture mapping.
+- [`COSIGNERS.md`](COSIGNERS.md): how a second party cosigns a verifier run,
+  and the cosignature log.
+- [`CHANGELOG.md`](CHANGELOG.md): changes to existing fixtures, by commit.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md): where to raise a change, and the
+  repository layout.
 
 ## License
 

@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Assert the README's sibling-repositories rows match the sibling repositories.
 
+The rows stand in docs/sibling-repositories.md, which took the README's
+Sibling repositories section and which the README links; this check reads
+them there.
+
 The atp-conformance and aip-conformance rows state counts and versions that
 are measurements of other repositories, so check_readme_counts.py, which reads
 only this tree, cannot hold them. They drifted: the atp-conformance row said
@@ -47,7 +51,8 @@ import urllib.error
 import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-README = ROOT / "README.md"
+SIBLINGS_PAGE_NAME = "docs/sibling-repositories.md"
+SIBLINGS_PAGE = ROOT / SIBLINGS_PAGE_NAME
 ORG = "opena2a-standards"
 API = "https://api.github.com"
 HEADING = "## Sibling repositories"
@@ -189,9 +194,9 @@ def check(readme, siblings):
     rows = sibling_rows(readme)
     failures = []
     if not rows:
-        return [f"no sibling rows found under `{HEADING}` in README"]
+        return [f"no sibling rows found under `{HEADING}` in {SIBLINGS_PAGE_NAME}"]
     for repo in sorted({site[0] for site in COUNT_SITES} - set(rows)):
-        failures.append(f"README has no sibling-repositories row for {repo}")
+        failures.append(f"{SIBLINGS_PAGE_NAME} has no sibling-repositories row for {repo}")
 
     for repo, label, pattern, kind, prefix in COUNT_SITES:
         if repo not in rows:
@@ -323,7 +328,7 @@ def main():
         return 2
     only_self_test = "--self-test" in sys.argv
 
-    readme = README.read_text(encoding="utf-8")
+    readme = SIBLINGS_PAGE.read_text(encoding="utf-8")
     repos = sorted(set(sibling_rows(readme)) | {site[0] for site in COUNT_SITES})
     siblings = {}
     try:
@@ -345,8 +350,8 @@ def main():
     failures = check(readme, siblings)
     if failures:
         sys.stdout.flush()
-        print("README sibling rows do not match the sibling repositories:\n",
-              file=sys.stderr)
+        print(f"{SIBLINGS_PAGE_NAME} sibling rows do not match the sibling "
+              "repositories:\n", file=sys.stderr)
         for f in failures:
             print(f"  - {f}", file=sys.stderr)
         return 1
@@ -359,7 +364,7 @@ def main():
         f"{len(siblings[repo]['tags'])} tags)"
         for repo in repos
     )
-    print(f"README sibling rows match the sibling repositories: {summary}")
+    print(f"{SIBLINGS_PAGE_NAME} sibling rows match the sibling repositories: {summary}")
     return 0
 
 

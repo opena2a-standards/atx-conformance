@@ -40,8 +40,9 @@ forged-post-quantum control `fixtures/v1_1-hybrid-mldsa-tampered.json` pins
 that each REJECTs a tampered ML-DSA-65 signature even when the Ed25519
 signature is intact, and `fixtures/v1_1-hybrid-pq-only.json` pins that each
 REJECTs a valid ML-DSA-65 signature that carries no Ed25519 companion. See
-the README's "Hybrid signing: what this suite
-requires" section for the full picture.
+"Hybrid signing: what this suite requires" in
+[`docs/scope.md`](./docs/scope.md#hybrid-signing-what-this-suite-requires)
+for the full picture.
 
 ## CI self-cosignature (baseline)
 

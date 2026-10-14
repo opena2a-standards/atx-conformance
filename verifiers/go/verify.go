@@ -15,7 +15,7 @@
 //   - Canonicalization: v1.0 signs the pipe-delimited 11-field string matching
 //     opena2a-registry/pkg/atcverify/verify.go canonicalPayload() VERBATIM;
 //     v1.1 signs JCS(TBS), the RFC 8785 form of the to-be-signed projection
-//     (core.md §1.3a.2). See README
+//     (core.md §1.3a.2). See docs/scope.md
 //     §"Canonicalization: v1.0 signs 11 fields; v1.1 signs JCS(TBS)".
 //
 // Not performed: the distinct signer-authority count for trust level 3+
@@ -149,7 +149,7 @@ type atx struct {
 //
 // The v1.0 signature covers exactly 11 fields. capabilities, scanSummary,
 // publisher, publisherDid, transparencyLogIndex, behavioralProfile,
-// revoked-related fields, and createdAt are NOT signed. See README
+// revoked-related fields, and createdAt are NOT signed. See docs/scope.md
 // §"Canonicalization: v1.0 signs 11 fields; v1.1 signs JCS(TBS)".
 func canonicalPayload(a *atx) []byte {
 	return []byte(fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d|%.6f|%s|%s|%s",
@@ -431,8 +431,8 @@ func scanValueForDuplicates(dec *json.Decoder, depth int) (name string, dup, abo
 // release the verifier is built with, so a pair of names whose case mapping a
 // later Unicode version added is a duplicate under one release and not under
 // another: U+1C89 and U+1C8A (Unicode 16.0) under Go 1.27 (Unicode 17.0) and
-// not under Go 1.22 through 1.26 (Unicode 15.0). README "Running the
-// verifiers" says the same. Ported from opena2a-registry pkg/atcverify
+// not under Go 1.22 through 1.26 (Unicode 15.0). docs/running-the-verifiers.md
+// says the same. Ported from opena2a-registry pkg/atcverify
 // (registry #307).
 func foldKey(s string) string {
 	var b strings.Builder
