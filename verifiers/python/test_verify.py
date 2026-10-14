@@ -14,7 +14,8 @@ behavioralProfile and scanSummary members outside their Go type, the signature
 base64 alphabet, a fixture whose expected member is not an object, and a
 report line standard output cannot encode. They also pin the decode of the
 fixture wrapper: members outside their Go type, names in another case or
-repeated, a public key that is not hex, arrays and objects nested to Go's
+repeated (a first value outside its Go type included), a public key that is
+not hex, arrays and objects nested to Go's
 depth limit (in declaredPurpose too, which the JCS serializer walks, and in a
 typed member, whose decode error writes the value to 8 levels), an integer
 with more digits than int() converts, bytes that are not UTF-8, the
@@ -219,6 +220,20 @@ def _write_fixture_at(
     out = directory / name
     out.write_bytes(text.replace(b'"@@MEMBER@@"', literal or b""))
     return out
+
+
+def _write_repeated(
+    directory: Path, name: str, baseline: Path, path: tuple, first_name: str | None, literal: str
+) -> Path:
+    """_write_fixture_at with the member at path written twice: first under
+    first_name (its own name when None) holding the raw JSON literal, then
+    under its own name with the value the baseline gives it."""
+    fixture = json.loads(baseline.read_text())
+    parent = fixture
+    for step in path[:-1]:
+        parent = parent[step]
+    second = f"{json.dumps(path[-1])}: {json.dumps(parent[path[-1]])}"
+    return _write_fixture_at(directory, name, baseline, path, f"{literal}, {second}", first_name)
 
 
 def _fixture_verdict(baseline: Path, path: tuple, literal, rename: str | None = None) -> verify.VerifyResult:
@@ -849,6 +864,55 @@ GO_REPEATED_EXPECTED_NAMES = (
     ('{"verifyResult": "REJECT", "VerifyResult": "ACCEPT", "verifyResult": "REJECT"}', "REJECT"),
     ('{"VerifyResult": "REJECT", "verifyResult": "ACCEPT"}', "ACCEPT"),
     ('{"verifyResult": "REJECT", "VERIFYRESULT": "ACCEPT"}', "ACCEPT"),
+)
+
+# The two tables below were recorded from `go run .` in ../go built with Go
+# 1.26.3, on fixtures _write_repeated writes: the member at path written
+# first under the name given (its own when None) holding the raw literal,
+# then as the baseline writes it.
+
+# A repeated fixture member whose first value is outside its Go type. Go
+# reports the type error after decoding the second value, so the file fails
+# to load. (path, first name, raw literal, the member this verifier's load
+# error names), on the CRL baseline.
+GO_UNLOADABLE_REPEATS = (
+    (("verifierState", "clockRfc3339"), None, "5", "verifierState.clockRfc3339"),
+    (("verifierState", "clockRfc3339"), None, "9" * 401, "verifierState.clockRfc3339"),
+    (("verifierState", "clockRfc3339"), None, "9" * 5001, "verifierState.clockRfc3339"),
+    (("verifierState", "clockRfc3339"), "ClockRfc3339", "9" * 5001, "verifierState.clockRfc3339"),
+    (("name",), "NAME", "5", "name"),
+    (("expected", "verifyResult"), "VerifyResult", "7", "expected.verifyResult"),
+    (("keypairRefs", 0, "keyId"), None, "7", "keypairRefs[0].keyId"),
+    (("verifierState",), None, "[]", "verifierState"),
+    (("verifierState",), None, '{"clockRfc3339": 5}', "verifierState.clockRfc3339"),
+    (
+        ("verifierState", "crl", "issuedAt"),
+        None,
+        '"2026-05-23T00:00:00\\u005a"',
+        "verifierState.crl.issuedAt",
+    ),
+    (
+        ("verifierState", "crl"),
+        None,
+        '{"issuedAt": "2026-05-23T00:00:00\\u005a"}',
+        "verifierState.crl.issuedAt",
+    ),
+    (
+        ("verifierState", "crl", "entries", 0, "revokedAt"),
+        "RevokedAt",
+        '"2026-05-23T12:00:00\\u005a"',
+        "verifierState.crl.entries[0].revokedAt",
+    ),
+)
+
+# A repeated fixture member whose first value is inside its Go type: the file
+# loads and the second value is the one verified. (baseline, path, first
+# name, raw literal, Go verdict).
+GO_REPEAT_VERDICTS = (
+    (BASELINE_V11, ("verifierState", "clockRfc3339"), None, "null", "ACCEPT"),
+    (BASELINE_V11, ("verifierState", "clockRfc3339"), None, '"2100-01-01T00:00:00Z"', "ACCEPT"),
+    (BASELINE_V11, ("name",), "NAME", '"another name"', "ACCEPT"),
+    (BASELINE_CRL, ("verifierState", "crl", "issuedAt"), None, '"2026-05-23T00:00:00Z"', "REVOKED"),
 )
 
 # What Go's hex.DecodeString makes of a public key's publicKeyHex, None where
@@ -1540,6 +1604,25 @@ class FixtureWrapper(unittest.TestCase):
                 path = _write_wrapper(Path(tmp), "e.json", BASELINE_V11, "expected", literal)
                 got = verify._expected_outcome(verify.load_fixture(path))
                 self.assertEqual(got["verifyResult"], verify_result)
+
+    def test_repeat_outside_its_go_type_is_a_load_error(self):
+        # Only the second value was decoded, so each of these files loaded.
+        for path, first_name, literal, member in GO_UNLOADABLE_REPEATS:
+            with self.subTest(path=path, name=first_name, value=literal[:40]), \
+                    tempfile.TemporaryDirectory() as tmp:
+                written = _write_repeated(Path(tmp), "r.json", BASELINE_CRL, path, first_name, literal)
+                with self.assertRaises(ValueError) as raised:
+                    verify._expected_outcome(verify.load_fixture(written))
+                message = str(raised.exception)
+                self.assertTrue(message.startswith(member + " "), message[:200])
+
+    def test_repeat_inside_its_go_type_reaches_the_go_verdict(self):
+        for baseline, path, first_name, literal, outcome in GO_REPEAT_VERDICTS:
+            with self.subTest(baseline=baseline.name, path=path, name=first_name, value=literal), \
+                    tempfile.TemporaryDirectory() as tmp:
+                written = _write_repeated(Path(tmp), "r.json", baseline, path, first_name, literal)
+                got = verify.verify_fixture(verify.load_fixture(written))
+                self.assertEqual(_outcome(got), outcome, got.reason)
 
     def test_null_fixture_is_the_zero_value(self):
         # Go loads a fixture file holding null into its zero value, which has

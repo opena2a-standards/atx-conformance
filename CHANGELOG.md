@@ -270,6 +270,20 @@ whenever one lands; README "Versioning and stability" says they should not.
   levels deep, so the 8 levels stated above are tested. Before, it passed
   with that error writing out the whole value, and with the 8 changed to 7
   or 60 (#181). No fixture changes.
+- `verifiers/python/verify.py` fails to load a fixture that writes a wrapper
+  member twice, under one name or in two cases, with a first value outside
+  the member's Go type, as the Go verifier does: `"clockRfc3339": 5` before
+  the `verifierState` clock, `"NAME": 5` before `name`, an integer of 401 or
+  5001 digits in place of the 5, or a CRL `issuedAt` or entry `revokedAt`
+  written with a JSON escape before an unescaped one. Only the last value
+  was decoded before, so the v1.1 baseline with the first or second insert
+  printed `observed: ACCEPT`, and the CRL baseline with an escaped
+  `issuedAt` first reported `REVOKED`, as each does without the insert. A
+  first value inside its type, null included, still loads, and the last
+  value is the one verified. Go decodes each value into the same field, so
+  a repeat whose last value is null or an object can still reach a
+  different verdict here; the module docstring names the two cases measured
+  (#183). No fixture changes.
 
 ## e2f9dc4 (#26, 2026-09-09): capabilities rewritten in 22 existing fixtures
 

@@ -38,12 +38,19 @@ lesson and scoped to the whole body because ATX signs it all):
     the Go reference verifier's fixture struct decodes it: each member the
     struct declares (name, description, keypairRefs, verifierState and every
     member of it, expected) is type-checked against its field, a member name
-    in another case names the same member, and of two such names the last in
-    the document wins. A fixture the Go decode refuses, a name that is not a
-    string or a CRL entry's revokedAt outside the timestamp grammar for
-    example, fails to load, as it does there. A verifierState public key
-    whose publicKeyHex is not an even run of hex digits is skipped, as Go's
-    hex.DecodeString leads the Go verifier to skip it.
+    in another case names the same member, and a member written more than
+    once, under one name or in two cases, is type-checked each time, as Go
+    type-checks each. A fixture the Go decode refuses, a name that is not a
+    string, even with a string name written after it, or a CRL entry's
+    revokedAt outside the timestamp grammar for example, fails to load, as
+    it does there. Of a member written more than once the last value is the
+    one read. Go decodes each into the same field, so a repeat whose last
+    value is null or an object can still differ: Go keeps a clockRfc3339
+    that a later null follows, and merges a later verifierState object into
+    the earlier one, where this verifier reads the null and the later object
+    alone. A verifierState public key whose publicKeyHex is not an even run
+    of hex digits is skipped, as Go's hex.DecodeString leads the Go verifier
+    to skip it.
   - each member the Go reference verifier's atx struct declares with a typed
     field is type-checked against that field: strings, integers in int64
     range, a finite trustScore, a boolean revoked, arrays of strings,
@@ -267,12 +274,13 @@ class _DupMarkedDict(dict):
     """dict that remembers the first duplicate member name seen in this object
     or any descendant (None when the subtree is duplicate-free). Values keep
     standard last-wins semantics so everything outside the strict-parse check
-    behaves exactly as a plain json.loads. folded_names maps each folded
-    member name to the last name, as written, that folds to it in document
-    order, which the dict's own order does not give: it keeps a repeated name
-    at its first position."""
+    behaves exactly as a plain json.loads. names lists the name of each
+    member, as written, in document order, which the dict's own order does
+    not give: it keeps a repeated name at its first position. shadowed holds
+    the value of each member that a later member of the same name replaced in
+    the dict, by its index in names, or is None when no member was replaced."""
 
-    __slots__ = ("duplicate_member", "folded_names")
+    __slots__ = ("duplicate_member", "names", "shadowed")
 
 
 def _subtree_duplicate(value: Any) -> str | None:
@@ -331,21 +339,31 @@ def _go_string(value: str) -> str:
 def _dup_marking_pairs(pairs: list[tuple[str, Any]]) -> "_DupMarkedDict":
     out = _DupMarkedDict()
     dup: str | None = None
-    folded_names: dict[str, str] = {}
+    folded: set[str] = set()
+    names: list[str] = []
+    last_index: dict[str, int] = {}
+    shadowed: dict[int, Any] | None = None
     for key, value in pairs:
         # Names are compared as Go decodes them, so two names that escape
         # different unpaired surrogates are one name. The object keeps the
         # name as written.
         name = _go_string(key)
         fk = _fold_key(name)
-        if dup is None and fk in folded_names:
+        if dup is None and fk in folded:
             dup = name
-        folded_names[fk] = key
+        folded.add(fk)
         if dup is None:
             dup = _subtree_duplicate(value)
+        if key in last_index:
+            if shadowed is None:
+                shadowed = {}
+            shadowed[last_index[key]] = out[key]
+        last_index[key] = len(names)
+        names.append(key)
         out[key] = value
     out.duplicate_member = dup
-    out.folded_names = folded_names
+    out.names = names
+    out.shadowed = shadowed
     return out
 
 
@@ -755,17 +773,25 @@ def _decode_member(name: str, go_type: str, value: Any) -> Any:
     return _decode_members(_STRUCT_TYPES[go_type], value, f"{name}.")
 
 
-def _members_by_folded_name(value: dict[str, Any]) -> dict[str, Any]:
+def _members_by_folded_name(value: dict[str, Any]) -> dict[str, list[Any]]:
     """The members of a JSON object under the name folding Go's encoding/json
     matches a member to a struct field with: "Revoked" and "REVOKED" are the
-    member "revoked". The strict parse has already refused a credential in
-    which two names fold together; elsewhere the last one in document order
-    wins, as it does in Go, which the folded_names of an object load_fixture
-    built records."""
-    folded_names = getattr(value, "folded_names", None)
-    if folded_names is None:
-        return {_fold_key(_go_string(key)): member for key, member in value.items()}
-    return {folded: value[key] for folded, key in folded_names.items()}
+    member "revoked". Each folded name maps to the value of every member
+    whose name folds to it, in document order for an object load_fixture
+    built (dict order otherwise), so a member written twice, under one name
+    or two, has two values. Go's encoding/json decodes each one into the
+    field. The strict parse has already refused a credential in which two
+    names fold together."""
+    names = getattr(value, "names", None)
+    if names is None:
+        pairs = value.items()
+    else:
+        shadowed = value.shadowed or {}
+        pairs = ((key, shadowed[i] if i in shadowed else value[key]) for i, key in enumerate(names))
+    members: dict[str, list[Any]] = {}
+    for key, member in pairs:
+        members.setdefault(_fold_key(_go_string(key)), []).append(member)
+    return members
 
 
 def _decode_members(
@@ -773,18 +799,23 @@ def _decode_members(
 ) -> dict[str, Any]:
     """Each member named in types, decoded from the JSON object value as Go's
     encoding/json decodes it into a struct field of that type: matched by
-    folded name, the zero value when absent. A member outside its type raises
-    _DecodeError, or with lenient takes the zero value, which is what a Go
-    caller that ignores the decode error is left with."""
+    folded name, the zero value when absent. A member written more than once
+    is decoded each time, in document order, and holds the last value. A
+    value outside the member's type raises _DecodeError, the first value of
+    a repeated member included, which Go reports after decoding the later
+    one. With lenient such a value leaves the member at the value decoded
+    before it, the zero value when there is none, which is what a Go caller
+    that ignores the decode error is left with."""
     members = _members_by_folded_name(value)
     decoded = {}
     for name, go_type in types.items():
-        try:
-            decoded[name] = _decode_member(prefix + name, go_type, members.get(_fold_key(name)))
-        except _DecodeError:
-            if not lenient:
-                raise
-            decoded[name] = _decode_member(prefix + name, go_type, None)
+        decoded[name] = _decode_member(prefix + name, go_type, None)
+        for member in members.get(_fold_key(name), ()):
+            try:
+                decoded[name] = _decode_member(prefix + name, go_type, member)
+            except _DecodeError:
+                if not lenient:
+                    raise
     return decoded
 
 
@@ -811,7 +842,7 @@ def _decode_credential(atx: Any) -> dict[str, Any]:
     decoded.update(_decode_members(_MEMBER_TYPES, atx))
     members = _members_by_folded_name(atx)
     for name in _RAW_MEMBERS:
-        decoded[name] = members.get(_fold_key(name))
+        decoded[name] = members.get(_fold_key(name), [None])[-1]
     return decoded
 
 
@@ -827,7 +858,7 @@ def _decode_fixture(fixture: Any) -> dict[str, Any]:
     if not isinstance(fixture, dict):
         raise ValueError("fixture is not a JSON object")
     decoded = _decode_members(_FIXTURE_TYPES, fixture)
-    decoded["atx"] = _members_by_folded_name(fixture).get("atx", _ABSENT)
+    decoded["atx"] = _members_by_folded_name(fixture).get("atx", [_ABSENT])[-1]
     return decoded
 
 
@@ -855,12 +886,15 @@ def _decode_base64(value: str) -> bytes:
 def _scalars(value: Any):
     """Each (container, key) in value that holds a scalar, at any depth and
     without recursion, so a deeply nested document does not exhaust the
-    stack."""
+    stack. The members of an object load_fixture built that a later member
+    of the same name replaced are walked in its shadowed dict."""
     pending = [value]
     while pending:
         node = pending.pop()
         if isinstance(node, dict):
             keys = list(node)
+            if getattr(node, "shadowed", None):
+                pending.append(node.shadowed)
         elif isinstance(node, list):
             keys = range(len(node))
         else:
@@ -1162,12 +1196,18 @@ def load_fixture(path: Path) -> dict[str, Any]:
     # json.loads does not say which strings were written with an escape, and
     # the Go reference verifier's timestamp decoder refuses a timestamp that
     # was. A second parse, with each such string value replaced by null, has
-    # the same shape as the first. It holds null at each of those values and
-    # also at every null of the document, where the first parse holds None
-    # and not a string: the isinstance test below is what keeps a literal
-    # null from being taken for an escaped string. It reads integers as the
-    # first parse does, so one int() refuses does not fail it either.
-    shadow = _parse_json(_escaped_values_nulled(text, literals), parse_int=_parse_int)
+    # the same shape as the first, down to the members a later member of the
+    # same name replaced, since it builds its objects with the same hook. It
+    # holds null at each of those values and also at every null of the
+    # document, where the first parse holds None and not a string: the
+    # isinstance test below is what keeps a literal null from being taken
+    # for an escaped string. It reads integers as the first parse does, so
+    # one int() refuses does not fail it either.
+    shadow = _parse_json(
+        _escaped_values_nulled(text, literals),
+        object_pairs_hook=_dup_marking_pairs,
+        parse_int=_parse_int,
+    )
     for (node, key), (other, _) in zip(_scalars(fixture), _scalars(shadow)):
         if other[key] is None and isinstance(node[key], str):
             node[key] = _EscapedString(node[key])
