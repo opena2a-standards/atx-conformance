@@ -155,6 +155,20 @@ leaves the signature valid and both verifiers report ACCEPT. The README must
 not claim future fields are signed and must say a field is signed once the
 spec adds it to the TBS projection.
 
+It also holds the scope page's count of ACCEPT fixtures that carry Ed25519
+signatures only ("6 of its 8 ACCEPT fixtures") to the fixtures' expected
+verifyResult and signature algorithms. Changed to "5 of its 9", it passed.
+
+It also holds the repository layout's label of the scripts/*.py glob as CI
+gates to the workflow. The layout called check_fixture_immutability.py a CI
+gate while no workflow step ran it. A script the workflow runs neither by
+name nor through a script it runs that imports it must have its own layout
+line, and that line must not call it a CI gate.
+
+The criterion (c) claim is matched in more wordings than the one the README
+used ("fulfils criterion (c)", "closes criterion c"), and a failure is
+reported under a header that names claims as well as counts.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
 declares, each signature-verification Scope row that claims a set of fixtures
@@ -173,8 +187,10 @@ the byte-agreement gate runs says it runs no code from another repository,
 every description of that gate names each verifier leg, every Version
 pinning link names a commit, the reproduction steps match the generator, no
 coordination link points at a closed issue, every statement of the TBS
-numbers matches the vectors and the jcs-vectors README scopes signing to the
-TBS projection, 1 otherwise, 2 on an unknown argument.
+numbers matches the vectors, the jcs-vectors README scopes signing to the
+TBS projection, the Ed25519-only ACCEPT count matches the fixtures and the
+workflow runs every script the layout calls a CI gate, 1 otherwise, 2 on an
+unknown argument.
 """
 
 import collections
@@ -254,17 +270,30 @@ BEHAVIORAL_BULLET = re.compile(
 BEHAVIORAL_V11_CLAIM = "carried and signed in the v1.1 fixtures"
 
 # A present-tense statement that criterion (c) is closed, matched over
-# whitespace-collapsed text so a line wrap cannot hide it. The conditional
-# form ("designed to close criterion (c) ... once") does not match.
+# whitespace-collapsed text so a line wrap cannot hide it. The criterion may
+# be written with or without its parentheses. The conditional form ("designed
+# to close criterion (c) ... once") does not match.
+_CRITERION_C = r"criterion\s+(?:\(c\)|c\b)"
 CRITERION_C_CLAIM = re.compile(
-    r"\b(?:closes|closed|satisfies|meets)\s+criterion\s+\(c\)"
-    r"|\bcriterion\s+\(c\)\s+(?:is|has\s+been)\s+(?:closed|satisfied|met)\b",
+    r"\b(?:closes|closed|satisfies|satisfied|meets|met|fulfils|fulfills|fulfilled)\s+"
+    + _CRITERION_C
+    + r"|\b" + _CRITERION_C
+    + r"\s+(?:is|has\s+been)\s+(?:closed|satisfied|met|fulfilled)\b",
     re.IGNORECASE,
 )
 # The sentence README.md published before a second-party cosignature existed,
 # with its original line wrap. The claim pattern must keep matching it, or the
 # gate has stopped being able to fire on the text it was written for.
 RETRACTED_CLAIM = "It closes criterion (c)\non the OpenA2A maturity bar"
+# Other wordings of the same claim. The pattern missed the first two.
+CRITERION_C_SYNONYMS = (
+    "It fulfils criterion (c) on the OpenA2A maturity bar",
+    "It closes criterion c on the OpenA2A maturity bar",
+    "It fulfills\ncriterion (c)",
+    "Criterion (c) has been met",
+)
+# The README's own wording, which states the claim as conditional.
+CRITERION_C_CONDITIONAL = "It is designed to close\ncriterion (c) on the OpenA2A maturity bar"
 REGISTRY_HEADING = "## Cosignature registry"
 
 # The README called each fixture's `trustScore` (87.5) "composite output from
@@ -955,6 +984,17 @@ def criterion_c_failures(readme, cosigners):
             "criterion (c) claim pattern no longer matches the sentence it was "
             "written for; the gate cannot fire"
         )
+    for wording in CRITERION_C_SYNONYMS:
+        if not CRITERION_C_CLAIM.search(" ".join(wording.split())):
+            failures.append(
+                f"criterion (c) claim pattern does not match {wording!r}; the "
+                f"gate cannot fire on that wording"
+            )
+    if CRITERION_C_CLAIM.search(" ".join(CRITERION_C_CONDITIONAL.split())):
+        failures.append(
+            f"criterion (c) claim pattern matches the conditional "
+            f"{CRITERION_C_CONDITIONAL!r}, which states no claim"
+        )
     rows = registry_cosigners(cosigners)
     if rows is None:
         failures.append(
@@ -1249,6 +1289,105 @@ def signature_coverage_failures(readme, outcomes):
                 f"verification (step 5): {', '.join(early)}; state the count "
                 f"as `{len(reached)} of {total}`"
             )
+    return failures
+
+
+# docs/scope.md says how many of the fixtures expected to ACCEPT carry Ed25519
+# signatures only ("6 of its 8 ACCEPT fixtures"). Matched over the raw text
+# with `\s+`, so a line wrap inside it cannot hide it.
+ED25519_ONLY_CLAIM = re.compile(r"\b(\d+)\s+of\s+its\s+(\d+)\s+ACCEPT\s+fixtures\b")
+ED25519 = "Ed25519"
+
+
+def signature_suites(paths):
+    """Map each fixture name to (expected verifyResult, the `algorithm` of each
+    atx.signatures entry), or to None when the file states neither."""
+    suites = {}
+    for path in paths:
+        try:
+            fx = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            fx = None
+        expected = fx.get("expected") if isinstance(fx, dict) else None
+        atx = fx.get("atx") if isinstance(fx, dict) else None
+        sigs = atx.get("signatures") if isinstance(atx, dict) else None
+        if (not isinstance(expected, dict) or not isinstance(sigs, list)
+                or not all(isinstance(s, dict) for s in sigs)):
+            suites[path.name] = None
+            continue
+        suites[path.name] = (expected.get("verifyResult"),
+                             tuple(s.get("algorithm") for s in sigs))
+    return suites
+
+
+def ed25519_only_failures(readme, suites):
+    """Statements of how many ACCEPT fixtures carry Ed25519 signatures only
+    that do not match the fixtures. `suites` is the map signature_suites()
+    returns."""
+    claims = ED25519_ONLY_CLAIM.findall(readme)
+    if not claims:
+        return []
+    unread = sorted(n for n in suites if suites[n] is None)
+    if unread:
+        return [f"fixtures/{n}: no expected object or atx.signatures list, so "
+                f"the ACCEPT fixtures that carry Ed25519 signatures only cannot "
+                f"be counted" for n in unread]
+    accept = [n for n in suites if suites[n][0] == "ACCEPT"]
+    only = [n for n in accept if set(suites[n][1]) == {ED25519}]
+    return [
+        f"README states {n} of its {m} ACCEPT fixtures carry Ed25519 signatures "
+        f"only, but {len(only)} of the {len(accept)} fixtures expected to "
+        f"ACCEPT do"
+        for n, m in claims if (int(n), int(m)) != (len(only), len(accept))
+    ]
+
+
+# The repository layout labels the scripts/*.py glob "CI gates". A script the
+# workflow does not run, either by name or through a script it runs that
+# imports it, must have its own layout line, and that line must not call it a
+# CI gate. The layout called check_fixture_immutability.py a CI gate while no
+# workflow step ran it.
+SCRIPTS = ROOT / "scripts"
+CI_GATE_GLOB = re.compile(r"^scripts/\*\.py[ \t]+CI gates\b", re.M)
+# A layout line naming one script, with the indented lines that continue it.
+SCRIPT_LINE = re.compile(r"^scripts/([\w-]+\.py)\b(.*(?:\n[ \t]+\S.*)*)", re.M)
+SCRIPT_IMPORT = re.compile(r"^[ \t]*(?:import[ \t]+(\w+)|from[ \t]+(\w+)[ \t]+import\b)", re.M)
+
+
+def ci_run_scripts(workflow, scripts):
+    """The scripts/*.py names the workflow runs: those it names, and those a
+    script it runs imports. `scripts` maps each name to its source text."""
+    run = {name for name in re.findall(r"\bscripts/([\w-]+\.py)\b", workflow or "")
+           if name in scripts}
+    todo = list(run)
+    while todo:
+        source = scripts.get(todo.pop()) or ""
+        for match in SCRIPT_IMPORT.finditer(source):
+            name = f"{match.group(1) or match.group(2)}.py"
+            if name in scripts and name not in run:
+                run.add(name)
+                todo.append(name)
+    return run
+
+
+def ci_gate_label_failures(readme, workflow, scripts):
+    """scripts/*.py files the README layout calls CI gates that the workflow
+    does not run."""
+    if not CI_GATE_GLOB.search(readme):
+        return []
+    run = ci_run_scripts(workflow, scripts)
+    own_line = {m.group(1): m.group(2) for m in SCRIPT_LINE.finditer(readme)}
+    failures = []
+    for name in sorted(set(scripts) - run):
+        if name not in own_line:
+            failures.append(
+                f"README layout calls every scripts/*.py a CI gate, but "
+                f"{WORKFLOW_NAME} does not run scripts/{name}; give it its own "
+                f"layout line saying how it is run")
+        elif "CI gate" in own_line[name]:
+            failures.append(
+                f"README layout calls scripts/{name} a CI gate, but "
+                f"{WORKFLOW_NAME} does not run it")
     return failures
 
 
@@ -1898,7 +2037,7 @@ Tree = collections.namedtuple("Tree", (
     "readme cosigners fixtures vectors signing fixture_paths workflow "
     "key_vectors used_key_ids versions go_mod verify_go py_requirements "
     "py_dependency_texts jcs_sites tbs_sites tbs_canonical jcs_readme "
-    "gate_sites gate_libraries profile outcomes"))
+    "gate_sites gate_libraries profile outcomes suites scripts"))
 
 # One check tree_failures() runs: its name, the call (`run(tree)` returns
 # failures) and the alteration the self-test makes to prove the call is still
@@ -2532,6 +2671,131 @@ def _signature_coverage_cases(readme, outcomes):
     return cases
 
 
+# Counts no fixture set here holds, and not ones the other cases write.
+ED25519_BAD_ONLY = "9201"
+ED25519_BAD_ACCEPT = "9202"
+
+
+def _ed25519_only_cases(readme, suites):
+    """Alter each count in the statement of how many ACCEPT fixtures carry
+    Ed25519 signatures only, then change the fixtures in memory: one
+    Ed25519-only ACCEPT fixture given an ML-DSA-65 signature, one REJECT
+    fixture expected to ACCEPT, one fixture that cannot be read. Each must
+    add a failure."""
+    labels = (
+        "scope count of ACCEPT fixtures that carry Ed25519 signatures only",
+        "scope count of ACCEPT fixtures",
+        "Ed25519-only ACCEPT fixture given an ML-DSA-65 signature",
+        "REJECT fixture expected to ACCEPT",
+        "fixture whose expected object or signatures cannot be read",
+    )
+    site = ED25519_ONLY_CLAIM.search(readme)
+    names = sorted(n for n in suites if suites[n] is not None)
+    if site is None or not names:
+        why = ("no fixture found whose expected outcome and signatures can be read"
+               if site is not None else
+               "no `N of its M ACCEPT fixtures` statement found in README.md or "
+               "its pages: a count stated there is not covered by this self-test")
+        return [(False, label, why) for label in labels]
+    baseline = set(ed25519_only_failures(readme, suites))
+
+    def new(text, altered):
+        return [f for f in ed25519_only_failures(text, altered) if f not in baseline]
+
+    cases = []
+    for label, group, bad, want in (
+            (labels[0], 1, ED25519_BAD_ONLY, f"states {ED25519_BAD_ONLY} of its"),
+            (labels[1], 2, ED25519_BAD_ACCEPT, f"of its {ED25519_BAD_ACCEPT} ACCEPT")):
+        got = new(readme[:site.start(group)] + bad + readme[site.end(group):], suites)
+        cases.append((any(want in f for f in got), label,
+                      f"README stating {bad} instead of {site.group(group)} "
+                      f"still passes: {got}"))
+
+    accept = [n for n in names if suites[n][0] == "ACCEPT"]
+    only = [n for n in accept if set(suites[n][1]) == {ED25519}]
+    rejected = [n for n in names if suites[n][0] != "ACCEPT"]
+    for label, pool, altered, want in (
+            (labels[2], only,
+             lambda n: (suites[n][0], suites[n][1] + ("ML-DSA-65",)),
+             f"but {len(only) - 1} of the {len(accept)} fixtures expected"),
+            (labels[3], rejected,
+             lambda n: ("ACCEPT", suites[n][1]),
+             f"of the {len(accept) + 1} fixtures expected to ACCEPT")):
+        if not pool:
+            cases.append((False, label, "no fixture found to alter"))
+            continue
+        got = new(readme, {**suites, pool[0]: altered(pool[0])})
+        cases.append((any(want in f for f in got), label,
+                      f"expected a failure containing {want!r}, got {got}"))
+
+    want = f"fixtures/{names[0]}: no expected object or atx.signatures list"
+    got = new(readme, {**suites, names[0]: None})
+    cases.append((any(want in f for f in got), labels[4],
+                  f"expected a failure containing {want!r}, got {got}"))
+    return cases
+
+
+INVENTED_SCRIPT = "check_invented.py"
+
+
+def _ci_gate_label_cases(readme, workflow, scripts):
+    """Add a script no workflow step runs, stop the workflow naming this
+    script, run an invented helper only through an import and then cut the
+    import, and give a script that is not run its own layout line, once
+    calling it a CI gate and once not. Each but the last must add a
+    failure."""
+    labels = (
+        "scripts/*.py script that no workflow step runs",
+        "script the workflow stops naming",
+        "script run only through an import, with the import cut",
+        "own layout line calling a script that is not run a CI gate",
+        "own layout line saying a script that is not run is run by hand",
+    )
+    if not CI_GATE_GLOB.search(readme):
+        why = ("no `scripts/*.py  CI gates` layout line found in README.md or its "
+               "pages: the label is not covered by this self-test")
+        return [(False, label, why) for label in labels]
+    baseline = set(ci_gate_label_failures(readme, workflow, scripts))
+
+    def new(text, flow, files):
+        return [f for f in ci_gate_label_failures(text, flow, files) if f not in baseline]
+
+    cases = []
+    want = f"does not run scripts/{INVENTED_SCRIPT}"
+    got = new(readme, workflow, {**scripts, INVENTED_SCRIPT: ""})
+    cases.append((any(want in f for f in got), labels[0],
+                  f"expected a failure containing {want!r}, got {got}"))
+
+    this = pathlib.Path(__file__).name
+    if f"scripts/{this}" not in (workflow or ""):
+        cases.append((False, labels[1], f"{WORKFLOW_NAME} does not name scripts/{this}"))
+    else:
+        want = f"does not run scripts/{this}"
+        got = new(readme, workflow.replace(f"scripts/{this}", "scripts/renamed.py"), scripts)
+        cases.append((any(want in f for f in got), labels[1],
+                      f"expected a failure containing {want!r}, got {got}"))
+
+    flow = (workflow or "") + "\n        run: python3 scripts/invented_runner.py\n"
+    files = {**scripts, "invented_runner.py": "import invented_helper  # noqa\n",
+             "invented_helper.py": ""}
+    want = "does not run scripts/invented_helper.py"
+    reached = not any(want in f for f in new(readme, flow, files))
+    cut = new(readme, flow, {**files, "invented_runner.py": ""})
+    cases.append((reached and any(want in f for f in cut), labels[2],
+                  f"with the import: {'not ' if reached else ''}reported; "
+                  f"with it cut: {cut}"))
+
+    line = f"\nscripts/{INVENTED_SCRIPT}            CI gate: an invented check\n"
+    want = f"calls scripts/{INVENTED_SCRIPT} a CI gate"
+    got = new(readme + line, workflow, {**scripts, INVENTED_SCRIPT: ""})
+    cases.append((any(want in f for f in got), labels[3],
+                  f"expected a failure containing {want!r}, got {got}"))
+    line = f"\nscripts/{INVENTED_SCRIPT}\n                       an invented check (run by hand)\n"
+    got = new(readme + line, workflow, {**scripts, INVENTED_SCRIPT: ""})
+    cases.append((not got, labels[4], f"the line still fails: {got}"))
+    return cases
+
+
 def _wire_count(tree):
     row = FIXTURE_ROW.search(tree.readme)
     if row is None:
@@ -2641,6 +2905,20 @@ def _wire_gate_leg(tree):
             {"gate_sites": {**tree.gate_sites, GATE_SCRIPT_NAME: script + banner}})
 
 
+def _wire_ed25519_only(tree):
+    site = ED25519_ONLY_CLAIM.search(tree.readme)
+    if site is None:
+        return "no `N of its M ACCEPT fixtures` statement found in README.md or its pages"
+    return (f"states {ED25519_BAD_ONLY} of its",
+            {"readme": (tree.readme[:site.start(1)] + ED25519_BAD_ONLY
+                        + tree.readme[site.end(1):])})
+
+
+def _wire_ci_gate_label(tree):
+    return (f"does not run scripts/{INVENTED_SCRIPT}",
+            {"scripts": {**tree.scripts, INVENTED_SCRIPT: ""}})
+
+
 CHECKS = (
     Check("count",
           lambda t: check(t.readme, t.cosigners, t.fixtures, t.vectors, t.signing),
@@ -2679,6 +2957,11 @@ CHECKS = (
           lambda t: gate_leg_failures(t.readme, t.profile,
                                       t.gate_sites.get(GATE_SCRIPT_NAME)),
           _wire_gate_leg),
+    Check("Ed25519-only count", lambda t: ed25519_only_failures(t.readme, t.suites),
+          _wire_ed25519_only),
+    Check("CI gate label",
+          lambda t: ci_gate_label_failures(t.readme, t.workflow, t.scripts),
+          _wire_ci_gate_label),
 )
 
 
@@ -2752,6 +3035,10 @@ CHILD_TIMEOUT = 120
 CHILD_COUNT = "7777"
 # Left out of the copy: nothing the script reads, and the bulk of a checkout.
 UNCOPIED = (".git", "node_modules", "__pycache__", ".venv", "venv")
+# The line main() prints above the failures. Most checks hold a claim, not a
+# count: the header read "README counts do not match the tree" for a criterion
+# (c), threshold or behavioralProfile failure too.
+FAILURE_HEADER = "Counts and claims stated in the README and the files it describes do not match the tree:"
 
 
 def _whole_script_case(tree):
@@ -2792,9 +3079,10 @@ def _whole_script_case(tree):
                 timeout=CHILD_TIMEOUT, check=False, env={**os.environ, CHILD_ENV: "1"})
         except subprocess.TimeoutExpired:
             return False, label, f"the child run did not end within {CHILD_TIMEOUT} s"
-    return (child.returncode == 1 and want in child.stderr, label,
-            f"expected exit 1 and {want!r} on stderr, got exit {child.returncode} "
-            f"and {child.stderr.strip()[-300:]!r}")
+    return (child.returncode == 1 and want in child.stderr
+            and FAILURE_HEADER in child.stderr, label,
+            f"expected exit 1 and {want!r} under {FAILURE_HEADER!r} on stderr, got "
+            f"exit {child.returncode} and {child.stderr.strip()[-300:]!r}")
 
 
 def self_test(tree, verbose):
@@ -2872,7 +3160,19 @@ def self_test(tree, verbose):
                       "trustScore not called illustrative",
                       f"a section that drops `{TRUST_PLACEHOLDER}` still passes: {new}"))
 
+    for wording in (RETRACTED_CLAIM,) + CRITERION_C_SYNONYMS:
+        altered = dict(texts)
+        altered["README.md"] = readme + "\n" + wording + ".\n"
+        new = run(altered)
+        cases.append((any(f.startswith("README states \"") and "criterion" in f
+                          for f in new),
+                      f"README stating {' '.join(wording.split())!r} with no "
+                      f"second-party cosignature",
+                      f"appending it to README.md still passes: {new}"))
+
     cases.extend(_signature_coverage_cases(readme, tree.outcomes))
+    cases.extend(_ed25519_only_cases(readme, tree.suites))
+    cases.extend(_ci_gate_label_cases(readme, tree.workflow, tree.scripts))
     cases.extend(_trigger_cases(readme, tree.workflow))
     cases.extend(_key_source_cases(readme, tree.key_vectors, tree.used_key_ids))
     cases.extend(_version_cases(readme, tree.versions))
@@ -3082,6 +3382,9 @@ def main():
             for name in (GATE_GO_MOD_NAME, GATE_PACKAGE_NAME))),
         profile=PROFILE.read_text(encoding="utf-8") if PROFILE.exists() else None,
         outcomes=expected_outcomes(fixture_paths),
+        suites=signature_suites(fixture_paths),
+        scripts={path.name: path.read_text(encoding="utf-8")
+                 for path in sorted(SCRIPTS.glob("*.py"))},
     )
 
     failed, total = self_test(tree, only_self_test)
@@ -3099,7 +3402,7 @@ def main():
 
     if failures:
         sys.stdout.flush()
-        print("README counts do not match the tree:\n", file=sys.stderr)
+        print(f"{FAILURE_HEADER}\n", file=sys.stderr)
         for f in failures:
             print(f"  - {f}", file=sys.stderr)
         return 1
@@ -3132,7 +3435,9 @@ def main():
           f"cross-check in the generator; coordination links point at an open "
           f"issue tracker; every statement of the JSON numbers in the TBS "
           f"matches the {len(tree.tbs_canonical)} JCS vectors, all of them integers; "
-          f"{JCS_README_NAME} scopes v1.1 signing to the TBS projection")
+          f"{JCS_README_NAME} scopes v1.1 signing to the TBS projection; "
+          f"the Ed25519-only ACCEPT count matches the fixtures; "
+          f"{WORKFLOW_NAME} runs each scripts/*.py the layout calls a CI gate")
     return 0
 
 

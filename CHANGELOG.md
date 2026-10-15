@@ -32,6 +32,25 @@ and stability" says they should not.
 
 ### Changed
 
+- `verifiers/python/verify.py` rejects a v1.1 credential whose
+  `declaredPurpose` holds a number outside the float64 range (`1e400`,
+  `-1e400`, `1.7976931348623159e308`, an integer of 401 digits, one nested
+  in an object or array) as `VERIFIER_CONFIG_ERROR`, the category the Go
+  verifier reports, where it reported `SIGNATURE_INVALID`. A number inside
+  the range (`1e308`, `1.7976931348623158e308`, `1e-400`) stays
+  `SIGNATURE_INVALID` in both verifiers (#151). No fixture changes.
+- `scripts/check_readme_counts.py` holds the `docs/scope.md` count of ACCEPT
+  fixtures that carry Ed25519 signatures only ("6 of its 8") to the
+  fixtures; changed to "5 of its 9", it passed. It fails when the
+  repository layout in `CONTRIBUTING.md` calls a `scripts/*.py` file a CI
+  gate that `.github/workflows/conformance.yml` does not run, and the
+  layout gives `scripts/check_fixture_immutability.py`, which no workflow
+  step runs, its own line saying it is run by hand. Its criterion (c) claim
+  pattern also matches "fulfils criterion (c)" and "closes criterion c",
+  and it prints its failures under "Counts and claims stated in the README
+  and the files it describes do not match the tree", where the header read
+  "README counts do not match the tree" for every failure (#151). No
+  fixture changes.
 - README.md is shortened to what the suite is, the command that runs the Go
   verifier and its output, how to run both verifiers and check the fixture
   bytes, the implementations table and one list of documentation links. Its
