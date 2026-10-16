@@ -1,0 +1,25 @@
+{
+  "command": "go run . ../../fixtures",
+  "workingDirectory": "verifiers/go",
+  "stream": "stdout",
+  "goVersion": "go1.26.3",
+  "platform": "darwin/arm64",
+  "commit": "48b49a84493fbc1ec92da5e971bb59cd9dd92f66",
+  "inputs": [
+    "verifiers/go",
+    "fixtures"
+  ],
+  "inputsUncommitted": [],
+  "ranAtUtc": "2026-10-16T01:04:06Z",
+  "exitCode": 0,
+  "stderrLines": 0,
+  "summary": "summary: 25 pass, 0 fail (25 fixtures)",
+  "outputs": {
+    "capture": {
+      "path": "docs/captures/go-verifier.txt",
+      "sha256": "29936c2940263414c1149ea45ccaabf35211fdab927bc19168b2c36751c03c4c",
+      "bytes": 6043,
+      "lines": 93
+    }
+  }
+}

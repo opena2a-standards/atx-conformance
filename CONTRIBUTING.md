@@ -26,7 +26,8 @@ conformance.json                 requirement-to-fixture profile (generated from 
                                  fixtures, drift-checked in CI)
 docs/                            scope, fixtures, gates, dependencies, version
                                  pinning and stability (the pages the README
-                                 links), and the full output of its Go run
+                                 links), and the full output of its Go run with
+                                 a JSON sidecar saying how it was taken
 fixtures/                        the 25 conformance fixtures (byte-stable JSON)
 jcs-vectors/                     JCS(TBS) byte-agreement vectors and the Go, Python
                                  and TypeScript canonicalizers that must agree on them
@@ -47,5 +48,9 @@ scripts/check_fixture_immutability.py
                                  (run by hand)
 scripts/check_sibling_rows.py    sibling-repositories table against the sibling
                                  repositories (network, run by hand)
+scripts/capture_go_verifier.py   reruns the README's Go command and rewrites its
+                                 capture and sidecar under docs/captures/;
+                                 --check holds them to the README excerpt (run
+                                 by hand)
 scripts/check_circl_pin.sh       CI gate: one cloudflare/circl version per Go module
 ```
