@@ -1372,10 +1372,11 @@ CI_GATE_GLOB = re.compile(r"^scripts/\*\.py[ \t]+CI gates\b", re.M)
 SCRIPT_LINE = re.compile(r"^scripts/([\w-]+\.py)\b(.*(?:\n[ \t]+\S.*)*)", re.M)
 SCRIPT_IMPORT = re.compile(r"^[ \t]*(?:import[ \t]+(\w+)|from[ \t]+(\w+)[ \t]+import\b)", re.M)
 # A block-style YAML line holding a key: its indentation, an optional
-# sequence dash, the key, plain, single-quoted or double-quoted, and the value
-# written on the same line.
+# sequence dash, the key, plain, single-quoted or double-quoted, any spaces
+# before its `:` (`run : x` holds the key `run`), and the value written on the
+# same line.
 WORKFLOW_KEY = re.compile(
-    r"^( *)(-[ ]+)?([\w-]+|'(?:[^']|'')*'|\"(?:[^\"\\]|\\.)*\"):(?:[ \t]+(.*))?$")
+    r"^( *)(-[ ]+)?([\w-]+|'(?:[^']|'')*'|\"(?:[^\"\\]|\\.)*\")[ ]*:(?:[ \t]+(.*))?$")
 # A double-quoted YAML scalar's escapes: `\x`, `\u` or `\U` and its hex
 # digits, or the one character after the backslash, which YAML_ESCAPES maps.
 YAML_ESCAPE = re.compile(r"\\(?:x([0-9A-Fa-f]{2})|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|(.))", re.S)
@@ -1490,9 +1491,10 @@ def workflow_run_commands(workflow):
     comment. The command may start on the key's line or on a later line
     indented past it, and a step may be a flow mapping on one line or more
     (`- {name: a, run: python3 scripts/a.py}`). A key may be quoted
-    (`- "run": python3 scripts/a.py`) and is read by yaml_key(). A script
-    named in a YAML comment, a step `name:` or an action's `with:` input is
-    in none of them."""
+    (`- "run": python3 scripts/a.py`) and is read by yaml_key(), and spaces
+    may stand between a block-style key and its `:`
+    (`- run : python3 scripts/a.py`). A script named in a YAML comment, a
+    step `name:` or an action's `with:` input is in none of them."""
     lines = (workflow or "").splitlines()
     commands = []
     # Open nodes, innermost last: (column, "-") for a sequence item and
@@ -2971,8 +2973,10 @@ def _ci_gate_label_cases(readme, workflow, scripts):
     from a step whose command starts on the line after `run:`, from a step
     written as a flow mapping on one line, from one whose command is on its
     second line, from steps whose `run:` key is double-quoted, single-quoted
-    or double-quoted with a `\\x` escape, and from a flow-mapping step whose
-    keys are double-quoted: none of the seven may add a failure. Last, name
+    or double-quoted with a `\\x` escape, from a flow-mapping step whose
+    keys are double-quoted, and from steps whose `run` key, plain or
+    double-quoted, has a space before its `:`: none of the nine may add a
+    failure. Last, name
     it under the single-quoted key `'ru''n'`, which reads as `ru'n`: that
     must add a failure."""
     labels = (
@@ -2994,6 +2998,8 @@ def _ci_gate_label_cases(readme, workflow, scripts):
         "script run by a step whose double-quoted run: key holds an escape",
         "script run by a flow-mapping step whose keys are double-quoted",
         "script named only under a quoted key that reads as ru'n",
+        "script run by a step with a space between its run key and the colon",
+        "script run by a step with a space after its double-quoted run key",
     )
     if not CI_GATE_GLOB.search(readme):
         why = ("no `scripts/*.py  CI gates` layout line found in README.md or its "
@@ -3045,6 +3051,8 @@ def _ci_gate_label_cases(readme, workflow, scripts):
             (labels[14], f"\n      - 'run': python3 scripts/{this}\n"),
             (labels[15], f"\n      - \"r\\x75n\": python3 scripts/{this}\n"),
             (labels[16], f"\n      - {{\"name\": a, \"run\": \"python3 scripts/{this}\"}}\n"),
+            (labels[18], f"\n      - run : python3 scripts/{this}\n"),
+            (labels[19], f"\n      - \"run\" : python3 scripts/{this}\n"),
         )
         for label, text in run:
             got = new(readme, renamed + text, scripts)
