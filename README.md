@@ -9,16 +9,6 @@ SDK-independent reference verifiers (Go and Python) walk the fixture set and
 report PASS or FAIL per vector. Fixture bytes are pinned in
 [`MANIFEST.sha256`](./MANIFEST.sha256).
 
-This suite mirrors the pattern set by
-[`a2a-idf-conformance/fixtures/composition/aim-did-rfc9421/`](https://github.com/opena2a-standards/a2a-idf-conformance/tree/main/fixtures/composition/aim-did-rfc9421)
-(APS interop conformance for A2A-IDF wire signatures). It is designed to close
-criterion (c) on the OpenA2A maturity bar stated in
-[a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876) (closed as
-not planned on 2026-06-15), "peer-cosigned conformance fixtures comparable to
-APS's `aim-did-rfc9421/*` set", once a second-party cosignature is recorded in
-the [cosignature registry](./COSIGNERS.md#cosignature-registry). The CI
-self-cosignature anchors the baseline and does not count toward it.
-
 License: Apache 2.0. All keypairs, seeds, and credential identifiers in this
 repository are TEST-ONLY.
 
@@ -107,9 +97,10 @@ The cosignature itself is recorded by pull request, as
 
 ## Documentation
 
-- [Scope](docs/scope.md): what the suite verifies, what it does not, and the
-  honest scope notes on canonicalization, hybrid signing, the issuer DID
-  method and trust scoring.
+- [Scope](docs/scope.md): the conformance pattern the suite mirrors and the
+  second-party cosignature it waits on, what it verifies, what it does not,
+  and the honest scope notes on canonicalization, hybrid signing, the issuer
+  DID method and trust scoring.
 - [Fixtures](docs/fixtures.md): the issuer, agent, verifier clock and keys
   every fixture shares, and what each fixture exercises.
 - [Running the verifiers](docs/running-the-verifiers.md): toolchain

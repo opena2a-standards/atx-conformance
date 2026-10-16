@@ -3,6 +3,16 @@
 What the suite verifies, what it does not, and the notes to read before
 relying on it. The commands that run it are in the [README](../README.md).
 
+This suite mirrors the pattern set by
+[`a2a-idf-conformance/fixtures/composition/aim-did-rfc9421/`](https://github.com/opena2a-standards/a2a-idf-conformance/tree/main/fixtures/composition/aim-did-rfc9421)
+(APS interop conformance for A2A-IDF wire signatures). It is designed to close
+criterion (c) on the OpenA2A maturity bar stated in
+[a2aproject/A2A#1876](https://github.com/a2aproject/A2A/issues/1876) (closed as
+not planned on 2026-06-15), "peer-cosigned conformance fixtures comparable to
+APS's `aim-did-rfc9421/*` set", once a second-party cosignature is recorded in
+the [cosignature registry](../COSIGNERS.md#cosignature-registry). The CI
+self-cosignature anchors the baseline and does not count toward it.
+
 ## Scope
 
 What this suite verifies:

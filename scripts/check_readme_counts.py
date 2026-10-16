@@ -169,6 +169,13 @@ The criterion (c) claim is matched in more wordings than the one the README
 used ("fulfils criterion (c)", "closes criterion c"), and a failure is
 reported under a header that names claims as well as counts.
 
+It also reads README.md alone, apart from the pages it links, and fails on
+each line that states a three-part version or an ISO date (VERSION_OR_DATE).
+README.md cited the day a2aproject/A2A#1876 closed above its first section
+heading; that paragraph moved to docs/scope.md, as the version pins moved to
+docs/version-pinning.md and the toolchain minimums to
+docs/running-the-verifiers.md.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
 declares, each signature-verification Scope row that claims a set of fixtures
@@ -188,8 +195,9 @@ every description of that gate names each verifier leg, every Version
 pinning link names a commit, the reproduction steps match the generator, no
 coordination link points at a closed issue, every statement of the TBS
 numbers matches the vectors, the jcs-vectors README scopes signing to the
-TBS projection, the Ed25519-only ACCEPT count matches the fixtures and the
-workflow runs every script the layout calls a CI gate, 1 otherwise, 2 on an
+TBS projection, the Ed25519-only ACCEPT count matches the fixtures, the
+workflow runs every script the layout calls a CI gate and README.md states no
+version or date, 1 otherwise, 2 on an
 unknown argument.
 """
 
@@ -218,6 +226,14 @@ README_PAGES = tuple(pathlib.Path(p) for p in (
     "docs/sibling-repositories.md",
     "CONTRIBUTING.md",
 ))
+# README.md read alone states no version or date; the pages above hold them.
+# A three-part version (1.22.0, v0.4.1) or an ISO date (2026-10-01) matches.
+# A two-part label such as "ATX v1.0" does not.
+VERSION_OR_DATE = re.compile(r"v?[0-9]+\.[0-9]+\.[0-9]+|20[0-9]{2}-[0-9]{2}-[0-9]{2}")
+# The README.md line the pattern was written for, as it was wrapped. The
+# pattern must keep matching it, or the gate cannot fire on that text.
+RETRACTED_DATE_LINE = ('not planned on 2026-06-15), "peer-cosigned conformance '
+                       'fixtures comparable to')
 FIXTURES = ROOT / "fixtures"
 JCS_VECTORS = ROOT / "jcs-vectors" / "vectors"
 # COSIGNERS.md tells an external cosigner what to observe before they sign.
@@ -1867,6 +1883,26 @@ def read_readme(root):
     return "\n".join(texts)
 
 
+def front_page_failures(front_page):
+    """One failure per line of README.md, read alone, that states a version or
+    a date."""
+    failures = []
+    if not VERSION_OR_DATE.search(RETRACTED_DATE_LINE):
+        failures.append(
+            "version-or-date pattern no longer matches the README.md line it "
+            "was written for; the gate cannot fire"
+        )
+    for number, line in enumerate(front_page.splitlines(), 1):
+        found = VERSION_OR_DATE.search(line)
+        if found:
+            failures.append(
+                f"README.md:{number} states {found.group(0)!r}; move the "
+                f"passage to the page README.md links for it, or to "
+                f"CHANGELOG.md, and keep the link"
+            )
+    return failures
+
+
 def count_vectors(root):
     return len(sorted((root / "jcs-vectors" / "vectors").glob("*.json")))
 
@@ -2037,7 +2073,7 @@ Tree = collections.namedtuple("Tree", (
     "readme cosigners fixtures vectors signing fixture_paths workflow "
     "key_vectors used_key_ids versions go_mod verify_go py_requirements "
     "py_dependency_texts jcs_sites tbs_sites tbs_canonical jcs_readme "
-    "gate_sites gate_libraries profile outcomes suites scripts"))
+    "gate_sites gate_libraries profile outcomes suites scripts front_page"))
 
 # One check tree_failures() runs: its name, the call (`run(tree)` returns
 # failures) and the alteration the self-test makes to prove the call is still
@@ -2796,6 +2832,33 @@ def _ci_gate_label_cases(readme, workflow, scripts):
     return cases
 
 
+def _front_page_cases(front_page):
+    """Append one line to README.md alone: the line the version-or-date gate
+    was written for, a version and a date must each fail it on that line
+    number, and the two-part ATX labels the intro names must not."""
+    baseline = set(front_page_failures(front_page))
+    cases = []
+    for label, line, value in (
+            ("README.md restoring the date A2A#1876 closed", RETRACTED_DATE_LINE,
+             "2026-06-15"),
+            ("README.md stating a toolchain minimum", "Requires Go 1.22.0 or later.",
+             "1.22.0"),
+            ("README.md stating a pinned release", "Pin the suite at v0.4.1.",
+             "v0.4.1"),
+            ("README.md stating a date", "Last checked 2026-10-01.", "2026-10-01"),
+            ("README.md naming ATX v1.0 and v1.1", "Fixtures for ATX v1.0 and v1.1.",
+             None)):
+        altered = front_page + "\n" + line + "\n"
+        new = [f for f in front_page_failures(altered) if f not in baseline]
+        if value is None:
+            cases.append((not new, label, f"the gate fired on it: {new}"))
+            continue
+        want = f"README.md:{len(altered.splitlines())} states {value!r}"
+        cases.append((any(f.startswith(want) for f in new), label,
+                       f"expected a failure starting {want!r}, got {new}"))
+    return cases
+
+
 def _wire_count(tree):
     row = FIXTURE_ROW.search(tree.readme)
     if row is None:
@@ -2919,6 +2982,11 @@ def _wire_ci_gate_label(tree):
             {"scripts": {**tree.scripts, INVENTED_SCRIPT: ""}})
 
 
+def _wire_front_page(tree):
+    return ("README.md:1 states '9.9.9'",
+            {"front_page": "Requires Go 9.9.9 or later.\n" + tree.front_page})
+
+
 CHECKS = (
     Check("count",
           lambda t: check(t.readme, t.cosigners, t.fixtures, t.vectors, t.signing),
@@ -2962,6 +3030,8 @@ CHECKS = (
     Check("CI gate label",
           lambda t: ci_gate_label_failures(t.readme, t.workflow, t.scripts),
           _wire_ci_gate_label),
+    Check("README.md version or date", lambda t: front_page_failures(t.front_page),
+          _wire_front_page),
 )
 
 
@@ -3304,6 +3374,7 @@ def self_test(tree, verbose):
                       f"took {took:.1f} s; the pattern rescans the run from every "
                       f"position in it"))
     cases.extend(_tbs_number_cases(tree.tbs_sites, tree.tbs_canonical))
+    cases.extend(_front_page_cases(tree.front_page))
 
     jcs_readme = tree.jcs_readme
     jcs_text = jcs_readme or ""
@@ -3385,6 +3456,7 @@ def main():
         suites=signature_suites(fixture_paths),
         scripts={path.name: path.read_text(encoding="utf-8")
                  for path in sorted(SCRIPTS.glob("*.py"))},
+        front_page=README.read_text(encoding="utf-8"),
     )
 
     failed, total = self_test(tree, only_self_test)
@@ -3437,7 +3509,8 @@ def main():
           f"matches the {len(tree.tbs_canonical)} JCS vectors, all of them integers; "
           f"{JCS_README_NAME} scopes v1.1 signing to the TBS projection; "
           f"the Ed25519-only ACCEPT count matches the fixtures; "
-          f"{WORKFLOW_NAME} runs each scripts/*.py the layout calls a CI gate")
+          f"{WORKFLOW_NAME} runs each scripts/*.py the layout calls a CI gate; "
+          f"README.md states no version or date")
     return 0
 
 

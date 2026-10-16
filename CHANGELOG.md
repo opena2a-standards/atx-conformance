@@ -67,6 +67,11 @@ and stability" says they should not.
   `docs/sibling-repositories.md`, and the verifiers and the generator cite
   `docs/scope.md`, which `verify_test.go` and `test_verify.py` resolve in the
   file cited. No fixture changes.
+- The README paragraph on the `a2a-idf-conformance` pattern the suite mirrors
+  and the second-party cosignature criterion (c) waits on moved as written to
+  `docs/scope.md`, taking with it the date a2aproject/A2A#1876 closed.
+  `scripts/check_readme_counts.py` reads README.md alone and fails on each
+  line that states a three-part version or an ISO date. No fixture changes.
 - FIPS 204 is cited only by the four fixtures whose credential carries an
   ML-DSA-65 signature, where every fixture cited it before, and
   `atx-v1/wrong-issuer` also cites `core.md` section 13, which holds the
