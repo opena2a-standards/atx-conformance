@@ -39,6 +39,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -719,26 +720,35 @@ func controllerDID(keyID string) string {
 // ---------------------------------------------------------------------------
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: verify <fixture.json|dir>...")
-		os.Exit(2)
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// run verifies the fixtures args name, writes a record per fixture and the
+// summary line to stdout, and returns the exit code: 2 when args name no
+// fixture or a path that does not exist, 1 when a fixture's observed result
+// differs from its expected outcome, 0 otherwise. TestCaptureIsVerifierOutput
+// holds docs/captures/go-verifier.txt to what it writes.
+func run(args []string, stdout, stderr io.Writer) int {
+	if len(args) < 1 {
+		fmt.Fprintln(stderr, "usage: verify <fixture.json|dir>...")
+		return 2
 	}
 
-	paths, err := expandFixturePaths(os.Args[1:])
+	paths, err := expandFixturePaths(args)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(2)
+		fmt.Fprintln(stderr, "error:", err)
+		return 2
 	}
 	if len(paths) == 0 {
-		fmt.Fprintln(os.Stderr, "no fixture *.json files found in supplied args")
-		os.Exit(2)
+		fmt.Fprintln(stderr, "no fixture *.json files found in supplied args")
+		return 2
 	}
 
 	totalPass, totalFail := 0, 0
 	for _, p := range paths {
 		f, err := loadFixture(p)
 		if err != nil {
-			fmt.Printf("FAIL  %s  (load error: %v)\n", relPath(p), err)
+			fmt.Fprintf(stdout, "FAIL  %s  (load error: %v)\n", relPath(p), err)
 			totalFail++
 			continue
 		}
@@ -752,27 +762,28 @@ func main() {
 		} else {
 			totalPass++
 		}
-		fmt.Printf("%s  %s\n", status, relPath(p))
-		fmt.Printf("       expected: %s", f.Expected.VerifyResult)
+		fmt.Fprintf(stdout, "%s  %s\n", status, relPath(p))
+		fmt.Fprintf(stdout, "       expected: %s", f.Expected.VerifyResult)
 		if f.Expected.RejectCategory != "" {
-			fmt.Printf(" [%s]", f.Expected.RejectCategory)
+			fmt.Fprintf(stdout, " [%s]", f.Expected.RejectCategory)
 		}
-		fmt.Println()
-		fmt.Printf("       observed: %s\n", got)
+		fmt.Fprintln(stdout)
+		fmt.Fprintf(stdout, "       observed: %s\n", got)
 		if got.SigsExpected > 0 {
-			fmt.Printf("       signatures: %d/%d valid (ed25519=%t mldsa65=%t)\n",
+			fmt.Fprintf(stdout, "       signatures: %d/%d valid (ed25519=%t mldsa65=%t)\n",
 				got.SigsValid, got.SigsExpected, got.Ed25519Valid, got.MLDSA65Valid)
 		}
 		if got.Accepted && got.TrustLevel >= 3 && !got.Step7Performed {
-			fmt.Printf("       trustLevel %d asserted; distinct-authority count (step 7) not performed by this verifier\n", got.TrustLevel)
+			fmt.Fprintf(stdout, "       trustLevel %d asserted; distinct-authority count (step 7) not performed by this verifier\n", got.TrustLevel)
 		}
 	}
 
-	fmt.Println()
-	fmt.Printf("summary: %d pass, %d fail (%d fixtures)\n", totalPass, totalFail, totalPass+totalFail)
+	fmt.Fprintln(stdout)
+	fmt.Fprintf(stdout, "summary: %d pass, %d fail (%d fixtures)\n", totalPass, totalFail, totalPass+totalFail)
 	if totalFail > 0 {
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 // matchesExpected reports whether an observed result is the outcome a fixture

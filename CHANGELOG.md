@@ -39,6 +39,14 @@ and stability" says they should not.
   describe the committed capture or README.md's command, or when the
   README's trimmed excerpt is not the capture's lines in order. The
   capture's bytes are unchanged. No fixture changes.
+- `TestCaptureIsVerifierOutput` in `verifiers/go` fails when
+  `docs/captures/go-verifier.txt` is not, byte for byte, what the Go
+  verifier writes for the command its sidecar names, and names the first
+  line that differs. CI runs it with `go test ./...`. The verifier's
+  `main` now calls `run`, which takes the arguments and the two output
+  streams and returns the exit code; its output and exit codes on the
+  fixtures, on no argument, on a missing path and on a file that is not a
+  fixture are unchanged. No fixture changes.
 
 ### Changed
 

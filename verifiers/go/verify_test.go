@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +67,76 @@ func TestReadmeCrossReferencesResolve(t *testing.T) {
 	if found == 0 {
 		t.Fatal("no README cross-reference found; refusing to pass vacuously")
 	}
+}
+
+// TestCaptureIsVerifierOutput holds docs/captures/go-verifier.txt, the full
+// output README.md excerpts under its first command, to what this verifier
+// writes for that command on this tree. The sidecar beside the capture names
+// the command and the directory it runs in: the directory must be this one
+// and the command `go run . <args>`. The test calls run with <args> and
+// compares its standard output with the capture byte for byte.
+// scripts/capture_go_verifier.py --check holds the README excerpt and the
+// sidecar to the capture but runs no verifier, so a capture that a change to
+// a fixture or to this verifier left behind passed it.
+func TestCaptureIsVerifierOutput(t *testing.T) {
+	const (
+		sidecarPath = "../../docs/captures/go-verifier.json"
+		capturePath = "../../docs/captures/go-verifier.txt"
+	)
+	raw, err := os.ReadFile(sidecarPath)
+	if err != nil {
+		t.Fatalf("cannot read %s: %v", sidecarPath, err)
+	}
+	var sidecar struct {
+		Command          string `json:"command"`
+		WorkingDirectory string `json:"workingDirectory"`
+		Outputs          struct {
+			Capture struct {
+				Path string `json:"path"`
+			} `json:"capture"`
+		} `json:"outputs"`
+	}
+	if err := json.Unmarshal(raw, &sidecar); err != nil {
+		t.Fatalf("%s: %v", sidecarPath, err)
+	}
+	if sidecar.WorkingDirectory != "verifiers/go" {
+		t.Fatalf("%s names working directory %q; this test runs the verifier in verifiers/go",
+			sidecarPath, sidecar.WorkingDirectory)
+	}
+	if want := strings.TrimPrefix(capturePath, "../../"); sidecar.Outputs.Capture.Path != want {
+		t.Fatalf("%s names capture %q; this test reads %s", sidecarPath, sidecar.Outputs.Capture.Path, want)
+	}
+	fields := strings.Fields(sidecar.Command)
+	if len(fields) < 4 || strings.Join(fields[:3], " ") != "go run ." {
+		t.Fatalf("%s names command %q, not `go run . <fixture paths>`", sidecarPath, sidecar.Command)
+	}
+	want, err := os.ReadFile(capturePath)
+	if err != nil {
+		t.Fatalf("cannot read %s: %v", capturePath, err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := run(fields[3:], &stdout, &stderr); code != 0 {
+		t.Errorf("`%s` in verifiers/go exits %d; the capture is of a run that exits 0 (stderr: %q)",
+			sidecar.Command, code, stderr.String())
+	}
+	if bytes.Equal(stdout.Bytes(), want) {
+		return
+	}
+	got, exp := strings.Split(stdout.String(), "\n"), strings.Split(string(want), "\n")
+	line := 0
+	for line < len(got) && line < len(exp) && got[line] == exp[line] {
+		line++
+	}
+	at := func(lines []string) string {
+		if line < len(lines) {
+			return strconv.Quote(lines[line])
+		}
+		return "nothing (end of output)"
+	}
+	t.Errorf("%s line %d is %s; `%s` in verifiers/go writes %s. From the repository root, "+
+		"run python3 scripts/capture_go_verifier.py and commit both files it rewrites under docs/captures/",
+		capturePath, line+1, at(exp), sidecar.Command, at(got))
 }
 
 // TestFoldKey pins the field-fold used by the fold-aware duplicate detector to
