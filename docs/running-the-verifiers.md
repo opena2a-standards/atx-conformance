@@ -4,6 +4,11 @@ What each reference verifier depends on, and where the toolchain release
 changes a result. The [README](../README.md#running-the-verifiers) runs both
 verifiers and says what they print.
 
+## Exit code
+
+Exit code is 0 if every fixture's observed result matches the expected
+result and the rejection category matches (when declared).
+
 ## Dependencies
 
 ### Go (full hybrid Ed25519 plus ML-DSA-65)

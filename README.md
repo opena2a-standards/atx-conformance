@@ -42,9 +42,7 @@ before relying on a result.
 ## Running the verifiers
 
 Both verifiers walk every `*.json` file in the directory you point them at
-(or you may pass individual fixture files). Exit code is 0 if every
-fixture's observed result matches the expected result and the rejection
-category matches (when declared).
+(or you may pass individual fixture files).
 
 The Python verifier, from the repository root:
 
@@ -55,8 +53,9 @@ python verify.py ../../fixtures
 ```
 
 `pip install` downloads the packages `requirements.txt` names, and their
-dependencies, into the active Python environment. Each verifier needs a
-minimum toolchain release,
+dependencies, into the active Python environment.
+
+Each verifier needs a minimum toolchain release,
 and the release can change a result on inputs no fixture carries:
 [docs/running-the-verifiers.md](docs/running-the-verifiers.md) lists the
 minimums, the modules and packages each verifier pins, and those inputs.
@@ -64,14 +63,18 @@ minimums, the modules and packages each verifier pins, and those inputs.
 ### Expected output
 
 Both verifiers report `summary: 25 pass, 0 fail (25 fixtures)` against the
-shipped fixture set. A verifier prints a FAIL line when its result on a
+shipped fixture set.
+
+A verifier prints a FAIL line when its result on a
 fixture differs from the fixture's expected outcome, which is how drift in
 verifier semantics (the verifier no longer follows the spec) shows up.
 
 The verifiers check verdicts, not bytes. An edit that leaves the verdict
 unchanged still reports PASS: a change to an unsigned v1.0 field, to a v1.1
 field outside the signed `JCS(TBS)` payload, or to a fixture's
-`description`. The byte check is `MANIFEST.sha256`. Run it from the
+`description`.
+
+The byte check is `MANIFEST.sha256`. Run it from the
 repository root:
 
 ```bash
@@ -97,15 +100,13 @@ The cosignature itself is recorded by pull request, as
 
 ## Documentation
 
-- [Scope](docs/scope.md): the conformance pattern the suite mirrors and the
-  second-party cosignature it waits on, what it verifies, what it does not,
-  and the honest scope notes on canonicalization, hybrid signing, the issuer
-  DID method and trust scoring.
+- [Scope](docs/scope.md): what the suite verifies, what it does not, and
+  notes on canonicalization, hybrid signing, issuer DIDs and trust scoring.
 - [Fixtures](docs/fixtures.md): the issuer, agent, verifier clock and keys
   every fixture shares, and what each fixture exercises.
-- [Running the verifiers](docs/running-the-verifiers.md): toolchain
-  minimums, pinned modules and packages, and results that depend on the
-  toolchain release.
+- [Running the verifiers](docs/running-the-verifiers.md): the exit code,
+  toolchain minimums, pinned modules and packages, and results that depend on
+  the toolchain release.
 - [Continuous verification](docs/continuous-verification.md): the gates CI
   runs on every pull request.
 - [Reproducing the fixtures](docs/reproducing-the-fixtures.md): what the
@@ -118,13 +119,9 @@ The cosignature itself is recorded by pull request, as
   [`atp-conformance`](https://github.com/opena2a-standards/atp-conformance)
   and [`aip-conformance`](https://github.com/opena2a-standards/aip-conformance)
   suites for the other OpenA2A specs.
-- [`conformance.json`](conformance.json): the machine-readable
-  requirement-to-fixture mapping.
-- [`COSIGNERS.md`](COSIGNERS.md): how a second party cosigns a verifier run,
-  and the cosignature log.
-- [`CHANGELOG.md`](CHANGELOG.md): changes to existing fixtures, by commit.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): where to raise a change, and the
-  repository layout.
+  repository layout, which describes [`conformance.json`](conformance.json),
+  [`COSIGNERS.md`](COSIGNERS.md) and [`CHANGELOG.md`](CHANGELOG.md).
 
 ## License
 
