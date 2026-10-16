@@ -33,6 +33,13 @@ and when README.md's excerpt is not the capture's lines, in order, with a
 line holding only `...` standing for the lines left out. It runs the
 self-test first.
 
+Each git command runs in the repository root, or in one of the self-test's
+temporary repositories, with every GIT_* variable removed from its
+environment and with git told not to look for a repository above that
+directory. A GIT_DIR, GIT_WORK_TREE or GIT_INDEX_FILE that git exports to a
+hook running `--check` does not move a command to another repository or
+index.
+
 Usage:
     python3 scripts/capture_go_verifier.py              # run README.md's Go command, (re)write the capture and its sidecar
     python3 scripts/capture_go_verifier.py --check      # exit 1 if the sidecar, the capture, README.md's excerpt and the inputs disagree
@@ -273,6 +280,22 @@ def _output(argv: list[str], cwd: Path) -> list[str]:
                           check=True).stdout.splitlines()
 
 
+def git_env(root: Path, **extra: str) -> dict[str, str]:
+    """The environment of a git command run in `root`: this process's without
+    any GIT_* variable, so a GIT_DIR, GIT_WORK_TREE or GIT_INDEX_FILE that git
+    exports to a hook does not point the command at another repository or
+    index, and with GIT_CEILING_DIRECTORIES set to the directory above
+    `root`, so git looks for the repository in `root` and not above it."""
+    env = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
+    return {**env, "GIT_CEILING_DIRECTORIES": str(root.resolve().parent), **extra}
+
+
+def git(root: Path, *args: str, **extra: str) -> list[str]:
+    """The output lines of `git <args>` run in `root` with git_env(root, **extra)."""
+    return subprocess.run(["git", *args], cwd=root, env=git_env(root, **extra),
+                          capture_output=True, text=True, check=True).stdout.splitlines()
+
+
 def inputs(root: Path, start: Start) -> list[str]:
     """The working directory and each command argument naming a path inside
     the repository, relative to the repository root."""
@@ -294,25 +317,23 @@ def input_trees(root: Path, paths: list[str]) -> dict[str, str]:
     path is unchanged. It is built in a temporary index, so the repository's
     own index is not touched."""
     with tempfile.TemporaryDirectory() as tmp:
-        env = {**os.environ, "GIT_INDEX_FILE": str(Path(tmp) / "index"),
-               "GIT_LITERAL_PATHSPECS": "1"}
+        index = str(Path(tmp) / "index")
 
-        def git(*args: str) -> list[str]:
-            return subprocess.run(["git", *args], cwd=root, env=env, capture_output=True,
-                                  text=True, check=True).stdout.splitlines()
+        def run(*args: str) -> list[str]:
+            return git(root, *args, GIT_INDEX_FILE=index, GIT_LITERAL_PATHSPECS="1")
 
-        git("read-tree", "HEAD")
-        git("add", "--all", "--", *paths)
-        tree = git("write-tree")[0]
-        ids = git("rev-parse", *(f"{tree}:" if p == "." else f"{tree}:{p}" for p in paths))
+        run("read-tree", "HEAD")
+        run("add", "--all", "--", *paths)
+        tree = run("write-tree")[0]
+        ids = run("rev-parse", *(f"{tree}:" if p == "." else f"{tree}:{p}" for p in paths))
     return dict(zip(paths, ids))
 
 
 def git_inputs(root: Path, start: Start) -> dict:
     paths = inputs(root, start)
     uncommitted = sorted(set(
-        _output(["git", "diff", "--name-only", "HEAD", "--", *paths], root)
-        + _output(["git", "ls-files", "--others", "--exclude-standard", "--", *paths], root)))
+        git(root, "diff", "--name-only", "HEAD", "--", *paths)
+        + git(root, "ls-files", "--others", "--exclude-standard", "--", *paths)))
     return {
         "inputs": paths,
         "inputTrees": input_trees(root, paths),
@@ -402,8 +423,8 @@ def _fake_describe(root: Path, start: Start) -> dict:
 
 
 def _git(root: Path, *args: str) -> list[str]:
-    return _output(["git", "-c", "user.name=self-test", "-c", "user.email=self-test@example.invalid",
-                    "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", *args], root)
+    return git(root, "-c", "user.name=self-test", "-c", "user.email=self-test@example.invalid",
+               "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", *args)
 
 
 def _commit_all(root: Path, message: str) -> None:
@@ -553,9 +574,59 @@ def _after_squash() -> tuple[list[str], list[str], list[str]]:
              str(root), str(clone))
         ids = re.findall(r'"([0-9a-f]{40})"', (clone / start.sidecar).read_text(encoding="utf-8"))
         unresolved = [i for i in ids
-                      if subprocess.run(["git", "cat-file", "-e", i], cwd=clone,
+                      if subprocess.run(["git", "cat-file", "-e", i], cwd=clone, env=git_env(clone),
                                         capture_output=True, check=False).returncode != 0]
         return check(clone), ids, unresolved
+
+
+def _files(root: Path) -> dict[str, bytes]:
+    return {p.relative_to(root).as_posix(): p.read_bytes()
+            for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def _beside_other(run: Callable[[Path], object]) -> tuple[object, bool]:
+    """run(other), `other` being a git repository with one commit made in a
+    temporary directory first. Returns what run returns, or the OSError or
+    CalledProcessError it raises, and whether every file under `other`,
+    .git included, holds the bytes it held before."""
+    with tempfile.TemporaryDirectory() as tmp:
+        other = Path(tmp)
+        (other / INPUT).write_text("other\n", encoding="utf-8")
+        _git(other, "-c", "init.defaultBranch=main", "init", "-q")
+        _commit_all(other, "other")
+        before = _files(other)
+        try:
+            result = run(other)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            result = exc
+        return result, _files(other) == before
+
+
+def _squash_in_hook_env(other: Path) -> tuple[list[str], list[str], list[str]]:
+    """_after_squash() with GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE naming
+    `other`, as git exports them to a hook."""
+    env = {"GIT_DIR": str(other / ".git"), "GIT_WORK_TREE": str(other),
+           "GIT_INDEX_FILE": str(other / ".git" / "index")}
+    saved = {name: os.environ.get(name) for name in env}
+    os.environ.update(env)
+    try:
+        return _after_squash()
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def _no_work_tree_inside(other: Path) -> bool:
+    """The "not a git work tree" case with the copy made inside `other`'s
+    work tree, so a git that looks above the copy finds `other`."""
+    saved, tempfile.tempdir = tempfile.tempdir, str(other)
+    try:
+        return _fails(lambda root, s: shutil.rmtree(root / ".git"), "cannot read the git tree ids")
+    finally:
+        tempfile.tempdir = saved
 
 
 def self_test() -> int:
@@ -581,6 +652,8 @@ def self_test() -> int:
     bin_rc, bin_nothing, _ = _write_on(Run(data + b"\xff\n" + summary.encode() + b"\n", b"", 0))
     tree_rc, tree_out = _check_tree_on(lambda root, s: (root / s.sidecar).unlink())
     squash_failures, squash_ids, squash_unresolved = _after_squash()
+    hook_squash, hook_other_kept = _beside_other(_squash_in_hook_env)
+    nested_fails, nested_other_kept = _beside_other(_no_work_tree_inside)
     help_rc, help_out, _ = _main_on(["--help"])
     h_rc, h_out, _ = _main_on(["-h"])
     bad_rc, bad_out, bad_err = _main_on(["--bogus"])
@@ -670,6 +743,14 @@ def self_test() -> int:
         ("a capture taken on a branch passes in a fresh clone of `main` after a squash merge, "
          "and each object id its sidecar records resolves there",
          not squash_failures and bool(squash_ids) and not squash_unresolved),
+        ("with GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE naming another repository, as git "
+         "exports them to a hook, the squash-merge case passes and that repository's files "
+         "are unchanged",
+         isinstance(hook_squash, tuple) and not hook_squash[0] and bool(hook_squash[1])
+         and not hook_squash[2] and hook_other_kept),
+        ("with the copy inside another repository's work tree, the not-a-git-work-tree case "
+         "fails as named and that repository's files are unchanged",
+         nested_fails is True and nested_other_kept),
         ("--help prints usage", help_rc == 0 and help_out == USAGE),
         ("-h prints usage", h_rc == 0 and h_out == USAGE),
         ("an unknown argument prints usage to stderr and exits 2",

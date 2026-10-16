@@ -64,6 +64,20 @@ and stability" says they should not.
   requires a fresh clone of `main` to pass the check and to resolve each
   object id the sidecar records (#190). The capture's bytes are unchanged.
   No fixture changes.
+- `scripts/capture_go_verifier.py` runs each git command with every `GIT_*`
+  variable removed from its environment and with `GIT_CEILING_DIRECTORIES`
+  set to the directory above the repository the command targets. With
+  `GIT_DIR` naming another repository, as git exports it to a hook,
+  `--self-test` (which `--check` runs first) wrote its temporary commits
+  into that repository: one holding a single commit gained a `capture`
+  branch and ten commits, and the run ended with a `CalledProcessError`
+  from `git clone`. That repository now keeps its single commit and the
+  self-test passes. The self-test adds two cases: the squash-merge case run
+  with `GIT_DIR`, `GIT_WORK_TREE` and `GIT_INDEX_FILE` naming another
+  repository, and the not-a-git-work-tree case with the copy made inside
+  another repository's work tree. The first must pass and the second must
+  fail as it names, and each must leave every file of the other repository
+  unchanged (#194). No fixture changes.
 - `scripts/check_readme_counts.py` reads the command of a `run:` step that
   starts on a line after the key, indented past it, and of a step written as
   a flow mapping on one line or more. With the
