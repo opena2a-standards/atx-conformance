@@ -50,6 +50,34 @@ and stability" says they should not.
 
 ### Changed
 
+- `docs/captures/go-verifier.json` records `inputTrees`, the git tree id of
+  each path the Go command reads (`verifiers/go`, `fixtures`), in place of
+  `commit`. The commit it held, `48b49a8`, was the one the capture was taken
+  on, on a branch the squash merge left off `main`: it is not an ancestor of
+  `main`. A tree id hashes only the names, modes and bytes of the files
+  under the path, so after a squash merge `git rev-parse HEAD:verifiers/go`
+  on `main` gives the recorded id.
+  `scripts/capture_go_verifier.py --check` runs git and fails when a
+  recorded tree id is not the one that path has in the working tree, or
+  when the sidecar lists other input paths than README.md's command reads.
+  Its self-test squash-merges a branch holding a capture into `main` and
+  requires a fresh clone of `main` to pass the check and to resolve each
+  object id the sidecar records (#190). The capture's bytes are unchanged.
+  No fixture changes.
+- `scripts/check_readme_counts.py` reads the command of a `run:` step that
+  starts on a line after the key, indented past it, and of a step written as
+  a flow mapping on one line or more. With the
+  `scripts/check_fixture_immutability.py` entry removed from the
+  `CONTRIBUTING.md` layout, a step `- run:` with
+  `python3 scripts/check_fixture_immutability.py` on the next line, or
+  `- {name: a, run: python3 scripts/check_fixture_immutability.py}`, made the
+  check exit 1 saying the workflow does not run that script; both now exit
+  0, as the one-line form did. Its self-test adds five cases: a step whose
+  command starts on the line after `run:`, a flow-mapping step on one line
+  and one whose command is on its second line, each of which must count as
+  running the script, and the script named only in the name of a
+  flow-mapping step and only in a YAML comment after a `run:` key, each of
+  which must not (#192). No fixture changes.
 - `verifiers/go/verify.go` reports a duplicate member that comes after a
   number outside the float64 range (`1e400`, `-1e400`, an integer of 401
   digits, one nested in an object or array, one between the two members)
