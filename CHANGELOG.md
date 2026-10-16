@@ -63,6 +63,21 @@ and stability" says they should not.
   are double-quoted, each of which must count as running the script, and the
   script named only under the key `'ru''n'`, which must not (#196). No
   fixture changes.
+- `scripts/capture_go_verifier.py --check` and `--self-test` report a
+  self-test case that cannot run git as a red case. With `PATH` holding
+  `python3` and no `git`, or with every git command exiting 128 (as git
+  does when it cannot read its configuration), both ended in a Python
+  traceback (`FileNotFoundError` for `git`, or `CalledProcessError` from
+  `git init`) before printing a case line or the summary. Each case now runs
+  when it is reported: one that raises because git cannot be started or a
+  git command exits non-zero prints `[RED  ]` and then the error under its
+  label (the missing `git`, or the git command, its exit code and its
+  standard error), the cases after it still run, and the run ends in its
+  `N/N cases green` summary and exits 1. Two self-test cases build and run
+  the other cases with no git on `PATH` and with a `git` on `PATH` that
+  exits 128, whatever environment it is run with, and require exit code 1,
+  the summary line last and an error line under each red case (#195). No
+  fixture changes.
 - `docs/captures/go-verifier.json` records `inputTrees`, the git tree id of
   each path the Go command reads (`verifiers/go`, `fixtures`), in place of
   `commit`. The commit it held, `48b49a8`, was the one the capture was taken
