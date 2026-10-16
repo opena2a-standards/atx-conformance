@@ -117,6 +117,15 @@ func TestRawDuplicateMember(t *testing.T) {
 		{"same-name in array", `{"a":[{"k":1,"k":2}]}`, true},
 		{"kelvin fold collision", "{\"K\":1,\"k\":2}", true},
 		{"non-ASCII case variant", `{"É":1,"é":2}`, true},
+		// atx-conformance#187: a number outside the float64 range ahead of
+		// the duplicate aborted the scan before UseNumber.
+		{"after 1e400", `{"zzz":1e400,"trustLevel":1,"trustLevel":4}`, true},
+		{"after -1e400", `{"zzz":-1e400,"trustLevel":1,"trustLevel":4}`, true},
+		{"after 401-digit integer", `{"zzz":1` + strings.Repeat("0", 400) + `,"trustLevel":1,"trustLevel":4}`, true},
+		{"after 1e400 nested in object", `{"zzz":{"n":1e400},"trustLevel":1,"trustLevel":4}`, true},
+		{"after 1e400 nested in array", `{"zzz":[1e400],"trustLevel":1,"trustLevel":4}`, true},
+		{"1e400 between the duplicates", `{"trustLevel":1,"zzz":1e400,"trustLevel":4}`, true},
+		{"1e400 and distinct keys", `{"zzz":1e400,"trustLevel":4}`, false},
 		{"distinct keys", `{"trustLevel":4,"trustScore":9}`, false},
 		{"distinct nested", `{"a":{"x":1},"b":{"x":2}}`, false},
 		{"empty object", `{}`, false},
@@ -125,6 +134,42 @@ func TestRawDuplicateMember(t *testing.T) {
 		_, dup := rawDuplicateMember([]byte(c.raw))
 		if dup != c.wantDup {
 			t.Errorf("%s: rawDuplicateMember(%s) dup=%v, want %v", c.name, c.raw, dup, c.wantDup)
+		}
+	}
+}
+
+// TestDuplicateAfterOutOfRangeNumberRejects runs the two baseline fixtures
+// through verify() with members spliced in at the start of the credential: a
+// number outside the float64 range, then a trustLevel that the fixture's own
+// trustLevel duplicates later in the object. Each MUST REJECT as PARSE_ERROR
+// naming trustLevel; before the fix the v1.1 and v1.0 cases ACCEPTed while
+// the 1e300 case rejected. atx-conformance#187.
+func TestDuplicateAfterOutOfRangeNumberRejects(t *testing.T) {
+	cases := []struct {
+		fixture string
+		prefix  string
+	}{
+		{"../../fixtures/v1_1-baseline-valid.json", `"zzz":1e400,"trustLevel":1,`},
+		{"../../fixtures/v1_1-baseline-valid.json", `"zzz":1e300,"trustLevel":1,`},
+		{"../../fixtures/v1_1-baseline-valid.json", `"zzz":1` + strings.Repeat("0", 400) + `,"trustLevel":1,`},
+		{"../../fixtures/baseline-valid.json", `"declaredPurpose":1e400,"trustLevel":1,`},
+	}
+	for _, c := range cases {
+		f, err := loadFixture(c.fixture)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := verify(f); !got.Accepted {
+			t.Fatalf("%s as shipped: got %s, want ACCEPT", c.fixture, got)
+		}
+		raw := strings.TrimSpace(string(f.ATX))
+		if !strings.HasPrefix(raw, "{") {
+			t.Fatalf("%s: atx member does not start with '{'", c.fixture)
+		}
+		f.ATX = json.RawMessage("{" + c.prefix + raw[1:])
+		got := verify(f)
+		if got.Accepted || got.RejectCategory != "PARSE_ERROR" || !strings.Contains(got.Reason, `duplicate member "trustLevel"`) {
+			t.Errorf("%s with prefix %.40s: got %s, want REJECT[PARSE_ERROR] naming duplicate member \"trustLevel\"", c.fixture, c.prefix, got)
 		}
 	}
 }

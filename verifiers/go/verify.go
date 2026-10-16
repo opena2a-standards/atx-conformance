@@ -356,6 +356,13 @@ const maxScanDepth = 10000
 // because ATX signs it all.)
 func rawDuplicateMember(raw []byte) (string, bool) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
+	// UseNumber keeps Token() from converting each number to float64. Without
+	// it, a number outside the float64 range (1e400, an integer of 401 digits)
+	// makes Token() return an error and aborts the scan, although the number is
+	// valid JSON that json.Unmarshal accepts in a member the atx struct holds as
+	// raw JSON (declaredPurpose) or does not declare: a duplicate member after
+	// it was then not reported. atx-conformance#187.
+	dec.UseNumber()
 	name, dup, _ := scanValueForDuplicates(dec, 0)
 	return name, dup
 }
@@ -366,7 +373,9 @@ func rawDuplicateMember(raw []byte) (string, bool) {
 // malformed or exceeds maxScanDepth; the caller stops immediately rather than
 // re-reading a token it never consumed (which would spin dec.More() forever).
 // An aborted scan reports no duplicate — the json.Unmarshal in verify() is what
-// then rejects the malformed / over-deep input.
+// then rejects the malformed / over-deep input. Numbers do not abort the scan:
+// rawDuplicateMember sets UseNumber, so Token() returns each one as a
+// json.Number without parsing it.
 func scanValueForDuplicates(dec *json.Decoder, depth int) (name string, dup, abort bool) {
 	if depth > maxScanDepth {
 		return "", false, true

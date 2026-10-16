@@ -42,6 +42,15 @@ and stability" says they should not.
 
 ### Changed
 
+- `verifiers/go/verify.go` reports a duplicate member that comes after a
+  number outside the float64 range (`1e400`, `-1e400`, an integer of 401
+  digits, one nested in an object or array, one between the two members)
+  as `PARSE_ERROR`, as the Python verifier does. Its duplicate-member scan
+  read numbers as float64, stopped at such a number and reported no
+  duplicate: `v1_1-baseline-valid.json` with `"zzz": 1e400, "trustLevel": 1`
+  at the start of its credential, and `baseline-valid.json` with
+  `"declaredPurpose": 1e400, "trustLevel": 1`, were accepted. The scan now
+  reads numbers without converting them (#187). No fixture changes.
 - `verifiers/python/verify.py` rejects a v1.1 credential whose
   `declaredPurpose` holds a number outside the float64 range (`1e400`,
   `-1e400`, `1.7976931348623159e308`, an integer of 401 digits, one nested
