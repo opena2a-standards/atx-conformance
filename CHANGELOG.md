@@ -39,9 +39,36 @@ and stability" says they should not.
   describe the committed capture or README.md's command, or when the
   README's trimmed excerpt is not the capture's lines in order. The
   capture's bytes are unchanged. No fixture changes.
+- `TestCaptureIsVerifierOutput` in `verifiers/go` fails when
+  `docs/captures/go-verifier.txt` is not, byte for byte, what the Go
+  verifier writes for the command its sidecar names, and names the first
+  line that differs. CI runs it with `go test ./...`. The verifier's
+  `main` now calls `run`, which takes the arguments and the two output
+  streams and returns the exit code; its output and exit codes on the
+  fixtures, on no argument, on a missing path and on a file that is not a
+  fixture are unchanged. No fixture changes.
 
 ### Changed
 
+- `verifiers/go/verify.go` reports a duplicate member that comes after a
+  number outside the float64 range (`1e400`, `-1e400`, an integer of 401
+  digits, one nested in an object or array, one between the two members)
+  as `PARSE_ERROR`, as the Python verifier does. Its duplicate-member scan
+  read numbers as float64, stopped at such a number and reported no
+  duplicate: `v1_1-baseline-valid.json` with `"zzz": 1e400, "trustLevel": 1`
+  at the start of its credential, and `baseline-valid.json` with
+  `"declaredPurpose": 1e400, "trustLevel": 1`, were accepted. The scan now
+  reads numbers without converting them (#187). No fixture changes.
+- `scripts/check_readme_counts.py` counts a `scripts/*.py` file as run by
+  `.github/workflows/conformance.yml` only when the command of a `run:` step
+  names it outside a shell comment, or a script so run imports it. It
+  counted a name anywhere in the workflow file: with the
+  `scripts/check_fixture_immutability.py` entry removed from the
+  `CONTRIBUTING.md` layout, a YAML comment naming that script made the check
+  exit 0, and it now exits 1 and names the script. Its self-test adds three
+  cases, the name only in a YAML comment, only in shell comments of a `run:`
+  step, and only in a step `name:` and an action's `with:` input (#188). No
+  fixture changes.
 - `verifiers/python/verify.py` rejects a v1.1 credential whose
   `declaredPurpose` holds a number outside the float64 range (`1e400`,
   `-1e400`, `1.7976931348623159e308`, an integer of 401 digits, one nested

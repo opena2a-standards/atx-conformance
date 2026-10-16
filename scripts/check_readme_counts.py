@@ -163,7 +163,9 @@ It also holds the repository layout's label of the scripts/*.py glob as CI
 gates to the workflow. The layout called check_fixture_immutability.py a CI
 gate while no workflow step ran it. A script the workflow runs neither by
 name nor through a script it runs that imports it must have its own layout
-line, and that line must not call it a CI gate.
+line, and that line must not call it a CI gate. Only a name in the command of
+a `run:` step, outside a shell comment, counts as run: a name anywhere in the
+workflow file counted, so a YAML comment naming a script made it pass.
 
 The criterion (c) claim is matched in more wordings than the one the README
 used ("fulfils criterion (c)", "closes criterion c"), and a failure is
@@ -1359,21 +1361,80 @@ def ed25519_only_failures(readme, suites):
 
 
 # The repository layout labels the scripts/*.py glob "CI gates". A script the
-# workflow does not run, either by name or through a script it runs that
-# imports it, must have its own layout line, and that line must not call it a
-# CI gate. The layout called check_fixture_immutability.py a CI gate while no
-# workflow step ran it.
+# workflow does not run, either by name in the command of a `run:` step or
+# through a script it runs that imports it, must have its own layout line, and
+# that line must not call it a CI gate. The layout called
+# check_fixture_immutability.py a CI gate while no workflow step ran it, and a
+# name the workflow held only in a comment counted as run.
 SCRIPTS = ROOT / "scripts"
 CI_GATE_GLOB = re.compile(r"^scripts/\*\.py[ \t]+CI gates\b", re.M)
 # A layout line naming one script, with the indented lines that continue it.
 SCRIPT_LINE = re.compile(r"^scripts/([\w-]+\.py)\b(.*(?:\n[ \t]+\S.*)*)", re.M)
 SCRIPT_IMPORT = re.compile(r"^[ \t]*(?:import[ \t]+(\w+)|from[ \t]+(\w+)[ \t]+import\b)", re.M)
+# A block-style YAML line holding a key: its indentation, an optional
+# sequence dash, the key and the value written on the same line.
+WORKFLOW_KEY = re.compile(r"^( *)(-[ ]+)?([\w-]+):(?:[ \t]+(.*))?$")
+WORKFLOW_ITEM = re.compile(r"^( *)-(?:[ ]+|$)")
+BLOCK_SCALAR = re.compile(r"^[|>][-+0-9]*[ \t]*(?:#.*)?$")
+SHELL_COMMENT = re.compile(r"(?:^|(?<=\s))#.*$", re.M)
+
+
+def workflow_run_commands(workflow):
+    """The command text of each `run:` key of an item in a `steps:` sequence
+    of the workflow text, read as block-style YAML, with the text from a `#`
+    that starts a word to the end of its line removed, as the shell drops a
+    comment. A script named in a YAML comment, a step `name:` or an action's
+    `with:` input is in none of them."""
+    lines = (workflow or "").splitlines()
+    commands = []
+    # Open nodes, innermost last: (column, "-") for a sequence item and
+    # (column, key) for a mapping key.
+    stack = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        i += 1
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        key = WORKFLOW_KEY.match(line)
+        item = WORKFLOW_ITEM.match(line)
+        indent = len(line) - len(line.lstrip(" "))
+        # A sequence may sit at its parent key's own indentation, so an item
+        # closes only the items and keys indented past it, and earlier items
+        # at its own column.
+        while stack and (stack[-1][0] > indent or (
+                stack[-1][0] == indent and (not item or stack[-1][1] == "-"))):
+            stack.pop()
+        if item:
+            stack.append((indent, "-"))
+        if not key:
+            continue
+        column = key.start(3)
+        name, value = key.group(3), (key.group(4) or "").strip()
+        is_step = (len(stack) >= 2 and stack[-1][1] == "-"
+                   and stack[-2][1] == "steps")
+        # Lines indented past the key carry its value: a block scalar's body,
+        # or the continuation of a value begun on the key's line.
+        body = []
+        if value:
+            while i < len(lines) and (not lines[i].strip()
+                                      or len(lines[i]) - len(lines[i].lstrip(" ")) > column):
+                body.append(lines[i])
+                i += 1
+            if BLOCK_SCALAR.match(value):
+                value = ""
+        stack.append((column, name))
+        if name == "run" and is_step:
+            commands.append(SHELL_COMMENT.sub("", "\n".join([value] + body)))
+    return commands
 
 
 def ci_run_scripts(workflow, scripts):
-    """The scripts/*.py names the workflow runs: those it names, and those a
-    script it runs imports. `scripts` maps each name to its source text."""
-    run = {name for name in re.findall(r"\bscripts/([\w-]+\.py)\b", workflow or "")
+    """The scripts/*.py names the workflow runs: those named in the command of
+    a `run:` step, and those a script it runs imports. `scripts` maps each
+    name to its source text."""
+    named = "\n".join(workflow_run_commands(workflow))
+    run = {name for name in re.findall(r"\bscripts/([\w-]+\.py)\b", named)
            if name in scripts}
     todo = list(run)
     while todo:
@@ -2776,13 +2837,17 @@ INVENTED_SCRIPT = "check_invented.py"
 
 def _ci_gate_label_cases(readme, workflow, scripts):
     """Add a script no workflow step runs, stop the workflow naming this
-    script, run an invented helper only through an import and then cut the
-    import, and give a script that is not run its own layout line, once
-    calling it a CI gate and once not. Each but the last must add a
-    failure."""
+    script, then name it again only in a YAML comment, only in shell comments
+    of a `run:` step, and only in a step name and an action input, run an
+    invented helper only through an import and then cut the import, and give
+    a script that is not run its own layout line, once calling it a CI gate
+    and once not. Each but the last must add a failure."""
     labels = (
         "scripts/*.py script that no workflow step runs",
         "script the workflow stops naming",
+        "script the workflow names only in a YAML comment",
+        "script named only in shell comments of a run: step",
+        "script named only in a step name and an action input",
         "script run only through an import, with the import cut",
         "own layout line calling a script that is not run a CI gate",
         "own layout line saying a script that is not run is run by hand",
@@ -2804,12 +2869,25 @@ def _ci_gate_label_cases(readme, workflow, scripts):
 
     this = pathlib.Path(__file__).name
     if f"scripts/{this}" not in (workflow or ""):
-        cases.append((False, labels[1], f"{WORKFLOW_NAME} does not name scripts/{this}"))
+        why = f"{WORKFLOW_NAME} does not name scripts/{this}"
+        cases.extend((False, label, why) for label in labels[1:5])
     else:
         want = f"does not run scripts/{this}"
-        got = new(readme, workflow.replace(f"scripts/{this}", "scripts/renamed.py"), scripts)
-        cases.append((any(want in f for f in got), labels[1],
-                      f"expected a failure containing {want!r}, got {got}"))
+        renamed = workflow.replace(f"scripts/{this}", "scripts/renamed.py")
+        # Each text is appended after the workflow's last step.
+        named_not_run = (
+            (labels[1], ""),
+            (labels[2], f"\n# scripts/{this} is not run here\n"),
+            (labels[3], f"\n      - run: |\n          # python3 scripts/{this}\n"
+                        f"          echo done # scripts/{this}\n"),
+            (labels[4], f"\n      - name: python3 scripts/{this}\n"
+                        f"        uses: actions/checkout@v4\n"
+                        f"        with:\n          run: python3 scripts/{this}\n"),
+        )
+        for label, text in named_not_run:
+            got = new(readme, renamed + text, scripts)
+            cases.append((any(want in f for f in got), label,
+                          f"expected a failure containing {want!r}, got {got}"))
 
     flow = (workflow or "") + "\n        run: python3 scripts/invented_runner.py\n"
     files = {**scripts, "invented_runner.py": "import invented_helper  # noqa\n",
@@ -2817,18 +2895,18 @@ def _ci_gate_label_cases(readme, workflow, scripts):
     want = "does not run scripts/invented_helper.py"
     reached = not any(want in f for f in new(readme, flow, files))
     cut = new(readme, flow, {**files, "invented_runner.py": ""})
-    cases.append((reached and any(want in f for f in cut), labels[2],
+    cases.append((reached and any(want in f for f in cut), labels[5],
                   f"with the import: {'not ' if reached else ''}reported; "
                   f"with it cut: {cut}"))
 
     line = f"\nscripts/{INVENTED_SCRIPT}            CI gate: an invented check\n"
     want = f"calls scripts/{INVENTED_SCRIPT} a CI gate"
     got = new(readme + line, workflow, {**scripts, INVENTED_SCRIPT: ""})
-    cases.append((any(want in f for f in got), labels[3],
+    cases.append((any(want in f for f in got), labels[6],
                   f"expected a failure containing {want!r}, got {got}"))
     line = f"\nscripts/{INVENTED_SCRIPT}\n                       an invented check (run by hand)\n"
     got = new(readme + line, workflow, {**scripts, INVENTED_SCRIPT: ""})
-    cases.append((not got, labels[4], f"the line still fails: {got}"))
+    cases.append((not got, labels[7], f"the line still fails: {got}"))
     return cases
 
 
