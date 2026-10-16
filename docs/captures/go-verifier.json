@@ -4,13 +4,16 @@
   "stream": "stdout",
   "goVersion": "go1.26.3",
   "platform": "darwin/arm64",
-  "commit": "48b49a84493fbc1ec92da5e971bb59cd9dd92f66",
   "inputs": [
     "verifiers/go",
     "fixtures"
   ],
+  "inputTrees": {
+    "verifiers/go": "c7519f2b6269642c21e2f95071b6d67bb53c6d45",
+    "fixtures": "e1286df4db4115deb1fbf103fdf97757a4c95b05"
+  },
   "inputsUncommitted": [],
-  "ranAtUtc": "2026-10-16T01:04:06Z",
+  "ranAtUtc": "2026-10-16T04:13:30Z",
   "exitCode": 0,
   "stderrLines": 0,
   "summary": "summary: 25 pass, 0 fail (25 fixtures)",

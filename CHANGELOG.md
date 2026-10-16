@@ -50,6 +50,20 @@ and stability" says they should not.
 
 ### Changed
 
+- `docs/captures/go-verifier.json` records `inputTrees`, the git tree id of
+  each path the Go command reads (`verifiers/go`, `fixtures`), in place of
+  `commit`. The commit it held, `48b49a8`, was the one the capture was taken
+  on, on a branch the squash merge left off `main`: it is not an ancestor of
+  `main`. A tree id hashes only the names, modes and bytes of the files
+  under the path, so after a squash merge `git rev-parse HEAD:verifiers/go`
+  on `main` gives the recorded id.
+  `scripts/capture_go_verifier.py --check` runs git and fails when a
+  recorded tree id is not the one that path has in the working tree, or
+  when the sidecar lists other input paths than README.md's command reads.
+  Its self-test squash-merges a branch holding a capture into `main` and
+  requires a fresh clone of `main` to pass the check and to resolve each
+  object id the sidecar records (#190). The capture's bytes are unchanged.
+  No fixture changes.
 - `verifiers/go/verify.go` reports a duplicate member that comes after a
   number outside the float64 range (`1e400`, `-1e400`, an integer of 401
   digits, one nested in an object or array, one between the two members)

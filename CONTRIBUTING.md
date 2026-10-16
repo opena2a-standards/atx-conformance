@@ -50,7 +50,8 @@ scripts/check_sibling_rows.py    sibling-repositories table against the sibling
                                  repositories (network, run by hand)
 scripts/capture_go_verifier.py   reruns the README's Go command and rewrites its
                                  capture and sidecar under docs/captures/;
-                                 --check holds them to the README excerpt (run
-                                 by hand)
+                                 --check holds them to the README excerpt and
+                                 the sidecar's input tree ids to the working
+                                 tree (run by hand)
 scripts/check_circl_pin.sh       CI gate: one cloudflare/circl version per Go module
 ```

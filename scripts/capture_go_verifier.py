@@ -8,24 +8,34 @@ working directory, the command and the capture path from those lines, runs
 the command there, and writes its standard output to the capture
 (docs/captures/go-verifier.txt) and a sidecar beside it with the same name
 ending in .json. The sidecar says how the capture was taken: the command
-and its working directory, the Go release and platform, the commit, the
-uncommitted files under the paths the command reads, the time, the exit
-code, the number of lines written to standard error (not captured), the
-summary line, and the capture's SHA-256 and byte and line counts. A run
-that exits non-zero, prints no `summary:` line last, or prints bytes that
-are not UTF-8 writes nothing.
+and its working directory, the Go release and platform, the paths the
+command reads and the git tree id of each as the run read it, the
+uncommitted files under those paths, the time, the exit code, the number
+of lines written to standard error (not captured), the summary line, and
+the capture's SHA-256 and byte and line counts. A run that exits non-zero,
+prints no `summary:` line last, or prints bytes that are not UTF-8 writes
+nothing.
 
-`--check` runs no command and needs no Go toolchain. It fails when the
-sidecar is missing, is not a JSON object, lacks a member or holds one of
-the wrong type, names another command, working directory or capture than
-README.md, records a non-zero exit code, or does not describe the committed
-capture's bytes and last line; and when README.md's excerpt is not the
-capture's lines, in order, with a line holding only `...` standing for the
-lines left out. It runs the self-test first.
+The sidecar records tree ids, not a commit id. A capture is committed on
+a branch that is squash-merged, so the commit a run sees is left off the
+default branch. A tree id hashes only the names, modes and bytes of the
+files under the path, so once the branch is merged `git rev-parse
+HEAD:<path>` on the default branch gives the recorded id until the path
+changes.
+
+`--check` runs no Go command and needs no Go toolchain; it runs git. It
+fails when the sidecar is missing, is not a JSON object, lacks a member or
+holds one of the wrong type, names another command, working directory,
+capture or list of input paths than README.md, records tree ids other than
+those the input paths hold in the working tree, records a non-zero exit
+code, or does not describe the committed capture's bytes and last line;
+and when README.md's excerpt is not the capture's lines, in order, with a
+line holding only `...` standing for the lines left out. It runs the
+self-test first.
 
 Usage:
     python3 scripts/capture_go_verifier.py              # run README.md's Go command, (re)write the capture and its sidecar
-    python3 scripts/capture_go_verifier.py --check      # exit 1 if the sidecar, the capture and README.md's excerpt disagree
+    python3 scripts/capture_go_verifier.py --check      # exit 1 if the sidecar, the capture, README.md's excerpt and the inputs disagree
     python3 scripts/capture_go_verifier.py --self-test  # prove each altered capture, sidecar or excerpt fails
     python3 scripts/capture_go_verifier.py --help       # print this usage
 """
@@ -36,6 +46,7 @@ import datetime
 import hashlib
 import io
 import json
+import os
 import re
 import shlex
 import shutil
@@ -53,7 +64,7 @@ README = "README.md"
 USAGE = """\
 Usage:
     python3 scripts/capture_go_verifier.py              # run README.md's Go command, (re)write the capture and its sidecar
-    python3 scripts/capture_go_verifier.py --check      # exit 1 if the sidecar, the capture and README.md's excerpt disagree
+    python3 scripts/capture_go_verifier.py --check      # exit 1 if the sidecar, the capture, README.md's excerpt and the inputs disagree
     python3 scripts/capture_go_verifier.py --self-test  # prove each altered capture, sidecar or excerpt fails
     python3 scripts/capture_go_verifier.py --help       # print this usage
 """
@@ -63,12 +74,11 @@ LABEL = re.compile(r"What `(?P<cmd>[^`]+)` prints "
                    r"\(\[full output\]\((?P<path>docs/captures/[^)/\s]+\.txt)\)(?P<trimmed>, trimmed)?\):")
 ELISION = "..."
 SUMMARY = "summary: "
-COMMIT = re.compile(r"[0-9a-f]{40}")
 UTC = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 # Sidecar members, in the order they are written, and the type each holds.
 MEMBERS: tuple[tuple[str, type], ...] = (
     ("command", str), ("workingDirectory", str), ("stream", str), ("goVersion", str),
-    ("platform", str), ("commit", str), ("inputs", list), ("inputsUncommitted", list),
+    ("platform", str), ("inputs", list), ("inputTrees", dict), ("inputsUncommitted", list),
     ("ranAtUtc", str), ("exitCode", int), ("stderrLines", int), ("summary", str),
     ("outputs", dict),
 )
@@ -198,9 +208,11 @@ def sidecar_failures(root: Path, start: Start, data: bytes) -> list[str]:
     if failures:
         return failures
     lines = _lines(data.decode("utf-8", errors="replace"))
+    paths = inputs(root, start)
     expected = {
         "command": start.command,
         "workingDirectory": start.working_directory,
+        "inputs": paths,
         "exitCode": 0,
         "summary": lines[-1] if lines else "",
         "outputs": {"capture": {"path": start.capture,
@@ -212,8 +224,17 @@ def sidecar_failures(root: Path, start: Start, data: bytes) -> list[str]:
         if doc[name] != want:
             failures.append(f"{start.sidecar}: `{name}` is {json.dumps(doc[name])}, "
                             f"{start.capture} and {README} give {json.dumps(want)}")
-    if not COMMIT.fullmatch(doc["commit"]):
-        failures.append(f"{start.sidecar}: `commit` is not a 40-character commit id")
+    try:
+        trees = input_trees(root, paths)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        failures.append(f"{start.sidecar}: cannot read the git tree ids of "
+                        f"{', '.join(paths)} to compare with `inputTrees` ({exc})")
+    else:
+        if doc["inputTrees"] != trees:
+            failures.append(f"{start.sidecar}: `inputTrees` is {json.dumps(doc['inputTrees'])}, "
+                            f"the paths the command reads in this tree are {json.dumps(trees)}; "
+                            "the capture was taken on other inputs: run "
+                            "scripts/capture_go_verifier.py")
     if not UTC.fullmatch(doc["ranAtUtc"]):
         failures.append(f"{start.sidecar}: `ranAtUtc` is not a UTC time "
                         "(YYYY-MM-DDTHH:MM:SSZ)")
@@ -264,19 +285,48 @@ def inputs(root: Path, start: Start) -> list[str]:
     return [p.relative_to(root.resolve()).as_posix() or "." for p in found]
 
 
-def describe(root: Path, start: Start) -> dict:
-    workdir = root / start.working_directory
-    version, goos, goarch = _output(["go", "env", "GOVERSION", "GOOS", "GOARCH"], workdir)
+def input_trees(root: Path, paths: list[str]) -> dict[str, str]:
+    """The git tree id of each path as the working tree holds it: HEAD's
+    files with the uncommitted and untracked (not ignored) ones applied. A
+    tree id hashes only the names, modes and bytes of the files under the
+    path, so it survives the squash merge that lands a capture: on the
+    default branch, `git rev-parse HEAD:<path>` gives the same id while the
+    path is unchanged. It is built in a temporary index, so the repository's
+    own index is not touched."""
+    with tempfile.TemporaryDirectory() as tmp:
+        env = {**os.environ, "GIT_INDEX_FILE": str(Path(tmp) / "index"),
+               "GIT_LITERAL_PATHSPECS": "1"}
+
+        def git(*args: str) -> list[str]:
+            return subprocess.run(["git", *args], cwd=root, env=env, capture_output=True,
+                                  text=True, check=True).stdout.splitlines()
+
+        git("read-tree", "HEAD")
+        git("add", "--all", "--", *paths)
+        tree = git("write-tree")[0]
+        ids = git("rev-parse", *(f"{tree}:" if p == "." else f"{tree}:{p}" for p in paths))
+    return dict(zip(paths, ids))
+
+
+def git_inputs(root: Path, start: Start) -> dict:
     paths = inputs(root, start)
     uncommitted = sorted(set(
         _output(["git", "diff", "--name-only", "HEAD", "--", *paths], root)
         + _output(["git", "ls-files", "--others", "--exclude-standard", "--", *paths], root)))
     return {
+        "inputs": paths,
+        "inputTrees": input_trees(root, paths),
+        "inputsUncommitted": uncommitted,
+    }
+
+
+def describe(root: Path, start: Start) -> dict:
+    workdir = root / start.working_directory
+    version, goos, goarch = _output(["go", "env", "GOVERSION", "GOOS", "GOARCH"], workdir)
+    return {
         "goVersion": version,
         "platform": f"{goos}/{goarch}",
-        "commit": _output(["git", "rev-parse", "HEAD"], root)[0],
-        "inputs": paths,
-        "inputsUncommitted": uncommitted,
+        **git_inputs(root, start),
         "ranAtUtc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
@@ -309,7 +359,7 @@ def write(root: Path, runner: Runner = run_command, describer: Describer = descr
     try:
         provenance = describer(root, start)
     except (OSError, subprocess.CalledProcessError) as exc:
-        print(f"cannot read the Go release or the commit ({exc}); nothing written")
+        print(f"cannot read the Go release or the inputs' git tree ids ({exc}); nothing written")
         return 1
     sidecar = {
         "command": start.command,
@@ -339,30 +389,50 @@ def write(root: Path, runner: Runner = run_command, describer: Describer = descr
 # with a sidecar written for them by write() through a runner that prints the
 # published capture, and runs the real check() on it. A case is green only
 # when the copy fails as named, and the unaltered copy must pass, so a tree
-# that is already stale does not make every case look red-as-expected.
+# that is already stale does not make every case look red-as-expected. The
+# copy is a temporary git repository, so the sidecar's git members are read
+# by the real git_inputs(); only the Go release and the time are fixed.
 
-FAKE_COMMIT = "0" * 40
+INPUT = "input.txt"  # the file the copy holds under each path the command reads
 
 
 def _fake_describe(root: Path, start: Start) -> dict:
-    return {"goVersion": "go-test", "platform": "test/test", "commit": FAKE_COMMIT,
-            "inputs": inputs(root, start), "inputsUncommitted": [],
+    return {"goVersion": "go-test", "platform": "test/test", **git_inputs(root, start),
             "ranAtUtc": "2000-01-01T00:00:00Z"}
+
+
+def _git(root: Path, *args: str) -> list[str]:
+    return _output(["git", "-c", "user.name=self-test", "-c", "user.email=self-test@example.invalid",
+                    "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", *args], root)
+
+
+def _commit_all(root: Path, message: str) -> None:
+    # The repository is a temporary one, so adding everything in it adds
+    # exactly the copy's files.
+    _git(root, "add", "--all")
+    _git(root, "commit", "-q", "--allow-empty", "-m", message)
 
 
 @contextlib.contextmanager
 def _tree(published: Path = REPO_ROOT):
-    """A temporary copy of README.md and its capture, a sidecar written for
-    them, and the start block read from the copy."""
+    """A temporary git repository whose `main` commit holds a copy of
+    README.md and a file under each path the command reads, with the capture
+    and a sidecar written for them on top; and the start block read from the
+    copy."""
     start, failures = read_start(published)
     if start is None:
         raise SystemExit("\n".join(failures))
     data = (published / start.capture).read_bytes()
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        (root / start.working_directory).mkdir(parents=True)
         (root / start.capture).parent.mkdir(parents=True)
         shutil.copyfile(published / README, root / README)
+        for p in inputs(published, start):
+            f = root / p / INPUT if (published / p).is_dir() else root / p
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(f"{p}\n", encoding="utf-8")
+        _git(root, "-c", "init.defaultBranch=main", "init", "-q")
+        _commit_all(root, "inputs")
         with contextlib.redirect_stdout(io.StringIO()):
             write(root, lambda argv, cwd: Run(data, b"", 0), _fake_describe)
         yield root, start
@@ -458,6 +528,36 @@ def _main_on(argv: list[str]) -> tuple[int, str, str]:
     return rc, out.getvalue(), err.getvalue()
 
 
+def _after_squash() -> tuple[list[str], list[str], list[str]]:
+    """Take a capture the way a pull request does: on a branch, change an
+    input and commit it, write the capture and sidecar and commit them. Then
+    squash-merge the branch into `main` and clone `main` from scratch, as a
+    reader does. Returns check() on the clone, the 40-hex object ids its
+    sidecar records, and those of them the clone cannot resolve."""
+    with _tree() as (root, start), tempfile.TemporaryDirectory() as tmp:
+        data = (root / start.capture).read_bytes()
+        _git(root, "checkout", "-q", "-b", "capture")
+        changed = root / start.working_directory / INPUT
+        changed.write_text(changed.read_text(encoding="utf-8") + "changed\n", encoding="utf-8")
+        _commit_all(root, "change an input")
+        with contextlib.redirect_stdout(io.StringIO()):
+            write(root, lambda argv, cwd: Run(data, b"", 0), _fake_describe)
+        _commit_all(root, "capture")
+        _git(root, "checkout", "-q", "main")
+        _git(root, "merge", "-q", "--squash", "capture")
+        _commit_all(root, "squash")
+        clone = Path(tmp) / "clone"
+        # --no-local copies only the objects reachable from main, as a clone
+        # over the network does.
+        _git(root, "clone", "-q", "--no-local", "--single-branch", "--branch", "main",
+             str(root), str(clone))
+        ids = re.findall(r'"([0-9a-f]{40})"', (clone / start.sidecar).read_text(encoding="utf-8"))
+        unresolved = [i for i in ids
+                      if subprocess.run(["git", "cat-file", "-e", i], cwd=clone,
+                                        capture_output=True, check=False).returncode != 0]
+        return check(clone), ids, unresolved
+
+
 def self_test() -> int:
     start, failures = read_start(REPO_ROOT)
     if start is None:
@@ -469,6 +569,8 @@ def self_test() -> int:
     with _tree() as (root, _):
         baseline = check(root)
         written = json.loads((root / start.sidecar).read_text(encoding="utf-8"))
+        head_trees = {p: _git(root, "rev-parse", "HEAD:" if p == "." else f"HEAD:{p}")[0]
+                      for p in inputs(root, start)}
     summary = capture[-1]
     first = start.excerpt[0]
     kept = next(line for line in start.excerpt if "observed: ACCEPT" in line)
@@ -478,6 +580,7 @@ def self_test() -> int:
     nosum_rc, nosum_nothing, _ = _write_on(Run(data.replace(summary.encode(), b"done"), b"", 0))
     bin_rc, bin_nothing, _ = _write_on(Run(data + b"\xff\n" + summary.encode() + b"\n", b"", 0))
     tree_rc, tree_out = _check_tree_on(lambda root, s: (root / s.sidecar).unlink())
+    squash_failures, squash_ids, squash_unresolved = _after_squash()
     help_rc, help_out, _ = _main_on(["--help"])
     h_rc, h_out, _ = _main_on(["-h"])
     bad_rc, bad_out, bad_err = _main_on(["--bogus"])
@@ -525,7 +628,22 @@ def self_test() -> int:
         ("fails when the sidecar names another capture path",
          _fails(_set("outputs", {"capture": {**written["outputs"]["capture"],
                                              "path": "docs/captures/other.txt"}}), "`outputs`")),
-        ("fails when `commit` is not a commit id", _fails(_set("commit", "HEAD"), "`commit`")),
+        ("write() records, for each path the command reads, the tree id "
+         "`git rev-parse HEAD:<path>` gives on the commit holding the inputs",
+         written["inputTrees"] == head_trees and list(head_trees) == written["inputs"]),
+        ("fails when the sidecar lists other inputs",
+         _fails(_set("inputs", written["inputs"][:1]), "`inputs`")),
+        ("fails when `inputTrees` records another tree for an input",
+         _fails(_set("inputTrees", {**written["inputTrees"], start.working_directory: "0" * 40}),
+                "`inputTrees`")),
+        ("fails when a file under an input path changes after the capture",
+         _fails(lambda root, s: (root / s.working_directory / INPUT).write_text(
+             "changed\n", encoding="utf-8"), "`inputTrees`")),
+        ("fails when a file is added under an input path after the capture",
+         _fails(lambda root, s: (root / s.working_directory / "added.txt").write_text(
+             "added\n", encoding="utf-8"), "`inputTrees`")),
+        ("fails when the tree is not a git work tree",
+         _fails(lambda root, s: shutil.rmtree(root / ".git"), "cannot read the git tree ids")),
         ("fails when `ranAtUtc` is not a UTC time",
          _fails(_set("ranAtUtc", "2000-01-01 00:00:00"), "`ranAtUtc`")),
         ("fails when a token of a kept excerpt line is edited",
@@ -549,6 +667,9 @@ def self_test() -> int:
          _fails(_edit(_readme, f"cd {start.working_directory} && ", ""), "is not one line")),
         ("check_tree exits 1 and prints the failure when the sidecar is missing",
          tree_rc == 1 and f"FAIL {start.sidecar} missing" in tree_out),
+        ("a capture taken on a branch passes in a fresh clone of `main` after a squash merge, "
+         "and each object id its sidecar records resolves there",
+         not squash_failures and bool(squash_ids) and not squash_unresolved),
         ("--help prints usage", help_rc == 0 and help_out == USAGE),
         ("-h prints usage", h_rc == 0 and h_out == USAGE),
         ("an unknown argument prints usage to stderr and exits 2",
