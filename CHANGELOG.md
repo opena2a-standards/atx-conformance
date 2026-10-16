@@ -50,6 +50,10 @@ and stability" says they should not.
 
 ### Changed
 
+- README.md is shorter: the verifiers' exit-code sentence moved as written to
+  `docs/running-the-verifiers.md` (Exit code), and the Documentation list has
+  nine lines, the `CONTRIBUTING.md` line linking `conformance.json`,
+  `COSIGNERS.md` and `CHANGELOG.md`. No fixture changes.
 - `scripts/check_readme_counts.py` reads a block-style key of the workflow
   written with spaces before its `:` as the same key, as YAML does. With the
   step that runs it replaced by `run : python3 scripts/check_readme_counts.py`
