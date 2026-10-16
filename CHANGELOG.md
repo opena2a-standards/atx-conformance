@@ -50,6 +50,19 @@ and stability" says they should not.
 
 ### Changed
 
+- `scripts/check_readme_counts.py` reads a quoted key of the workflow, in a
+  block-style line or a flow mapping, as the key it names: a single-quoted
+  key without its quotes and with each `''` read as `'`, a double-quoted key
+  without its quotes and with its backslash escapes undone. With the step
+  that runs it replaced by `- "run": python3 scripts/check_readme_counts.py`
+  or `- {"name": a, "run": "python3 scripts/check_readme_counts.py"}`, the
+  check exited 1 saying the workflow does not run that script; both now exit
+  0, as the unquoted forms do. Its self-test adds five cases: a step whose
+  `run:` key is double-quoted, one whose key is single-quoted, one whose
+  double-quoted key is written `"r\x75n"`, and a flow-mapping step whose keys
+  are double-quoted, each of which must count as running the script, and the
+  script named only under the key `'ru''n'`, which must not (#196). No
+  fixture changes.
 - `docs/captures/go-verifier.json` records `inputTrees`, the git tree id of
   each path the Go command reads (`verifiers/go`, `fixtures`), in place of
   `commit`. The commit it held, `48b49a8`, was the one the capture was taken
@@ -64,6 +77,20 @@ and stability" says they should not.
   requires a fresh clone of `main` to pass the check and to resolve each
   object id the sidecar records (#190). The capture's bytes are unchanged.
   No fixture changes.
+- `scripts/capture_go_verifier.py` runs each git command with every `GIT_*`
+  variable removed from its environment and with `GIT_CEILING_DIRECTORIES`
+  set to the directory above the repository the command targets. With
+  `GIT_DIR` naming another repository, as git exports it to a hook,
+  `--self-test` (which `--check` runs first) wrote its temporary commits
+  into that repository: one holding a single commit gained a `capture`
+  branch and ten commits, and the run ended with a `CalledProcessError`
+  from `git clone`. That repository now keeps its single commit and the
+  self-test passes. The self-test adds two cases: the squash-merge case run
+  with `GIT_DIR`, `GIT_WORK_TREE` and `GIT_INDEX_FILE` naming another
+  repository, and the not-a-git-work-tree case with the copy made inside
+  another repository's work tree. The first must pass and the second must
+  fail as it names, and each must leave every file of the other repository
+  unchanged (#194). No fixture changes.
 - `scripts/check_readme_counts.py` reads the command of a `run:` step that
   starts on a line after the key, indented past it, and of a step written as
   a flow mapping on one line or more. With the
