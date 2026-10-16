@@ -1372,8 +1372,19 @@ CI_GATE_GLOB = re.compile(r"^scripts/\*\.py[ \t]+CI gates\b", re.M)
 SCRIPT_LINE = re.compile(r"^scripts/([\w-]+\.py)\b(.*(?:\n[ \t]+\S.*)*)", re.M)
 SCRIPT_IMPORT = re.compile(r"^[ \t]*(?:import[ \t]+(\w+)|from[ \t]+(\w+)[ \t]+import\b)", re.M)
 # A block-style YAML line holding a key: its indentation, an optional
-# sequence dash, the key and the value written on the same line.
-WORKFLOW_KEY = re.compile(r"^( *)(-[ ]+)?([\w-]+):(?:[ \t]+(.*))?$")
+# sequence dash, the key, plain, single-quoted or double-quoted, and the value
+# written on the same line.
+WORKFLOW_KEY = re.compile(
+    r"^( *)(-[ ]+)?([\w-]+|'(?:[^']|'')*'|\"(?:[^\"\\]|\\.)*\"):(?:[ \t]+(.*))?$")
+# A double-quoted YAML scalar's escapes: `\x`, `\u` or `\U` and its hex
+# digits, or the one character after the backslash, which YAML_ESCAPES maps.
+YAML_ESCAPE = re.compile(r"\\(?:x([0-9A-Fa-f]{2})|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|(.))", re.S)
+YAML_ESCAPES = {
+    "0": "\0", "a": "\a", "b": "\b", "t": "\t", "\t": "\t", "n": "\n",
+    "v": "\v", "f": "\f", "r": "\r", "e": "\x1b", " ": " ", '"': '"',
+    "/": "/", "\\": "\\", "N": "\x85", "_": "\xa0", "L": " ",
+    "P": " ",
+}
 WORKFLOW_ITEM = re.compile(r"^( *)-(?:[ ]+|$)")
 BLOCK_SCALAR = re.compile(r"^[|>][-+0-9]*[ \t]*(?:#.*)?$")
 SHELL_COMMENT = re.compile(r"(?:^|(?<=\s))#.*$", re.M)
@@ -1388,13 +1399,35 @@ FLOW_SCALAR = re.compile(
     re.S)
 
 
+def yaml_key(scalar):
+    """The key a mapping key's scalar text names: a single-quoted key without
+    its quotes and with each `''` read as `'`, a double-quoted key without
+    its quotes and with its backslash escapes undone, and a plain key as it
+    is written. A double-quoted key holding an escape YAML does not define
+    is returned with its quotes, so it names no plain key."""
+    if scalar[:1] == "'":
+        return scalar[1:-1].replace("''", "'")
+    if scalar[:1] != '"':
+        return scalar
+
+    def unescape(match):
+        code = match.group(1) or match.group(2) or match.group(3)
+        return chr(int(code, 16)) if code else YAML_ESCAPES[match.group(4)]
+
+    try:
+        return YAML_ESCAPE.sub(unescape, scalar[1:-1])
+    except (KeyError, ValueError):
+        return scalar
+
+
 def flow_node(text, pos):
     """The flow-style YAML node at text[pos], after the spaces, line breaks
     and comments before it, and the index past it: a mapping as a dict, a
     sequence as a list and a scalar as its source text, quotes kept, as the
-    block-style lines are read. A node left empty before `,`, `:`, `]` or `}`
-    is None. Raises EOFError when the text ends inside the node and
-    ValueError when it is not flow-style YAML."""
+    block-style lines are read. A mapping key is read by yaml_key(). A node
+    left empty before `,`, `:`, `]` or `}` is None. Raises EOFError when the
+    text ends inside the node and ValueError when it is not flow-style
+    YAML."""
     pos = FLOW_SPACE.match(text, pos).end()
     if pos == len(text):
         raise EOFError
@@ -1419,6 +1452,8 @@ def flow_node(text, pos):
         pos = FLOW_SPACE.match(text, pos).end()
         pair = text.startswith(":", pos)
         value = None
+        if isinstance(key, str) and (pair or opener == "{"):
+            key = yaml_key(key)
         if pair:
             value, pos = flow_node(text, pos + 1)
             pos = FLOW_SPACE.match(text, pos).end()
@@ -1454,9 +1489,10 @@ def workflow_run_commands(workflow):
     that starts a word to the end of its line removed, as the shell drops a
     comment. The command may start on the key's line or on a later line
     indented past it, and a step may be a flow mapping on one line or more
-    (`- {name: a, run: python3 scripts/a.py}`). A script named in a YAML
-    comment, a step `name:` or an action's `with:` input is in none of
-    them."""
+    (`- {name: a, run: python3 scripts/a.py}`). A key may be quoted
+    (`- "run": python3 scripts/a.py`) and is read by yaml_key(). A script
+    named in a YAML comment, a step `name:` or an action's `with:` input is
+    in none of them."""
     lines = (workflow or "").splitlines()
     commands = []
     # Open nodes, innermost last: (column, "-") for a sequence item and
@@ -1491,7 +1527,7 @@ def workflow_run_commands(workflow):
         if not key:
             continue
         column = key.start(3)
-        name, value = key.group(3), (key.group(4) or "").strip()
+        name, value = yaml_key(key.group(3)), (key.group(4) or "").strip()
         # A step's command may start on a later line than its `run:` key,
         # indented past it, after any YAML comment lines.
         if not value and name == "run" and is_step:
@@ -2933,8 +2969,12 @@ def _ci_gate_label_cases(readme, workflow, scripts):
     a script that is not run its own layout line, once calling it a CI gate
     and once not. Each but the last must add a failure. Then run this script
     from a step whose command starts on the line after `run:`, from a step
-    written as a flow mapping on one line, and from one whose command is on
-    its second line: none of the three may add a failure."""
+    written as a flow mapping on one line, from one whose command is on its
+    second line, from steps whose `run:` key is double-quoted, single-quoted
+    or double-quoted with a `\\x` escape, and from a flow-mapping step whose
+    keys are double-quoted: none of the seven may add a failure. Last, name
+    it under the single-quoted key `'ru''n'`, which reads as `ru'n`: that
+    must add a failure."""
     labels = (
         "scripts/*.py script that no workflow step runs",
         "script the workflow stops naming",
@@ -2949,6 +2989,11 @@ def _ci_gate_label_cases(readme, workflow, scripts):
         "script run by a step whose command starts on the line after run:",
         "script run by a step written as a flow mapping",
         "script run by a flow-mapping step whose command is on its second line",
+        "script run by a step whose run: key is double-quoted",
+        "script run by a step whose run: key is single-quoted",
+        "script run by a step whose double-quoted run: key holds an escape",
+        "script run by a flow-mapping step whose keys are double-quoted",
+        "script named only under a quoted key that reads as ru'n",
     )
     if not CI_GATE_GLOB.search(readme):
         why = ("no `scripts/*.py  CI gates` layout line found in README.md or its "
@@ -2985,6 +3030,7 @@ def _ci_gate_label_cases(readme, workflow, scripts):
                         f"uses: actions/checkout@v4}}\n"),
             (labels[9], f"\n      - run:\n          # python3 scripts/{this}\n"
                         f"          echo done\n"),
+            (labels[17], f"\n      - 'ru''n': python3 scripts/{this}\n"),
         )
         for label, text in named_not_run:
             got = new(readme, renamed + text, scripts)
@@ -2995,6 +3041,10 @@ def _ci_gate_label_cases(readme, workflow, scripts):
             (labels[11], f"\n      - {{name: a, run: python3 scripts/{this}}}\n"),
             (labels[12], f"\n      - {{name: a, run:\n          "
                          f"'python3 scripts/{this}'}}\n"),
+            (labels[13], f"\n      - \"run\": python3 scripts/{this}\n"),
+            (labels[14], f"\n      - 'run': python3 scripts/{this}\n"),
+            (labels[15], f"\n      - \"r\\x75n\": python3 scripts/{this}\n"),
+            (labels[16], f"\n      - {{\"name\": a, \"run\": \"python3 scripts/{this}\"}}\n"),
         )
         for label, text in run:
             got = new(readme, renamed + text, scripts)

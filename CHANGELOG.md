@@ -50,6 +50,19 @@ and stability" says they should not.
 
 ### Changed
 
+- `scripts/check_readme_counts.py` reads a quoted key of the workflow, in a
+  block-style line or a flow mapping, as the key it names: a single-quoted
+  key without its quotes and with each `''` read as `'`, a double-quoted key
+  without its quotes and with its backslash escapes undone. With the step
+  that runs it replaced by `- "run": python3 scripts/check_readme_counts.py`
+  or `- {"name": a, "run": "python3 scripts/check_readme_counts.py"}`, the
+  check exited 1 saying the workflow does not run that script; both now exit
+  0, as the unquoted forms do. Its self-test adds five cases: a step whose
+  `run:` key is double-quoted, one whose key is single-quoted, one whose
+  double-quoted key is written `"r\x75n"`, and a flow-mapping step whose keys
+  are double-quoted, each of which must count as running the script, and the
+  script named only under the key `'ru''n'`, which must not (#196). No
+  fixture changes.
 - `docs/captures/go-verifier.json` records `inputTrees`, the git tree id of
   each path the Go command reads (`verifiers/go`, `fixtures`), in place of
   `commit`. The commit it held, `48b49a8`, was the one the capture was taken
