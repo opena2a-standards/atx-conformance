@@ -1377,14 +1377,86 @@ WORKFLOW_KEY = re.compile(r"^( *)(-[ ]+)?([\w-]+):(?:[ \t]+(.*))?$")
 WORKFLOW_ITEM = re.compile(r"^( *)-(?:[ ]+|$)")
 BLOCK_SCALAR = re.compile(r"^[|>][-+0-9]*[ \t]*(?:#.*)?$")
 SHELL_COMMENT = re.compile(r"(?:^|(?<=\s))#.*$", re.M)
+# Flow-style YAML: the spaces, line breaks and comments between tokens, and a
+# single-quoted, double-quoted or plain scalar. A plain scalar ends at a flow
+# indicator, at a `:` before a space or a flow indicator, and before a comment.
+FLOW_SPACE = re.compile(r"(?:\s+|(?<=\s)#[^\n]*)*")
+FLOW_SCALAR = re.compile(
+    r"'(?:[^']|'')*'(?!')|\"(?:[^\"\\]|\\.)*\""
+    r"|(?:[^\s,\[\]{}:'\"]|:(?=[^\s,\[\]{}]))"
+    r"(?:[^\s,\[\]{}:]|:(?=[^\s,\[\]{}])|\s+(?=[^\s#,\[\]{}:]|:[^\s,\[\]{}]))*",
+    re.S)
+
+
+def flow_node(text, pos):
+    """The flow-style YAML node at text[pos], after the spaces, line breaks
+    and comments before it, and the index past it: a mapping as a dict, a
+    sequence as a list and a scalar as its source text, quotes kept, as the
+    block-style lines are read. A node left empty before `,`, `:`, `]` or `}`
+    is None. Raises EOFError when the text ends inside the node and
+    ValueError when it is not flow-style YAML."""
+    pos = FLOW_SPACE.match(text, pos).end()
+    if pos == len(text):
+        raise EOFError
+    opener = text[pos]
+    if opener not in "{[":
+        scalar = FLOW_SCALAR.match(text, pos)
+        if scalar:
+            return scalar.group(), scalar.end()
+        if opener in "'\"":
+            raise EOFError
+        return None, pos
+    close = "}" if opener == "{" else "]"
+    mapping, sequence = {}, []
+    pos += 1
+    while True:
+        pos = FLOW_SPACE.match(text, pos).end()
+        if pos == len(text):
+            raise EOFError
+        if text[pos] == close:
+            return (mapping if opener == "{" else sequence), pos + 1
+        key, pos = flow_node(text, pos)
+        pos = FLOW_SPACE.match(text, pos).end()
+        pair = text.startswith(":", pos)
+        value = None
+        if pair:
+            value, pos = flow_node(text, pos + 1)
+            pos = FLOW_SPACE.match(text, pos).end()
+        if opener == "[":
+            sequence.append({key: value} if pair and isinstance(key, str) else key)
+        elif isinstance(key, str):
+            mapping[key] = value
+        if pos == len(text):
+            raise EOFError
+        if text[pos] == ",":
+            pos += 1
+        elif text[pos] != close:
+            raise ValueError(f"expected `,` or `{close}` at offset {pos}")
+
+
+def flow_node_lines(lines, i, text):
+    """The flow-style node `text`, the rest of a line, opens, read on through
+    lines[i:] until it closes, and the index of the line after it; None and
+    i when it does not close or is not flow-style YAML."""
+    for end in range(i, len(lines) + 1):
+        try:
+            return flow_node("\n".join([text] + lines[i:end]), 0)[0], end
+        except EOFError:
+            continue
+        except ValueError:
+            break
+    return None, i
 
 
 def workflow_run_commands(workflow):
     """The command text of each `run:` key of an item in a `steps:` sequence
     of the workflow text, read as block-style YAML, with the text from a `#`
     that starts a word to the end of its line removed, as the shell drops a
-    comment. A script named in a YAML comment, a step `name:` or an action's
-    `with:` input is in none of them."""
+    comment. The command may start on the key's line or on a later line
+    indented past it, and a step may be a flow mapping on one line or more
+    (`- {name: a, run: python3 scripts/a.py}`). A script named in a YAML
+    comment, a step `name:` or an action's `with:` input is in none of
+    them."""
     lines = (workflow or "").splitlines()
     commands = []
     # Open nodes, innermost last: (column, "-") for a sequence item and
@@ -1407,12 +1479,28 @@ def workflow_run_commands(workflow):
             stack.pop()
         if item:
             stack.append((indent, "-"))
+        is_step = (len(stack) >= 2 and stack[-1][1] == "-"
+                   and stack[-2][1] == "steps")
+        if item and line.startswith("{", item.end()):
+            # A sequence item written as a flow mapping, on as many lines as
+            # it takes to close.
+            step, i = flow_node_lines(lines, i, line[item.end():])
+            if is_step and isinstance(step, dict) and isinstance(step.get("run"), str):
+                commands.append(SHELL_COMMENT.sub("", step["run"]))
+            continue
         if not key:
             continue
         column = key.start(3)
         name, value = key.group(3), (key.group(4) or "").strip()
-        is_step = (len(stack) >= 2 and stack[-1][1] == "-"
-                   and stack[-2][1] == "steps")
+        # A step's command may start on a later line than its `run:` key,
+        # indented past it, after any YAML comment lines.
+        if not value and name == "run" and is_step:
+            j = i
+            while j < len(lines) and (not lines[j].strip()
+                                      or lines[j].lstrip().startswith("#")):
+                j += 1
+            if j < len(lines) and len(lines[j]) - len(lines[j].lstrip(" ")) > column:
+                value, i = lines[j].strip(), j + 1
         # Lines indented past the key carry its value: a block scalar's body,
         # or the continuation of a value begun on the key's line.
         body = []
@@ -2838,10 +2926,15 @@ INVENTED_SCRIPT = "check_invented.py"
 def _ci_gate_label_cases(readme, workflow, scripts):
     """Add a script no workflow step runs, stop the workflow naming this
     script, then name it again only in a YAML comment, only in shell comments
-    of a `run:` step, and only in a step name and an action input, run an
+    of a `run:` step, only in a step name and an action input, only in the
+    name of a step written as a flow mapping, and only in a YAML comment
+    between a step's `run:` key and the command on the lines after it, run an
     invented helper only through an import and then cut the import, and give
     a script that is not run its own layout line, once calling it a CI gate
-    and once not. Each but the last must add a failure."""
+    and once not. Each but the last must add a failure. Then run this script
+    from a step whose command starts on the line after `run:`, from a step
+    written as a flow mapping on one line, and from one whose command is on
+    its second line: none of the three may add a failure."""
     labels = (
         "scripts/*.py script that no workflow step runs",
         "script the workflow stops naming",
@@ -2851,6 +2944,11 @@ def _ci_gate_label_cases(readme, workflow, scripts):
         "script run only through an import, with the import cut",
         "own layout line calling a script that is not run a CI gate",
         "own layout line saying a script that is not run is run by hand",
+        "script named only in the name of a flow-mapping step",
+        "script named only in a YAML comment after a run: key",
+        "script run by a step whose command starts on the line after run:",
+        "script run by a step written as a flow mapping",
+        "script run by a flow-mapping step whose command is on its second line",
     )
     if not CI_GATE_GLOB.search(readme):
         why = ("no `scripts/*.py  CI gates` layout line found in README.md or its "
@@ -2870,7 +2968,7 @@ def _ci_gate_label_cases(readme, workflow, scripts):
     this = pathlib.Path(__file__).name
     if f"scripts/{this}" not in (workflow or ""):
         why = f"{WORKFLOW_NAME} does not name scripts/{this}"
-        cases.extend((False, label, why) for label in labels[1:5])
+        cases.extend((False, label, why) for label in labels[1:5] + labels[8:])
     else:
         want = f"does not run scripts/{this}"
         renamed = workflow.replace(f"scripts/{this}", "scripts/renamed.py")
@@ -2883,11 +2981,25 @@ def _ci_gate_label_cases(readme, workflow, scripts):
             (labels[4], f"\n      - name: python3 scripts/{this}\n"
                         f"        uses: actions/checkout@v4\n"
                         f"        with:\n          run: python3 scripts/{this}\n"),
+            (labels[8], f"\n      - {{name: python3 scripts/{this}, "
+                        f"uses: actions/checkout@v4}}\n"),
+            (labels[9], f"\n      - run:\n          # python3 scripts/{this}\n"
+                        f"          echo done\n"),
         )
         for label, text in named_not_run:
             got = new(readme, renamed + text, scripts)
             cases.append((any(want in f for f in got), label,
                           f"expected a failure containing {want!r}, got {got}"))
+        run = (
+            (labels[10], f"\n      - run:\n          python3 scripts/{this}\n"),
+            (labels[11], f"\n      - {{name: a, run: python3 scripts/{this}}}\n"),
+            (labels[12], f"\n      - {{name: a, run:\n          "
+                         f"'python3 scripts/{this}'}}\n"),
+        )
+        for label, text in run:
+            got = new(readme, renamed + text, scripts)
+            cases.append((not any(want in f for f in got), label,
+                          f"the step is not read as running it: {got}"))
 
     flow = (workflow or "") + "\n        run: python3 scripts/invented_runner.py\n"
     files = {**scripts, "invented_runner.py": "import invented_helper  # noqa\n",
