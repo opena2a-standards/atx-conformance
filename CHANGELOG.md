@@ -50,6 +50,14 @@ and stability" says they should not.
 
 ### Changed
 
+- `scripts/check_readme_counts.py` reads a block-style key of the workflow
+  written with spaces before its `:` as the same key, as YAML does. With the
+  step that runs it replaced by `run : python3 scripts/check_readme_counts.py`
+  or `"run" : python3 scripts/check_readme_counts.py`, the check exited 1
+  saying the workflow does not run that script; both now exit 0, as `run:`
+  does. Its self-test adds two cases, a step whose plain `run` key and one
+  whose double-quoted `"run"` key has a space before the colon, each of which
+  must count as running the script (#198). No fixture changes.
 - `scripts/check_readme_counts.py` reads a quoted key of the workflow, in a
   block-style line or a flow mapping, as the key it names: a single-quoted
   key without its quotes and with each `''` read as `'`, a double-quoted key
