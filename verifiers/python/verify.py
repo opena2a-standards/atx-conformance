@@ -73,7 +73,10 @@ lesson and scoped to the whole body because ATX signs it all):
     canonicalized and rejects as VERIFIER_CONFIG_ERROR, the category the Go
     reference verifier's JCS library leads to. One input still differs: an
     unpaired surrogate escape followed directly by another \\u escape, which
-    that library reads as a single U+FFFD and this verifier refuses.
+    that library reads as a single U+FFFD and this verifier refuses. A number
+    in it outside the float64 range (1e400, or an integer of 401 digits)
+    rejects as VERIFIER_CONFIG_ERROR too: that library parses every number as
+    a float64.
   - NaN, Infinity and -Infinity are not JSON, so a file carrying one fails to
     load, as it does in the Go reference verifier.
   - the file is read as UTF-8 the way Go's encoding/json reads it: each byte
@@ -551,6 +554,24 @@ def _finite_number(value: Any) -> bool:
         return False
 
 
+def _holds_number_outside_float64(value: Any) -> bool:
+    """True if the raw JSON value holds, at any depth, a number that is not
+    finite as a float64. The Go reference verifier's JCS library parses each
+    number it canonicalizes with strconv.ParseFloat, which refuses such a
+    literal. Walked with a stack, not by recursion, so a value nested as deep
+    as load_fixture allows is read whole."""
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+        elif isinstance(item, (int, float)) and not isinstance(item, bool) and not _finite_number(item):
+            return True
+    return False
+
+
 # The Go type of each credential member the Go reference verifier's atx struct
 # declares. Members it holds as raw JSON (declaredPurpose, behavioralProfile,
 # scanSummary) or does not declare (createdAt) are not decoded.
@@ -979,6 +1000,16 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
     # Step 5: signature verification.
     # Spec mandate: every declared signature MUST verify.
     if version == SUPPORTED_ATC_VERSION_V11:
+        if _holds_number_outside_float64(atx.get("declaredPurpose")):
+            # declaredPurpose enters the TBS as written, so no typed decode
+            # refuses the number first. The Go reference verifier's JCS
+            # library cannot canonicalize it and the verifier reports the
+            # category below, where this serializer would refuse it as a
+            # float (1e400) or write it out (an integer of 401 digits).
+            return VerifyResult(
+                reject_category="VERIFIER_CONFIG_ERROR",
+                reason="v1.1 canonicalization failed: declaredPurpose holds a number outside the float64 range",
+            )
         try:
             payload = canonical_payload_v11(atx)
         except NotImplementedError as exc:

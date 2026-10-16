@@ -2,7 +2,8 @@
 """Unit tests for the Python reference verifier.
 
 These pin behaviour on inputs that no shipped fixture carries: a credential
-whose unsigned declaredPurpose holds a non-integer JSON number, a credential
+whose unsigned declaredPurpose holds a non-integer JSON number or one outside
+the float64 range, a credential
 member outside the type the Go reference verifier decodes it into, an absent or
 null member, timestamps at the edges of Go's RFC 3339 grammar, a
 behavioralProfile.generatedAt outside it, a NaN or Infinity literal, a fixture
@@ -268,6 +269,29 @@ def _load_serializer(path: Path):
     return module
 
 
+# The largest float64 plus half a unit in its last place: the smallest integer
+# that rounds past it, to infinity, under round-half-to-even.
+FLOAT64_EDGE = 2**1024 - 2**970
+
+# Numbers written into an unsigned declaredPurpose, and the category the Go
+# reference verifier reports for each, read from its run over these values.
+GO_PURPOSE_NUMBER_VERDICTS = (
+    ("1e400", "VERIFIER_CONFIG_ERROR"),
+    ("-1e400", "VERIFIER_CONFIG_ERROR"),
+    ("1.7976931348623159e308", "VERIFIER_CONFIG_ERROR"),
+    (str(FLOAT64_EDGE), "VERIFIER_CONFIG_ERROR"),
+    (str(-FLOAT64_EDGE), "VERIFIER_CONFIG_ERROR"),
+    ('{"limit": 1e400}', "VERIFIER_CONFIG_ERROR"),
+    ('["billing:inquiry", 1e400]', "VERIFIER_CONFIG_ERROR"),
+    ("[1.5, 1e400]", "VERIFIER_CONFIG_ERROR"),
+    ("[" * 9997 + "1e400" + "]" * 9997, "VERIFIER_CONFIG_ERROR"),
+    ("1.7976931348623158e308", "SIGNATURE_INVALID"),
+    (str(FLOAT64_EDGE - 1), "SIGNATURE_INVALID"),
+    ("1e308", "SIGNATURE_INVALID"),
+    ("1e-400", "SIGNATURE_INVALID"),
+)
+
+
 class InjectedNumberPurpose(unittest.TestCase):
     def test_non_integer_number_rejects_as_signature_invalid(self):
         # atx-spec §1.3a.2 rule 5: a present non-empty declaredPurpose enters
@@ -289,6 +313,17 @@ class InjectedNumberPurpose(unittest.TestCase):
                 self.assertFalse(got.accepted)
                 self.assertEqual(got.reject_category, "SIGNATURE_INVALID")
                 self.assertIn("signature", got.reason.lower())
+
+    def test_number_outside_float64_range_reaches_the_go_category(self):
+        # The Go reference verifier's JCS library parses each number with
+        # strconv.ParseFloat: one it cannot hold rejects as
+        # VERIFIER_CONFIG_ERROR, one it holds is canonicalized and the
+        # signature fails. Python's float() rounds at the same edge.
+        for literal, category in GO_PURPOSE_NUMBER_VERDICTS:
+            with self.subTest(literal=literal[:40], length=len(literal)):
+                got = _at_verdict(BASELINE_V11, ("declaredPurpose",), literal)
+                self.assertFalse(got.accepted)
+                self.assertEqual(got.reject_category, category, got.reason[:200])
 
     def test_directory_run_reaches_the_summary_line(self):
         # One fixture the verifier cannot canonicalize must not end the run:
@@ -1825,9 +1860,8 @@ class LongInteger(unittest.TestCase):
     def test_declared_purpose_rejects_as_it_does_for_a_shorter_integer(self):
         # declaredPurpose enters the v1.1 signed payload as written, so no
         # typed decode refuses the number there. An integer of 401 digits,
-        # which int() converts, is outside float64 range too. This is not the
-        # Go verdict for either: the Go verifier's JCS library refuses a
-        # number outside float64 range (VERIFIER_CONFIG_ERROR).
+        # which int() converts, is outside float64 range too, and the Go
+        # verifier's JCS library refuses both (VERIFIER_CONFIG_ERROR).
         shorter = "1" + "0" * 400
         for purpose in ("%s", "-%s", '{"x": %s}', "[7, %s]"):
             with self.subTest(purpose=purpose):
@@ -1835,6 +1869,7 @@ class LongInteger(unittest.TestCase):
                 control = _at_verdict(BASELINE_V11, ("declaredPurpose",), purpose % shorter)
                 self.assertFalse(got.accepted)
                 self.assertEqual(got.reject_category, control.reject_category)
+                self.assertEqual(got.reject_category, "VERIFIER_CONFIG_ERROR", got.reason[:200])
 
     def test_directory_run_reaches_the_summary_line(self):
         with tempfile.TemporaryDirectory() as tmp:

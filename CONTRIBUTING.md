@@ -41,6 +41,10 @@ scripts/parity/                  Go/Python per-fixture parity gate
 scripts/*.py                     CI gates: README counts, spec references, schema
                                  validation, conformance profile, implementation
                                  status
+scripts/check_fixture_immutability.py
+                                 each fixture's atx, verifierState and expected
+                                 members against the merge base with origin/main
+                                 (run by hand)
 scripts/check_sibling_rows.py    sibling-repositories table against the sibling
                                  repositories (network, run by hand)
 scripts/check_circl_pin.sh       CI gate: one cloudflare/circl version per Go module
