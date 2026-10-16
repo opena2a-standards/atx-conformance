@@ -31,7 +31,10 @@ those the input paths hold in the working tree, records a non-zero exit
 code, or does not describe the committed capture's bytes and last line;
 and when README.md's excerpt is not the capture's lines, in order, with a
 line holding only `...` standing for the lines left out. It runs the
-self-test first.
+self-test first. A self-test case that raises because git cannot be
+started or a git command exits non-zero is red and prints the error under
+its label; the cases after it still run, and the run ends in its
+`N/N cases green` line.
 
 Each git command runs in the repository root, or in one of the self-test's
 temporary repositories, with every GIT_* variable removed from its
@@ -50,6 +53,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime
+import functools
 import hashlib
 import io
 import json
@@ -63,6 +67,7 @@ import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 README = "README.md"
@@ -629,140 +634,233 @@ def _no_work_tree_inside(other: Path) -> bool:
         tempfile.tempdir = saved
 
 
+# A case is a label and a function that returns whether the case holds. It
+# runs when it is reported, so a case that cannot run git is reported red
+# with the error, and the cases after it still run.
+Case = tuple[str, Callable[[], bool]]
+
+
+def _raised(exc: OSError | subprocess.CalledProcessError) -> list[str]:
+    """The lines a case that raised prints under its label: the command that
+    exited non-zero and its standard error, or the error that stopped it."""
+    if isinstance(exc, subprocess.CalledProcessError):
+        err = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"").decode(
+            "utf-8", errors="replace")
+        return [f"`{shlex.join(exc.cmd)}` exited {exc.returncode}", *_lines(err.strip())]
+    return [f"raised {type(exc).__name__}: {exc}"]
+
+
+def _report(cases: list[Case]) -> int:
+    failed = 0
+    for label, case in cases:
+        try:
+            ok, why = case(), []
+        except (OSError, subprocess.CalledProcessError) as exc:
+            ok, why = False, _raised(exc)
+        print(f"  [{'GREEN' if ok else 'RED  '}] {label}")
+        for line in why:
+            print(f"          {line}")
+        failed += not ok
+    print(f"capture-go-verifier self-test: {len(cases) - failed}/{len(cases)} cases green")
+    return 1 if failed else 0
+
+
+def _red_with(start: Start, env: dict[str, str], needle: str) -> bool:
+    """With `env` set in the environment, _cases() builds its cases and
+    _report() on them exits 1, ends in the summary line, and prints a line
+    holding `needle` under the label of each red case."""
+    out = io.StringIO()
+    with mock.patch.dict(os.environ, env), contextlib.redirect_stdout(out):
+        cases = _cases(start)
+        rc = _report(cases)
+    lines = out.getvalue().splitlines()
+    red = [i for i, line in enumerate(lines) if line.startswith("  [RED  ] ")]
+    return (rc == 1 and bool(red) and all(needle in lines[i + 1] for i in red)
+            and lines[-1] == "capture-go-verifier self-test: "
+                             f"{len(cases) - len(red)}/{len(cases)} cases green")
+
+
+def _cases(start: Start) -> list[Case]:
+    data = (REPO_ROOT / start.capture).read_bytes()
+    capture = _lines(data.decode("utf-8"))
+    summary = capture[-1]
+    first = start.excerpt[0]
+    kept = next(line for line in start.excerpt if "observed: ACCEPT" in line)
+    ok_run = Run(data, b"", 0)
+
+    @functools.cache
+    def published() -> tuple[list[str], dict, dict[str, str]]:
+        """check() on the unaltered copy, the sidecar write() wrote for it,
+        and the tree id `git rev-parse HEAD:<path>` gives for each input."""
+        with _tree() as (root, _):
+            return (check(root), json.loads((root / start.sidecar).read_text(encoding="utf-8")),
+                    {p: _git(root, "rev-parse", "HEAD:" if p == "." else f"HEAD:{p}")[0]
+                     for p in inputs(root, start)})
+
+    def written() -> dict:
+        return published()[1]
+
+    def check_tree_names_missing_sidecar() -> bool:
+        rc, out = _check_tree_on(lambda root, s: (root / s.sidecar).unlink())
+        return rc == 1 and f"FAIL {start.sidecar} missing" in out
+
+    def squash_passes() -> bool:
+        squash_failures, ids, unresolved = _after_squash()
+        return not squash_failures and bool(ids) and not unresolved
+
+    def hook_env_squash_passes() -> bool:
+        hook_squash, other_kept = _beside_other(_squash_in_hook_env)
+        return (isinstance(hook_squash, tuple) and not hook_squash[0] and bool(hook_squash[1])
+                and not hook_squash[2] and other_kept)
+
+    def nested_no_work_tree_fails() -> bool:
+        nested_fails, other_kept = _beside_other(_no_work_tree_inside)
+        return nested_fails is True and other_kept
+
+    return [
+        ("the published README.md and capture, with a sidecar written for them, pass",
+         lambda: not published()[0]),
+        ("write() records the published capture's line count and last line",
+         lambda: written()["outputs"]["capture"]["lines"] == len(capture)
+         and written()["summary"] == summary),
+        ("inputs() lists the working directory and the fixture directory",
+         lambda: inputs(REPO_ROOT, start) == ["verifiers/go", "fixtures"]),
+        ("write() writes the sidecar members in order",
+         lambda: list(written()) == [name for name, _ in MEMBERS]),
+        ("write() runs README.md's command as argv in its working directory",
+         lambda: _write_on(ok_run)
+         == (0, False, [(shlex.split(start.command), start.working_directory)])),
+        ("write() writes nothing when the command exits 1",
+         lambda: _write_on(Run(data, b"", 1))[:2] == (1, True)),
+        ("write() writes nothing when the last line is not a summary line",
+         lambda: _write_on(Run(data.replace(summary.encode(), b"done"), b"", 0))[:2] == (1, True)),
+        ("write() writes nothing when the output is not UTF-8",
+         lambda: _write_on(Run(data + b"\xff\n" + summary.encode() + b"\n", b"", 0))[:2]
+         == (1, True)),
+        ("fails when the capture's first token is edited",
+         lambda: _fails(_edit(_capture, first, first.replace("PASS", "FAIL", 1)), "`outputs`")),
+        ("fails when a line is appended to the capture",
+         lambda: _fails(lambda root, s: (root / s.capture).write_bytes(data + b"extra\n"),
+                        "`outputs`")),
+        ("fails when the capture is missing",
+         lambda: _fails(lambda root, s: (root / s.capture).unlink(), f"{start.capture} missing")),
+        ("fails when the sidecar is missing",
+         lambda: _fails(lambda root, s: (root / s.sidecar).unlink(), f"{start.sidecar} missing")),
+        ("fails when the sidecar is not JSON",
+         lambda: _fails(lambda root, s: (root / s.sidecar).write_text("{", encoding="utf-8"),
+                        "not JSON")),
+        ("fails when the sidecar is a JSON array",
+         lambda: _fails(lambda root, s: (root / s.sidecar).write_text("[]", encoding="utf-8"),
+                        "not a JSON object")),
+        *((f"fails when the sidecar has no `{name}` member",
+           lambda name=name: _fails(_set(name, _DROP), f"no `{name}` member"))
+          for name, _ in MEMBERS),
+        ("fails when `exitCode` is true",
+         lambda: _fails(_set("exitCode", True), "`exitCode` is not")),
+        ("fails when `stderrLines` is a string",
+         lambda: _fails(_set("stderrLines", "0"), "`stderrLines` is not")),
+        ("fails when the sidecar names another command",
+         lambda: _fails(_set("command", start.command + " extra"), "`command`")),
+        ("fails when the sidecar names another working directory",
+         lambda: _fails(_set("workingDirectory", "verifiers/python"), "`workingDirectory`")),
+        ("fails when the sidecar records exit code 1",
+         lambda: _fails(_set("exitCode", 1), "`exitCode`")),
+        ("fails when the sidecar's summary is not the capture's last line",
+         lambda: _fails(_set("summary", summary.replace("pass", "passed")), "`summary`")),
+        ("fails when the sidecar names another capture path",
+         lambda: _fails(_set("outputs", {"capture": {**written()["outputs"]["capture"],
+                                                     "path": "docs/captures/other.txt"}}),
+                        "`outputs`")),
+        ("write() records, for each path the command reads, the tree id "
+         "`git rev-parse HEAD:<path>` gives on the commit holding the inputs",
+         lambda: written()["inputTrees"] == published()[2]
+         and list(published()[2]) == written()["inputs"]),
+        ("fails when the sidecar lists other inputs",
+         lambda: _fails(_set("inputs", written()["inputs"][:1]), "`inputs`")),
+        ("fails when `inputTrees` records another tree for an input",
+         lambda: _fails(_set("inputTrees", {**written()["inputTrees"],
+                                            start.working_directory: "0" * 40}),
+                        "`inputTrees`")),
+        ("fails when a file under an input path changes after the capture",
+         lambda: _fails(lambda root, s: (root / s.working_directory / INPUT).write_text(
+             "changed\n", encoding="utf-8"), "`inputTrees`")),
+        ("fails when a file is added under an input path after the capture",
+         lambda: _fails(lambda root, s: (root / s.working_directory / "added.txt").write_text(
+             "added\n", encoding="utf-8"), "`inputTrees`")),
+        ("fails when the tree is not a git work tree",
+         lambda: _fails(lambda root, s: shutil.rmtree(root / ".git"),
+                        "cannot read the git tree ids")),
+        ("fails when `ranAtUtc` is not a UTC time",
+         lambda: _fails(_set("ranAtUtc", "2000-01-01 00:00:00"), "`ranAtUtc`")),
+        ("fails when a token of a kept excerpt line is edited",
+         lambda: _fails(_edit(_readme, kept, kept.replace("ACCEPT", "REJECT")),
+                        "are not the next run")),
+        ("fails when the excerpt's two runs are swapped",
+         lambda: _fails(_excerpt(_swap_runs), "are not the next run")),
+        ("fails when the elision line is removed and the runs are joined",
+         lambda: _fails(_excerpt(lambda e: [x for x in e if x != ELISION]),
+                        "are not the next run")),
+        ("fails when an elision line opens the excerpt",
+         lambda: _fails(_excerpt(lambda e: [ELISION, *e]), "opens or closes")),
+        ("fails when the label does not say trimmed and the excerpt elides lines",
+         lambda: _fails(_edit(_readme, f"]({start.capture}), trimmed):", f"]({start.capture})):"),
+                        "does not say trimmed")),
+        ("fails when the label names another command than the first command",
+         lambda: _fails(_edit(_readme, f"What `{start.command}`", f"What `{start.command} -v`"),
+                        "the label names")),
+        ("fails when the label links another capture",
+         lambda: _fails(_edit(_readme, f"]({start.capture})", "](docs/captures/other.txt)"),
+                        "docs/captures/other.txt missing")),
+        ("fails when the first command is not `cd <dir> && <command>`",
+         lambda: _fails(_edit(_readme, f"cd {start.working_directory} && ", ""),
+                        "is not one line")),
+        ("check_tree exits 1 and prints the failure when the sidecar is missing",
+         check_tree_names_missing_sidecar),
+        ("a capture taken on a branch passes in a fresh clone of `main` after a squash merge, "
+         "and each object id its sidecar records resolves there", squash_passes),
+        ("with GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE naming another repository, as git "
+         "exports them to a hook, the squash-merge case passes and that repository's files "
+         "are unchanged", hook_env_squash_passes),
+        ("with the copy inside another repository's work tree, the not-a-git-work-tree case "
+         "fails as named and that repository's files are unchanged", nested_no_work_tree_fails),
+        ("--help prints usage", lambda: _main_on(["--help"])[:2] == (0, USAGE)),
+        ("-h prints usage", lambda: _main_on(["-h"])[:2] == (0, USAGE)),
+        ("an unknown argument prints usage to stderr and exits 2",
+         lambda: _main_on(["--bogus"]) == (2, "", USAGE)),
+        ("the docstring's Usage block is USAGE",
+         lambda: __doc__ is None or __doc__.endswith(USAGE)),
+    ]
+
+
 def self_test() -> int:
     start, failures = read_start(REPO_ROOT)
     if start is None:
         for f in failures:
             print(f"FAIL {f}")
         return 1
-    data = (REPO_ROOT / start.capture).read_bytes()
-    capture = _lines(data.decode("utf-8"))
-    with _tree() as (root, _):
-        baseline = check(root)
-        written = json.loads((root / start.sidecar).read_text(encoding="utf-8"))
-        head_trees = {p: _git(root, "rev-parse", "HEAD:" if p == "." else f"HEAD:{p}")[0]
-                      for p in inputs(root, start)}
-    summary = capture[-1]
-    first = start.excerpt[0]
-    kept = next(line for line in start.excerpt if "observed: ACCEPT" in line)
-    ok_run = Run(data, b"", 0)
-    write_rc, write_nothing, write_seen = _write_on(ok_run)
-    fail_rc, fail_nothing, _ = _write_on(Run(data, b"", 1))
-    nosum_rc, nosum_nothing, _ = _write_on(Run(data.replace(summary.encode(), b"done"), b"", 0))
-    bin_rc, bin_nothing, _ = _write_on(Run(data + b"\xff\n" + summary.encode() + b"\n", b"", 0))
-    tree_rc, tree_out = _check_tree_on(lambda root, s: (root / s.sidecar).unlink())
-    squash_failures, squash_ids, squash_unresolved = _after_squash()
-    hook_squash, hook_other_kept = _beside_other(_squash_in_hook_env)
-    nested_fails, nested_other_kept = _beside_other(_no_work_tree_inside)
-    help_rc, help_out, _ = _main_on(["--help"])
-    h_rc, h_out, _ = _main_on(["-h"])
-    bad_rc, bad_out, bad_err = _main_on(["--bogus"])
-    cases: list[tuple[str, bool]] = [
-        ("the published README.md and capture, with a sidecar written for them, pass",
-         not baseline),
-        ("write() records the published capture's line count and last line",
-         written["outputs"]["capture"]["lines"] == len(capture) and written["summary"] == summary),
-        ("inputs() lists the working directory and the fixture directory",
-         inputs(REPO_ROOT, start) == ["verifiers/go", "fixtures"]),
-        ("write() writes the sidecar members in order",
-         list(written) == [name for name, _ in MEMBERS]),
-        ("write() runs README.md's command as argv in its working directory",
-         write_rc == 0 and not write_nothing
-         and write_seen == [(shlex.split(start.command), start.working_directory)]),
-        ("write() writes nothing when the command exits 1", fail_rc == 1 and fail_nothing),
-        ("write() writes nothing when the last line is not a summary line",
-         nosum_rc == 1 and nosum_nothing),
-        ("write() writes nothing when the output is not UTF-8", bin_rc == 1 and bin_nothing),
-        ("fails when the capture's first token is edited",
-         _fails(_edit(_capture, first, first.replace("PASS", "FAIL", 1)), "`outputs`")),
-        ("fails when a line is appended to the capture",
-         _fails(lambda root, s: (root / s.capture).write_bytes(data + b"extra\n"), "`outputs`")),
-        ("fails when the capture is missing",
-         _fails(lambda root, s: (root / s.capture).unlink(), f"{start.capture} missing")),
-        ("fails when the sidecar is missing",
-         _fails(lambda root, s: (root / s.sidecar).unlink(), f"{start.sidecar} missing")),
-        ("fails when the sidecar is not JSON",
-         _fails(lambda root, s: (root / s.sidecar).write_text("{", encoding="utf-8"), "not JSON")),
-        ("fails when the sidecar is a JSON array",
-         _fails(lambda root, s: (root / s.sidecar).write_text("[]", encoding="utf-8"),
-                "not a JSON object")),
-        *((f"fails when the sidecar has no `{name}` member",
-           _fails(_set(name, _DROP), f"no `{name}` member")) for name, _ in MEMBERS),
-        ("fails when `exitCode` is true", _fails(_set("exitCode", True), "`exitCode` is not")),
-        ("fails when `stderrLines` is a string",
-         _fails(_set("stderrLines", "0"), "`stderrLines` is not")),
-        ("fails when the sidecar names another command",
-         _fails(_set("command", start.command + " extra"), "`command`")),
-        ("fails when the sidecar names another working directory",
-         _fails(_set("workingDirectory", "verifiers/python"), "`workingDirectory`")),
-        ("fails when the sidecar records exit code 1", _fails(_set("exitCode", 1), "`exitCode`")),
-        ("fails when the sidecar's summary is not the capture's last line",
-         _fails(_set("summary", summary.replace("pass", "passed")), "`summary`")),
-        ("fails when the sidecar names another capture path",
-         _fails(_set("outputs", {"capture": {**written["outputs"]["capture"],
-                                             "path": "docs/captures/other.txt"}}), "`outputs`")),
-        ("write() records, for each path the command reads, the tree id "
-         "`git rev-parse HEAD:<path>` gives on the commit holding the inputs",
-         written["inputTrees"] == head_trees and list(head_trees) == written["inputs"]),
-        ("fails when the sidecar lists other inputs",
-         _fails(_set("inputs", written["inputs"][:1]), "`inputs`")),
-        ("fails when `inputTrees` records another tree for an input",
-         _fails(_set("inputTrees", {**written["inputTrees"], start.working_directory: "0" * 40}),
-                "`inputTrees`")),
-        ("fails when a file under an input path changes after the capture",
-         _fails(lambda root, s: (root / s.working_directory / INPUT).write_text(
-             "changed\n", encoding="utf-8"), "`inputTrees`")),
-        ("fails when a file is added under an input path after the capture",
-         _fails(lambda root, s: (root / s.working_directory / "added.txt").write_text(
-             "added\n", encoding="utf-8"), "`inputTrees`")),
-        ("fails when the tree is not a git work tree",
-         _fails(lambda root, s: shutil.rmtree(root / ".git"), "cannot read the git tree ids")),
-        ("fails when `ranAtUtc` is not a UTC time",
-         _fails(_set("ranAtUtc", "2000-01-01 00:00:00"), "`ranAtUtc`")),
-        ("fails when a token of a kept excerpt line is edited",
-         _fails(_edit(_readme, kept, kept.replace("ACCEPT", "REJECT")), "are not the next run")),
-        ("fails when the excerpt's two runs are swapped",
-         _fails(_excerpt(_swap_runs), "are not the next run")),
-        ("fails when the elision line is removed and the runs are joined",
-         _fails(_excerpt(lambda e: [x for x in e if x != ELISION]), "are not the next run")),
-        ("fails when an elision line opens the excerpt",
-         _fails(_excerpt(lambda e: [ELISION, *e]), "opens or closes")),
-        ("fails when the label does not say trimmed and the excerpt elides lines",
-         _fails(_edit(_readme, f"]({start.capture}), trimmed):", f"]({start.capture})):"),
-                "does not say trimmed")),
-        ("fails when the label names another command than the first command",
-         _fails(_edit(_readme, f"What `{start.command}`", f"What `{start.command} -v`"),
-                "the label names")),
-        ("fails when the label links another capture",
-         _fails(_edit(_readme, f"]({start.capture})", "](docs/captures/other.txt)"),
-                "docs/captures/other.txt missing")),
-        ("fails when the first command is not `cd <dir> && <command>`",
-         _fails(_edit(_readme, f"cd {start.working_directory} && ", ""), "is not one line")),
-        ("check_tree exits 1 and prints the failure when the sidecar is missing",
-         tree_rc == 1 and f"FAIL {start.sidecar} missing" in tree_out),
-        ("a capture taken on a branch passes in a fresh clone of `main` after a squash merge, "
-         "and each object id its sidecar records resolves there",
-         not squash_failures and bool(squash_ids) and not squash_unresolved),
-        ("with GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE naming another repository, as git "
-         "exports them to a hook, the squash-merge case passes and that repository's files "
-         "are unchanged",
-         isinstance(hook_squash, tuple) and not hook_squash[0] and bool(hook_squash[1])
-         and not hook_squash[2] and hook_other_kept),
-        ("with the copy inside another repository's work tree, the not-a-git-work-tree case "
-         "fails as named and that repository's files are unchanged",
-         nested_fails is True and nested_other_kept),
-        ("--help prints usage", help_rc == 0 and help_out == USAGE),
-        ("-h prints usage", h_rc == 0 and h_out == USAGE),
-        ("an unknown argument prints usage to stderr and exits 2",
-         bad_rc == 2 and bad_err == USAGE and not bad_out),
-        ("the docstring's Usage block is USAGE", __doc__ is None or __doc__.endswith(USAGE)),
-    ]
-    failed = 0
-    for label, ok in cases:
-        print(f"  [{'GREEN' if ok else 'RED  '}] {label}")
-        failed += not ok
-    print(f"capture-go-verifier self-test: {len(cases) - failed}/{len(cases)} cases green")
-    return 1 if failed else 0
+
+    def without_git() -> bool:
+        with tempfile.TemporaryDirectory() as empty:
+            return _red_with(start, {"PATH": empty}, "No such file or directory: 'git'")
+
+    def with_failing_git() -> bool:
+        # A `git` that exits 128, as git does when it cannot read its
+        # configuration, is the only command on PATH. It fails whatever
+        # environment git is run with.
+        with tempfile.TemporaryDirectory() as bin_dir:
+            stub = Path(bin_dir) / "git"
+            stub.write_text("#!/bin/sh\necho 'fatal: self-test git' >&2\nexit 128\n",
+                            encoding="utf-8")
+            stub.chmod(0o755)
+            return _red_with(start, {"PATH": bin_dir}, "` exited 128")
+
+    return _report([
+        *_cases(start),
+        ("with no git on PATH, the cases above exit 1 after the summary line, and each red "
+         "one prints the missing git under its label", without_git),
+        ("with a git on PATH that exits 128, the cases above exit 1 after the summary line, "
+         "and each red one prints the git command and its exit code", with_failing_git),
+    ])
 
 
 def main(argv: list[str], root: Path = REPO_ROOT) -> int:
