@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	atxconformance "github.com/opena2a-standards/atx-conformance"
 )
 
 // TestReadmeCrossReferencesResolve pins that every README §"..." or
@@ -71,17 +75,19 @@ func TestReadmeCrossReferencesResolve(t *testing.T) {
 
 // TestCaptureIsVerifierOutput holds docs/captures/go-verifier.txt, the full
 // output README.md excerpts under its first command, to what this verifier
-// writes for that command on this tree. The sidecar beside the capture names
-// the command and the directory it runs in: the directory must be this one
-// and the command `go run . <args>`. The test calls run with <args> and
-// compares its standard output with the capture byte for byte.
-// scripts/capture_go_verifier.py --check holds the README excerpt and the
-// sidecar to the capture but runs no verifier, so a capture that a change to
-// a fixture or to this verifier left behind passed it.
+// writes for that command on this tree. The sidecar beside the capture
+// records the command as README.md states it, the command the capture script
+// ran for it from this tree (`ranAs`) and the directory it ran in: `ranAs`
+// must be `go run <this package> <args>`. The test calls run with <args> in
+// that directory and compares its standard output with the capture byte for
+// byte. scripts/capture_go_verifier.py --check holds the README excerpt and
+// the sidecar to the capture but runs no verifier, so a capture that a change
+// to a fixture or to this verifier left behind passed it.
 func TestCaptureIsVerifierOutput(t *testing.T) {
 	const (
-		sidecarPath = "../../docs/captures/go-verifier.json"
-		capturePath = "../../docs/captures/go-verifier.txt"
+		repoRoot    = "../.."
+		sidecarPath = repoRoot + "/docs/captures/go-verifier.json"
+		capturePath = repoRoot + "/docs/captures/go-verifier.txt"
 	)
 	raw, err := os.ReadFile(sidecarPath)
 	if err != nil {
@@ -89,6 +95,7 @@ func TestCaptureIsVerifierOutput(t *testing.T) {
 	}
 	var sidecar struct {
 		Command          string `json:"command"`
+		RanAs            string `json:"ranAs"`
 		WorkingDirectory string `json:"workingDirectory"`
 		Outputs          struct {
 			Capture struct {
@@ -99,26 +106,45 @@ func TestCaptureIsVerifierOutput(t *testing.T) {
 	if err := json.Unmarshal(raw, &sidecar); err != nil {
 		t.Fatalf("%s: %v", sidecarPath, err)
 	}
-	if sidecar.WorkingDirectory != "verifiers/go" {
-		t.Fatalf("%s names working directory %q; this test runs the verifier in verifiers/go",
-			sidecarPath, sidecar.WorkingDirectory)
-	}
-	if want := strings.TrimPrefix(capturePath, "../../"); sidecar.Outputs.Capture.Path != want {
+	if want := strings.TrimPrefix(capturePath, repoRoot+"/"); sidecar.Outputs.Capture.Path != want {
 		t.Fatalf("%s names capture %q; this test reads %s", sidecarPath, sidecar.Outputs.Capture.Path, want)
 	}
-	fields := strings.Fields(sidecar.Command)
-	if len(fields) < 4 || strings.Join(fields[:3], " ") != "go run ." {
-		t.Fatalf("%s names command %q, not `go run . <fixture paths>`", sidecarPath, sidecar.Command)
+	fields := strings.Fields(sidecar.RanAs)
+	if len(fields) < 3 || fields[0] != "go" || fields[1] != "run" {
+		t.Fatalf("%s records ranAs %q, not `go run <package> <args>`", sidecarPath, sidecar.RanAs)
+	}
+	workDir := filepath.Join(repoRoot, sidecar.WorkingDirectory)
+	here, err := filepath.Abs(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := filepath.Abs(filepath.Join(workDir, fields[2]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != here {
+		t.Fatalf("%s records ranAs %q in %q, which runs %s, not this package",
+			sidecarPath, sidecar.RanAs, sidecar.WorkingDirectory, target)
 	}
 	want, err := os.ReadFile(capturePath)
 	if err != nil {
 		t.Fatalf("cannot read %s: %v", capturePath, err)
 	}
 
+	// Run in the recorded working directory, so a relative path among <args>
+	// names what it named for the capture.
+	if err := os.Chdir(workDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chdir(here); err != nil {
+			t.Error(err)
+		}
+	}()
 	var stdout, stderr bytes.Buffer
 	if code := run(fields[3:], &stdout, &stderr); code != 0 {
-		t.Errorf("`%s` in verifiers/go exits %d; the capture is of a run that exits 0 (stderr: %q)",
-			sidecar.Command, code, stderr.String())
+		t.Errorf("`%s` in %s exits %d; the capture is of a run that exits 0 (stderr: %q)",
+			sidecar.RanAs, sidecar.WorkingDirectory, code, stderr.String())
 	}
 	if bytes.Equal(stdout.Bytes(), want) {
 		return
@@ -134,9 +160,95 @@ func TestCaptureIsVerifierOutput(t *testing.T) {
 		}
 		return "nothing (end of output)"
 	}
-	t.Errorf("%s line %d is %s; `%s` in verifiers/go writes %s. From the repository root, "+
+	t.Errorf("%s line %d is %s; `%s` in %s writes %s. From the repository root, "+
 		"run python3 scripts/capture_go_verifier.py and commit both files it rewrites under docs/captures/",
-		capturePath, line+1, at(exp), sidecar.Command, at(got))
+		capturePath, line+1, at(exp), sidecar.RanAs, sidecar.WorkingDirectory, at(got))
+}
+
+// TestEmbeddedFixturesAreTheFixtureDirectory holds the fixture set the module
+// root embeds, which run walks when it is given no argument, to
+// fixtures/*.json on disk: the same names, and under each name the same bytes.
+func TestEmbeddedFixturesAreTheFixtureDirectory(t *testing.T) {
+	onDisk, err := filepath.Glob(filepath.Join("..", "..", "fixtures", "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(onDisk) == 0 {
+		t.Fatal("no fixtures found on disk; refusing to pass vacuously")
+	}
+	entries, err := fs.ReadDir(atxconformance.Fixtures, "fixtures")
+	if err != nil {
+		t.Fatalf("cannot list the embedded fixtures: %v", err)
+	}
+	var embedded, want []string
+	for _, e := range entries {
+		embedded = append(embedded, e.Name())
+	}
+	for _, p := range onDisk {
+		want = append(want, filepath.Base(p))
+	}
+	sort.Strings(want)
+	if strings.Join(embedded, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("the module root embeds %q; fixtures/ holds %q", embedded, want)
+	}
+	for _, name := range want {
+		disk, err := os.ReadFile(filepath.Join("..", "..", "fixtures", name)) //nolint:gosec // G304: name is a file name listed from fixtures/ above
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := fs.ReadFile(atxconformance.Fixtures, "fixtures/"+name)
+		if err != nil {
+			t.Fatalf("embedded fixtures/%s: %v", name, err)
+		}
+		if !bytes.Equal(got, disk) {
+			t.Errorf("the embedded fixtures/%s differs from the file on disk", name)
+		}
+	}
+}
+
+// TestNoArgumentVerifiesEmbeddedFixtures pins what the published entry point,
+// `go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest`
+// with no argument, writes: the report run writes for the fixtures/
+// directory, each fixture named fixtures/<name>, exiting 0 on the shipped
+// set. Before the module root embedded the fixtures, run with no argument
+// wrote a usage line to stderr and exited 2.
+func TestNoArgumentVerifiesEmbeddedFixtures(t *testing.T) {
+	var fromDir, fromEmbed, stderr bytes.Buffer
+	if code := run([]string{"../../fixtures"}, &fromDir, &stderr); code != 0 {
+		t.Fatalf("run over ../../fixtures exits %d (stderr %q)", code, stderr.String())
+	}
+	if code := run(nil, &fromEmbed, &stderr); code != 0 {
+		t.Fatalf("run with no argument exits %d, want 0 (stderr %q)", code, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("run with no argument writes %q to stderr, want nothing", stderr.String())
+	}
+	if !strings.HasPrefix(fromEmbed.String(), "PASS  fixtures/") {
+		t.Fatalf("run with no argument starts with %q, want a `PASS  fixtures/<name>` line",
+			strings.SplitN(fromEmbed.String(), "\n", 2)[0])
+	}
+	want := strings.ReplaceAll(fromDir.String(), "../../fixtures/", "fixtures/")
+	if got := fromEmbed.String(); got != want {
+		t.Errorf("run with no argument writes:\n%s\nwant the ../../fixtures report with each path as fixtures/<name>:\n%s",
+			got, want)
+	}
+}
+
+// TestHelpPrintsUsage pins that -h and --help write the usage lines to stdout
+// and exit 0.
+func TestHelpPrintsUsage(t *testing.T) {
+	for _, flag := range []string{"-h", "--help"} {
+		var stdout, stderr bytes.Buffer
+		if code := run([]string{flag}, &stdout, &stderr); code != 0 {
+			t.Errorf("run(%s) exits %d, want 0", flag, code)
+		}
+		if stdout.String() != usage {
+			t.Errorf("run(%s) writes %q to stdout, want the usage lines", flag, stdout.String())
+		}
+		if stderr.Len() != 0 {
+			t.Errorf("run(%s) writes %q to stderr, want nothing", flag, stderr.String())
+		}
+	}
 }
 
 // TestFoldKey pins the field-fold used by the fold-aware duplicate detector to

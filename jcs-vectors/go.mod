@@ -1,4 +1,4 @@
-module github.com/opena2a-org/atx-conformance/jcs-vectors
+module github.com/opena2a-standards/atx-conformance/jcs-vectors
 
 go 1.24
 

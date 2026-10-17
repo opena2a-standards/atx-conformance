@@ -2,7 +2,8 @@
 // conformance fixture set. It depends only on the Go standard library plus
 // github.com/cloudflare/circl (for ML-DSA-65 verification per FIPS 204) and
 // github.com/gowebpki/jcs (for RFC 8785 canonicalization of the v1.1 signed
-// payload).
+// payload), and imports the root package of its own module, which embeds
+// the fixture set it verifies when run with no argument.
 //
 // It does NOT import any opena2a-* SDK or registry package. The goal is to
 // validate that the conformance fixtures are byte-stable and that an
@@ -22,12 +23,20 @@
 // (core.md §1.3 step 7). The asserted trustLevel is reported, never checked;
 // see conformance.json notCovered.
 //
-// Usage:
+// Usage, with nothing cloned (the module version go run fetches embeds
+// fixtures/*.json, which a run with no argument walks):
 //
+//	go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest
+//	go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest <fixture.json|dir>...
+//
+// Usage from a checkout, in this directory:
+//
+//	go run .                             (no argument; walks the embedded fixtures/*.json)
 //	go run . ../../fixtures/baseline-valid.json
 //	go run . ../../fixtures/*.json
 //	go run . ../../fixtures              (directory; walks *.json)
 //	go run . ../..                       (repo root; walks fixtures/*.json)
+//	go run . --help                      (prints the usage lines and exits 0)
 //
 // Exit 0 iff every fixture's observed result matches expected.verifyResult.
 package main
@@ -40,6 +49,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -49,6 +59,8 @@ import (
 
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	"github.com/gowebpki/jcs"
+
+	atxconformance "github.com/opena2a-standards/atx-conformance"
 )
 
 // ---------------------------------------------------------------------------
@@ -723,32 +735,85 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-// run verifies the fixtures args name, writes a record per fixture and the
-// summary line to stdout, and returns the exit code: 2 when args name no
-// fixture or a path that does not exist, 1 when a fixture's observed result
-// differs from its expected outcome, 0 otherwise. TestCaptureIsVerifierOutput
-// holds docs/captures/go-verifier.txt to what it writes.
+// usage is what run writes to stdout for -h or --help.
+const usage = `usage: verify [fixture.json|dir]...
+  no argument    verify the fixture set built into this module version (fixtures/*.json)
+  -h, --help     print this usage and exit 0
+`
+
+// source is one fixture to verify: the name the report writes for it and how
+// to read its bytes.
+type source struct {
+	name string
+	read func() ([]byte, error)
+}
+
+// fileSource is the fixture at path, named relative to the working directory.
+func fileSource(path string) source {
+	return source{relPath(path), func() ([]byte, error) {
+		// path originates from os.Args[1:] (operator-supplied fixture file/dir); this is a
+		// standalone CLI verifier with no network/request surface, so no untrusted taint.
+		return os.ReadFile(path) //nolint:gosec // G304: operator-supplied CLI arg, not request-derived
+	}}
+}
+
+// embeddedSources is every fixtures/*.json file the module root embeds, in
+// name order, each named fixtures/<name>.
+func embeddedSources() ([]source, error) {
+	entries, err := fs.ReadDir(atxconformance.Fixtures, "fixtures")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]source, 0, len(entries))
+	for _, e := range entries {
+		name := "fixtures/" + e.Name()
+		out = append(out, source{name, func() ([]byte, error) {
+			return fs.ReadFile(atxconformance.Fixtures, name)
+		}})
+	}
+	return out, nil
+}
+
+// run verifies the fixtures args name, or with no argument the fixture set
+// the module root embeds, writes a record per fixture and the summary line
+// to stdout, and returns the exit code: 0 for -h or --help after writing
+// usage, 2 when args name no fixture or a path that does not exist, 1 when a
+// fixture's observed result differs from its expected outcome, 0 otherwise.
+// TestCaptureIsVerifierOutput holds docs/captures/go-verifier.txt to what it
+// writes.
 func run(args []string, stdout, stderr io.Writer) int {
-	if len(args) < 1 {
-		fmt.Fprintln(stderr, "usage: verify <fixture.json|dir>...")
-		return 2
+	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
+		fmt.Fprint(stdout, usage)
+		return 0
 	}
 
-	paths, err := expandFixturePaths(args)
-	if err != nil {
-		fmt.Fprintln(stderr, "error:", err)
-		return 2
-	}
-	if len(paths) == 0 {
-		fmt.Fprintln(stderr, "no fixture *.json files found in supplied args")
-		return 2
+	var sources []source
+	if len(args) == 0 {
+		var err error
+		if sources, err = embeddedSources(); err != nil {
+			fmt.Fprintln(stderr, "error:", err)
+			return 2
+		}
+	} else {
+		paths, err := expandFixturePaths(args)
+		if err != nil {
+			fmt.Fprintln(stderr, "error:", err)
+			return 2
+		}
+		if len(paths) == 0 {
+			fmt.Fprintln(stderr, "no fixture *.json files found in supplied args")
+			return 2
+		}
+		for _, p := range paths {
+			sources = append(sources, fileSource(p))
+		}
 	}
 
 	totalPass, totalFail := 0, 0
-	for _, p := range paths {
-		f, err := loadFixture(p)
+	for _, s := range sources {
+		f, err := s.load()
 		if err != nil {
-			fmt.Fprintf(stdout, "FAIL  %s  (load error: %v)\n", relPath(p), err)
+			fmt.Fprintf(stdout, "FAIL  %s  (load error: %v)\n", s.name, err)
 			totalFail++
 			continue
 		}
@@ -762,7 +827,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		} else {
 			totalPass++
 		}
-		fmt.Fprintf(stdout, "%s  %s\n", status, relPath(p))
+		fmt.Fprintf(stdout, "%s  %s\n", status, s.name)
 		fmt.Fprintf(stdout, "       expected: %s", f.Expected.VerifyResult)
 		if f.Expected.RejectCategory != "" {
 			fmt.Fprintf(stdout, " [%s]", f.Expected.RejectCategory)
@@ -807,13 +872,21 @@ func matchesExpected(want expectedOutcome, got result) bool {
 	return true
 }
 
-func loadFixture(path string) (fixture, error) {
-	// path originates from os.Args[1:] (operator-supplied fixture file/dir); this is a
-	// standalone CLI verifier with no network/request surface, so no untrusted taint.
-	b, err := os.ReadFile(path) //nolint:gosec // G304: operator-supplied CLI arg, not request-derived
+// load reads and decodes the fixture.
+func (s source) load() (fixture, error) {
+	b, err := s.read()
 	if err != nil {
 		return fixture{}, err
 	}
+	return parseFixture(b)
+}
+
+// loadFixture reads and decodes the fixture file at path.
+func loadFixture(path string) (fixture, error) {
+	return fileSource(path).load()
+}
+
+func parseFixture(b []byte) (fixture, error) {
 	var f fixture
 	if err := json.Unmarshal(b, &f); err != nil {
 		return fixture{}, err

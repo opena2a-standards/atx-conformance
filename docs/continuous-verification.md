@@ -12,11 +12,11 @@ claims the README and its pages under `docs/` make about them -- not every
 sentence below:
 
 1. Both reference verifiers run against `fixtures/` and must report
-   `25 pass, 0 fail`. `go test` in `verifiers/go` runs the Go verifier on
-   the arguments of the command the capture's sidecar names and requires
-   its standard output to equal
-   [`docs/captures/go-verifier.txt`](captures/go-verifier.txt), the full
-   output the README excerpts, byte for byte.
+   `25 pass, 0 fail`. `go test` in `verifiers/go` runs the Go verifier in
+   the directory and with the arguments of the command the capture's
+   sidecar records it ran (`ranAs`) and requires its standard output to
+   equal [`docs/captures/go-verifier.txt`](captures/go-verifier.txt), the
+   full output the README excerpts, byte for byte.
 2. The fixture generator re-runs and the committed fixture bytes plus
    `MANIFEST.sha256` must reproduce exactly (byte-pin).
 3. The JCS byte-agreement gate

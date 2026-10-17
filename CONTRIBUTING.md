@@ -24,6 +24,12 @@ CHANGELOG.md                     changes to existing fixtures, by commit
 MANIFEST.sha256                  per-fixture SHA-256 (path-sorted)
 conformance.json                 requirement-to-fixture profile (generated from the
                                  fixtures, drift-checked in CI)
+go.mod, go.sum                   the Go module the repository publishes,
+                                 github.com/opena2a-standards/atx-conformance;
+                                 verifiers/go is its main package
+fixtures.go                      the module's root package: fixtures/*.json as an
+                                 embedded file system, the set the Go verifier
+                                 walks when run with no argument
 docs/                            scope, fixtures, gates, dependencies, version
                                  pinning and stability (the pages the README
                                  links), and the full output of its Go run with
@@ -35,7 +41,8 @@ schemas/*.schema.json            fixture-v1 and conformance-profile-v1 file form
 schemas/vendor/atx-spec/         vendored atx-spec credential schema and core.md
                                  (pinned ref)
 vectors/                         test keypair vectors (TEST-ONLY)
-verifiers/go/                    Go reference verifier (full hybrid)
+verifiers/go/                    Go reference verifier (full hybrid), the module's
+                                 main package
 verifiers/python/                Python reference verifier (full hybrid)
 scripts/generate-fixtures/       deterministic fixture generator (Go)
 scripts/parity/                  Go/Python per-fixture parity gate
@@ -48,8 +55,8 @@ scripts/check_fixture_immutability.py
                                  (run by hand)
 scripts/check_sibling_rows.py    sibling-repositories table against the sibling
                                  repositories (network, run by hand)
-scripts/capture_go_verifier.py   reruns the README's Go command and rewrites its
-                                 capture and sidecar under docs/captures/;
+scripts/capture_go_verifier.py   runs the README's Go command from the tree and
+                                 rewrites its capture and sidecar under docs/captures/;
                                  --check holds them to the README excerpt and
                                  the sidecar's input tree ids to the working
                                  tree (run by hand)

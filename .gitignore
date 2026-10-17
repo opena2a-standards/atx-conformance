@@ -1,4 +1,6 @@
 # Compiled Go binaries (verifiers and generator are `go run`-only).
+# `go build ./verifiers/go` at the repository root writes `go` there.
+/go
 verifiers/go/go
 verifiers/go/verify
 scripts/generate-fixtures/generate-fixtures

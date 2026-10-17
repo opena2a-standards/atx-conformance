@@ -1,4 +1,4 @@
-module github.com/opena2a-org/atx-conformance/verifiers/go
+module github.com/opena2a-standards/atx-conformance
 
 go 1.22.0
 

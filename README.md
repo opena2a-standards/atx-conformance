@@ -13,26 +13,30 @@ License: Apache 2.0. All keypairs, seeds, and credential identifiers in this
 repository are TEST-ONLY.
 
 ```bash
-cd verifiers/go && go run . ../../fixtures
+go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest
 ```
-What `go run . ../../fixtures` prints ([full output](docs/captures/go-verifier.txt), trimmed):
+What `go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest` prints ([full output](docs/captures/go-verifier.txt), trimmed):
 ```text
-PASS  ../../fixtures/baseline-valid-hybrid.json
+PASS  fixtures/baseline-valid-hybrid.json
        expected: ACCEPT
        observed: ACCEPT
        signatures: 2/2 valid (ed25519=true mldsa65=true)
        trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
 ...
-PASS  ../../fixtures/wrong-issuer.json
+PASS  fixtures/wrong-issuer.json
        expected: REJECT [UNTRUSTED_ISSUER]
        observed: REJECT[UNTRUSTED_ISSUER: issuer DID did:opena2a:authority:attacker.example is not in the verifier's trusted set (untrusted issuer)]
 
 summary: 25 pass, 0 fail (25 fixtures)
 ```
 
-The command exits 1 when any fixture's result differs from its expected
-outcome. On its first run, `go run` downloads the modules listed in
-[`verifiers/go/go.mod`](verifiers/go/go.mod).
+With no argument the verifier walks the fixture set built into the module
+version `go run` fetched, `fixtures/*.json` of that commit, with nothing
+cloned. The command exits 1 when any fixture's result differs from its
+expected outcome. This repository has no tags, so `@latest` is the newest
+commit on `main`; `@<commit>` in its place runs the verifier and fixtures of
+that commit. On its first run, `go run` downloads the module and the modules
+listed in [`go.mod`](go.mod).
 
 The suite does not check `contentHash` against an agent binary, transparency
 log inclusion, build attestations or behavioral profiles;
@@ -42,7 +46,19 @@ before relying on a result.
 ## Running the verifiers
 
 Both verifiers walk every `*.json` file in the directory you point them at
-(or you may pass individual fixture files).
+(or you may pass individual fixture files). The Go verifier over fixture
+files of your own:
+
+```bash
+go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest path/to/fixtures
+```
+
+From a checkout of this repository, at its root, the Go verifier of that
+checkout over its fixtures:
+
+```bash
+go run ./verifiers/go fixtures
+```
 
 The Python verifier, from the repository root:
 

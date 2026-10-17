@@ -1,4 +1,4 @@
-module github.com/opena2a-org/atx-conformance/scripts/generate-fixtures
+module github.com/opena2a-standards/atx-conformance/scripts/generate-fixtures
 
 go 1.22.0
 

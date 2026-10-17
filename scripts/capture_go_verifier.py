@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
 """Write (or verify) the capture of README.md's Go verifier run and its sidecar.
 
-README.md opens with one command in a fenced block, `cd <dir> && <command>`,
-then a label line, "What `<command>` prints ([full output](<capture>),
-trimmed):", and a fenced excerpt of that output. This script reads the
-working directory, the command and the capture path from those lines, runs
-the command there, and writes its standard output to the capture
-(docs/captures/go-verifier.txt) and a sidecar beside it with the same name
-ending in .json. The sidecar says how the capture was taken: the command
-and its working directory, the Go release and platform, the paths the
-command reads and the git tree id of each as the run read it, the
-uncommitted files under those paths, the time, the exit code, the number
-of lines written to standard error (not captured), the summary line, and
-the capture's SHA-256 and byte and line counts. A run that exits non-zero,
-prints no `summary:` line last, or prints bytes that are not UTF-8 writes
-nothing.
+README.md opens with one command in a fenced block, `<command>`, run in the
+repository root, or `cd <dir> && <command>`, run in <dir>; then a label
+line, "What `<command>` prints ([full output](<capture>), trimmed):", and a
+fenced excerpt of that output. This script reads the working directory, the
+command and the capture path from those lines, runs the command there, and
+writes its standard output to the capture (docs/captures/go-verifier.txt)
+and a sidecar beside it with the same name ending in .json. A command
+`go run <import path>@<version> ...` naming a package of this repository's
+Go module (go.mod at the root) runs that package from the tree,
+`go run ./<dir> ...`, so the capture is of this tree and not of a published
+version of the module. The sidecar says how the capture was taken: the
+command as README.md states it, the command run for it (`ranAs`) and its
+working directory, the Go release and platform, the paths the command reads
+and the git tree id of each as the run read it, the uncommitted files under
+those paths, the time, the exit code, the number of lines written to
+standard error (not captured), the summary line, and the capture's SHA-256
+and byte and line counts. A run that exits non-zero, prints no `summary:`
+line last, or prints bytes that are not UTF-8 writes nothing.
 
 The sidecar records tree ids, not a commit id. A capture is committed on
 a branch that is squash-merged, so the commit a run sees is left off the
@@ -26,7 +30,8 @@ changes.
 `--check` runs no Go command and needs no Go toolchain; it runs git. It
 fails when the sidecar is missing, is not a JSON object, lacks a member or
 holds one of the wrong type, names another command, working directory,
-capture or list of input paths than README.md, records tree ids other than
+capture or list of input paths than README.md or another `ranAs` than the
+command runs as, records tree ids other than
 those the input paths hold in the working tree, records a non-zero exit
 code, or does not describe the committed capture's bytes and last line;
 and when README.md's excerpt is not the capture's lines, in order, with a
@@ -81,18 +86,23 @@ Usage:
     python3 scripts/capture_go_verifier.py --help       # print this usage
 """
 
-START = re.compile(r"cd (?P<dir>[^\s&;|]+) && (?P<cmd>[^&;|`]+)")
+# The first command: `<command>`, run in the repository root, or
+# `cd <dir> && <command>`, run in <dir>.
+START = re.compile(r"(?:cd (?P<dir>[^\s&;|]+) && )?(?P<cmd>[^&;|`]+)")
 LABEL = re.compile(r"What `(?P<cmd>[^`]+)` prints "
                    r"\(\[full output\]\((?P<path>docs/captures/[^)/\s]+\.txt)\)(?P<trimmed>, trimmed)?\):")
+# The module path go.mod declares, and the patterns of a //go:embed directive.
+MODULE = re.compile(r"^module[ \t]+(\S+)", re.M)
+EMBED = re.compile(r"^//go:embed[ \t]+(.+?)[ \t]*$", re.M)
 ELISION = "..."
 SUMMARY = "summary: "
 UTC = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 # Sidecar members, in the order they are written, and the type each holds.
 MEMBERS: tuple[tuple[str, type], ...] = (
-    ("command", str), ("workingDirectory", str), ("stream", str), ("goVersion", str),
-    ("platform", str), ("inputs", list), ("inputTrees", dict), ("inputsUncommitted", list),
-    ("ranAtUtc", str), ("exitCode", int), ("stderrLines", int), ("summary", str),
-    ("outputs", dict),
+    ("command", str), ("ranAs", str), ("workingDirectory", str), ("stream", str),
+    ("goVersion", str), ("platform", str), ("inputs", list), ("inputTrees", dict),
+    ("inputsUncommitted", list), ("ranAtUtc", str), ("exitCode", int), ("stderrLines", int),
+    ("summary", str), ("outputs", dict),
 )
 
 
@@ -100,6 +110,10 @@ MEMBERS: tuple[tuple[str, type], ...] = (
 class Start:
     working_directory: str
     command: str
+    # The directory, relative to the repository root, of the package a
+    # `go run <import path>@<version>` command names in this repository's
+    # module; None for any other command, which runs as written.
+    package: str | None
     capture: str
     trimmed: bool
     excerpt: list[str]
@@ -151,7 +165,10 @@ def read_start(root: Path) -> tuple[Start | None, list[str]]:
     start = START.fullmatch(body[0]) if len(body) == 1 else None
     if start is None:
         return None, [f"{README}:{first + 2}: the first fenced block is not one line "
-                      "`cd <dir> && <command>`"]
+                      "`<command>` or `cd <dir> && <command>`"]
+    package, problem = go_run_package(root, start["cmd"])
+    if problem is not None:
+        return None, [f"{README}:{first + 2}: {problem}"]
     label = LABEL.fullmatch(lines[after]) if after < len(lines) else None
     if label is None:
         return None, [f"{README}:{after + 1}: the line after the first command is not "
@@ -162,8 +179,52 @@ def read_start(root: Path) -> tuple[Start | None, list[str]]:
     excerpt = _block(lines, after + 1)
     if excerpt is None:
         return None, [f"{README}:{after + 2}: no fenced excerpt follows the label"]
-    return Start(start["dir"], start["cmd"], label["path"], bool(label["trimmed"]),
-                 excerpt[0], after + 3), []
+    return Start(working_directory=start["dir"] or ".", command=start["cmd"], package=package,
+                 capture=label["path"], trimmed=bool(label["trimmed"]), excerpt=excerpt[0],
+                 excerpt_line=after + 3), []
+
+
+def module_path(root: Path) -> str | None:
+    """The module path go.mod at the repository root declares, or None when
+    there is no such file or it declares none."""
+    try:
+        text = (root / "go.mod").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    found = MODULE.search(text)
+    return found.group(1) if found else None
+
+
+def go_run_package(root: Path, command: str) -> tuple[str | None, str | None]:
+    """For `go run <import path>@<version> ...`, the directory of that package
+    in this repository's module, relative to the root, and None; for any other
+    command, None and None. The second value is the failure when go.mod
+    declares no module or the import path is not a package of it."""
+    argv = shlex.split(command)
+    if len(argv) < 3 or argv[:2] != ["go", "run"] or "@" not in argv[2]:
+        return None, None
+    import_path = argv[2].partition("@")[0]
+    module = module_path(root)
+    if module is None:
+        return None, ("the first command runs a Go package by import path, and go.mod at "
+                      "the repository root declares no module")
+    if import_path != module and not import_path.startswith(module + "/"):
+        return None, (f"the first command runs `{import_path}`, which is not a package of "
+                      f"this repository's module `{module}`")
+    return import_path[len(module):].lstrip("/") or ".", None
+
+
+def run_argv(start: Start) -> list[str]:
+    """The argv write() runs in the working directory for README.md's
+    command: the command as written, except that `go run <import path>@<version>`
+    of a package of this repository's module runs that package from the tree,
+    `go run ./<dir>`, so the capture is of this tree and not of a published
+    version of the module."""
+    argv = shlex.split(start.command)
+    if start.package is not None:
+        rel = os.path.relpath(start.package, start.working_directory)
+        argv[2] = rel if rel.startswith(".") else "./" + rel
+    return argv
 
 
 def _lines(text: str) -> list[str]:
@@ -223,6 +284,7 @@ def sidecar_failures(root: Path, start: Start, data: bytes) -> list[str]:
     paths = inputs(root, start)
     expected = {
         "command": start.command,
+        "ranAs": shlex.join(run_argv(start)),
         "workingDirectory": start.working_directory,
         "inputs": paths,
         "exitCode": 0,
@@ -302,10 +364,25 @@ def git(root: Path, *args: str, **extra: str) -> list[str]:
 
 
 def inputs(root: Path, start: Start) -> list[str]:
-    """The working directory and each command argument naming a path inside
-    the repository, relative to the repository root."""
+    """The paths the command reads, relative to the repository root. For
+    `go run <import path>@<version>`: the package directory, go.mod and
+    go.sum, the Go files at the module root (the package the verifier
+    imports) and each directory those files embed. For any other command:
+    the working directory. Then each command argument naming a path inside
+    the repository."""
     workdir = (root / start.working_directory).resolve()
-    found = [workdir]
+    if start.package is None:
+        found = [workdir]
+    else:
+        found = [(root / start.package).resolve()]
+        found += [p.resolve() for p in (root / "go.mod", root / "go.sum") if p.is_file()]
+        for go_file in sorted(root.glob("*.go")):
+            found.append(go_file.resolve())
+            for patterns in EMBED.findall(go_file.read_text(encoding="utf-8")):
+                for pattern in shlex.split(patterns):
+                    for embedded in sorted(root.glob(pattern.split("/")[0])):
+                        if embedded.resolve() not in found:
+                            found.append(embedded.resolve())
     for arg in shlex.split(start.command)[1:]:
         p = (workdir / arg).resolve()
         if p.exists() and p.is_relative_to(root.resolve()) and p not in found:
@@ -363,8 +440,9 @@ def write(root: Path, runner: Runner = run_command, describer: Describer = descr
         for f in failures:
             print(f"FAIL {f}")
         return 1
+    argv = run_argv(start)
     try:
-        run = runner(shlex.split(start.command), root / start.working_directory)
+        run = runner(argv, root / start.working_directory)
     except OSError as exc:
         print(f"`{start.command}` in {start.working_directory} did not start ({exc}); "
               "nothing written")
@@ -389,6 +467,7 @@ def write(root: Path, runner: Runner = run_command, describer: Describer = descr
         return 1
     sidecar = {
         "command": start.command,
+        "ranAs": shlex.join(argv),
         "workingDirectory": start.working_directory,
         "stream": "stdout",
         **provenance,
@@ -439,12 +518,18 @@ def _commit_all(root: Path, message: str) -> None:
     _git(root, "commit", "-q", "--allow-empty", "-m", message)
 
 
+def _package_dir(start: Start) -> str:
+    """The directory input whose placeholder file the cases change: the
+    package the command runs, or the working directory."""
+    return start.package or start.working_directory
+
+
 @contextlib.contextmanager
 def _tree(published: Path = REPO_ROOT):
     """A temporary git repository whose `main` commit holds a copy of
-    README.md and a file under each path the command reads, with the capture
-    and a sidecar written for them on top; and the start block read from the
-    copy."""
+    README.md, a copy of each file the command reads and a placeholder file
+    under each directory it reads, with the capture and a sidecar written for
+    them on top; and the start block read from the copy."""
     start, failures = read_start(published)
     if start is None:
         raise SystemExit("\n".join(failures))
@@ -453,10 +538,17 @@ def _tree(published: Path = REPO_ROOT):
         root = Path(tmp)
         (root / start.capture).parent.mkdir(parents=True)
         shutil.copyfile(published / README, root / README)
+        # A file input (go.mod, a Go file at the module root) is copied, since
+        # read_start() and inputs() read the module path and the embed
+        # directives from them.
         for p in inputs(published, start):
-            f = root / p / INPUT if (published / p).is_dir() else root / p
-            f.parent.mkdir(parents=True, exist_ok=True)
-            f.write_text(f"{p}\n", encoding="utf-8")
+            if (published / p).is_dir():
+                f = root / p / INPUT
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_text(f"{p}\n", encoding="utf-8")
+            else:
+                (root / p).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(published / p, root / p)
         _git(root, "-c", "init.defaultBranch=main", "init", "-q")
         _commit_all(root, "inputs")
         with contextlib.redirect_stdout(io.StringIO()):
@@ -563,7 +655,7 @@ def _after_squash() -> tuple[list[str], list[str], list[str]]:
     with _tree() as (root, start), tempfile.TemporaryDirectory() as tmp:
         data = (root / start.capture).read_bytes()
         _git(root, "checkout", "-q", "-b", "capture")
-        changed = root / start.working_directory / INPUT
+        changed = root / _package_dir(start) / INPUT
         changed.write_text(changed.read_text(encoding="utf-8") + "changed\n", encoding="utf-8")
         _commit_all(root, "change an input")
         with contextlib.redirect_stdout(io.StringIO()):
@@ -723,13 +815,23 @@ def _cases(start: Start) -> list[Case]:
         ("write() records the published capture's line count and last line",
          lambda: written()["outputs"]["capture"]["lines"] == len(capture)
          and written()["summary"] == summary),
-        ("inputs() lists the working directory and the fixture directory",
-         lambda: inputs(REPO_ROOT, start) == ["verifiers/go", "fixtures"]),
+        ("read_start() reads a first command with no `cd` as run in the repository root, "
+         "naming the package of this module it runs",
+         lambda: (start.working_directory, start.package) == (".", "verifiers/go")),
+        ("START reads `cd <dir> && <command>` as <command> in <dir>",
+         lambda: START.fullmatch("cd verifiers/go && go run . ../../fixtures")
+         .group("dir", "cmd") == ("verifiers/go", "go run . ../../fixtures")),
+        ("inputs() lists the package, go.mod, go.sum, the module root's Go file and the "
+         "directory it embeds",
+         lambda: inputs(REPO_ROOT, start)
+         == ["verifiers/go", "go.mod", "go.sum", "fixtures.go", "fixtures"]),
+        ("run_argv() runs `go run <module>/verifiers/go@<version>` as `go run ./verifiers/go` "
+         "from the tree",
+         lambda: run_argv(start) == ["go", "run", "./verifiers/go"]),
         ("write() writes the sidecar members in order",
          lambda: list(written()) == [name for name, _ in MEMBERS]),
-        ("write() runs README.md's command as argv in its working directory",
-         lambda: _write_on(ok_run)
-         == (0, False, [(shlex.split(start.command), start.working_directory)])),
+        ("write() runs run_argv() of README.md's command in its working directory",
+         lambda: _write_on(ok_run) == (0, False, [(run_argv(start), start.working_directory)])),
         ("write() writes nothing when the command exits 1",
          lambda: _write_on(Run(data, b"", 1))[:2] == (1, True)),
         ("write() writes nothing when the last line is not a summary line",
@@ -761,6 +863,8 @@ def _cases(start: Start) -> list[Case]:
          lambda: _fails(_set("stderrLines", "0"), "`stderrLines` is not")),
         ("fails when the sidecar names another command",
          lambda: _fails(_set("command", start.command + " extra"), "`command`")),
+        ("fails when the sidecar records another `ranAs`",
+         lambda: _fails(_set("ranAs", "go run ./verifiers/python"), "`ranAs`")),
         ("fails when the sidecar names another working directory",
          lambda: _fails(_set("workingDirectory", "verifiers/python"), "`workingDirectory`")),
         ("fails when the sidecar records exit code 1",
@@ -779,14 +883,18 @@ def _cases(start: Start) -> list[Case]:
          lambda: _fails(_set("inputs", written()["inputs"][:1]), "`inputs`")),
         ("fails when `inputTrees` records another tree for an input",
          lambda: _fails(_set("inputTrees", {**written()["inputTrees"],
-                                            start.working_directory: "0" * 40}),
+                                            _package_dir(start): "0" * 40}),
                         "`inputTrees`")),
         ("fails when a file under an input path changes after the capture",
-         lambda: _fails(lambda root, s: (root / s.working_directory / INPUT).write_text(
+         lambda: _fails(lambda root, s: (root / _package_dir(s) / INPUT).write_text(
              "changed\n", encoding="utf-8"), "`inputTrees`")),
         ("fails when a file is added under an input path after the capture",
-         lambda: _fails(lambda root, s: (root / s.working_directory / "added.txt").write_text(
+         lambda: _fails(lambda root, s: (root / _package_dir(s) / "added.txt").write_text(
              "added\n", encoding="utf-8"), "`inputTrees`")),
+        ("fails when a file input (go.mod) changes after the capture",
+         lambda: _fails(lambda root, s: (root / "go.mod").write_text(
+             (root / "go.mod").read_text(encoding="utf-8") + "\n// changed\n",
+             encoding="utf-8"), "`inputTrees`")),
         ("fails when the tree is not a git work tree",
          lambda: _fails(lambda root, s: shutil.rmtree(root / ".git"),
                         "cannot read the git tree ids")),
@@ -811,9 +919,17 @@ def _cases(start: Start) -> list[Case]:
         ("fails when the label links another capture",
          lambda: _fails(_edit(_readme, f"]({start.capture})", "](docs/captures/other.txt)"),
                         "docs/captures/other.txt missing")),
-        ("fails when the first command is not `cd <dir> && <command>`",
-         lambda: _fails(_edit(_readme, f"cd {start.working_directory} && ", ""),
+        ("fails when the first fenced block holds two lines",
+         lambda: _fails(_edit(_readme, f"{start.command}\n", f"{start.command}\necho\n"),
                         "is not one line")),
+        ("fails when the first command runs a package outside this module",
+         lambda: _fails(_edit(_readme, f"go run {module_path(REPO_ROOT)}/",
+                              "go run example.com/other/"),
+                        "is not a package of this repository's module")),
+        ("fails when go.mod declares no module",
+         lambda: _fails(lambda root, s: (root / "go.mod").write_text("go 1.22.0\n",
+                                                                     encoding="utf-8"),
+                        "declares no module")),
         ("check_tree exits 1 and prints the failure when the sidecar is missing",
          check_tree_names_missing_sidecar),
         ("a capture taken on a branch passes in a fresh clone of `main` after a squash merge, "
