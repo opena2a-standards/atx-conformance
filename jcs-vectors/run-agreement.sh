@@ -12,8 +12,8 @@
 # It then runs both conformance verifiers' own v1.1 path (credential -> TBS
 # projection -> JCS) over the same vectors and requires the same bytes:
 #
-#   Go      verifiers/go      TestJCSVectorsThroughVerifierProjection
-#   Python  verifiers/python  test_verify.JCSVectorsThroughVerifierProjection
+#   Go      verifiers/go/verifier  TestJCSVectorsThroughVerifierProjection
+#   Python  verifiers/python       test_verify.JCSVectorsThroughVerifierProjection
 #
 # This is the Phase 0 MERGE GATE: the jcs-vectors set may only merge when this
 # script exits 0. It runs no issuer, offline-verifier or broker code: each is
@@ -24,19 +24,19 @@ cd "$(dirname "$0")"
 
 fail=0
 
-# Run one named test of verifiers/go. `go test -run` exits 0 with "no tests to
+# Run one named test of verifiers/go/verifier. `go test -run` exits 0 with "no tests to
 # run" when the pattern matches no test, so a renamed test left this leg green
 # without running. It passes only when the -v output carries the test's own
 # PASS line.
 go_verifier_test() {
   local out
-  if ! out=$( cd ../verifiers/go && go test -count=1 -v -run "^$1\$" . 2>&1 ); then
+  if ! out=$( cd ../verifiers/go && go test -count=1 -v -run "^$1\$" ./verifier 2>&1 ); then
     echo "$out"
     return 1
   fi
   echo "$out"
   if ! grep -q "^--- PASS: $1 (" <<<"$out"; then
-    echo "[verifier/go] FAIL  $1 did not run: verifiers/go has no test of that name"
+    echo "[verifier/go] FAIL  $1 did not run: verifiers/go/verifier has no test of that name"
     return 1
   fi
 }
@@ -67,7 +67,7 @@ if [ "$ts_installed" -eq 1 ]; then
 fi
 echo
 
-echo "=== [verifier/go] verifiers/go canonicalPayloadV11 ==="
+echo "=== [verifier/go] verifiers/go/verifier canonicalPayloadV11 ==="
 if ! go_verifier_test TestJCSVectorsThroughVerifierProjection; then fail=1; fi
 # The leg must be able to fail: a name no test has is not reported as run.
 if go_verifier_test TestNoSuchVerifierTest >/dev/null; then

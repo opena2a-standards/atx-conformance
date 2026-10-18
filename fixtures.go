@@ -1,9 +1,9 @@
 // Package atxconformance is the root package of the Go module this
 // repository publishes, github.com/opena2a-standards/atx-conformance. It
 // holds the conformance fixture set, fixtures/*.json, as an embedded file
-// system, so that the reference verifier at verifiers/go, run as
+// system, so that the reference verifier at verifiers/go/verifier, run as
 //
-//	go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest
+//	go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@latest
 //
 // with no argument, verifies the fixtures of the module version go run
 // fetched, with nothing cloned. The verifier's test

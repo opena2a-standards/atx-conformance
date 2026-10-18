@@ -508,6 +508,39 @@ and stability" says they should not.
   different verdict here; the module docstring names the two cases measured
   (#183). No fixture changes.
 
+### Fixed
+
+- README.md's first command is `go run
+  github.com/opena2a-standards/atx-conformance/cmd/atx-verify@latest`.
+  `go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest`,
+  the command it opened with, exits 1 through the default module proxy
+  with `module declares its path as:
+  github.com/opena2a-org/atx-conformance/verifiers/go but was required as:
+  github.com/opena2a-standards/atx-conformance/verifiers/go`: the proxy
+  answers `verifiers/go@latest` with the version of the former nested
+  module it stored for `d8887e6`, and a stored version cannot be removed.
+  No directory on the path `cmd/atx-verify` has held a `go.mod`. Through a
+  local file proxy holding that stored module and this tree as the root
+  module, `cmd/atx-verify@latest` printed `summary: 25 pass, 0 fail (25
+  fixtures)` and exited 0, and `verifiers/go@latest` exited 1 with the
+  error above. The verifier moved to the package `verifiers/go/verifier`,
+  whose `Run` takes the arguments and the two output streams;
+  `cmd/atx-verify` and `verifiers/go` are main packages that call it, so
+  `cd verifiers/go && go run . ../../fixtures` and `go test ./...` there run
+  as before, and `TestEntryPointsPassArgsToRun` holds both to the call.
+  `docs/captures/go-verifier.txt` is unchanged byte for byte; its sidecar
+  records `ranAs` `go run ./cmd/atx-verify` and lists
+  `verifiers/go/verifier` among its inputs, which
+  `scripts/capture_go_verifier.py` reads off the package's imports of the
+  module (self-test 68 cases, from 67). README.md says `@latest` resolves
+  to the commit the module proxy reports as latest, where it said the
+  newest commit on `main`, and that `verifiers/go@<commit>` runs for
+  `ea4b485` or a later commit. `scripts/check_readme_counts.py` fails when
+  a fenced `go run <module>/<dir>@latest` command names a package under a
+  directory whose `go.mod` is in `HEAD`'s history (self-test 225 altered
+  sites, from 216); on the README of `265c96b` it names `verifiers/go`. No
+  fixture changes.
+
 ## e2f9dc4 (#26, 2026-09-09): capabilities rewritten in 22 existing fixtures
 
 Commit e2f9dc4 changed `atx.capabilities` to the AIP `namespace:action`

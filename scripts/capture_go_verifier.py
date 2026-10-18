@@ -94,6 +94,11 @@ LABEL = re.compile(r"What `(?P<cmd>[^`]+)` prints "
 # The module path go.mod declares, and the patterns of a //go:embed directive.
 MODULE = re.compile(r"^module[ \t]+(\S+)", re.M)
 EMBED = re.compile(r"^//go:embed[ \t]+(.+?)[ \t]*$", re.M)
+# The import paths of a Go file: `import "<path>"`, `import name "<path>"`,
+# and each quoted path of an `import ( ... )` block.
+IMPORT_LINE = re.compile(r'^import[ \t]+(?:[\w.]+[ \t]+)?"([^"]+)"', re.M)
+IMPORT_BLOCK = re.compile(r"^import[ \t]*\((.*?)^\)", re.M | re.S)
+QUOTED = re.compile(r'"([^"]+)"')
 ELISION = "..."
 SUMMARY = "summary: "
 UTC = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
@@ -363,18 +368,45 @@ def git(root: Path, *args: str, **extra: str) -> list[str]:
                           capture_output=True, text=True, check=True).stdout.splitlines()
 
 
+def module_imports(root: Path, package: str, module: str) -> list[str]:
+    """The directories, relative to the repository root, of the packages of
+    `module` below its root that the non-test Go files of `package` import,
+    directly or through each other, in the order they are found."""
+    found: list[str] = []
+    pending = [package]
+    while pending:
+        directory = pending.pop(0)
+        for go_file in sorted((root / directory).glob("*.go")):
+            if go_file.name.endswith("_test.go"):
+                continue
+            text = go_file.read_text(encoding="utf-8")
+            paths = IMPORT_LINE.findall(text)
+            for block in IMPORT_BLOCK.findall(text):
+                paths += QUOTED.findall(block)
+            for path in paths:
+                rel = path[len(module) + 1:] if path.startswith(module + "/") else None
+                if rel and rel != package and rel not in found:
+                    found.append(rel)
+                    pending.append(rel)
+    return found
+
+
 def inputs(root: Path, start: Start) -> list[str]:
     """The paths the command reads, relative to the repository root. For
-    `go run <import path>@<version>`: the package directory, go.mod and
-    go.sum, the Go files at the module root (the package the verifier
-    imports) and each directory those files embed. For any other command:
-    the working directory. Then each command argument naming a path inside
-    the repository."""
+    `go run <import path>@<version>`: the package directory, the directory
+    of each package of the module below its root that the package imports
+    (module_imports()), go.mod and go.sum, the Go files at the module root
+    (the package the verifier imports) and each directory those files embed.
+    For any other command: the working directory. Then each command argument
+    naming a path inside the repository."""
     workdir = (root / start.working_directory).resolve()
     if start.package is None:
         found = [workdir]
     else:
         found = [(root / start.package).resolve()]
+        module = module_path(root)
+        if module is not None:
+            found += [(root / d).resolve() for d in module_imports(root, start.package, module)]
         found += [p.resolve() for p in (root / "go.mod", root / "go.sum") if p.is_file()]
         for go_file in sorted(root.glob("*.go")):
             found.append(go_file.resolve())
@@ -516,6 +548,28 @@ def _commit_all(root: Path, message: str) -> None:
     # exactly the copy's files.
     _git(root, "add", "--all")
     _git(root, "commit", "-q", "--allow-empty", "-m", message)
+
+
+def _module_imports_follows_imports() -> bool:
+    """module_imports() over a temporary tree: `a` imports `b` in a block
+    (beside another module's package and the module root), `c` under a
+    name in the same block and `x/y` on a line of its own; `b` imports `c`;
+    a test file of `a` imports `t`."""
+    files = {
+        "a/main.go": ('package main\n\nimport (\n\t"os"\n\n\t"example.com/m/b"\n'
+                      '\tother "example.com/m/c"\n\t"example.com/other/z"\n\t"example.com/m"\n)\n'
+                      '\nimport "example.com/m/x/y"\n'),
+        "a/main_test.go": 'package main\n\nimport "example.com/m/t"\n',
+        "b/b.go": 'package b\n\nimport "example.com/m/c"\n',
+        "c/c.go": "package c\n",
+        "x/y/y.go": "package y\n",
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        for rel, text in files.items():
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(text, encoding="utf-8")
+        return module_imports(root, "a", "example.com/m") == ["x/y", "b", "c"]
 
 
 def _package_dir(start: Start) -> str:
@@ -817,17 +871,21 @@ def _cases(start: Start) -> list[Case]:
          and written()["summary"] == summary),
         ("read_start() reads a first command with no `cd` as run in the repository root, "
          "naming the package of this module it runs",
-         lambda: (start.working_directory, start.package) == (".", "verifiers/go")),
+         lambda: (start.working_directory, start.package) == (".", "cmd/atx-verify")),
         ("START reads `cd <dir> && <command>` as <command> in <dir>",
          lambda: START.fullmatch("cd verifiers/go && go run . ../../fixtures")
          .group("dir", "cmd") == ("verifiers/go", "go run . ../../fixtures")),
-        ("inputs() lists the package, go.mod, go.sum, the module root's Go file and the "
-         "directory it embeds",
+        ("inputs() lists the package, the package of this module it imports, go.mod, go.sum, "
+         "the module root's Go file and the directory it embeds",
          lambda: inputs(REPO_ROOT, start)
-         == ["verifiers/go", "go.mod", "go.sum", "fixtures.go", "fixtures"]),
-        ("run_argv() runs `go run <module>/verifiers/go@<version>` as `go run ./verifiers/go` "
-         "from the tree",
-         lambda: run_argv(start) == ["go", "run", "./verifiers/go"]),
+         == ["cmd/atx-verify", "verifiers/go/verifier", "go.mod", "go.sum", "fixtures.go",
+             "fixtures"]),
+        ("module_imports() follows single-line, named and block imports of this module from "
+         "one package to the next, and skips test files and other modules",
+         _module_imports_follows_imports),
+        ("run_argv() runs `go run <module>/cmd/atx-verify@<version>` as "
+         "`go run ./cmd/atx-verify` from the tree",
+         lambda: run_argv(start) == ["go", "run", "./cmd/atx-verify"]),
         ("write() writes the sidecar members in order",
          lambda: list(written()) == [name for name, _ in MEMBERS]),
         ("write() runs run_argv() of README.md's command in its working directory",

@@ -1,5 +1,7 @@
-// Package main is the Go reference verifier for the ATX v1.0 and v1.1
-// conformance fixture set. It depends only on the Go standard library plus
+// Package verifier is the Go reference verifier for the ATX v1.0 and v1.1
+// conformance fixture set. Two main packages pass their arguments to Run:
+// cmd/atx-verify, the published entry point, and verifiers/go, which runs it
+// from a checkout. It depends only on the Go standard library plus
 // github.com/cloudflare/circl (for ML-DSA-65 verification per FIPS 204) and
 // github.com/gowebpki/jcs (for RFC 8785 canonicalization of the v1.1 signed
 // payload), and imports the root package of its own module, which embeds
@@ -26,10 +28,10 @@
 // Usage, with nothing cloned (the module version go run fetches embeds
 // fixtures/*.json, which a run with no argument walks):
 //
-//	go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest
-//	go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest <fixture.json|dir>...
+//	go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@latest
+//	go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@latest <fixture.json|dir>...
 //
-// Usage from a checkout, in this directory:
+// Usage from a checkout, in verifiers/go:
 //
 //	go run .                             (no argument; walks the embedded fixtures/*.json)
 //	go run . ../../fixtures/baseline-valid.json
@@ -39,7 +41,7 @@
 //	go run . --help                      (prints the usage lines and exits 0)
 //
 // Exit 0 iff every fixture's observed result matches expected.verifyResult.
-package main
+package verifier
 
 import (
 	"bytes"
@@ -364,7 +366,7 @@ const maxScanDepth = 10000
 // {"trustLevel":9,"TRUSTLEVEL":1} collapses to one field — a case-sensitive
 // check would miss that collapse and leave the exact divergence this guard
 // closes. Strictness applies to the credential object only; the fixture wrapper
-// is harness metadata and parses leniently. (Same rule in ../python; ported
+// is harness metadata and parses leniently. (Same rule in verifiers/python; ported
 // from the aap-conformance protected-header lesson, scoped to the whole body
 // because ATX signs it all.)
 func rawDuplicateMember(raw []byte) (string, bool) {
@@ -731,11 +733,7 @@ func controllerDID(keyID string) string {
 // driver
 // ---------------------------------------------------------------------------
 
-func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
-}
-
-// usage is what run writes to stdout for -h or --help.
+// usage is what Run writes to stdout for -h or --help.
 const usage = `usage: verify [fixture.json|dir]...
   no argument    verify the fixture set built into this module version (fixtures/*.json)
   -h, --help     print this usage and exit 0
@@ -751,7 +749,8 @@ type source struct {
 // fileSource is the fixture at path, named relative to the working directory.
 func fileSource(path string) source {
 	return source{relPath(path), func() ([]byte, error) {
-		// path originates from os.Args[1:] (operator-supplied fixture file/dir); this is a
+		// path originates from Run's args, which each main package passes from
+		// os.Args[1:] (operator-supplied fixture file/dir); this is a
 		// standalone CLI verifier with no network/request surface, so no untrusted taint.
 		return os.ReadFile(path) //nolint:gosec // G304: operator-supplied CLI arg, not request-derived
 	}}
@@ -774,14 +773,14 @@ func embeddedSources() ([]source, error) {
 	return out, nil
 }
 
-// run verifies the fixtures args name, or with no argument the fixture set
+// Run verifies the fixtures args name, or with no argument the fixture set
 // the module root embeds, writes a record per fixture and the summary line
 // to stdout, and returns the exit code: 0 for -h or --help after writing
 // usage, 2 when args name no fixture or a path that does not exist, 1 when a
 // fixture's observed result differs from its expected outcome, 0 otherwise.
 // TestCaptureIsVerifierOutput holds docs/captures/go-verifier.txt to what it
 // writes.
-func run(args []string, stdout, stderr io.Writer) int {
+func Run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
 		fmt.Fprint(stdout, usage)
 		return 0

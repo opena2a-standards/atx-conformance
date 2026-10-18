@@ -13,9 +13,9 @@ License: Apache 2.0. All keypairs, seeds, and credential identifiers in this
 repository are TEST-ONLY.
 
 ```bash
-go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest
+go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@latest
 ```
-What `go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest` prints ([full output](docs/captures/go-verifier.txt), trimmed):
+What `go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@latest` prints ([full output](docs/captures/go-verifier.txt), trimmed):
 ```text
 PASS  fixtures/baseline-valid-hybrid.json
        expected: ACCEPT
@@ -33,10 +33,16 @@ summary: 25 pass, 0 fail (25 fixtures)
 With no argument the verifier walks the fixture set built into the module
 version `go run` fetched, `fixtures/*.json` of that commit, with nothing
 cloned. The command exits 1 when any fixture's result differs from its
-expected outcome. This repository has no tags, so `@latest` is the newest
-commit on `main`; `@<commit>` in its place, for `ea4b485` or a later commit
-on `main`, runs the verifier and fixtures of that commit. `ea4b485` is the
-first commit with `go.mod` at the repository root. On its first run, `go run`
+expected outcome. This repository has no tags, so `@latest` resolves to a
+pseudo-version of a commit on `main`, the one the Go module proxy reports as
+latest. `@<commit>` in its place runs the verifier and fixtures of that
+commit: `cmd/atx-verify@<commit>` for a commit that has `cmd/atx-verify`, and
+`verifiers/go@<commit>` for `ea4b485` or a later commit on `main`. `ea4b485`
+is the first commit with `go.mod` at the repository root. Before it,
+`verifiers/go` was a module of its own; the module proxy answers
+`verifiers/go@latest` with a version of that module, and
+`go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest`
+exits 1, so `@latest` goes with `cmd/atx-verify`. On its first run, `go run`
 downloads the module and the modules listed in [`go.mod`](go.mod).
 
 The suite does not check `contentHash` against an agent binary, transparency
@@ -51,7 +57,7 @@ Both verifiers walk every `*.json` file in the directory you point them at
 files of your own:
 
 ```bash
-go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest path/to/fixtures
+go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@latest path/to/fixtures
 ```
 
 From a checkout of this repository, at its root, the Go verifier of that

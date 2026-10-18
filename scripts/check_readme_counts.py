@@ -82,10 +82,10 @@ versions the fixtures expect to ACCEPT. Both said "v1.0" alone while most
 fixtures were v1.1 and the vendored schema was the v1.1 schema.
 
 It also holds the Go verifier's stated dependencies to the direct requirements
-of go.mod at the repository root (the module whose main package is
-verifiers/go), in the three places that state them: the dependency list under
-the README's Go heading, the version-pinning table and the header comment of
-verifiers/go/verify.go. All three named cloudflare/circl alone while go.mod
+of go.mod at the repository root (the module whose package
+verifiers/go/verifier is the verifier), in the three places that state them:
+the dependency list under the README's Go heading, the version-pinning table
+and the header comment of verifiers/go/verifier/verify.go. All three named cloudflare/circl alone while go.mod
 also required gowebpki/jcs.
 
 It also holds what jcs-vectors/README.md and both copies of the vendored RFC
@@ -189,6 +189,17 @@ commit must be the oldest in HEAD's history whose go.mod declares the module
 go.mod declares; a shallow clone, or a tree with no repository, is held to
 the first half alone, and the closing line says so.
 
+It also holds each `go run <module>/<dir>@latest` command in a fenced block
+of the README and its pages to the history. README.md opened with
+`go run <module>/verifiers/go@latest`, which exited 1 through the default
+module proxy: before go.mod moved to the root, verifiers/go held a go.mod of
+its own declaring another module path, the proxy answers
+`<module>/verifiers/go@latest` with a version of that module it stored, and
+the path mismatch stops `go run`. A stored version cannot be removed, so the
+package such a command names must lie under no directory other than the root
+whose go.mod appears in HEAD's history. A shallow clone, or a tree with no
+repository, is not held to it, and the closing line says so.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
 declares, each signature-verification Scope row that claims a set of fixtures
@@ -201,7 +212,9 @@ Go dependency site names every direct requirement (the two README sites at
 its pinned version; the verify.go header states no versions, so it is held
 to module names alone), each sentence offering `@<commit>` names its first
 commit (the first with the module's go.mod at the root, where the history
-can be read), no Python dependency site calls the Python verifier
+can be read), each fenced `go run <module>/<dir>@latest` command names a
+package under no directory that held a go.mod in HEAD's history (where the
+history can be read), no Python dependency site calls the Python verifier
 zero-dependency while requirements.txt names a package, each jcs-vectors
 file describing canonicalize cites RFC 8785 Appendix G, none calls an RFC
 8785 library a reference implementation or port, neither description of what
@@ -508,7 +521,7 @@ ATX_VERSION = re.compile(r"\bv(\d+\.\d+)\b")
 # cloudflare/circl alone after go.mod had come to require gowebpki/jcs for the
 # v1.1 signed payload, so each is held to the direct requirements of go.mod.
 GO_MOD = ROOT / "go.mod"
-VERIFY_GO = ROOT / "verifiers" / "go" / "verify.go"
+VERIFY_GO = ROOT / "verifiers" / "go" / "verifier" / "verify.go"
 GO_MOD_NAME = "go.mod"
 GO_HEADING = re.compile(r"^### Go\b.*$", re.M)
 # A dependency-list item naming a module at a version: "- `<module> <version>`".
@@ -516,7 +529,7 @@ GO_MODULE_ITEM = re.compile(r"^- `([^`\s]+/[^`\s]+) (v[^`\s]+)`", re.M)
 GO_PACKAGE_CLAUSE = re.compile(r"^package \w+", re.M)
 GO_LIST_SITE = "README Go verifier dependency list"
 GO_PIN_SITE = f"README `{VERSION_PINNING}` table"
-GO_HEADER_SITE = "verifiers/go/verify.go header comment"
+GO_HEADER_SITE = "verifiers/go/verifier/verify.go header comment"
 
 
 def accepted_versions(paths):
@@ -668,7 +681,7 @@ def go_dependency_failures(readme, go_mod, verify_go):
                                     f"{GO_MOD_NAME} pins {version}")
 
     if verify_go is None:
-        failures.append(f"{GO_HEADER_SITE} not found: verifiers/go/verify.go "
+        failures.append(f"{GO_HEADER_SITE} not found: verifiers/go/verifier/verify.go "
                         f"is missing")
     else:
         header = go_header(verify_go)
@@ -692,6 +705,20 @@ GO_MODULE = re.compile(r"^module[ \t]+(\S+)", re.M)
 START_SITE = f"README {COMMIT_FORM} sentence"
 
 
+def _history_git(root):
+    """A function running one git command in `root` with every GIT_*
+    variable removed and git not let look for a repository above `root`, so
+    a copy of the tree outside the repository reads as having no history."""
+    env = {name: value for name, value in os.environ.items()
+           if not name.startswith("GIT_")}
+    env["GIT_CEILING_DIRECTORIES"] = str(pathlib.Path(root).resolve().parent)
+
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=root, env=env,
+                              capture_output=True, text=True, check=False)
+    return git
+
+
 def first_module_commit(root, go_mod):
     """The id of the oldest commit in HEAD's history whose go.mod at the root
     declares the module `go_mod` declares, or None when it cannot be read: no
@@ -704,14 +731,7 @@ def first_module_commit(root, go_mod):
     module = GO_MODULE.search(go_mod or "")
     if module is None:
         return None
-    env = {name: value for name, value in os.environ.items()
-           if not name.startswith("GIT_")}
-    env["GIT_CEILING_DIRECTORIES"] = str(pathlib.Path(root).resolve().parent)
-
-    def git(*args):
-        return subprocess.run(["git", *args], cwd=root, env=env,
-                              capture_output=True, text=True, check=False)
-
+    git = _history_git(root)
     try:
         shallow = git("rev-parse", "--is-shallow-repository")
         if shallow.returncode != 0 or shallow.stdout.strip() != "false":
@@ -750,6 +770,66 @@ def module_start_failures(readme, start):
                 f"form runs from, but the first commit in HEAD's history whose "
                 f"{GO_MOD_NAME} at the root declares the module is {start[:7]} "
                 f"({start})")
+    return failures
+
+
+# README.md opened with `go run <module>/verifiers/go@latest`, which exited 1
+# through the default module proxy: before go.mod moved to the root,
+# verifiers/go held a go.mod of its own declaring another module path, and the
+# proxy answers `<module>/verifiers/go@latest` with a version of that module it
+# stored. go run tries the longest module path first and stops on the path
+# mismatch. A stored version cannot be removed, so the package a fenced
+# `go run <module>/<dir>@latest` command names must lie under no directory that
+# held a go.mod.
+FENCED = re.compile(r"^```[^\n]*\n(.*?)^```", re.M | re.S)
+LATEST_RUN = re.compile(r"\bgo run (\S+?)@latest\b")
+LATEST_SITE = "README `go run <module>/<dir>@latest` command"
+
+
+def nested_module_dirs(root):
+    """Each directory other than the root whose go.mod appears in HEAD's
+    history, sorted, or None when it cannot be read: git cannot run, `root` is
+    not a repository's top level, or the clone is shallow (a go.mod removed
+    before the commit the clone was cut at is not in it)."""
+    git = _history_git(root)
+    try:
+        shallow = git("rev-parse", "--is-shallow-repository")
+        if shallow.returncode != 0 or shallow.stdout.strip() != "false":
+            return None
+        listed = git("log", "--format=", "--name-only", "HEAD", "--",
+                     f":(glob)**/{GO_MOD_NAME}")
+        if listed.returncode != 0:
+            return None
+    except OSError:
+        return None
+    return sorted({str(pathlib.PurePosixPath(p).parent)
+                   for p in listed.stdout.split() if p != GO_MOD_NAME})
+
+
+def latest_run_failures(readme, go_mod, nested):
+    """Each `go run <import path>@latest` in a fenced block of the README and
+    its pages that names a package of the module go.mod declares must name
+    one under no directory of `nested` (nested_module_dirs()). With no module
+    line, or `nested` None, nothing is checked."""
+    module = GO_MODULE.search(go_mod or "")
+    if module is None or nested is None:
+        return []
+    module = module.group(1)
+    failures = []
+    commands = [path for block in FENCED.findall(readme)
+                for path in LATEST_RUN.findall(block)]
+    for path in dict.fromkeys(commands):
+        if not path.startswith(module + "/"):
+            continue
+        rel = path[len(module) + 1:]
+        for directory in nested:
+            if rel == directory or rel.startswith(directory + "/"):
+                failures.append(
+                    f"{LATEST_SITE} `go run {path}@latest` names a package under "
+                    f"{directory}, which held a {GO_MOD_NAME} of its own in HEAD's "
+                    f"history; the module proxy can answer "
+                    f"`{module}/{directory}@latest` with that module, and go run "
+                    f"exits 1 when its {GO_MOD_NAME} declares another path")
     return failures
 
 
@@ -2348,7 +2428,7 @@ Tree = collections.namedtuple("Tree", (
     "key_vectors used_key_ids versions go_mod verify_go py_requirements "
     "py_dependency_texts jcs_sites tbs_sites tbs_canonical jcs_readme "
     "gate_sites gate_libraries profile outcomes suites scripts front_page "
-    "module_start"))
+    "module_start nested_modules"))
 
 # One check tree_failures() runs: its name, the call (`run(tree)` returns
 # failures) and the alteration the self-test makes to prove the call is still
@@ -2594,7 +2674,7 @@ def _go_dependency_cases(readme, go_mod, verify_go):
     a requirement no site names; each must add a failure naming the site."""
     if go_mod is None or verify_go is None:
         return [(False, "Go verifier dependency sites",
-                 f"{GO_MOD_NAME} or verifiers/go/verify.go is missing")]
+                 f"{GO_MOD_NAME} or verifiers/go/verifier/verify.go is missing")]
     baseline = set(go_dependency_failures(readme, go_mod, verify_go))
     cases = []
 
@@ -2643,7 +2723,7 @@ def _go_dependency_cases(readme, go_mod, verify_go):
                  readme=readme[:row.start(1)] + GO_ALTERED_VERSION + readme[row.end(1):])
 
         if module not in header:
-            missing(f"{GO_HEADER_SITE} naming {module}", "verifiers/go/verify.go")
+            missing(f"{GO_HEADER_SITE} naming {module}", "verifiers/go/verifier/verify.go")
         else:
             case(f"{GO_HEADER_SITE} without {module}", GO_HEADER_SITE, module,
                  verify_go=verify_go.replace(module, "a module", 1))
@@ -2704,6 +2784,45 @@ def _module_start_cases(readme):
     return cases
 
 
+def _latest_run_cases(readme, go_mod, nested):
+    """The published README passes against the directories whose go.mod is in
+    the history (verifiers/go where none can be read). Held to verifiers/go,
+    the retracted first command `go run <module>/verifiers/go@latest` and a
+    package below verifiers/go, each in a fenced block, add a failure naming
+    it; the retracted command in prose adds none. _first_module_commit_cases()
+    reads nested_module_dirs() off temporary repositories."""
+    module = GO_MODULE.search(go_mod or "")
+    if module is None:
+        return [(False, f"{LATEST_SITE} cases", f"{GO_MOD_NAME} declares no module")]
+    go_mod_module = module.group(1)
+    held = nested if nested is not None else ["verifiers/go"]
+    baseline = latest_run_failures(readme, go_mod, held)
+    cases = [(not baseline,
+              f"{LATEST_SITE}s held to the directories whose {GO_MOD_NAME} is in "
+              f"the history ({', '.join(held)})",
+              f"they fail: {baseline}")]
+
+    def case(label, text, want):
+        new = latest_run_failures(text, go_mod, ["verifiers/go"])
+        named = any(f.startswith(LATEST_SITE) and "under verifiers/go," in f for f in new)
+        cases.append((named == want, label,
+                      f"expected {'a' if want else 'no'} {LATEST_SITE} failure "
+                      f"naming verifiers/go, got {new}"))
+
+    def fenced(command):
+        return f"\n\n```bash\n{command}\n```\n"
+
+    retracted = f"go run {go_mod_module}/verifiers/go@latest"
+    case(f"README restating the retracted first command `{retracted}` in a fenced block",
+         readme + fenced(retracted), True)
+    case("a fenced `go run ...@latest` of a package below verifiers/go",
+         readme + fenced(f"go run {go_mod_module}/verifiers/go/cmd/x@latest path/to/fixtures"),
+         True)
+    case(f"`{retracted}` in prose, outside a fenced block",
+         readme + f"\n\n`{retracted}` exits 1.\n", False)
+    return cases
+
+
 def _first_module_commit_cases():
     """first_module_commit() over a repository whose first commit holds a
     nested verifiers/go module, whose second adds go.mod at the root and whose
@@ -2759,6 +2878,16 @@ def _first_module_commit_cases():
             (first_module_commit(plain, module) is None,
              f"{label}: a directory that is no repository",
              f"expected None, got {first_module_commit(plain, module)}"),
+            (nested_module_dirs(repo) == ["verifiers/go"],
+             "nested_module_dirs() over the same repository: verifiers/go, whose "
+             "go.mod is in the history, and not the root",
+             f"expected ['verifiers/go'], got {nested_module_dirs(repo)}"),
+            (nested_module_dirs(shallow) is None,
+             "nested_module_dirs() over a shallow clone of it",
+             f"expected None, got {nested_module_dirs(shallow)}"),
+            (nested_module_dirs(plain) is None,
+             "nested_module_dirs() over a directory that is no repository",
+             f"expected None, got {nested_module_dirs(plain)}"),
         ]
 
 
@@ -3358,6 +3487,19 @@ def _wire_module_start(tree):
     return f"is {INVENTED_START[:7]}", {"module_start": INVENTED_START}
 
 
+def _wire_latest_run(tree):
+    module = GO_MODULE.search(tree.go_mod or "")
+    paths = [path for block in FENCED.findall(tree.readme)
+             for path in LATEST_RUN.findall(block)
+             if module is not None and path.startswith(module.group(1) + "/")]
+    if not paths:
+        return (f"no fenced `go run <module>/<dir>@latest` command found in "
+                f"README.md or its pages")
+    directory = paths[0][len(module.group(1)) + 1:]
+    return (f"names a package under {directory},",
+            {"nested_modules": [*(tree.nested_modules or []), directory]})
+
+
 def _wire_python_dependency(tree):
     site = PY_DEPENDENCY_SITES[0]
     if tree.py_dependency_texts.get(site) is None:
@@ -3451,6 +3593,9 @@ CHECKS = (
     Check("`@<commit>` first commit",
           lambda t: module_start_failures(t.readme, t.module_start),
           _wire_module_start),
+    Check("`@latest` package path",
+          lambda t: latest_run_failures(t.readme, t.go_mod, t.nested_modules),
+          _wire_latest_run),
     Check("Python dependency",
           lambda t: python_dependency_failures(t.py_requirements, t.py_dependency_texts),
           _wire_python_dependency),
@@ -3690,6 +3835,7 @@ def self_test(tree, verbose):
     cases.extend(_version_cases(readme, tree.versions))
     cases.extend(_go_dependency_cases(readme, tree.go_mod, tree.verify_go))
     cases.extend(_module_start_cases(readme))
+    cases.extend(_latest_run_cases(readme, tree.go_mod, tree.nested_modules))
     cases.extend(_python_dependency_cases(tree.py_requirements, tree.py_dependency_texts))
     cases.extend(_jcs_library_cases(tree.jcs_sites))
     cases.extend(_outside_code_cases(tree.gate_sites, tree.gate_libraries))
@@ -3902,6 +4048,7 @@ def main():
                  for path in sorted(SCRIPTS.glob("*.py"))},
         front_page=README.read_text(encoding="utf-8"),
         module_start=first_module_commit(ROOT, go_mod),
+        nested_modules=nested_module_dirs(ROOT),
     )
 
     failed, total = self_test(tree, only_self_test)
@@ -3943,6 +4090,12 @@ def main():
              f"{GO_MOD_NAME} at the root declares the module; "
              if tree.module_start else
              f" (not held to the history: none could be read in this checkout); ")
+          + (f"each fenced `go run <module>/<dir>@latest` command names a package "
+             f"under none of the {len(tree.nested_modules)} directories whose "
+             f"{GO_MOD_NAME} is in HEAD's history; "
+             if tree.nested_modules is not None else
+             f"fenced `go run <module>/<dir>@latest` commands not held to the "
+             f"history: none could be read in this checkout; ")
           + f"no jcs-vectors README or RFC 8785 serializer docstring calls the "
           f"Python verifier zero-dependency; "
           f"each jcs-vectors file describing canonicalize cites "

@@ -216,7 +216,7 @@ def _scope_cases() -> list[tuple[bool, str, str]]:
     # Hand-maintained files are NOT governed. This is limit L2, asserted rather
     # than assumed: the provenance citations in tracked source must stay legal,
     # or this check acquires the false positives it exists to avoid.
-    for rel in ("README.md", "verifiers/go/verify.go", "scripts/generate-fixtures/main.go"):
+    for rel in ("README.md", "verifiers/go/verifier/verify.go", "scripts/generate-fixtures/main.go"):
         quiet = not _probe("canonicalPayload mirrors opena2a-registry/pkg/atcverify.\n", rel)
         out.append((quiet, f"scope: {rel} is NOT governed (limit L2)",
                     "a hand-maintained file was governed -- the provenance "
