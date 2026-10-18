@@ -86,6 +86,21 @@ and stability" says they should not.
 
 ### Changed
 
+- `scripts/check_readme_counts.py` reports a README that fails its
+  `@latest` check as that check's failure. With a fenced block holding `go
+  run github.com/opena2a-standards/atx-conformance/verifiers/go@latest`
+  appended to README.md, its first line was `self-test FAILED: 2 of 225
+  case(s) not caught by the check`, and 3 of 225 on the README of
+  `265c96b`; on both it now prints `self-test passed`, then the check's
+  failure naming that command and `verifiers/go`, and exits 1 as before.
+  The `@latest` cases run on the README less each fenced line the check
+  fails, and with `--self-test` the first case's label says how many lines
+  were removed; the `@latest` wiring case holds a command the check
+  already fails to a directory above its package. The self-test adds three
+  cases over a README opening with that command in a fenced block: the
+  check names the command and `verifiers/go`, and the `@latest` cases and
+  the wiring case stay green (228 altered sites, from 225). No fixture
+  changes.
 - The Python verifier writes the signatures line's booleans as `true` and
   `false`, and quotes an unsupported `atcVersion` or a duplicate member name
   as Go's `%q` does, so its report over `fixtures/` from the repository root

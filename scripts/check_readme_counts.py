@@ -199,7 +199,9 @@ its own declaring another module path, the proxy answers
 the path mismatch stops `go run`. A stored version cannot be removed, so the
 package such a command names must lie under no directory other than the root
 whose go.mod appears in HEAD's history. A shallow clone, or a tree with no
-repository, is not held to it, and the closing line says so.
+repository, is not held to it, and the closing line says so. A README that
+fails it is reported as this check's failure: the self-test's `@latest`
+cases run on the README less each fenced line the check fails.
 
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
@@ -2785,22 +2787,47 @@ def _module_start_cases(readme):
     return cases
 
 
+def _passing_latest_runs(readme, go_mod, nested):
+    """`readme` with each line of a fenced block that latest_run_failures()
+    fails against `nested` removed, and the lines removed. A command sits on
+    one line (`go run` holds a space, the path none), so what is left
+    passes."""
+    removed = []
+
+    def keep(block):
+        kept = []
+        for line in block.group(0).split("\n"):
+            failing = latest_run_failures(f"```\n{line}\n```\n", go_mod, nested)
+            (removed if failing else kept).append(line)
+        return "\n".join(kept)
+    return FENCED.sub(keep, readme), removed
+
+
 def _latest_run_cases(readme, go_mod, nested):
     """The published README passes against the directories whose go.mod is in
     the history (verifiers/go where none can be read). Held to verifiers/go,
     the retracted first command `go run <module>/verifiers/go@latest` and a
     package below verifiers/go, each in a fenced block, add a failure naming
     it; the retracted command in prose adds none. _first_module_commit_cases()
-    reads nested_module_dirs() off temporary repositories."""
+    reads nested_module_dirs() off temporary repositories.
+
+    The cases run on the README less each fenced line the check fails against
+    those directories and verifiers/go, and when any was removed the first
+    case's label says how many: a README that fails the check is reported by
+    the check, and not as cases that fail for its reason."""
     module = GO_MODULE.search(go_mod or "")
     if module is None:
         return [(False, f"{LATEST_SITE} cases", f"{GO_MOD_NAME} declares no module")]
     go_mod_module = module.group(1)
     held = nested if nested is not None else ["verifiers/go"]
+    readme, removed = _passing_latest_runs(readme, go_mod,
+                                           sorted({*held, "verifiers/go"}))
     baseline = latest_run_failures(readme, go_mod, held)
     cases = [(not baseline,
               f"{LATEST_SITE}s held to the directories whose {GO_MOD_NAME} is in "
-              f"the history ({', '.join(held)})",
+              f"the history ({', '.join(held)})"
+              + (f"; the cases below run without the {len(removed)} fenced "
+                 f"line(s) the check fails" if removed else ""),
               f"they fail: {baseline}")]
 
     def case(label, text, want):
@@ -2821,6 +2848,43 @@ def _latest_run_cases(readme, go_mod, nested):
          True)
     case(f"`{retracted}` in prose, outside a fenced block",
          readme + f"\n\n`{retracted}` exits 1.\n", False)
+    return cases
+
+
+def _failing_latest_run_cases(tree):
+    """The README of 265c96b opened with the retracted command in a fenced
+    block. The check failed it, and so did three self-test cases, for the
+    README's reason and not their own: the cases above appended to it, and
+    the `@latest` wiring case held it to verifiers/go, which it already
+    failed on. Over the published README with a fenced block holding that
+    command before its first line, the check must name the command and
+    verifiers/go, and every case above and the wiring case must stay
+    green."""
+    module = GO_MODULE.search(tree.go_mod or "")
+    if module is None:
+        return [(False, f"{LATEST_SITE} cases over a README the check fails",
+                 f"{GO_MOD_NAME} declares no module")]
+    retracted = f"go run {module.group(1)}/verifiers/go@latest"
+    readme = f"```bash\n{retracted}\n```\n\n" + tree.readme
+    held = sorted({*(tree.nested_modules or []), "verifiers/go"})
+    label = f"a README opening with `{retracted}` in a fenced block"
+    failures = latest_run_failures(readme, tree.go_mod, held)
+    cases = [(any(f"`{retracted}` names a package under verifiers/go," in f
+                  for f in failures),
+              f"{label} fails the check, naming the command and verifiers/go",
+              f"got {failures}")]
+    red = [case_label for ok, case_label, _ in
+           _latest_run_cases(readme, tree.go_mod, held) if not ok]
+    cases.append((not red, f"{LATEST_SITE} cases over {label}",
+                  f"red for the README's failure, not their own: {red}"))
+    entry = next((e for e in CHECKS if e.wiring is _wire_latest_run), None)
+    if entry is None:
+        cases.append((False, f"the `@latest` wiring case over {label}",
+                      "no entry of CHECKS has the `@latest` wiring"))
+    else:
+        ok, _, detail = _wiring_case(tree._replace(readme=readme, nested_modules=held),
+                                     entry)
+        cases.append((ok, f"the {entry.name} wiring case over {label}", detail))
     return cases
 
 
@@ -3496,9 +3560,19 @@ def _wire_latest_run(tree):
     if not paths:
         return (f"no fenced `go run <module>/<dir>@latest` command found in "
                 f"README.md or its pages")
-    directory = paths[0][len(module.group(1)) + 1:]
-    return (f"names a package under {directory},",
-            {"nested_modules": [*(tree.nested_modules or []), directory]})
+    # A directory already listed adds no failure, so a command the check
+    # already fails (verifiers/go@latest under verifiers/go) is held to a
+    # directory above its package (verifiers) instead.
+    nested = tree.nested_modules or []
+    for path in paths:
+        parts = path[len(module.group(1)) + 1:].split("/")
+        for directory in ("/".join(parts[:i]) for i in range(len(parts), 0, -1)):
+            if directory and directory not in nested:
+                return (f"names a package under {directory},",
+                        {"nested_modules": [*nested, directory]})
+    return (f"each directory holding the package of a fenced `go run "
+            f"<module>/<dir>@latest` command is already listed as one whose "
+            f"{GO_MOD_NAME} is in HEAD's history")
 
 
 def _wire_python_dependency(tree):
@@ -3837,6 +3911,7 @@ def self_test(tree, verbose):
     cases.extend(_go_dependency_cases(readme, tree.go_mod, tree.verify_go))
     cases.extend(_module_start_cases(readme))
     cases.extend(_latest_run_cases(readme, tree.go_mod, tree.nested_modules))
+    cases.extend(_failing_latest_run_cases(tree))
     cases.extend(_python_dependency_cases(tree.py_requirements, tree.py_dependency_texts))
     cases.extend(_jcs_library_cases(tree.jcs_sites))
     cases.extend(_outside_code_cases(tree.gate_sites, tree.gate_libraries))
