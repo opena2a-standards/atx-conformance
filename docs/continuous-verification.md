@@ -33,10 +33,11 @@ sentence below:
    and Python verifiers agree per fixture on gate status, verdict, and
    reject category, and publishes `parity-report.json` as a CI artifact.
    On each argument list of its argument table (an empty argument, `-h` and
-   `--help` at several positions, a directory whose `fixtures` entry is a
-   file, a path that does not exist, a directory with no `*.json`) the two
-   must exit with the same code and write the same first stderr line and
-   verdict lines.
+   `--help` at several positions, `--version` and an unknown option after a
+   path, a repository root, a directory whose `fixtures` entry is a file, a
+   path that does not exist, a directory with no `*.json`) the two must exit
+   with the same code and write the same first stderr line and verdict
+   lines.
 5. `conformance.json` must match the fixture set, and every ATX citation in
    each fixture's `spec` list, each JCS vector's `spec` member and the
    `requirements[].specRefs` of `conformance.json` must link to atx-spec
