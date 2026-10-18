@@ -97,6 +97,21 @@ they should not.
 
 ### Changed
 
+- `docs/running-the-verifiers.md` says the file of a directory argument
+  that names another directory once cleaned, as `d/link/..` can with
+  `d/link` a symbolic link, is named and read as the argument spells the
+  directory, then the file name, with a `/` between the two unless the
+  directory as spelled ends in `/` (#233). It said "then a `/` and the file
+  name", which gives `d/link/..//other.json` for `d/link/../`, while both
+  verifiers print `PASS  d/link/../other.json` for it, exit 0, as they do
+  for `d/link/..`. Its example quotes `d/link/../` beside `d/link/..`. The
+  #231 entry under Fixed, which said the same, says "then the file name,
+  with a `/` between the two unless the argument ends in `/`".
+  `test_verify.py` adds
+  `test_arguments_section_names_the_file_of_a_dotdot_after_a_link_as_printed`,
+  which fails unless that section quotes `d/link/..` and `d/link/../` and
+  the `PASS` line the Python verifier prints for each; on the previous
+  commit's page it fails for `d/link/../`. No fixture changes.
 - README.md says `@latest` resolves to the highest release tag of this
   repository that the Go module proxy reports, and that `go run` resolves
   `@<commit>` to the commit's release tag, or to a pseudo-version when the
@@ -692,8 +707,9 @@ they should not.
   error, exit 1; both write `PASS  d/link/../other.json`, exit 0, having
   verified that copy. Where a directory argument, cleaned as
   `filepath.Clean` cleans it, names another directory than it does, its
-  files are named and read as the argument spells it, then a `/` and the
-  file name, and its `fixtures` entry is looked up there: `r/link/..`,
+  files are named and read as the argument spells it, then the file name,
+  with a `/` between the two unless the argument ends in `/`, and its
+  `fixtures` entry is looked up there: `r/link/..`,
   which resolves to a directory holding `fixtures/`, was walked for its own
   `*.json` and is walked for `fixtures/*.json`. A directory argument that
   names the same directory cleaned keeps the names `filepath.Join` gives:

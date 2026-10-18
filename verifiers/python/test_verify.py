@@ -31,8 +31,10 @@ They hold the report to the Go reference verifier's text: a boolean, a
 string a reason quotes, and the whole report over fixtures/, which must be
 docs/captures/go-verifier.txt byte for byte. Two tests
 read verify.py itself: it imports no name it does not use, and its module
-docstring lists only the checks the verifier runs. Needs the same dependencies
-as verify.py. Run from this directory:
+docstring lists only the checks the verifier runs. Another test reads the
+"Arguments" section of docs/running-the-verifiers.md, which must quote
+d/link/.. and d/link/../ and the PASS line the verifier prints for each.
+Needs the same dependencies as verify.py. Run from this directory:
 
     python3 -m unittest -v test_verify
 """
@@ -2254,6 +2256,15 @@ class GoReportText(unittest.TestCase):
                         got.reason)
 
 
+def _doc_section(doc: str, heading: str) -> str:
+    """The lines under the `## heading` of the page `doc` names, up to its
+    next `## ` heading, joined with a space."""
+    lines = (ROOT / doc).read_text(encoding="utf-8").splitlines()
+    start = lines.index(f"## {heading}") + 1
+    end = next((i for i in range(start, len(lines)) if lines[i].startswith("## ")), len(lines))
+    return " ".join(lines[start:end])
+
+
 class ArgumentContract(unittest.TestCase):
     """The argument rules the Go reference verifier keeps too, and which
     scripts/parity/parity.py runs both verifiers on."""
@@ -2369,6 +2380,31 @@ class ArgumentContract(unittest.TestCase):
                         code, out, err = _run_main(arg)
                         self.assertEqual((code, err), (0, ""), out)
                         self.assertEqual(_verdict_lines(out), want)
+
+    def test_arguments_section_names_the_file_of_a_dotdot_after_a_link_as_printed(self):
+        # The "Arguments" section of docs/running-the-verifiers.md said the
+        # file of a directory argument with a .. after a symbolic link is
+        # named as the argument spells the directory, then a / and the file
+        # name: d/link/..//other.json for d/link/../, for which this verifier
+        # and the Go reference verifier print PASS  d/link/../other.json. In
+        # the layout the section describes, the section must quote d/link/..
+        # and d/link/../ and the PASS line this verifier prints for each.
+        text = _doc_section("docs/running-the-verifiers.md", "Arguments")
+        with tempfile.TemporaryDirectory() as tmp:
+            wd, elsewhere = Path(tmp) / "wd", Path(tmp) / "elsewhere"
+            for directory in (wd / "d", elsewhere / "deep"):
+                directory.mkdir(parents=True)
+            (elsewhere / "other.json").write_bytes((ROOT / "fixtures" / "expired.json").read_bytes())
+            (wd / "d" / "link").symlink_to(elsewhere / "deep", target_is_directory=True)
+            with contextlib.chdir(wd):
+                for arg in ("d/link/..", "d/link/../"):
+                    with self.subTest(arg=arg):
+                        code, out, err = _run_main(arg)
+                        self.assertEqual((code, err), (0, ""), out)
+                        printed = out.splitlines()[0]
+                        self.assertEqual(_verdict_lines(out), [printed, "observed: REJECT[EXPIRED]"])
+                        self.assertIn(f"`{arg}`", text)
+                        self.assertIn(f"`{printed}`", text)
 
 
 class JCSVectorsThroughVerifierProjection(unittest.TestCase):

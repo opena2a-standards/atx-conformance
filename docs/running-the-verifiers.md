@@ -35,11 +35,13 @@ and each `..` is removed with the element before it. When the directory,
 cleaned that way, names another directory than its argument does, as it can
 when a `..` follows a symbolic link, which the operating system resolves
 before it applies the `..`, the file is named and read as the argument
-spells the directory, then a `/` and the file name: with `d/link` a link to
+spells the directory, then the file name, with a `/` between the two unless
+the directory as spelled ends in `/`: with `d/link` a link to
 `elsewhere/deep` and `elsewhere/other.json` a copy of
 `fixtures/expired.json`, both verifiers verify that copy for `d/link/..`
-and print `PASS  d/link/../other.json`. A file named with a trailing `/` is
-refused, `error: stat <path>: not a directory` with exit 2.
+and for `d/link/../`, and print `PASS  d/link/../other.json` for each. A
+file named with a trailing `/` is refused,
+`error: stat <path>: not a directory` with exit 2.
 A fixture named by an absolute path under the working directory is reported
 relative to it instead, the two compared with their symbolic links
 resolved, each `..` applied after the element before it is resolved, as the
