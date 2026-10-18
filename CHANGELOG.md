@@ -86,6 +86,30 @@ and stability" says they should not.
 
 ### Changed
 
+- The two reference verifiers read their arguments alike, and
+  `scripts/parity/parity.py` holds them to it. An empty argument is a usage
+  error on both, `error: an empty argument names no fixture file or
+  directory` with exit 2, read after the options as any path is, where the
+  Go verifier wrote `error: stat : no such file or directory` and the Python
+  verifier walked the current directory. The Go verifier walks a directory
+  whose `fixtures` entry is a file for its own `*.json`, as the Python
+  verifier does, where it stopped with `open <dir>/fixtures: not a
+  directory`; and it writes the Python verifier's line for a path that does
+  not exist (`error: <path>: no such file or directory`, where it wrote
+  `error: stat <path>: no such file or directory`) and for a directory with
+  no `*.json` (`no fixture *.json files found`, where it added `in supplied
+  args`). After the fixture table, `parity.py` runs both verifiers on eight
+  argument lists from a scratch directory (an empty argument, `-h` and
+  `--help` at several positions, a directory whose `fixtures` entry is a
+  file, a path that does not exist, a directory with no `*.json`), the Go
+  verifier as a binary it builds there since `go run` reports a program's
+  exit 2 as its own exit 1, fails when their exit codes, first stderr lines
+  or verdict lines differ, and writes the table under `arguments` in the
+  `--json` report. Its self-test adds ten cases (27 cases green, from 17).
+  `TestEmptyArgumentIsAUsageError`, `TestFixturesFileEntryWalksTheDirectory`
+  and the Python verifier's `ArgumentContract` class pin the rules, and
+  `docs/running-the-verifiers.md` states them under "Arguments". No fixture
+  changes.
 - Both reference verifiers refuse to load a file that is not a fixture: one
   whose `expected` member or `expected.verifyResult` is absent or null, or
   whose `verifyResult` is any string but `ACCEPT` or `REJECT`, the values

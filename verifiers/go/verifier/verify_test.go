@@ -466,6 +466,58 @@ func TestNonFixtureIsALoadError(t *testing.T) {
 	}
 }
 
+// TestEmptyArgumentIsAUsageError pins that an empty argument, alone or beside
+// a path, is a usage error, as it is in the Python verifier: one line on
+// stderr, nothing on stdout, exit 2. Run passed it to os.Stat and wrote
+// `error: stat : no such file or directory`, while the Python verifier read
+// it as the current directory and walked it.
+func TestEmptyArgumentIsAUsageError(t *testing.T) {
+	const want = "error: an empty argument names no fixture file or directory\n"
+	for _, args := range [][]string{{""}, {repoRoot + "/fixtures", ""}} {
+		var stdout, stderr bytes.Buffer
+		if code := Run(args, &stdout, &stderr); code != 2 {
+			t.Errorf("Run(%q) exits %d, want 2", args, code)
+		}
+		if stderr.String() != want {
+			t.Errorf("Run(%q) writes %q to stderr, want %q", args, stderr.String(), want)
+		}
+		if stdout.Len() != 0 {
+			t.Errorf("Run(%q) writes %q to stdout, want nothing", args, stdout.String())
+		}
+	}
+}
+
+// TestFixturesFileEntryWalksTheDirectory pins that a directory whose fixtures
+// entry is a file is walked for its own *.json, as the Python verifier walks
+// it: the fixtures fallback lets a repository root be passed, and a file
+// named fixtures leaves the argument an ordinary directory. Run read
+// <dir>/fixtures whenever it existed and stopped with
+// `open <dir>/fixtures: not a directory`.
+func TestFixturesFileEntryWalksTheDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "fixtures"), []byte("a file, not a directory\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := fs.ReadFile(atxconformance.Fixtures, "fixtures/baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "x.json"), baseline, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{dir}, &stdout, &stderr); code != 0 {
+		t.Fatalf("Run(%q) exits %d, want 0 (stderr %q)", dir, code, stderr.String())
+	}
+	if want, first := "PASS  "+relPath(filepath.Join(dir, "x.json")),
+		strings.SplitN(stdout.String(), "\n", 2)[0]; first != want {
+		t.Errorf("Run(%q) starts with %q, want %q", dir, first, want)
+	}
+	if !strings.HasSuffix(stdout.String(), "\nsummary: 1 pass, 0 fail (1 fixtures)\n") {
+		t.Errorf("Run(%q) writes:\n%s\nwant one fixture, passing", dir, stdout.String())
+	}
+}
+
 // TestFoldKey pins the field-fold used by the fold-aware duplicate detector to
 // encoding/json's own folding: ASCII case-insensitive plus the only two
 // non-ASCII runes encoding/json folds to ASCII (Kelvin U+212A -> k, long s

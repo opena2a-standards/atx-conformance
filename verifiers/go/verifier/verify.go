@@ -59,6 +59,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -799,9 +800,11 @@ func embeddedSources() ([]source, error) {
 // argument of two or more characters that starts with "-", --version
 // aside, is an unknown option, named on stderr above the usage, and
 // returns 2; --version writes the version line and returns 0. Then Run
-// returns 2 when args name no fixture or a path that does not exist, 1 when
-// a fixture's observed result differs from its expected outcome, and 0
-// otherwise. TestCaptureIsVerifierOutput holds
+// returns 2 when an argument is empty or args name no fixture or a path
+// that does not exist, 1 when a fixture's observed result differs from its
+// expected outcome, and 0 otherwise. The Python verifier reads its
+// arguments the same way; scripts/parity/parity.py runs both on each
+// argument list of its ARGUMENT_CASES. TestCaptureIsVerifierOutput holds
 // docs/captures/go-verifier.txt to what it writes.
 func Run(args []string, stdout, stderr io.Writer) int {
 	for _, a := range args {
@@ -826,6 +829,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, versionLine(info, ok))
 		return 0
 	}
+	// os.Stat("") fails, and the Python verifier's Path("") is the current
+	// directory: an empty argument names neither, so nothing is walked.
+	if slices.Contains(args, "") {
+		fmt.Fprintln(stderr, "error: an empty argument names no fixture file or directory")
+		return 2
+	}
 
 	var sources []source
 	if len(args) == 0 {
@@ -841,7 +850,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		if len(paths) == 0 {
-			fmt.Fprintln(stderr, "no fixture *.json files found in supplied args")
+			fmt.Fprintln(stderr, "no fixture *.json files found")
 			return 2
 		}
 		for _, p := range paths {
@@ -968,14 +977,21 @@ func expandFixturePaths(args []string) ([]string, error) {
 	var out []string
 	for _, a := range args {
 		info, err := os.Stat(a) //nolint:gosec // G703: operator-supplied CLI arg, not request-derived
+		if errors.Is(err, fs.ErrNotExist) {
+			// The Python verifier's wording, which the parity gate holds
+			// this one to.
+			return nil, fmt.Errorf("%s: no such file or directory", a)
+		}
 		if err != nil {
 			return nil, err
 		}
 		switch {
 		case info.IsDir():
 			fixDir := a
-			// Allow passing the repo root: look in $arg/fixtures if it exists.
-			if _, err := os.Stat(filepath.Join(a, "fixtures")); err == nil { //nolint:gosec // G703: operator-supplied CLI arg
+			// Allow passing the repo root: look in $arg/fixtures when it is a
+			// directory. A file named fixtures leaves $arg an ordinary
+			// directory, walked for its own *.json.
+			if fi, err := os.Stat(filepath.Join(a, "fixtures")); err == nil && fi.IsDir() { //nolint:gosec // G703: operator-supplied CLI arg
 				fixDir = filepath.Join(a, "fixtures")
 			}
 			entries, err := os.ReadDir(fixDir)

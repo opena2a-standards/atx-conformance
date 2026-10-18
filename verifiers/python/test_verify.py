@@ -21,7 +21,8 @@ not hex, arrays and objects nested to Go's
 depth limit (in declaredPurpose too, which the JCS serializer walks, and in a
 typed member, whose decode error writes the value to 8 levels), an integer
 with more digits than int() converts, bytes that are not UTF-8, the
-single-pass string-literal scan, --help, an unknown option and --version.
+single-pass string-literal scan, --help, an unknown option, --version, an
+empty argument and a directory whose fixtures entry is a file.
 They hold the report to the Go reference verifier's text: a boolean, a
 string a reason quotes, and the whole report over fixtures/, which must be
 docs/captures/go-verifier.txt byte for byte. Two tests
@@ -2179,6 +2180,33 @@ class GoReportText(unittest.TestCase):
         self.assertEqual(got.reject_category, "PARSE_ERROR")
         self.assertTrue(got.reason.startswith(r'credential contains duplicate member "Q\"1\x01" (strict parse:'),
                         got.reason)
+
+
+class ArgumentContract(unittest.TestCase):
+    """The argument rules the Go reference verifier keeps too, and which
+    scripts/parity/parity.py runs both verifiers on."""
+
+    def test_empty_argument_is_a_usage_error(self):
+        # Path("") is the current directory, which a run walked: run here
+        # from a directory holding a fixture, so a walk would verify it.
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "x.json").write_bytes(BASELINE_V10.read_bytes())
+            with contextlib.chdir(tmp):
+                for args in (("",), (str(ROOT / "fixtures"), "")):
+                    with self.subTest(args=args):
+                        self.assertEqual(_run_main(*args), (
+                            2, "", "error: an empty argument names no fixture file or directory\n"))
+
+    def test_fixtures_file_entry_walks_the_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "fixtures").write_text("a file, not a directory\n", encoding="utf-8")
+            (directory / "x.json").write_bytes(BASELINE_V10.read_bytes())
+            code, out, err = _run_main(str(directory))
+        self.assertEqual((code, err), (0, ""), out)
+        lines = out.splitlines()
+        self.assertEqual(lines[0], f"PASS  {directory / 'x.json'}")
+        self.assertEqual(lines[-1], "summary: 1 pass, 0 fail (1 fixtures)")
 
 
 class JCSVectorsThroughVerifierProjection(unittest.TestCase):
