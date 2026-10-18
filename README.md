@@ -34,9 +34,10 @@ With no argument the verifier walks the fixture set built into the module
 version `go run` fetched, `fixtures/*.json` of that commit, with nothing
 cloned. The command exits 1 when any fixture's result differs from its
 expected outcome. This repository has no tags, so `@latest` is the newest
-commit on `main`; `@<commit>` in its place runs the verifier and fixtures of
-that commit. On its first run, `go run` downloads the module and the modules
-listed in [`go.mod`](go.mod).
+commit on `main`; `@<commit>` in its place, for `ea4b485` or a later commit
+on `main`, runs the verifier and fixtures of that commit. `ea4b485` is the
+first commit with `go.mod` at the repository root. On its first run, `go run`
+downloads the module and the modules listed in [`go.mod`](go.mod).
 
 The suite does not check `contentHash` against an agent binary, transparency
 log inclusion, build attestations or behavioral profiles;

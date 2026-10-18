@@ -71,6 +71,19 @@ and stability" says they should not.
 
 ### Changed
 
+- README.md names the first commit `@<commit>` works from: in place of
+  `@latest`, it runs the verifier and fixtures of `ea4b485` or a later
+  commit on `main`, the first commit with `go.mod` at the repository root.
+  The sentence named no first commit, while `go run
+  github.com/opena2a-standards/atx-conformance/verifiers/go@d8887e6`, the
+  commit before it, exits 1. `scripts/check_readme_counts.py` fails when a
+  sentence offering `@<commit>` names no first commit ("for `<commit>` or a
+  later commit") and, in a checkout with full history, when the commit it
+  names is not the oldest in `HEAD`'s history whose `go.mod` at the root
+  declares the module `go.mod` declares. In a shallow clone its closing
+  line says the commit was not held to the history. The self-test adds ten
+  cases (216 altered sites, from 206), four of them reading the first
+  commit off temporary git repositories. No fixture changes.
 - `scripts/capture_go_verifier.py` reads README.md's first command with or
   without a `cd <dir> && ` prefix; without one, the command runs in the
   repository root. It runs `go run <import path>@<version>` of a package of

@@ -179,6 +179,16 @@ heading; that paragraph moved to docs/scope.md, as the version pins moved to
 docs/version-pinning.md and the toolchain minimums to
 docs/running-the-verifiers.md.
 
+It also holds the README's `@<commit>` sentence to the history. The README
+said `go run <module>/verifiers/go@<commit>` runs the verifier of "that
+commit" while the form resolves only from the first commit whose go.mod at
+the root declares the module; at the commit before it, `go run` exited 1.
+Each sentence offering `@<commit>` must name its first commit ("for
+`<commit>` or a later commit"). Where the checkout has full history, that
+commit must be the oldest in HEAD's history whose go.mod declares the module
+go.mod declares; a shallow clone, or a tree with no repository, is held to
+the first half alone, and the closing line says so.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
 declares, each signature-verification Scope row that claims a set of fixtures
@@ -189,7 +199,9 @@ trigger sentence matches the workflow, both key-source lists name every
 Ed25519 key, both version labels name exactly the accepted versions, each
 Go dependency site names every direct requirement (the two README sites at
 its pinned version; the verify.go header states no versions, so it is held
-to module names alone), no Python dependency site calls the Python verifier
+to module names alone), each sentence offering `@<commit>` names its first
+commit (the first with the module's go.mod at the root, where the history
+can be read), no Python dependency site calls the Python verifier
 zero-dependency while requirements.txt names a package, each jcs-vectors
 file describing canonicalize cites RFC 8785 Appendix G, none calls an RFC
 8785 library a reference implementation or port, neither description of what
@@ -664,6 +676,80 @@ def go_dependency_failures(readme, go_mod, verify_go):
             if not _names(header, module):
                 failures.append(f"{GO_HEADER_SITE} does not name {module}, "
                                 f"which {GO_MOD_NAME} requires")
+    return failures
+
+
+# The README offers `go run <module>/verifiers/go@<commit>`. That form resolves
+# only at a commit whose go.mod at the repository root declares the module;
+# before that commit verifiers/go was a module of its own, and `go run` of
+# `@d8887e6` exited 1. The README said `@<commit>` runs the verifier of "that
+# commit" with no first commit named, so each sentence offering it must name
+# one ("for `<commit>` or a later commit"), and that commit is held to the
+# history when the checkout has it.
+COMMIT_FORM = "`@<commit>`"
+START_CLAIM = re.compile(r"\bfor\s+`([0-9a-f]{7,40})`\s+or\s+(?:a|any)\s+later\s+commit\b")
+GO_MODULE = re.compile(r"^module[ \t]+(\S+)", re.M)
+START_SITE = f"README {COMMIT_FORM} sentence"
+
+
+def first_module_commit(root, go_mod):
+    """The id of the oldest commit in HEAD's history whose go.mod at the root
+    declares the module `go_mod` declares, or None when it cannot be read: no
+    module line, git cannot run, `root` is not a repository's top level, or
+    the clone is shallow (its oldest commit is where the clone was cut).
+
+    git runs with every GIT_* variable removed and is not let look for a
+    repository above `root`, so a copy of the tree outside the repository
+    reads as having no history."""
+    module = GO_MODULE.search(go_mod or "")
+    if module is None:
+        return None
+    env = {name: value for name, value in os.environ.items()
+           if not name.startswith("GIT_")}
+    env["GIT_CEILING_DIRECTORIES"] = str(pathlib.Path(root).resolve().parent)
+
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=root, env=env,
+                              capture_output=True, text=True, check=False)
+
+    try:
+        shallow = git("rev-parse", "--is-shallow-repository")
+        if shallow.returncode != 0 or shallow.stdout.strip() != "false":
+            return None
+        listed = git("rev-list", "--reverse", "HEAD", "--", GO_MOD_NAME)
+        if listed.returncode != 0:
+            return None
+        for commit in listed.stdout.split():
+            shown = git("show", f"{commit}:{GO_MOD_NAME}")
+            found = GO_MODULE.search(shown.stdout) if shown.returncode == 0 else None
+            if found is not None and found.group(1) == module.group(1):
+                return commit
+    except OSError:
+        return None
+    return None
+
+
+def module_start_failures(readme, start):
+    """Each sentence of the README that offers `@<commit>` must name the first
+    commit the form runs from; when `start` (first_module_commit()) is known,
+    the commit named must be that one."""
+    failures = []
+    for sentence in statements(readme):
+        if COMMIT_FORM not in sentence:
+            continue
+        named = START_CLAIM.search(sentence)
+        if named is None:
+            failures.append(
+                f"{START_SITE} names no first commit the form runs from "
+                f"(\"for `<commit>` or a later commit\"); before the first "
+                f"commit whose {GO_MOD_NAME} at the root declares the module, "
+                f"`go run` cannot resolve the verifier: {sentence!r}")
+        elif start is not None and not start.startswith(named.group(1)):
+            failures.append(
+                f"{START_SITE} names `{named.group(1)}` as the first commit the "
+                f"form runs from, but the first commit in HEAD's history whose "
+                f"{GO_MOD_NAME} at the root declares the module is {start[:7]} "
+                f"({start})")
     return failures
 
 
@@ -2261,7 +2347,8 @@ Tree = collections.namedtuple("Tree", (
     "readme cosigners fixtures vectors signing fixture_paths workflow "
     "key_vectors used_key_ids versions go_mod verify_go py_requirements "
     "py_dependency_texts jcs_sites tbs_sites tbs_canonical jcs_readme "
-    "gate_sites gate_libraries profile outcomes suites scripts front_page"))
+    "gate_sites gate_libraries profile outcomes suites scripts front_page "
+    "module_start"))
 
 # One check tree_failures() runs: its name, the call (`run(tree)` returns
 # failures) and the alteration the self-test makes to prove the call is still
@@ -2576,6 +2663,103 @@ def _go_dependency_cases(readme, go_mod, verify_go):
         case(f"{where} when go.mod gains a requirement", where, GO_INVENTED,
              go_mod=grown)
     return cases
+
+
+# The sentence as the README published it, with its line wrap: no first commit.
+RETRACTED_START = ("`@<commit>` in its place runs the verifier and fixtures of\n"
+                   "that commit.")
+INVENTED_START = "0" * 40
+
+
+def _module_start_cases(readme):
+    """Restate the retracted sentence, drop the first commit from the live
+    one, and hold the live one to a first commit other than the one it names;
+    each must add a failure naming the README `@<commit>` sentence. Then read
+    first_module_commit() off temporary repositories."""
+    sentences = [s for s in statements(readme) if COMMIT_FORM in s]
+    named = [m.group(1) for m in map(START_CLAIM.search, sentences) if m]
+    if not named:
+        return [(False, f"{START_SITE} naming its first commit",
+                 f"no sentence offering {COMMIT_FORM} with \"for `<commit>` or a "
+                 f"later commit\" found in README.md or its pages")]
+    held = named[0] + "0" * (40 - len(named[0]))
+    baseline = set(module_start_failures(readme, held))
+    cases = [(not baseline, f"{START_SITE} held to the commit it names",
+              f"it fails against {held}: {sorted(baseline)}")]
+
+    def case(label, needle, text=readme, start=held):
+        new = [f for f in module_start_failures(text, start) if f not in baseline]
+        cases.append((any(f.startswith(START_SITE) and needle in f for f in new),
+                      label, f"expected a {START_SITE} failure naming {needle!r}, "
+                             f"got {new}"))
+
+    case("README restating `@<commit>` with no first commit",
+         "names no first commit", text=readme + "\n\n" + RETRACTED_START + "\n")
+    site = START_CLAIM.search(readme)
+    case(f"{START_SITE} with its first commit dropped", "names no first commit",
+         text=readme[:site.start()] + "for a commit" + readme[site.end():])
+    case(f"{START_SITE} naming a commit other than the first with go.mod at the root",
+         f"is {INVENTED_START[:7]}", start=INVENTED_START)
+    cases.extend(_first_module_commit_cases())
+    return cases
+
+
+def _first_module_commit_cases():
+    """first_module_commit() over a repository whose first commit holds a
+    nested verifiers/go module, whose second adds go.mod at the root and whose
+    third edits it: the second commit, or None for another module, a shallow
+    clone and a directory that is no repository. A git command that fails is a
+    red case."""
+    label = "first_module_commit() over a temporary repository"
+    env = {name: value for name, value in os.environ.items()
+           if not name.startswith("GIT_")}
+    config = ("-c", "user.name=self-test", "-c", "user.email=self-test@example.invalid",
+              "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null")
+
+    def git(cwd, *args):
+        return subprocess.run(["git", *config, *args], cwd=cwd, env=env, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    def commit(repo, files, message):
+        for rel, text in files.items():
+            (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+            (repo / rel).write_text(text, encoding="utf-8")
+        git(repo, "add", "--", *files)
+        git(repo, "commit", "-q", "-m", message)
+        return git(repo, "rev-parse", "HEAD")
+
+    module = "module example.com/m\n\ngo 1.22.0\n"
+    with tempfile.TemporaryDirectory(prefix="readme-counts-git-") as tmp:
+        repo = pathlib.Path(tmp) / "repo"
+        repo.mkdir()
+        try:
+            git(repo, "-c", "init.defaultBranch=main", "init", "-q")
+            commit(repo, {"verifiers/go/go.mod": "module example.com/m/verifiers/go\n"},
+                   "nested module")
+            first = commit(repo, {GO_MOD_NAME: module}, "go.mod at the root")
+            commit(repo, {GO_MOD_NAME: module + "\nrequire a.example/x v1.0.0\n"},
+                   "edit go.mod")
+            shallow = pathlib.Path(tmp) / "shallow"
+            git(tmp, "clone", "-q", "--depth", "1", repo.resolve().as_uri(), str(shallow))
+            plain = pathlib.Path(tmp) / "plain"
+            plain.mkdir()
+        except (OSError, subprocess.CalledProcessError) as exc:
+            detail = getattr(exc, "stderr", None) or exc
+            return [(False, label, f"git failed building the repository: {detail}")]
+        return [
+            (first_module_commit(repo, module) == first,
+             f"{label}: the commit that added go.mod at the root",
+             f"expected {first}, got {first_module_commit(repo, module)}"),
+            (first_module_commit(repo, "module example.com/other\n") is None,
+             f"{label}: a module no commit's go.mod declares",
+             "expected None"),
+            (first_module_commit(shallow, module) is None,
+             f"{label}: a shallow clone of it",
+             f"expected None, got {first_module_commit(shallow, module)}"),
+            (first_module_commit(plain, module) is None,
+             f"{label}: a directory that is no repository",
+             f"expected None, got {first_module_commit(plain, module)}"),
+        ]
 
 
 # The two forms the zero-dependency claim was published in, with their
@@ -3168,6 +3352,12 @@ def _wire_go_dependency(tree):
                                     + f"\nrequire {GO_INVENTED} {GO_ALTERED_VERSION}\n")}
 
 
+def _wire_module_start(tree):
+    if not any(COMMIT_FORM in s for s in statements(tree.readme)):
+        return f"no sentence offering {COMMIT_FORM} found in README.md or its pages"
+    return f"is {INVENTED_START[:7]}", {"module_start": INVENTED_START}
+
+
 def _wire_python_dependency(tree):
     site = PY_DEPENDENCY_SITES[0]
     if tree.py_dependency_texts.get(site) is None:
@@ -3258,6 +3448,9 @@ CHECKS = (
     Check("Go dependency",
           lambda t: go_dependency_failures(t.readme, t.go_mod, t.verify_go),
           _wire_go_dependency),
+    Check("`@<commit>` first commit",
+          lambda t: module_start_failures(t.readme, t.module_start),
+          _wire_module_start),
     Check("Python dependency",
           lambda t: python_dependency_failures(t.py_requirements, t.py_dependency_texts),
           _wire_python_dependency),
@@ -3496,6 +3689,7 @@ def self_test(tree, verbose):
     cases.extend(_key_source_cases(readme, tree.key_vectors, tree.used_key_ids))
     cases.extend(_version_cases(readme, tree.versions))
     cases.extend(_go_dependency_cases(readme, tree.go_mod, tree.verify_go))
+    cases.extend(_module_start_cases(readme))
     cases.extend(_python_dependency_cases(tree.py_requirements, tree.py_dependency_texts))
     cases.extend(_jcs_library_cases(tree.jcs_sites))
     cases.extend(_outside_code_cases(tree.gate_sites, tree.gate_libraries))
@@ -3669,6 +3863,7 @@ def main():
     key_vectors, vector_failures = load_key_vectors(ROOT)
     failures += vector_failures
     fixture_paths = sorted(FIXTURES.glob("*.json"))
+    go_mod = GO_MOD.read_text(encoding="utf-8") if GO_MOD.exists() else None
     tree = Tree(
         readme=read_readme(ROOT),
         cosigners=COSIGNERS.read_text(encoding="utf-8") if COSIGNERS.exists() else None,
@@ -3680,7 +3875,7 @@ def main():
         key_vectors=key_vectors,
         used_key_ids=fixture_key_ids(fixture_paths),
         versions=accepted_versions(fixture_paths),
-        go_mod=GO_MOD.read_text(encoding="utf-8") if GO_MOD.exists() else None,
+        go_mod=go_mod,
         verify_go=VERIFY_GO.read_text(encoding="utf-8") if VERIFY_GO.exists() else None,
         py_requirements=(PY_REQUIREMENTS.read_text(encoding="utf-8")
                          if PY_REQUIREMENTS.exists() else None),
@@ -3706,6 +3901,7 @@ def main():
         scripts={path.name: path.read_text(encoding="utf-8")
                  for path in sorted(SCRIPTS.glob("*.py"))},
         front_page=README.read_text(encoding="utf-8"),
+        module_start=first_module_commit(ROOT, go_mod),
     )
 
     failed, total = self_test(tree, only_self_test)
@@ -3742,7 +3938,12 @@ def main():
           f"intro and version-pinning row name ATX {_versions(tree.versions)}; "
           f"Go verifier dependency list, version-pinning rows and verify.go "
           f"header name every direct requirement of {GO_MOD_NAME}; "
-          f"no jcs-vectors README or RFC 8785 serializer docstring calls the "
+          f"each sentence offering {COMMIT_FORM} names its first commit"
+          + (f", {tree.module_start[:7]}, the first in HEAD's history whose "
+             f"{GO_MOD_NAME} at the root declares the module; "
+             if tree.module_start else
+             f" (not held to the history: none could be read in this checkout); ")
+          + f"no jcs-vectors README or RFC 8785 serializer docstring calls the "
           f"Python verifier zero-dependency; "
           f"each jcs-vectors file describing canonicalize cites "
           f"{JCS_APPENDIX_G} and none calls an RFC 8785 library a reference "
