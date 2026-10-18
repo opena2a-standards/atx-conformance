@@ -7,7 +7,10 @@ verifiers and says what they print.
 ## Exit code
 
 Exit code is 0 if every fixture's observed result matches the expected
-result and the rejection category matches (when declared).
+result and the rejection category matches (when declared). A file that is
+not a fixture, one with no `expected.verifyResult` of `ACCEPT` or `REJECT`,
+is a load error: both verifiers print `FAIL  <file>  (load error: <reason>)`
+for it, count it as a fail and exit 1.
 
 ## Dependencies
 

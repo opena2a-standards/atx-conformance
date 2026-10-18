@@ -86,6 +86,42 @@ and stability" says they should not.
 
 ### Changed
 
+- Both reference verifiers refuse to load a file that is not a fixture: one
+  whose `expected` member or `expected.verifyResult` is absent or null, or
+  whose `verifyResult` is any string but `ACCEPT` or `REJECT`, the values
+  `schemas/fixture-v1.schema.json` allows (`accept` included). Each such
+  file gets one line, `FAIL  <file>  (load error: <reason>)`, with the
+  reason `no expected member`, `no expected.verifyResult` or
+  `expected.verifyResult "MAYBE" is not ACCEPT or REJECT`; it counts as a
+  fail, the run goes on to the next file and exits 1. Before, such a value
+  read as "expect REJECT": `{}`, an npm `package.json` or any other JSON
+  object with no `atx` member rejected at parse and passed, so a run over
+  `jcs-vectors/ts` wrote `summary: 2 pass, 0 fail (2 fixtures)` and exited
+  0, a fixture with no `expected` member failed with a blank `expected:`
+  line, and `accept` read as `ACCEPT`. Both verifiers read the last
+  `expected` member and the last `verifyResult` in it, and the Python
+  verifier quotes the value as Go's `%q` does. `verify_test.go` adds
+  `TestNonFixtureIsALoadError` (seven files that are not fixtures, then the
+  shipped set); in `test_verify.py`, `ExpectedMember` adds
+  `test_unknown_verify_result_is_a_load_error`, and the three tests that
+  held the old reading hold the new one, two of them renamed. The shipped
+  set still verifies: `summary: 25 pass, 0 fail (25 fixtures)`, exit 0. No
+  fixture changes.
+- `scripts/check_readme_counts.py` reports a README that fails its
+  `@latest` check as that check's failure. With a fenced block holding `go
+  run github.com/opena2a-standards/atx-conformance/verifiers/go@latest`
+  appended to README.md, its first line was `self-test FAILED: 2 of 225
+  case(s) not caught by the check`, and 3 of 225 on the README of
+  `265c96b`; on both it now prints `self-test passed`, then the check's
+  failure naming that command and `verifiers/go`, and exits 1 as before.
+  The `@latest` cases run on the README less each fenced line the check
+  fails, and with `--self-test` the first case's label says how many lines
+  were removed; the `@latest` wiring case holds a command the check
+  already fails to a directory above its package. The self-test adds three
+  cases over a README opening with that command in a fenced block: the
+  check names the command and `verifiers/go`, and the `@latest` cases and
+  the wiring case stay green (228 altered sites, from 225). No fixture
+  changes.
 - The Python verifier writes the signatures line's booleans as `true` and
   `false`, and quotes an unsupported `atcVersion` or a duplicate member name
   as Go's `%q` does, so its report over `fixtures/` from the repository root

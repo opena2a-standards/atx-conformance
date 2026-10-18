@@ -401,6 +401,71 @@ func TestPathOutsideWorkingDirectoryIsWrittenWhole(t *testing.T) {
 	}
 }
 
+// TestNonFixtureIsALoadError pins that a file with no expected outcome the
+// fixture format allows fails to load: an expected member or
+// expected.verifyResult that is absent or null, or a verifyResult other than
+// ACCEPT or REJECT (schemas/fixture-v1.schema.json, exact case), "" among
+// them. Each gets one FAIL line naming why, with no expected or observed
+// line, and counts as a fail, so the run exits 1. Before, such a verifyResult
+// read as "expect REJECT": {} or an npm package.json, rejected at parse,
+// passed, and a directory of them ended in "N pass, 0 fail" with exit 0. The
+// shipped fixtures still all pass.
+func TestNonFixtureIsALoadError(t *testing.T) {
+	baseline, err := os.ReadFile(repoRoot + "/fixtures/baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const accept = `"verifyResult": "ACCEPT"`
+	if n := strings.Count(string(baseline), accept); n != 1 {
+		t.Fatalf("baseline-valid.json holds %s %d times, want once", accept, n)
+	}
+	withVerifyResult := func(word string) string {
+		return strings.Replace(string(baseline), accept, `"verifyResult": "`+word+`"`, 1)
+	}
+	cases := []struct{ file, content, reason string }{
+		{"a-empty-object.json", `{}`, "no expected member"},
+		{"b-null-expected.json", `{"expected": null}`, "no expected member"},
+		{"c-empty-expected.json", `{"expected": {}}`, "no expected.verifyResult"},
+		{"d-null-verify-result.json", `{"expected": {"verifyResult": null}}`, "no expected.verifyResult"},
+		{"e-maybe.json", withVerifyResult("MAYBE"), `expected.verifyResult "MAYBE" is not ACCEPT or REJECT`},
+		{"f-lower-case.json", withVerifyResult("accept"), `expected.verifyResult "accept" is not ACCEPT or REJECT`},
+		{"g-empty-string.json", withVerifyResult(""), `expected.verifyResult "" is not ACCEPT or REJECT`},
+	}
+	dir := t.TempDir()
+	var want strings.Builder
+	for _, c := range cases {
+		path := filepath.Join(dir, c.file)
+		if err := os.WriteFile(path, []byte(c.content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		want.WriteString("FAIL  " + relPath(path) + "  (load error: " + c.reason + ")\n")
+	}
+	want.WriteString("\nsummary: 0 pass, 7 fail (7 fixtures)\n")
+
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{dir}, &stdout, &stderr); code != 1 {
+		t.Errorf("Run over files that are not fixtures exits %d, want 1 (stderr %q)", code, stderr.String())
+	}
+	if got := stdout.String(); got != want.String() {
+		t.Errorf("Run writes:\n%s\nwant one load error line per file and no expected or observed line:\n%s", got, want.String())
+	}
+
+	const fixtures = repoRoot + "/fixtures"
+	shipped, err := filepath.Glob(filepath.Join(fixtures, "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{fixtures}, &stdout, &stderr); code != 0 {
+		t.Errorf("Run over %s exits %d, want 0 (stderr %q)", fixtures, code, stderr.String())
+	}
+	n := strconv.Itoa(len(shipped))
+	if summary := "\nsummary: " + n + " pass, 0 fail (" + n + " fixtures)\n"; !strings.HasSuffix(stdout.String(), summary) {
+		t.Errorf("Run over %s writes:\n%s\nwant it to end in%s", fixtures, stdout.String(), summary)
+	}
+}
+
 // TestFoldKey pins the field-fold used by the fold-aware duplicate detector to
 // encoding/json's own folding: ASCII case-insensitive plus the only two
 // non-ASCII runes encoding/json folds to ASCII (Kelvin U+212A -> k, long s

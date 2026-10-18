@@ -12,8 +12,9 @@ projection over every jcs-vectors vector. They also pin what Go's encoding/json
 makes of a member name in another case, a timestamp written with a JSON
 escape, an unpaired surrogate escape and a trustScore of -0, the projection of
 behavioralProfile and scanSummary members outside their Go type, the signature
-base64 alphabet, a fixture whose expected member is not an object, and a
-report line standard output cannot encode. They also pin the decode of the
+base64 alphabet, a fixture whose expected member is not an object, a file
+with no expected.verifyResult of ACCEPT or REJECT, and a report line standard
+output cannot encode. They also pin the decode of the
 fixture wrapper: members outside their Go type, names in another case or
 repeated (a first value outside its Go type included), a public key that is
 not hex, arrays and objects nested to Go's
@@ -1435,13 +1436,41 @@ class ExpectedMember(unittest.TestCase):
                     verify._expected_outcome(verify.load_fixture(path))
                 self.assertEqual(str(raised.exception), message)
 
-    def test_absent_or_null_expected_is_the_zero_value(self):
-        # Go leaves an absent or null expected, and an absent or null member
-        # of it, at "". No verifyResult is not ACCEPT.
-        zero = {"verifyResult": "", "rejectCategory": "", "reasonContains": ""}
-        for fixture in ({}, {"expected": None}, {"expected": {}}, {"expected": {"verifyResult": None}}):
+    def test_absent_or_null_expected_or_verify_result_is_a_load_error(self):
+        # The fixture format requires expected.verifyResult. Go leaves an
+        # absent or null one at "", which read as "expect REJECT", so a JSON
+        # object that is not a fixture rejected at parse and passed. Both
+        # verifiers now refuse to load it, with the same reason.
+        for fixture, message in (
+            ({}, "no expected member"),
+            ({"expected": None}, "no expected member"),
+            ({"expected": {}}, "no expected.verifyResult"),
+            ({"expected": {"verifyResult": None}}, "no expected.verifyResult"),
+        ):
             with self.subTest(fixture=fixture):
-                self.assertEqual(verify._expected_outcome(fixture), zero)
+                with self.assertRaises(ValueError) as raised:
+                    verify._expected_outcome(fixture)
+                self.assertEqual(str(raised.exception), message)
+
+    def test_unknown_verify_result_is_a_load_error(self):
+        # The fixture format allows ACCEPT and REJECT, in that case. Any
+        # other string, "" included, fails to load where it read as "expect
+        # REJECT", and "accept" as ACCEPT. The reason quotes the value as Go's
+        # %q does.
+        cases = (
+            ("a-maybe.json", "MAYBE", 'expected.verifyResult "MAYBE" is not ACCEPT or REJECT'),
+            ("b-lower-case.json", "accept", 'expected.verifyResult "accept" is not ACCEPT or REJECT'),
+            ("c-empty-string.json", "", 'expected.verifyResult "" is not ACCEPT or REJECT'),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            for name, word, _ in cases:
+                literal = json.dumps({"verifyResult": word})
+                _write_wrapper(directory, name, BASELINE_V10, "expected", literal)
+            code, text, err = _run_main(str(directory))
+        self.assertEqual(code, 1, text + err)
+        want = "".join(f"FAIL  {directory / name}  (load error: {message})\n" for name, _, message in cases)
+        self.assertEqual(text, want + f"\nsummary: 0 pass, {len(cases)} fail ({len(cases)} fixtures)\n")
 
     def test_directory_run_reaches_the_summary_line(self):
         # Each of the first two used to end the run with an AttributeError
@@ -1456,9 +1485,11 @@ class ExpectedMember(unittest.TestCase):
         self.assertEqual(code, 1, text + err)
         self.assertIn("a-number.json  (load error: expected 7 is not a JSON object)", text)
         self.assertIn("c-member.json  (load error: expected.verifyResult 7 is not", text)
-        # b-null.json expects nothing, the credential verifies, and that is a
-        # mismatch with a report block of its own.
-        self.assertIn("b-null.json\n       expected: \n       observed: ACCEPT", text)
+        # b-null.json expects nothing, so it is not a fixture and fails to
+        # load, where its credential verified and the mismatch got a report
+        # block of its own.
+        self.assertIn("b-null.json  (load error: no expected member)\n", text)
+        self.assertNotIn("expected: \n", text)
         self.assertEqual(text.splitlines()[-1], "summary: 1 pass, 3 fail (4 fixtures)")
 
 
@@ -1664,14 +1695,16 @@ class FixtureWrapper(unittest.TestCase):
                 got = verify.verify_fixture(verify.load_fixture(written))
                 self.assertEqual(_outcome(got), outcome, got.reason)
 
-    def test_null_fixture_is_the_zero_value(self):
-        # Go loads a fixture file holding null into its zero value, which has
-        # no credential and expects no verdict.
+    def test_null_fixture_is_the_zero_value_with_no_expected_member(self):
+        # Go decodes a fixture file holding null into its zero value, which
+        # has no credential and no expected member, so the file fails to load.
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "null.json"
             path.write_text("null")
             fixture = verify.load_fixture(path)
-            self.assertEqual(verify._expected_outcome(fixture)["verifyResult"], "")
+            with self.assertRaises(ValueError) as raised:
+                verify._expected_outcome(fixture)
+            self.assertEqual(str(raised.exception), "no expected member")
             got = verify.verify_fixture(fixture)
         self.assertEqual(got.reject_category, "PARSE_ERROR", got.reason)
 

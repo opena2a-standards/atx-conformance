@@ -42,6 +42,8 @@
 //	go run . --version                   (prints the module version and exits 0)
 //
 // Exit 0 iff every fixture's observed result matches expected.verifyResult.
+// A file that is not a fixture, one with no expected.verifyResult of ACCEPT
+// or REJECT, fails to load and counts as a fail, so the run exits 1.
 package verifier
 
 import (
@@ -50,6 +52,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -923,10 +926,40 @@ func loadFixture(path string) (fixture, error) {
 	return fileSource(path).load()
 }
 
+// parseFixture decodes a fixture file. A file with no expected outcome the
+// fixture format allows (schemas/fixture-v1.schema.json) is not a fixture and
+// fails to load: its expected member or expected.verifyResult is absent or
+// null, or its verifyResult is a string other than ACCEPT or REJECT, "accept"
+// among them. Read as "expect REJECT", such a file passed whenever its
+// credential rejected, and {} or a package.json rejects at parse. The check
+// reads the last expected member and the last verifyResult in it, as the
+// Python verifier reads them; when it passes, f.Expected.VerifyResult holds
+// that verifyResult.
 func parseFixture(b []byte) (fixture, error) {
 	var f fixture
 	if err := json.Unmarshal(b, &f); err != nil {
 		return fixture{}, err
+	}
+	var wrapper struct {
+		Expected json.RawMessage `json:"expected"`
+	}
+	if err := json.Unmarshal(b, &wrapper); err != nil {
+		return fixture{}, err
+	}
+	if len(wrapper.Expected) == 0 || string(wrapper.Expected) == "null" {
+		return fixture{}, errors.New("no expected member")
+	}
+	var expected struct {
+		VerifyResult *string `json:"verifyResult"`
+	}
+	if err := json.Unmarshal(wrapper.Expected, &expected); err != nil {
+		return fixture{}, err
+	}
+	switch {
+	case expected.VerifyResult == nil:
+		return fixture{}, errors.New("no expected.verifyResult")
+	case *expected.VerifyResult != "ACCEPT" && *expected.VerifyResult != "REJECT":
+		return fixture{}, fmt.Errorf("expected.verifyResult %q is not ACCEPT or REJECT", *expected.VerifyResult)
 	}
 	return f, nil
 }

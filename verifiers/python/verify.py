@@ -96,9 +96,10 @@ Usage:
     python verify.py --version             # the commit this file runs from
 
 Exit 0 iff every fixture's observed result matches expected.verifyResult, and
-after --help, -h or --version. Exit 2 on a usage error (no argument, or an
-unknown option, which is named above the usage lines), a path that does not
-exist, or no fixture files.
+after --help, -h or --version. A file with no expected.verifyResult of ACCEPT
+or REJECT is not a fixture: it fails to load and counts as a fail, so the run
+exits 1. Exit 2 on a usage error (no argument, or an unknown option, which is
+named above the usage lines), a path that does not exist, or no fixture files.
 
 The signatures line writes each boolean as true or false, and a rejection
 reason that quotes the credential's atcVersion or a duplicate member name
@@ -932,8 +933,25 @@ def _expected_outcome(fixture: Any) -> dict[str, str]:
     reasonContains, each "" when absent or null. The whole fixture is
     decoded, so this raises ValueError for any fixture _decode_fixture
     refuses, such as one whose expected member is not a JSON object or holds
-    a member that is not a string."""
-    return _decode_fixture(fixture)["expected"]
+    a member that is not a string.
+
+    It raises ValueError too for a file with no expected outcome the fixture
+    format allows (schemas/fixture-v1.schema.json), which is not a fixture
+    and fails to load in the Go reference verifier as well: its expected
+    member or expected.verifyResult is absent or null, or its verifyResult is
+    a string other than ACCEPT or REJECT, "accept" among them. Read as
+    "expect REJECT", such a file passed whenever its credential rejected, and
+    {} or a package.json rejects at parse. The check reads the last expected
+    member and the last verifyResult in it, the values decoded here."""
+    expected = _decode_fixture(fixture)["expected"]
+    member = _members_by_folded_name(fixture or {}).get(_fold_key("expected"), [None])[-1]
+    if member is None:
+        raise ValueError("no expected member")
+    if _members_by_folded_name(member).get(_fold_key("verifyResult"), [None])[-1] is None:
+        raise ValueError("no expected.verifyResult")
+    if expected["verifyResult"] not in ("ACCEPT", "REJECT"):
+        raise ValueError(f"expected.verifyResult {_go_quote(expected['verifyResult'])} is not ACCEPT or REJECT")
+    return expected
 
 
 def _decode_base64(value: str) -> bytes:
