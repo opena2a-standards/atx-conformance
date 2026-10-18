@@ -829,8 +829,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, versionLine(info, ok))
 		return 0
 	}
-	// os.Stat("") fails, and the Python verifier's Path("") is the current
-	// directory: an empty argument names neither, so nothing is walked.
+	// An empty argument names no fixture file or directory: it is a usage
+	// error, as it is in the Python verifier, and not the path that does not
+	// exist os.Stat("") would report.
 	if slices.Contains(args, "") {
 		fmt.Fprintln(stderr, "error: an empty argument names no fixture file or directory")
 		return 2

@@ -99,8 +99,11 @@ Exit 0 iff every fixture's observed result matches expected.verifyResult, and
 after --help, -h or --version. A file with no expected.verifyResult of ACCEPT
 or REJECT is not a fixture: it fails to load and counts as a fail, so the run
 exits 1. Exit 2 on a usage error (no argument, an empty one, or an unknown
-option, which is named above the usage lines), a path that does not exist, or
-no fixture files.
+option, which is named above the usage lines), a path that does not exist or
+that os.stat refuses (a file named with a trailing /), or no fixture files.
+
+A fixture named as a file is named in the report as its argument spells it,
+./ and // included, as the Go reference verifier names it.
 
 The signatures line writes each boolean as true or false, and a rejection
 reason that quotes the credential's atcVersion or a duplicate member name
@@ -116,6 +119,7 @@ import json
 import math
 import os
 import re
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -1307,21 +1311,58 @@ def load_fixture(path: Path) -> dict[str, Any]:
     return fixture
 
 
-def expand_paths(args: list[str]) -> list[Path]:
-    out: list[Path] = []
+def _go_join(directory: str, name: str) -> str:
+    """directory and name joined as Go's filepath.Join joins them, which
+    cleans the result as filepath.Clean does: os.path.normpath, except that
+    normpath keeps the two slashes a path may begin with and Clean writes
+    one."""
+    joined = os.path.normpath(os.path.join(directory, name))
+    return joined[1:] if joined.startswith("//") else joined
+
+
+def expand_paths(args: list[str]) -> list[str]:
+    """The fixture files args name, spelled as the Go reference verifier's
+    expandFixturePaths spells them: a file as its argument spells it, ./ and
+    // included, and a *.json file of a directory as _go_join writes the
+    directory and the file's name. An argument is read as the string it is,
+    not as a Path, which drops a ./ and a trailing / and collapses a //."""
+    out: list[str] = []
     for a in args:
-        p = Path(a)
-        if not p.exists():
-            raise FileNotFoundError(f"{a}: no such file or directory")
-        if p.is_dir():
-            fixtures_dir = p / "fixtures"
-            target = fixtures_dir if fixtures_dir.is_dir() else p
-            out.extend(sorted(target.glob("*.json")))
+        try:
+            mode = os.stat(a).st_mode
+        except FileNotFoundError:
+            raise FileNotFoundError(f"{a}: no such file or directory") from None
+        except OSError as exc:
+            # Go's os.Stat error as the Go reference verifier writes it, its
+            # reason lowercase: `stat d/x.json/: not a directory` for a file
+            # named with a trailing /.
+            reason = exc.strerror or str(exc)
+            raise OSError(f"stat {a}: {reason[:1].lower()}{reason[1:]}") from None
+        if stat.S_ISDIR(mode):
+            fixtures_dir = _go_join(a, "fixtures")
+            target = fixtures_dir if os.path.isdir(fixtures_dir) else a
+            out.extend(_go_join(target, p.name) for p in Path(target).glob("*.json"))
         else:
-            out.append(p)
+            out.append(a)
     # A path named twice is verified twice, as the Go reference verifier
-    # verifies it.
-    return sorted(out)
+    # verifies it, and the names sort byte by byte, as its sort.Strings sorts
+    # them: ./d/x.json before d/./x.json before d//x.json.
+    return sorted(out, key=os.fsencode)
+
+
+def _rel_path(path: str) -> str:
+    """The name the report gives the fixture at path, as the Go reference
+    verifier's relPath gives it: the path relative to the working directory,
+    cleaned as filepath.Rel cleans it, when path is an absolute path under
+    it, and path as given otherwise."""
+    if os.path.isabs(path):
+        try:
+            rel = os.path.relpath(path, os.getcwd())
+        except (OSError, ValueError):
+            return path
+        if rel != os.pardir and not rel.startswith(os.pardir + os.sep):
+            return rel
+    return path
 
 
 def _say(text: str, end: str = "\n") -> None:
@@ -1387,8 +1428,8 @@ def main(argv: list[str]) -> int:
     if "--version" in args:
         sys.stdout.write(_version_line())
         return 0
-    # Path("") is the current directory, which expand_paths would walk: an
-    # empty argument names no path, as it names none in the Go verifier.
+    # An empty argument names no path, as it names none in the Go verifier:
+    # it is a usage error, where expand_paths would report a missing path.
     if "" in args:
         sys.stderr.write("error: an empty argument names no fixture file or directory\n")
         return 2
@@ -1402,14 +1443,15 @@ def main(argv: list[str]) -> int:
         return 2
 
     total_pass = total_fail = 0
-    for p in paths:
+    for path in paths:
+        name = _rel_path(path)
         # A fixture the Go reference verifier's fixture struct cannot hold
         # fails to load, as it does there.
         try:
-            fixture = load_fixture(p)
+            fixture = load_fixture(Path(path))
             expected = _expected_outcome(fixture)
         except Exception as exc:
-            _say(f"FAIL  {p}  (load error: {exc})")
+            _say(f"FAIL  {name}  (load error: {exc})")
             total_fail += 1
             continue
 
@@ -1418,7 +1460,7 @@ def main(argv: list[str]) -> int:
         try:
             got = verify_fixture(fixture)
         except Exception as exc:
-            _say(f"FAIL  {p}  (verify error: {type(exc).__name__}: {exc})")
+            _say(f"FAIL  {name}  (verify error: {type(exc).__name__}: {exc})")
             total_fail += 1
             continue
         want_accept = expected["verifyResult"].upper() == "ACCEPT"
@@ -1435,11 +1477,7 @@ def main(argv: list[str]) -> int:
         else:
             total_fail += 1
 
-        try:
-            rel = p.relative_to(Path.cwd())
-        except ValueError:
-            rel = p
-        _say(f"{status}  {rel}")
+        _say(f"{status}  {name}")
         _say(f"       expected: {expected['verifyResult']}", end="")
         if expected["rejectCategory"]:
             _say(f" [{expected['rejectCategory']}]")

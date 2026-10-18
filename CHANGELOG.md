@@ -593,6 +593,32 @@ and stability" says they should not.
 
 ### Fixed
 
+- The Python verifier names a fixture in its report as the Go verifier
+  does, however its argument is spelled (#220). It made each argument a
+  `pathlib.Path`, which drops `./` and a trailing `/`, collapses `//` and
+  keeps a `..` that Go's `filepath.Join` removes: from `verifiers/python`,
+  `python verify.py ../../fixtures/./baseline-valid.json` wrote
+  `PASS  ../../fixtures/baseline-valid.json`, and writes
+  `PASS  ../../fixtures/./baseline-valid.json`, the Go verifier's line;
+  `../../fixtures//baseline-valid.json` likewise. It now reads each argument
+  as the string it is: a file keeps its spelling in its PASS or FAIL line, a
+  file of a walked directory is named as `filepath.Join` writes it
+  (`fixfile/../fixfile` names `fixfile/x.json`, not
+  `fixfile/../fixfile/x.json`), an absolute path under the working directory
+  is named relative to it with its `..` removed, the names sort byte by
+  byte, as the Go verifier sorts them, and a file named with a trailing `/`
+  is refused, `error: stat fixfile/x.json/: not a directory` with exit 2,
+  where it was verified. The "Arguments" section of
+  `docs/running-the-verifiers.md` says how a file and the files of a walked
+  directory are named, and that a trailing `/` is refused. The Go verifier's
+  behavior does not change. The argument table of `scripts/parity/parity.py`
+  runs fifteen argument lists, from twelve: `fixfile//x.json
+  ./fixfile/./x.json`, `fixfile/../fixfile` and `fixfile/x.json/`; with the
+  Python verifier of the previous commit the gate fails on those three and
+  agrees on the other twelve. The self-test adds three cases (34 cases
+  green, from 31): a verifier that reads each of those argument lists as a
+  `pathlib.Path` reads it is reported as a divergence. `test_verify.py` adds
+  `PathSpelling`. No fixture changes.
 - The Python verifier verifies a fixture path named twice twice, as the Go
   verifier does (#218): `python verify.py ../../fixtures/baseline-valid.json
   ../../fixtures/baseline-valid.json` wrote one PASS block and

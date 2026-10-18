@@ -31,14 +31,16 @@ After the fixture table the gate runs the argument table, ARGUMENT_CASES:
 argument lists no fixture can carry (an empty argument, -h and --help at
 several positions, --version and an unknown option after a path, a
 repository root, a directory whose `fixtures` entry is a file, a path that
-does not exist, a directory with no *.json, a path named twice), each run on
-both verifiers from a scratch directory holding the paths it names. Both
-must exit with the same code and write the same first stderr line and the
-same verdict lines (each PASS or FAIL line, its observed verdict and
-category, the summary), once the program name each verifier calls itself
-(`verify`, `verify.py`) is stripped; a case they differ on is a divergence. The Go verifier runs there
-as a binary built for the table, since `go run` reports a program's exit 2
-as its own exit 1. The --json report holds the table under `arguments`.
+does not exist, a directory with no *.json, a path named twice, a file spelled
+with ./ and //, a directory spelled with .., a file named with a trailing /),
+each run on both verifiers from a scratch directory holding the paths it
+names. Both must exit with the same code and write the same first stderr
+line and the same verdict lines (each PASS or FAIL line, its observed
+verdict and category, the summary), once the program name each verifier
+calls itself (`verify`, `verify.py`) is stripped; a case they differ on is a
+divergence. The Go verifier runs there as a binary built for the table,
+since `go run` reports a program's exit 2 as its own exit 1. The --json
+report holds the table under `arguments`.
 
 Every run starts with the self-test, which proves on stand-in verifiers that
 the gate reports a disagreement, a skipped fixture, a failed verifier and a
@@ -127,6 +129,9 @@ ARGUMENT_CASES: list[tuple[str, list[str]]] = [
     ("a path that does not exist", ["missing"]),
     ("a directory with no *.json", ["nojson"]),
     ("a path named twice", ["fixfile/x.json", "fixfile/x.json"]),
+    ("a file spelled with ./ and //", ["fixfile//x.json", "./fixfile/./x.json"]),
+    ("a directory spelled with ..", ["fixfile/../fixfile"]),
+    ("a file named with a trailing /", ["fixfile/x.json/"]),
 ]
 # The shipped fixture the argument table copies to fixfile/x.json.
 ARGUMENT_FIXTURE = "baseline-valid.json"
@@ -581,7 +586,7 @@ def self_test() -> int:
     no_fixtures = _gate_without_fixtures({"one": _stand_in(both), "two": _stand_in(both)})
     unknown = _refusal(["--bogus"])
 
-    # Argument-table stand-ins: "one" writes kept for seven cases, and "two"
+    # Argument-table stand-ins: "one" writes kept for ten cases, and "two"
     # the same with one case's outcome changed. A case is run alone, by name,
     # except in the gate runs, which run the whole table.
     empty_case, fixfile_case, missing_case = (
@@ -589,12 +594,24 @@ def self_test() -> int:
     version_case, unknown_case, root_case = (
         "--version after a path", "an unknown option after a path", "a repository root")
     twice_case = "a path named twice"
+    spelled_case, dotdot_case, slash_case = (
+        "a file spelled with ./ and //", "a directory spelled with ..",
+        "a file named with a trailing /")
     argv_of = {case: tuple(args) for case, args in ARGUMENT_CASES}
     fixfile = (
         "PASS  fixfile/x.json\n       expected: ACCEPT\n       observed: ACCEPT\n"
         "       signatures: 1/1 valid (ed25519=true mldsa65=false)\n"
         "\nsummary: 1 pass, 0 fail (1 fixtures)\n", "", 0,
     )
+
+    def passes(*names: str) -> tuple[str, str, int]:
+        """What a verifier writes and exits with when it verifies
+        fixfile/x.json once under each of names, in that order."""
+        block = fixfile[0][:fixfile[0].index("\n\n") + 1]
+        report = "".join(block.replace("fixfile/x.json", name) for name in names)
+        return (report + f"\nsummary: {len(names)} pass, 0 fail ({len(names)} fixtures)\n",
+                "", 0)
+
     missing = ("", "error: missing: no such file or directory\n", 2)
     kept = {
         argv_of[empty_case]: (
@@ -609,6 +626,9 @@ def self_test() -> int:
             fixfile[0].replace("\nsummary: 1 pass, 0 fail (1 fixtures)\n", "")
             + fixfile[0].replace("summary: 1 pass, 0 fail (1 fixtures)",
                                  "summary: 2 pass, 0 fail (2 fixtures)"), "", 0),
+        argv_of[spelled_case]: passes("./fixfile/./x.json", "fixfile//x.json"),
+        argv_of[dotdot_case]: passes("fixfile/x.json"),
+        argv_of[slash_case]: ("", "error: stat fixfile/x.json/: not a directory\n", 2),
     }
 
     def changed(outcomes: dict[tuple[str, ...], tuple[str, str, int]]) -> dict[str, dict]:
@@ -645,9 +665,11 @@ def self_test() -> int:
             "verify.py", {argv_of[missing_case]: ("", "verify: missing\n", 2)}),
     }, missing_case)
     # "two" as a verifier that reads --version only as its first argument,
-    # one with no unknown-option rule, and one that walks a repository root
-    # for its own *.json, which loads conformance.json there, and one that
-    # verifies a path named twice once.
+    # one with no unknown-option rule, one that walks a repository root
+    # for its own *.json, which loads conformance.json there, one that
+    # verifies a path named twice once, and one that reads each argument as
+    # a pathlib.Path does: it drops ./ and a trailing / and collapses //, and
+    # keeps a .. that Go's filepath.Join removes.
     args_version = _argument_divergences(changed(
         {argv_of[version_case]: ("", "error: --version: no such file or directory\n", 2)}),
         version_case)
@@ -659,6 +681,12 @@ def self_test() -> int:
         "\nsummary: 0 pass, 1 fail (1 fixtures)\n", "", 1)}), root_case)
     args_twice = _argument_divergences(
         changed({argv_of[twice_case]: fixfile}), twice_case)
+    args_spelled = _argument_divergences(changed(
+        {argv_of[spelled_case]: passes("fixfile/x.json", "fixfile/x.json")}), spelled_case)
+    args_dotdot = _argument_divergences(changed(
+        {argv_of[dotdot_case]: passes("fixfile/../fixfile/x.json")}), dotdot_case)
+    args_slash = _argument_divergences(changed(
+        {argv_of[slash_case]: passes("fixfile/x.json")}), slash_case)
     gate_fails = _gate_with_arguments(lambda bin_dir: changed(exit_changed))
     gate_passes = _gate_with_arguments(lambda bin_dir: changed({}))
     gate_not_built = _gate_with_arguments(_not_built)
@@ -783,6 +811,31 @@ def self_test() -> int:
              "one exit 0, verdict lines ['PASS  fixfile/x.json', 'observed: ACCEPT', "
              "'PASS  fixfile/x.json', 'observed: ACCEPT', "
              "'summary: 2 pass, 0 fail (2 fixtures)']; "
+             "two exit 0, verdict lines ['PASS  fixfile/x.json', 'observed: ACCEPT', "
+             "'summary: 1 pass, 0 fail (1 fixtures)']"]),
+        ("a file spelled with ./ and //, which one verifier names without them, is a "
+         "divergence",
+         args_spelled == [
+             'argument case "a file spelled with ./ and //" '
+             "(fixfile//x.json ./fixfile/./x.json): "
+             "one exit 0, verdict lines ['PASS  ./fixfile/./x.json', 'observed: ACCEPT', "
+             "'PASS  fixfile//x.json', 'observed: ACCEPT', "
+             "'summary: 2 pass, 0 fail (2 fixtures)']; "
+             "two exit 0, verdict lines ['PASS  fixfile/x.json', 'observed: ACCEPT', "
+             "'PASS  fixfile/x.json', 'observed: ACCEPT', "
+             "'summary: 2 pass, 0 fail (2 fixtures)']"]),
+        ("a directory spelled with .., whose files one verifier names with the .., is a "
+         "divergence",
+         args_dotdot == [
+             'argument case "a directory spelled with .." (fixfile/../fixfile): '
+             "one exit 0, verdict lines ['PASS  fixfile/x.json', 'observed: ACCEPT', "
+             "'summary: 1 pass, 0 fail (1 fixtures)']; "
+             "two exit 0, verdict lines ['PASS  fixfile/../fixfile/x.json', "
+             "'observed: ACCEPT', 'summary: 1 pass, 0 fail (1 fixtures)']"]),
+        ("a file named with a trailing /, which one verifier verifies, is a divergence",
+         args_slash == [
+             'argument case "a file named with a trailing /" (fixfile/x.json/): '
+             "one exit 2, stderr 'error: stat fixfile/x.json/: not a directory'; "
              "two exit 0, verdict lines ['PASS  fixfile/x.json', 'observed: ACCEPT', "
              "'summary: 1 pass, 0 fail (1 fixtures)']"]),
         ("the gate fails on an argument case one verifier diverges on, and that "
