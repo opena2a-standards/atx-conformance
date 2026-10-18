@@ -23,8 +23,15 @@ usage error, `error: an empty argument names no fixture file or directory`
 with exit 2, and nothing is verified. A directory is walked for
 `fixtures/*.json` when its `fixtures` entry is a directory, so a repository
 root can be passed, and for its own `*.json` otherwise, as when `fixtures` is
-a file. A path named twice is verified twice. The parity gate runs both
-verifiers on each of these shapes
+a file. A path named twice is verified twice. A file is named in the report
+as its argument spells it, `./` and `//` included: for
+`../../fixtures/./baseline-valid.json` both verifiers print
+`PASS  ../../fixtures/./baseline-valid.json`. A file found by walking a
+directory is named by the directory and file name joined as Go's
+`filepath.Join` joins them: a `.` element and a repeated `/` are dropped,
+and each `..` is removed with the element before it. A file named with a
+trailing `/` is refused, `error: stat <path>: not a directory` with exit 2.
+The parity gate runs both verifiers on each of these shapes
 ([continuous verification](continuous-verification.md)).
 
 ## Dependencies

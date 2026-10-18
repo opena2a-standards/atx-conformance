@@ -22,7 +22,9 @@ depth limit (in declaredPurpose too, which the JCS serializer walks, and in a
 typed member, whose decode error writes the value to 8 levels), an integer
 with more digits than int() converts, bytes that are not UTF-8, the
 single-pass string-literal scan, --help, an unknown option, --version, an
-empty argument and a directory whose fixtures entry is a file.
+empty argument, a directory whose fixtures entry is a file, a path spelled
+with ./, // or .., which the report names as the Go reference verifier names
+it, and a file named with a trailing /.
 They hold the report to the Go reference verifier's text: a boolean, a
 string a reason quotes, and the whole report over fixtures/, which must be
 docs/captures/go-verifier.txt byte for byte. Two tests
@@ -1600,6 +1602,48 @@ class RepeatedPath(unittest.TestCase):
             [line for line in out.splitlines() if line.startswith(("PASS", "FAIL"))],
             [f"PASS  {path}", f"PASS  {path}"])
         self.assertIn("summary: 2 pass, 0 fail (2 fixtures)", out)
+
+
+class PathSpelling(unittest.TestCase):
+    """A fixture is named in the report as the Go reference verifier names
+    it, however its argument is spelled. This verifier made each argument a
+    Path, which drops ./ and a trailing / and collapses //, and wrote
+    `PASS  d/x.json` for ./d//x.json, where the Go verifier writes
+    `PASS  ./d//x.json`."""
+
+    def _report(self, *args: str) -> tuple[int, list[str], str]:
+        """(exit code, PASS and FAIL lines, stderr) of a run on args, each
+        with {cwd} replaced by the working directory, from a directory
+        holding the fixture as d/x.json and {} as e/bad.json."""
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            os.mkdir("d")
+            os.mkdir("e")
+            Path("d", "x.json").write_bytes(BASELINE_V10.read_bytes())
+            Path("e", "bad.json").write_text("{}\n", encoding="utf-8")
+            code, out, err = _run_main(*(arg.replace("{cwd}", os.getcwd()) for arg in args))
+        lines = [line for line in out.splitlines() if line.startswith(("PASS", "FAIL"))]
+        return code, lines, err
+
+    def test_a_file_is_named_as_its_argument_spells_it(self):
+        # In the Go verifier's order, byte by byte.
+        self.assertEqual(self._report("d//x.json", "./d/x.json", "d/./x.json"), (
+            0, ["PASS  ./d/x.json", "PASS  d/./x.json", "PASS  d//x.json"], ""))
+
+    def test_a_load_error_names_the_file_as_its_argument_spells_it(self):
+        self.assertEqual(self._report("./e//bad.json"), (
+            1, ["FAIL  ./e//bad.json  (load error: no expected member)"], ""))
+
+    def test_a_directory_names_its_files_as_go_joins_them(self):
+        for arg in ("d/../d", "./d/", "d//"):
+            with self.subTest(arg=arg):
+                self.assertEqual(self._report(arg), (0, ["PASS  d/x.json"], ""))
+
+    def test_an_absolute_path_under_the_working_directory_is_named_relative_to_it(self):
+        self.assertEqual(self._report("{cwd}/d/../d//x.json"), (0, ["PASS  d/x.json"], ""))
+
+    def test_a_file_named_with_a_trailing_slash_is_refused(self):
+        self.assertEqual(self._report("d/x.json/"), (
+            2, [], "error: stat d/x.json/: not a directory\n"))
 
 
 class SerializerRefusal(unittest.TestCase):
