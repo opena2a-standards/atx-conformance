@@ -1,9 +1,10 @@
-package main
+package verifier
 
 import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -16,6 +17,9 @@ import (
 
 	atxconformance "github.com/opena2a-standards/atx-conformance"
 )
+
+// repoRoot is the repository root, relative to this package's directory.
+const repoRoot = "../../.."
 
 // TestReadmeCrossReferencesResolve pins that every README §"..." or
 // docs/<page>.md §"..." cross-reference in this verifier and in the fixture
@@ -30,9 +34,9 @@ func TestReadmeCrossReferencesResolve(t *testing.T) {
 		if set, ok := headings[doc]; ok {
 			return set
 		}
-		path := "../../" + doc
+		path := repoRoot + "/" + doc
 		if doc == "README" {
-			path = "../../README.md"
+			path = repoRoot + "/README.md"
 		}
 		body, err := os.ReadFile(path) //nolint:gosec // G304: doc is "README" or "docs/<name>.md", as the reference pattern below matches it
 		if err != nil {
@@ -55,7 +59,7 @@ func TestReadmeCrossReferencesResolve(t *testing.T) {
 	continuation := regexp.MustCompile(`\n[ \t]*//[ \t]*`)
 	reference := regexp.MustCompile(`(README|docs/[\w-]+\.md)\s+§"([^"]+)"`)
 	found := 0
-	for _, src := range []string{"verify.go", "../../scripts/generate-fixtures/main.go"} {
+	for _, src := range []string{"verify.go", repoRoot + "/scripts/generate-fixtures/main.go"} {
 		body, err := os.ReadFile(src) //nolint:gosec // G304: src ranges over the two fixed repository paths above
 		if err != nil {
 			t.Fatalf("cannot read %s: %v", src, err)
@@ -78,14 +82,14 @@ func TestReadmeCrossReferencesResolve(t *testing.T) {
 // writes for that command on this tree. The sidecar beside the capture
 // records the command as README.md states it, the command the capture script
 // ran for it from this tree (`ranAs`) and the directory it ran in: `ranAs`
-// must be `go run <this package> <args>`. The test calls run with <args> in
-// that directory and compares its standard output with the capture byte for
-// byte. scripts/capture_go_verifier.py --check holds the README excerpt and
-// the sidecar to the capture but runs no verifier, so a capture that a change
-// to a fixture or to this verifier left behind passed it.
+// must be `go run <package> <args>` for a main package that passes its
+// arguments to Run. The test calls Run with <args> in that directory and
+// compares its standard output with the capture byte for byte.
+// scripts/capture_go_verifier.py --check holds the README excerpt and the
+// sidecar to the capture but runs no verifier, so a capture that a change to
+// a fixture or to this verifier left behind passed it.
 func TestCaptureIsVerifierOutput(t *testing.T) {
 	const (
-		repoRoot    = "../.."
 		sidecarPath = repoRoot + "/docs/captures/go-verifier.json"
 		capturePath = repoRoot + "/docs/captures/go-verifier.txt"
 	)
@@ -118,13 +122,8 @@ func TestCaptureIsVerifierOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, err := filepath.Abs(filepath.Join(workDir, fields[2]))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if target != here {
-		t.Fatalf("%s records ranAs %q in %q, which runs %s, not this package",
-			sidecarPath, sidecar.RanAs, sidecar.WorkingDirectory, target)
+	if err := passesArgsToRun(filepath.Join(workDir, fields[2])); err != nil {
+		t.Fatalf("%s records ranAs %q in %q: %v", sidecarPath, sidecar.RanAs, sidecar.WorkingDirectory, err)
 	}
 	want, err := os.ReadFile(capturePath)
 	if err != nil {
@@ -142,7 +141,7 @@ func TestCaptureIsVerifierOutput(t *testing.T) {
 		}
 	}()
 	var stdout, stderr bytes.Buffer
-	if code := run(fields[3:], &stdout, &stderr); code != 0 {
+	if code := Run(fields[3:], &stdout, &stderr); code != 0 {
 		t.Errorf("`%s` in %s exits %d; the capture is of a run that exits 0 (stderr: %q)",
 			sidecar.RanAs, sidecar.WorkingDirectory, code, stderr.String())
 	}
@@ -165,11 +164,51 @@ func TestCaptureIsVerifierOutput(t *testing.T) {
 		capturePath, line+1, at(exp), sidecar.RanAs, sidecar.WorkingDirectory, at(got))
 }
 
+// entryCall is the call each main package of the verifier makes.
+const entryCall = "os.Exit(verifier.Run(os.Args[1:], os.Stdout, os.Stderr))"
+
+// passesArgsToRun returns nil when dir holds a main package whose non-test Go
+// files make entryCall, and otherwise an error naming what it found.
+func passesArgsToRun(dir string) error {
+	files, err := filepath.Glob(filepath.Join(dir, "*.go"))
+	if err != nil {
+		return err
+	}
+	mainClause := regexp.MustCompile(`(?m)^package main$`)
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		body, err := os.ReadFile(f) //nolint:gosec // G304: f is a Go file of a repository directory a test names
+		if err != nil {
+			return err
+		}
+		if mainClause.Match(body) && strings.Contains(string(body), entryCall) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s holds no main package making the call %s (Go files: %q)", dir, entryCall, files)
+}
+
+// TestEntryPointsPassArgsToRun holds both main packages of the verifier,
+// cmd/atx-verify (the published entry point) and verifiers/go (the one CI
+// runs from a checkout), to passing their arguments to Run.
+func TestEntryPointsPassArgsToRun(t *testing.T) {
+	for _, dir := range []string{"cmd/atx-verify", "verifiers/go"} {
+		if err := passesArgsToRun(filepath.Join(repoRoot, dir)); err != nil {
+			t.Error(err)
+		}
+	}
+	if err := passesArgsToRun("."); err == nil {
+		t.Error("passesArgsToRun accepts this library package, which is no main package")
+	}
+}
+
 // TestEmbeddedFixturesAreTheFixtureDirectory holds the fixture set the module
 // root embeds, which run walks when it is given no argument, to
 // fixtures/*.json on disk: the same names, and under each name the same bytes.
 func TestEmbeddedFixturesAreTheFixtureDirectory(t *testing.T) {
-	onDisk, err := filepath.Glob(filepath.Join("..", "..", "fixtures", "*.json"))
+	onDisk, err := filepath.Glob(filepath.Join(repoRoot, "fixtures", "*.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +231,7 @@ func TestEmbeddedFixturesAreTheFixtureDirectory(t *testing.T) {
 		t.Fatalf("the module root embeds %q; fixtures/ holds %q", embedded, want)
 	}
 	for _, name := range want {
-		disk, err := os.ReadFile(filepath.Join("..", "..", "fixtures", name)) //nolint:gosec // G304: name is a file name listed from fixtures/ above
+		disk, err := os.ReadFile(filepath.Join(repoRoot, "fixtures", name)) //nolint:gosec // G304: name is a file name listed from fixtures/ above
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -207,30 +246,31 @@ func TestEmbeddedFixturesAreTheFixtureDirectory(t *testing.T) {
 }
 
 // TestNoArgumentVerifiesEmbeddedFixtures pins what the published entry point,
-// `go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest`
-// with no argument, writes: the report run writes for the fixtures/
+// `go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@latest`
+// with no argument, writes: the report Run writes for the fixtures/
 // directory, each fixture named fixtures/<name>, exiting 0 on the shipped
-// set. Before the module root embedded the fixtures, run with no argument
-// wrote a usage line to stderr and exited 2.
+// set. Before the module root embedded the fixtures, the verifier with no
+// argument wrote a usage line to stderr and exited 2.
 func TestNoArgumentVerifiesEmbeddedFixtures(t *testing.T) {
+	const dir = repoRoot + "/fixtures"
 	var fromDir, fromEmbed, stderr bytes.Buffer
-	if code := run([]string{"../../fixtures"}, &fromDir, &stderr); code != 0 {
-		t.Fatalf("run over ../../fixtures exits %d (stderr %q)", code, stderr.String())
+	if code := Run([]string{dir}, &fromDir, &stderr); code != 0 {
+		t.Fatalf("Run over %s exits %d (stderr %q)", dir, code, stderr.String())
 	}
-	if code := run(nil, &fromEmbed, &stderr); code != 0 {
-		t.Fatalf("run with no argument exits %d, want 0 (stderr %q)", code, stderr.String())
+	if code := Run(nil, &fromEmbed, &stderr); code != 0 {
+		t.Fatalf("Run with no argument exits %d, want 0 (stderr %q)", code, stderr.String())
 	}
 	if stderr.Len() != 0 {
-		t.Errorf("run with no argument writes %q to stderr, want nothing", stderr.String())
+		t.Errorf("Run with no argument writes %q to stderr, want nothing", stderr.String())
 	}
 	if !strings.HasPrefix(fromEmbed.String(), "PASS  fixtures/") {
-		t.Fatalf("run with no argument starts with %q, want a `PASS  fixtures/<name>` line",
+		t.Fatalf("Run with no argument starts with %q, want a `PASS  fixtures/<name>` line",
 			strings.SplitN(fromEmbed.String(), "\n", 2)[0])
 	}
-	want := strings.ReplaceAll(fromDir.String(), "../../fixtures/", "fixtures/")
+	want := strings.ReplaceAll(fromDir.String(), dir+"/", "fixtures/")
 	if got := fromEmbed.String(); got != want {
-		t.Errorf("run with no argument writes:\n%s\nwant the ../../fixtures report with each path as fixtures/<name>:\n%s",
-			got, want)
+		t.Errorf("Run with no argument writes:\n%s\nwant the %s report with each path as fixtures/<name>:\n%s",
+			got, dir, want)
 	}
 }
 
@@ -239,14 +279,14 @@ func TestNoArgumentVerifiesEmbeddedFixtures(t *testing.T) {
 func TestHelpPrintsUsage(t *testing.T) {
 	for _, flag := range []string{"-h", "--help"} {
 		var stdout, stderr bytes.Buffer
-		if code := run([]string{flag}, &stdout, &stderr); code != 0 {
-			t.Errorf("run(%s) exits %d, want 0", flag, code)
+		if code := Run([]string{flag}, &stdout, &stderr); code != 0 {
+			t.Errorf("Run(%s) exits %d, want 0", flag, code)
 		}
 		if stdout.String() != usage {
-			t.Errorf("run(%s) writes %q to stdout, want the usage lines", flag, stdout.String())
+			t.Errorf("Run(%s) writes %q to stdout, want the usage lines", flag, stdout.String())
 		}
 		if stderr.Len() != 0 {
-			t.Errorf("run(%s) writes %q to stderr, want nothing", flag, stderr.String())
+			t.Errorf("Run(%s) writes %q to stderr, want nothing", flag, stderr.String())
 		}
 	}
 }
@@ -333,10 +373,10 @@ func TestDuplicateAfterOutOfRangeNumberRejects(t *testing.T) {
 		fixture string
 		prefix  string
 	}{
-		{"../../fixtures/v1_1-baseline-valid.json", `"zzz":1e400,"trustLevel":1,`},
-		{"../../fixtures/v1_1-baseline-valid.json", `"zzz":1e300,"trustLevel":1,`},
-		{"../../fixtures/v1_1-baseline-valid.json", `"zzz":1` + strings.Repeat("0", 400) + `,"trustLevel":1,`},
-		{"../../fixtures/baseline-valid.json", `"declaredPurpose":1e400,"trustLevel":1,`},
+		{repoRoot + "/fixtures/v1_1-baseline-valid.json", `"zzz":1e400,"trustLevel":1,`},
+		{repoRoot + "/fixtures/v1_1-baseline-valid.json", `"zzz":1e300,"trustLevel":1,`},
+		{repoRoot + "/fixtures/v1_1-baseline-valid.json", `"zzz":1` + strings.Repeat("0", 400) + `,"trustLevel":1,`},
+		{repoRoot + "/fixtures/baseline-valid.json", `"declaredPurpose":1e400,"trustLevel":1,`},
 	}
 	for _, c := range cases {
 		f, err := loadFixture(c.fixture)
@@ -369,7 +409,7 @@ func TestDuplicateAfterOutOfRangeNumberRejects(t *testing.T) {
 // Mutation-verified: with fixtures/revoked-crl-only.json removed, the CRL-blind
 // run matches every remaining fixture and this test fails.
 func TestSuiteCatchesCRLBlindVerifier(t *testing.T) {
-	paths, err := expandFixturePaths([]string{"../../fixtures"})
+	paths, err := expandFixturePaths([]string{repoRoot + "/fixtures"})
 	if err != nil {
 		t.Fatalf("cannot list the shipped fixtures: %v", err)
 	}
@@ -405,7 +445,7 @@ func TestSuiteCatchesCRLBlindVerifier(t *testing.T) {
 // with its Ed25519 entry removed carries one ML-DSA-65 signature that verifies
 // and MUST REJECT as SIGNATURE_INVALID. atx-conformance#133.
 func TestMLDSA65RequiresEd25519Companion(t *testing.T) {
-	f, err := loadFixture("../../fixtures/v1_1-baseline-valid-hybrid.json")
+	f, err := loadFixture(repoRoot + "/fixtures/v1_1-baseline-valid-hybrid.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,7 +530,7 @@ var earlyRejectCategories = map[string]bool{
 // trusted set and its keys from keypairRefs to the verifier's keys). The clock
 // and the revocation state are not read after step 4. atx-conformance#138.
 func TestEarlyRejectFixturesCarryValidSignatures(t *testing.T) {
-	paths, err := filepath.Glob(filepath.Join("..", "..", "fixtures", "*.json"))
+	paths, err := filepath.Glob(filepath.Join(repoRoot, "fixtures", "*.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -562,7 +602,7 @@ func lastWins(raw json.RawMessage) (json.RawMessage, error) {
 // gate runs this test, so the gate covers this verifier's code and not only the
 // library it calls. atx-conformance#156.
 func TestJCSVectorsThroughVerifierProjection(t *testing.T) {
-	dir := filepath.Join("..", "..", "jcs-vectors", "vectors")
+	dir := filepath.Join(repoRoot, "jcs-vectors", "vectors")
 	paths, err := filepath.Glob(filepath.Join(dir, "*.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -629,7 +669,7 @@ func mustHexDecode(t *testing.T, s string) []byte {
 // TestTimestampDecode pins what the timestamp decoder behind issuedAt,
 // expiresAt and every other timestamp this verifier decodes accepts. The
 // Python reference verifier ports this grammar (_parse_rfc3339 in
-// ../python/verify.py) and test_verify.py carries the same table, so a Go
+// verifiers/python/verify.py) and test_verify.py carries the same table, so a Go
 // release that changes how the decoder treats one of these inputs, for example
 // by enabling the strict RFC 3339 checks the standard library has disabled
 // (golang/go#54580), fails here before the two verifiers drift apart. An

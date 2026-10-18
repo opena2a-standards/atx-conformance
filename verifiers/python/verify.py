@@ -302,7 +302,7 @@ def _subtree_duplicate(value: Any) -> str | None:
 
 def _fold_key(s: str) -> str:
     """Fold a JSON member name the way Go's encoding/json folds struct field
-    names, matching the Go reference verifier's foldKey (verifiers/go/verify.go):
+    names, matching the Go reference verifier's foldKey (verifiers/go/verifier/verify.go):
     ASCII uppercase lowercased, Kelvin sign U+212A -> k, long s U+017F -> s, any
     other rune via str.lower(). Two names with the same fold key collapse to one
     struct field under a Go last-wins unmarshaler, so treating them as duplicates

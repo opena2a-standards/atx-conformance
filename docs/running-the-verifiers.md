@@ -14,14 +14,15 @@ result and the rejection category matches (when declared).
 ### Go (full hybrid Ed25519 plus ML-DSA-65)
 
 ```bash
-go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest
+go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@latest
 ```
 
 With no argument the verifier walks the fixture set built into the module
 version `go run` fetched, `fixtures/*.json` of that commit; name fixture
 files or a directory to walk those instead. `go.mod` at the repository root
-declares the module, `github.com/opena2a-standards/atx-conformance`, and
-`verifiers/go` is its main package, so from a checkout:
+declares the module, `github.com/opena2a-standards/atx-conformance`. The
+verifier is the package `verifiers/go/verifier`; `cmd/atx-verify` and
+`verifiers/go` are main packages that run it, so from a checkout:
 
 ```bash
 cd verifiers/go

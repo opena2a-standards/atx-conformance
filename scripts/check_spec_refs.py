@@ -63,7 +63,7 @@ case runs; a missing core.md or workflow fails there in the words the check
 uses for it. The self-test also fails a temporary tree it could not remove.
 
 Every link to atx-spec core.md in LINKED_DOCS (README.md, the docs/ pages
-that took its sections, and verifiers/go/verify.go) must also equal CORE_REF,
+that took its sections, and verifiers/go/verifier/verify.go) must also equal CORE_REF,
 apart from a query string, a
 #fragment, the punctuation a GitHub autolink drops after it (.,:!*_~) or a
 semicolon, trailing slashes, and the case of everything before the file name,
@@ -145,7 +145,7 @@ LINKED_DOCS = (Path("README.md"), Path("docs/scope.md"),
                Path("docs/running-the-verifiers.md"),
                Path("docs/reproducing-the-fixtures.md"), Path("docs/version-pinning.md"),
                Path("docs/versioning.md"), Path("docs/sibling-repositories.md"),
-               Path("verifiers/go/verify.go"))
+               Path("verifiers/go/verifier/verify.go"))
 
 # The atx-spec commit core.md was vendored from, and the SHA-256 of core.md at
 # that commit. When the atx-spec pin in WORKFLOW moves, re-vendor core.md from
@@ -972,7 +972,7 @@ def _linked_dir_unsearchable() -> bool | None:
     3.14; None (skipped) where permissions do not stop a read."""
     if not _permissions_stop_reads():
         return None
-    rel = Path("verifiers/go/verify.go")
+    rel = Path("verifiers/go/verifier/verify.go")
     return (_check_unreadable(lambda root: _unsearchable(root / rel), docs={str(rel): f"// {CORE_REF}\n"})
             == [f"{rel}: cannot be read (Permission denied)"])
 
@@ -2066,12 +2066,12 @@ def self_test() -> int:
          not _probe([good], docs={"README.md": f"See {CORE_REF}.\n{CORE_REF}?plain=1\n"
                                                 f"{CORE_REF.replace('https', 'HTTPS', 1)}\n"})),
         ("rejects a Go comment linking core.md on the old host",
-         _names_probe(_probe([good], docs={"verifiers/go/verify.go": f"// ({stale.replace('-standards', '-org')})\n"}),
-                      "verifiers/go/verify.go:1:")),
+         _names_probe(_probe([good], docs={"verifiers/go/verifier/verify.go": f"// ({stale.replace('-standards', '-org')})\n"}),
+                      "verifiers/go/verifier/verify.go:1:")),
         ("reports a README.md and a verify.go that are not UTF-8 by name",
          [f.split(":", 1)[0] for f in _probe([good], docs={"README.md": b"x \xff y\n",
-                                                          "verifiers/go/verify.go": b"// \xff\n"})]
-         == ["README.md", "verifiers/go/verify.go"]),
+                                                          "verifiers/go/verifier/verify.go": b"// \xff\n"})]
+         == ["README.md", "verifiers/go/verifier/verify.go"]),
         (_chmod_skips("reports a README.md it has no permission to read by name"),
          _unreadable_readme()),
         ("reports a vendored core.md that is not UTF-8 by name, after its digest failure",

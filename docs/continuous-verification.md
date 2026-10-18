@@ -12,7 +12,7 @@ claims the README and its pages under `docs/` make about them -- not every
 sentence below:
 
 1. Both reference verifiers run against `fixtures/` and must report
-   `25 pass, 0 fail`. `go test` in `verifiers/go` runs the Go verifier in
+   `25 pass, 0 fail`. `go test ./...` in `verifiers/go` runs the Go verifier in
    the directory and with the arguments of the command the capture's
    sidecar records it ran (`ranAs`) and requires its standard output to
    equal [`docs/captures/go-verifier.txt`](captures/go-verifier.txt), the
@@ -40,7 +40,7 @@ sentence below:
    A citation id must be a string, and one that differs from `ATX` only in
    case or surrounding blanks fails rather than being skipped. Every link to
    atx-spec `core.md` in the README, in its pages under `docs/` and in
-   `verifiers/go/verify.go` must be the same pinned link. The top-level
+   `verifiers/go/verifier/verify.go` must be the same pinned link. The top-level
    `spec.ref` of
    `conformance.json` is written from that link, so the staleness check holds
    it to the pin; the prose of `notCovered[].item` is not checked. Headings

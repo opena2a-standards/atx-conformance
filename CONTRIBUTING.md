@@ -26,10 +26,13 @@ conformance.json                 requirement-to-fixture profile (generated from 
                                  fixtures, drift-checked in CI)
 go.mod, go.sum                   the Go module the repository publishes,
                                  github.com/opena2a-standards/atx-conformance;
-                                 verifiers/go is its main package
+                                 cmd/atx-verify and verifiers/go are its main
+                                 packages
 fixtures.go                      the module's root package: fixtures/*.json as an
                                  embedded file system, the set the Go verifier
                                  walks when run with no argument
+cmd/atx-verify/                  the Go verifier's published entry point,
+                                 go run <module>/cmd/atx-verify@latest
 docs/                            scope, fixtures, gates, dependencies, version
                                  pinning and stability (the pages the README
                                  links), and the full output of its Go run with
@@ -41,8 +44,9 @@ schemas/*.schema.json            fixture-v1 and conformance-profile-v1 file form
 schemas/vendor/atx-spec/         vendored atx-spec credential schema and core.md
                                  (pinned ref)
 vectors/                         test keypair vectors (TEST-ONLY)
-verifiers/go/                    Go reference verifier (full hybrid), the module's
-                                 main package
+verifiers/go/                    Go reference verifier (full hybrid): the package
+                                 verifiers/go/verifier and a main package that
+                                 runs it from a checkout
 verifiers/python/                Python reference verifier (full hybrid)
 scripts/generate-fixtures/       deterministic fixture generator (Go)
 scripts/parity/                  Go/Python per-fixture parity gate

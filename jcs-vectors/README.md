@@ -42,7 +42,7 @@ through the verifier's TBS projection and JCS call, and the result must equal
 
 | Verifier | Test the gate runs | Code under test |
 |----------|--------------------|-----------------|
-| `verifiers/go` | `TestJCSVectorsThroughVerifierProjection` | `canonicalPayloadV11` |
+| `verifiers/go/verifier` | `TestJCSVectorsThroughVerifierProjection` | `canonicalPayloadV11` |
 | `verifiers/python` | `test_verify.JCSVectorsThroughVerifierProjection` | `canonical_payload_v11` |
 
 The libraries are an implementation detail behind the vectors. The vectors are
