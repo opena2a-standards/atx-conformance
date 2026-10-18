@@ -10,6 +10,27 @@ and stability" says they should not.
 
 ### Added
 
+- `go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest`
+  runs the Go verifier with nothing cloned, and is README.md's first
+  command. With no argument the verifier walks the fixture set built into
+  the module version `go run` fetched, `fixtures/*.json` of that commit,
+  names each fixture `fixtures/<name>` and exits 0 on the shipped set,
+  where it wrote `usage: verify <fixture.json|dir>...` and exited 2. For
+  that, `go.mod` moved from `verifiers/go` to the repository root and
+  declares the module `github.com/opena2a-standards/atx-conformance`, the
+  repository's path: declared as
+  `github.com/opena2a-org/atx-conformance/verifiers/go`, the command above
+  fetched the newest commit and stopped at `module declares its path as:
+  github.com/opena2a-org/atx-conformance/verifiers/go but was required as:
+  github.com/opena2a-standards/atx-conformance/verifiers/go`. `fixtures.go`
+  at the root embeds `fixtures/*.json`, `verifiers/go` is the module's main
+  package, and `cd verifiers/go && go run . ../../fixtures` writes the 93
+  lines it wrote before. `-h` and `--help` write the usage lines to stdout
+  and exit 0. `TestEmbeddedFixturesAreTheFixtureDirectory` holds the
+  embedded set to `fixtures/*.json` on disk, name by name and byte for
+  byte, and `TestNoArgumentVerifiesEmbeddedFixtures` holds the no-argument
+  report to the report for the `fixtures/` directory with each path
+  rewritten. No fixture changes.
 - `scripts/check_fixture_immutability.py` fails when the `atx`,
   `verifierState` or `expected` member of an existing fixture name differs
   from the merge base of `HEAD` and `origin/main`. Run it with `--base A
@@ -50,6 +71,35 @@ and stability" says they should not.
 
 ### Changed
 
+- `scripts/capture_go_verifier.py` reads README.md's first command with or
+  without a `cd <dir> && ` prefix; without one, the command runs in the
+  repository root. It runs `go run <import path>@<version>` of a package of
+  this repository's module (`go.mod` at the root) as `go run ./<dir>` from
+  the tree, so the capture is of the tree and not of a published version,
+  and the sidecar records that command in a new `ranAs` member after
+  `command`; `--check` fails when the sidecar's `ranAs` is another. For
+  such a command, `inputs` and `inputTrees` list the package directory,
+  `go.mod`, `go.sum`, the Go files at the module root and the directory
+  they embed (`verifiers/go`, `go.mod`, `go.sum`, `fixtures.go`,
+  `fixtures`). `TestCaptureIsVerifierOutput` runs the sidecar's `ranAs` in
+  its working directory. `docs/captures/go-verifier.txt` is the output of
+  the new first command: its 93 lines name each fixture `fixtures/<name>`
+  where they named `../../fixtures/<name>`. The self-test adds eight cases:
+  a first command with no `cd` runs in the root and names this module's
+  package, the `cd` form reads as before, `run_argv()` maps the command to
+  `go run ./verifiers/go`, and the check fails on a sidecar with no `ranAs`
+  member or another `ranAs`, on a `go.mod` changed after the capture, on a
+  first command naming a package outside this module and on a `go.mod`
+  declaring no module (67 cases green, from 59). No fixture changes.
+- The module paths of `jcs-vectors/go.mod` and
+  `scripts/generate-fixtures/go.mod` are under the repository's path,
+  `github.com/opena2a-standards/atx-conformance/jcs-vectors` and
+  `github.com/opena2a-standards/atx-conformance/scripts/generate-fixtures`,
+  where they named `github.com/opena2a-org/atx-conformance`. No fixture
+  changes.
+- `scripts/check_readme_counts.py` reads the Go verifier's direct
+  requirements from `go.mod` at the repository root, where it read
+  `verifiers/go/go.mod`. No fixture changes.
 - README.md is shorter: the verifiers' exit-code sentence moved as written to
   `docs/running-the-verifiers.md` (Exit code), and the Documentation list has
   nine lines, the `CONTRIBUTING.md` line linking `conformance.json`,

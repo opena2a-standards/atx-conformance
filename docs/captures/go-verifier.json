@@ -1,27 +1,40 @@
 {
-  "command": "go run . ../../fixtures",
-  "workingDirectory": "verifiers/go",
+  "command": "go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest",
+  "ranAs": "go run ./verifiers/go",
+  "workingDirectory": ".",
   "stream": "stdout",
   "goVersion": "go1.26.3",
   "platform": "darwin/arm64",
   "inputs": [
     "verifiers/go",
+    "go.mod",
+    "go.sum",
+    "fixtures.go",
     "fixtures"
   ],
   "inputTrees": {
-    "verifiers/go": "c7519f2b6269642c21e2f95071b6d67bb53c6d45",
+    "verifiers/go": "303db590c0d8c1a046c9b84d3d9ba08f01982992",
+    "go.mod": "667011a74ec65d88b16a2c7093b6e62bb4b97690",
+    "go.sum": "436e141fa3870ee84f73fe087c3929df8948c07c",
+    "fixtures.go": "d1e07a13bf0a6620502f7a19eb1f5d65088f706f",
     "fixtures": "e1286df4db4115deb1fbf103fdf97757a4c95b05"
   },
-  "inputsUncommitted": [],
-  "ranAtUtc": "2026-10-16T04:13:30Z",
+  "inputsUncommitted": [
+    "fixtures.go",
+    "go.mod",
+    "go.sum",
+    "verifiers/go/verify.go",
+    "verifiers/go/verify_test.go"
+  ],
+  "ranAtUtc": "2026-10-17T23:54:00Z",
   "exitCode": 0,
   "stderrLines": 0,
   "summary": "summary: 25 pass, 0 fail (25 fixtures)",
   "outputs": {
     "capture": {
       "path": "docs/captures/go-verifier.txt",
-      "sha256": "29936c2940263414c1149ea45ccaabf35211fdab927bc19168b2c36751c03c4c",
-      "bytes": 6043,
+      "sha256": "7d9c2bce423c1308ac33d5b08d40c1c47c39b29e3ad8d083ab798b7055059879",
+      "bytes": 5893,
       "lines": 93
     }
   }

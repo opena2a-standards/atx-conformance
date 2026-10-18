@@ -82,10 +82,11 @@ versions the fixtures expect to ACCEPT. Both said "v1.0" alone while most
 fixtures were v1.1 and the vendored schema was the v1.1 schema.
 
 It also holds the Go verifier's stated dependencies to the direct requirements
-of verifiers/go/go.mod, in the three places that state them: the dependency
-list under the README's Go heading, the version-pinning table and the header
-comment of verifiers/go/verify.go. All three named cloudflare/circl alone
-while go.mod also required gowebpki/jcs.
+of go.mod at the repository root (the module whose main package is
+verifiers/go), in the three places that state them: the dependency list under
+the README's Go heading, the version-pinning table and the header comment of
+verifiers/go/verify.go. All three named cloudflare/circl alone while go.mod
+also required gowebpki/jcs.
 
 It also holds what jcs-vectors/README.md and both copies of the vendored RFC
 8785 serializer say about the Python verifier's dependencies to
@@ -494,9 +495,9 @@ ATX_VERSION = re.compile(r"\bv(\d+\.\d+)\b")
 # The three places a reader learns what the Go verifier depends on. Each named
 # cloudflare/circl alone after go.mod had come to require gowebpki/jcs for the
 # v1.1 signed payload, so each is held to the direct requirements of go.mod.
-GO_MOD = ROOT / "verifiers" / "go" / "go.mod"
+GO_MOD = ROOT / "go.mod"
 VERIFY_GO = ROOT / "verifiers" / "go" / "verify.go"
-GO_MOD_NAME = "verifiers/go/go.mod"
+GO_MOD_NAME = "go.mod"
 GO_HEADING = re.compile(r"^### Go\b.*$", re.M)
 # A dependency-list item naming a module at a version: "- `<module> <version>`".
 GO_MODULE_ITEM = re.compile(r"^- `([^`\s]+/[^`\s]+) (v[^`\s]+)`", re.M)
