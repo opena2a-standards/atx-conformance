@@ -681,6 +681,23 @@ they should not.
 
 ### Fixed
 
+- `scripts/check_readme_counts.py` reads CHANGELOG.md's top section, its
+  first `## ` section whatever the heading says, for the `go run` commands
+  it names as README.md's first command, where it read the section headed
+  `## Unreleased` alone (#229). Once that section was retitled `## v0.1.0`
+  it read no sentence of CHANGELOG.md, so a sentence under `## v0.1.0`
+  naming an invented `go run` command as README.md's first command left it
+  exiting 0, while its closing line still named the Unreleased section. On
+  the CHANGELOG.md of `602ba90` it reads 279 sentences under `## v0.1.0`,
+  where it read none, and with that sentence added it names the sentence
+  and exits 1. A CHANGELOG.md with no `## ` heading fails it, exit 1, where
+  it passed, and the closing line names the heading of the section read.
+  The self-test's cases add their sentences to the published top section,
+  where they added a `## Unreleased` section at the top of a CHANGELOG.md
+  that had none, and it adds three cases (245 altered sites, from 242): an
+  invented command named in a top section retitled `## v9.9.9`, the same
+  under `### Added` in a CHANGELOG.md whose one section is `## v0.1.0`, and
+  a CHANGELOG.md with each `## ` heading made `### `. No fixture changes.
 - Both reference verifiers name a fixture given by an absolute path under
   the working directory alike when the working directory was entered
   through a symbolic link (#224): each compares the working directory and
