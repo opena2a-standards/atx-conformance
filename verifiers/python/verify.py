@@ -1346,6 +1346,23 @@ def _cleans_to_itself(directory: str, st: os.stat_result) -> bool:
         return False
 
 
+def _json_names(directory: str) -> list[str]:
+    """The names of the entries of directory that end in .json and are not
+    directories, the entries of os.ReadDir the Go reference verifier's
+    expandFixturePaths keeps. Each entry's own type decides, so a symbolic
+    link named *.json is kept whatever it links to, and a link to a
+    directory then fails to load, as it does there. Path.glob("*.json")
+    gave a subdirectory named *.json too, which then failed to load. A
+    directory that cannot be listed gives no name, as Path.glob gave none."""
+    try:
+        with os.scandir(directory) as it:
+            entries = list(it)
+    except OSError:
+        return []
+    return [e.name for e in entries
+            if e.name.endswith(".json") and not e.is_dir(follow_symlinks=False)]
+
+
 def expand_paths(args: list[str]) -> list[str]:
     """The fixture files args name, spelled as the Go reference verifier's
     expandFixturePaths spells them: a file as its argument spells it, ./ and
@@ -1373,7 +1390,7 @@ def expand_paths(args: list[str]) -> list[str]:
             join = _go_join if _cleans_to_itself(a, st) else _spelled_join
             fixtures_dir = join(a, "fixtures")
             target = fixtures_dir if os.path.isdir(fixtures_dir) else a
-            out.extend(join(target, p.name) for p in Path(target).glob("*.json"))
+            out.extend(join(target, name) for name in _json_names(target))
         else:
             out.append(a)
     # A path named twice is verified twice, as the Go reference verifier

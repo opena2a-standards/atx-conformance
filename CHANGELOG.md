@@ -97,6 +97,21 @@ they should not.
 
 ### Changed
 
+- `docs/running-the-verifiers.md` says the file of a directory argument
+  that names another directory once cleaned, as `d/link/..` can with
+  `d/link` a symbolic link, is named and read as the argument spells the
+  directory, then the file name, with a `/` between the two unless the
+  directory as spelled ends in `/` (#233). It said "then a `/` and the file
+  name", which gives `d/link/..//other.json` for `d/link/../`, while both
+  verifiers print `PASS  d/link/../other.json` for it, exit 0, as they do
+  for `d/link/..`. Its example quotes `d/link/../` beside `d/link/..`. The
+  #231 entry under Fixed, which said the same, says "then the file name,
+  with a `/` between the two unless the argument ends in `/`".
+  `test_verify.py` adds
+  `test_arguments_section_names_the_file_of_a_dotdot_after_a_link_as_printed`,
+  which fails unless that section quotes `d/link/..` and `d/link/../` and
+  the `PASS` line the Python verifier prints for each; on the previous
+  commit's page it fails for `d/link/../`. No fixture changes.
 - README.md says `@latest` resolves to the highest release tag of this
   repository that the Go module proxy reports, and that `go run` resolves
   `@<commit>` to the commit's release tag, or to a pseudo-version when the
@@ -681,6 +696,30 @@ they should not.
 
 ### Fixed
 
+- The Python reference verifier skips a subdirectory named `*.json` when
+  it walks a directory, as the Go reference verifier skips it (#234). It
+  listed a directory with `Path.glob("*.json")`, which gives
+  subdirectories too: with `g/` holding a copy of
+  `fixtures/baseline-valid.json` as `x.json` and a subdirectory
+  `sub.json`, `python3 verify.py g` wrote
+  `FAIL  g/sub.json  (load error: [Errno 21] Is a directory: 'g/sub.json')`
+  above `PASS  g/x.json` and `summary: 1 pass, 1 fail (2 fixtures)`,
+  exit 1, where `atx-verify g` wrote `PASS  g/x.json` and
+  `summary: 1 pass, 0 fail (1 fixtures)`, exit 0; both now write the
+  latter. A subdirectory named `*.json` in a repository root's `fixtures/`
+  is skipped too. It now keeps the `*.json` entries the Go verifier keeps,
+  those `os.ReadDir` does not type as a directory, so a symbolic link
+  named `*.json` is kept whatever it links to, as before, and a link to a
+  directory is still a load error in both.
+  `test_a_subdirectory_named_json_is_skipped` pins it. The "Arguments"
+  section of `docs/running-the-verifiers.md` says which entries a walk
+  skips. The argument table of `scripts/parity/parity.py` runs 23
+  argument lists, from 22, adding `subdir`, a directory holding a
+  subdirectory named `sub.json`; with the Python verifier of the previous
+  commit, the gate fails on that case alone. The self-test adds one case
+  (41 cases green, from 40): a verifier that reports `subdir/sub.json` as a
+  fixture that fails to load is reported as a divergence. No fixture
+  changes.
 - Both reference verifiers read and name the file the operating system
   resolves a path to when a `..` follows a symbolic link (#231). A
   directory argument was listed by the operating system, which resolves the
@@ -692,8 +731,9 @@ they should not.
   error, exit 1; both write `PASS  d/link/../other.json`, exit 0, having
   verified that copy. Where a directory argument, cleaned as
   `filepath.Clean` cleans it, names another directory than it does, its
-  files are named and read as the argument spells it, then a `/` and the
-  file name, and its `fixtures` entry is looked up there: `r/link/..`,
+  files are named and read as the argument spells it, then the file name,
+  with a `/` between the two unless the argument ends in `/`, and its
+  `fixtures` entry is looked up there: `r/link/..`,
   which resolves to a directory holding `fixtures/`, was walked for its own
   `*.json` and is walked for `fixtures/*.json`. A directory argument that
   names the same directory cleaned keeps the names `filepath.Join` gives:
