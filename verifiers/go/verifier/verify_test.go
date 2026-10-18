@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -275,19 +276,128 @@ func TestNoArgumentVerifiesEmbeddedFixtures(t *testing.T) {
 }
 
 // TestHelpPrintsUsage pins that -h and --help write the usage lines to stdout
-// and exit 0.
+// and exit 0, wherever they stand among the arguments.
 func TestHelpPrintsUsage(t *testing.T) {
-	for _, flag := range []string{"-h", "--help"} {
+	for _, args := range [][]string{{"-h"}, {"--help"}, {repoRoot + "/fixtures", "-h"}, {"--json", "--help"}} {
 		var stdout, stderr bytes.Buffer
-		if code := Run([]string{flag}, &stdout, &stderr); code != 0 {
-			t.Errorf("Run(%s) exits %d, want 0", flag, code)
+		if code := Run(args, &stdout, &stderr); code != 0 {
+			t.Errorf("Run(%q) exits %d, want 0", args, code)
 		}
 		if stdout.String() != usage {
-			t.Errorf("Run(%s) writes %q to stdout, want the usage lines", flag, stdout.String())
+			t.Errorf("Run(%q) writes %q to stdout, want the usage lines", args, stdout.String())
 		}
 		if stderr.Len() != 0 {
-			t.Errorf("Run(%s) writes %q to stderr, want nothing", flag, stderr.String())
+			t.Errorf("Run(%q) writes %q to stderr, want nothing", args, stderr.String())
 		}
+	}
+}
+
+// TestUnknownOptionIsNamed pins that an argument starting with "-" that is not
+// an option of this verifier is named on stderr above the usage lines, exit
+// 2, before any fixture is read. It was taken for a path, so `verify --json`
+// wrote `error: stat --json: no such file or directory`.
+func TestUnknownOptionIsNamed(t *testing.T) {
+	cases := []struct {
+		args    []string
+		unknown string
+	}{
+		{[]string{"--json"}, "--json"},
+		{[]string{"--verbose"}, "--verbose"},
+		{[]string{"-x"}, "-x"},
+		{[]string{repoRoot + "/fixtures", "--json"}, "--json"},
+		{[]string{"--version", "-x"}, "-x"},
+	}
+	for _, c := range cases {
+		var stdout, stderr bytes.Buffer
+		if code := Run(c.args, &stdout, &stderr); code != 2 {
+			t.Errorf("Run(%q) exits %d, want 2", c.args, code)
+		}
+		if want := "unknown option: " + c.unknown + "\n" + usage; stderr.String() != want {
+			t.Errorf("Run(%q) writes %q to stderr, want %q", c.args, stderr.String(), want)
+		}
+		if stdout.Len() != 0 {
+			t.Errorf("Run(%q) writes %q to stdout, want nothing", c.args, stdout.String())
+		}
+	}
+}
+
+// TestVersionNamesTheModuleVersion pins that --version writes one line naming
+// the module path and version the binary records and the Go release that
+// built it, and exits 0 without reading a fixture. Neither verifier had a
+// --version, and no line of the report named the commit a `go run
+// <module>/verifiers/go@latest` binary was built from.
+func TestVersionNamesTheModuleVersion(t *testing.T) {
+	info, ok := debug.ReadBuildInfo()
+	want := versionLine(info, ok)
+	for _, args := range [][]string{{"--version"}, {repoRoot + "/fixtures", "--version"}} {
+		var stdout, stderr bytes.Buffer
+		if code := Run(args, &stdout, &stderr); code != 0 {
+			t.Errorf("Run(%q) exits %d, want 0 (stderr %q)", args, code, stderr.String())
+		}
+		if stdout.String() != want {
+			t.Errorf("Run(%q) writes %q to stdout, want %q", args, stdout.String(), want)
+		}
+		if stderr.Len() != 0 {
+			t.Errorf("Run(%q) writes %q to stderr, want nothing", args, stderr.String())
+		}
+	}
+
+	const module = "github.com/opena2a-standards/atx-conformance"
+	lines := []struct {
+		info *debug.BuildInfo
+		ok   bool
+		want string
+	}{
+		{&debug.BuildInfo{GoVersion: "go1.22.12", Main: debug.Module{Path: module, Version: "v0.0.0-20261018005751-ea4b48544534"}}, true,
+			"verify: " + module + " v0.0.0-20261018005751-ea4b48544534, built with go1.22.12\n"},
+		{&debug.BuildInfo{GoVersion: "go1.26.3", Main: debug.Module{Path: module, Version: "(devel)"}}, true,
+			"verify: " + module + " (devel), built with go1.26.3\n"},
+		{&debug.BuildInfo{GoVersion: "go1.26.3"}, true, "verify: this binary records no module version\n"},
+		{nil, false, "verify: this binary records no module version\n"},
+	}
+	for _, c := range lines {
+		if got := versionLine(c.info, c.ok); got != c.want {
+			t.Errorf("versionLine(%+v, %t) = %q, want %q", c.info, c.ok, got, c.want)
+		}
+	}
+}
+
+// TestPathOutsideWorkingDirectoryIsWrittenWhole pins the name the report gives
+// a fixture named by an absolute path: the path relative to the working
+// directory when the fixture is under it, the absolute path when it is not.
+// A fixture outside was named by a climb of ".." elements to the file system
+// root, where the Python verifier writes the absolute path.
+func TestPathOutsideWorkingDirectoryIsWrittenWhole(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	above := filepath.Join(wd, repoRoot, "fixtures", "baseline-valid.json")
+	for _, c := range []struct{ path, want string }{
+		{filepath.Join(wd, "verify.go"), "verify.go"},
+		{filepath.Join(wd, "testdata", "x.json"), filepath.Join("testdata", "x.json")},
+		{above, above},
+		{repoRoot + "/fixtures/baseline-valid.json", repoRoot + "/fixtures/baseline-valid.json"},
+	} {
+		if got := relPath(c.path); got != c.want {
+			t.Errorf("relPath(%q) = %q, want %q", c.path, got, c.want)
+		}
+	}
+
+	raw, err := fs.ReadFile(atxconformance.Fixtures, "fixtures/baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "baseline-valid.json")
+	if err := os.WriteFile(outside, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{outside}, &stdout, &stderr); code != 0 {
+		t.Fatalf("Run(%q) exits %d, want 0 (stderr %q)", outside, code, stderr.String())
+	}
+	if first, want := strings.SplitN(stdout.String(), "\n", 2)[0], "PASS  "+outside; first != want {
+		t.Errorf("Run(%q) writes %q first, want %q", outside, first, want)
 	}
 }
 

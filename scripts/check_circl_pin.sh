@@ -11,9 +11,40 @@
 #
 # Usage: scripts/check_circl_pin.sh            # from the repository root
 #        scripts/check_circl_pin.sh <root>     # another checkout
+#        scripts/check_circl_pin.sh --help     # the usage line
+#
+# An argument other than one <root>, -h and --help is named on stderr above
+# the usage line, and the script exits 2 without reading a go.mod.
 set -euo pipefail
 
-root="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
+usage="usage: $(basename "$0") [<root>]"
+help=0
+root=""
+unknown=()
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help) help=1 ;;
+    -?*) unknown+=("$arg") ;;
+    *)
+      if [ -z "$root" ]; then
+        root="$arg"
+      else
+        unknown+=("$arg")
+      fi
+      ;;
+  esac
+done
+if [ "${#unknown[@]}" -gt 0 ]; then
+  echo "unknown argument(s): ${unknown[*]}" >&2
+  echo "$usage" >&2
+  exit 2
+fi
+if [ "$help" -eq 1 ]; then
+  echo "$usage"
+  exit 0
+fi
+
+root="${root:-$(cd "$(dirname "$0")/.." && pwd)}"
 module="github.com/cloudflare/circl"
 
 pins=()

@@ -51,6 +51,7 @@ reported red by that member's name, and the format pass still runs.
 Usage:
     python3 scripts/schema_validation.py              # self-test, then both passes
     python3 scripts/schema_validation.py --self-test  # the self-test alone
+    python3 scripts/schema_validation.py --help       # the usage line
 """
 
 import contextlib
@@ -402,12 +403,16 @@ def check_credentials() -> int:
 
 
 def main() -> int:
+    usage = f"usage: {pathlib.Path(sys.argv[0]).name} [--self-test]"
     # An unrecognised flag must not fall through to the default run and exit 0.
-    unknown = [a for a in sys.argv[1:] if a != "--self-test"]
+    unknown = [a for a in sys.argv[1:] if a not in ("--self-test", "-h", "--help")]
     if unknown:
         print(f"unknown argument(s): {' '.join(unknown)}", file=sys.stderr)
-        print(f"usage: {pathlib.Path(sys.argv[0]).name} [--self-test]", file=sys.stderr)
+        print(usage, file=sys.stderr)
         return 2
+    if "-h" in sys.argv[1:] or "--help" in sys.argv[1:]:
+        print(usage)
+        return 0
 
     print("self-test: the format pass fails on each altered document\n")
     failed, total = self_test()

@@ -10,6 +10,21 @@ and stability" says they should not.
 
 ### Added
 
+- Both reference verifiers take `--version`, and name an unknown option on
+  stderr above their usage lines, exit 2 (#208): `verify --json` wrote
+  `error: stat --json: no such file or directory`, and writes
+  `unknown option: --json`. The Go verifier's `--version` writes the module
+  path and version the binary records and the Go release that built it;
+  through a module proxy holding this tree at a pseudo-version,
+  `go run <module>/verifiers/go@latest --version` wrote that pseudo-version.
+  The Python verifier's writes the commit git names as HEAD for its
+  directory. Every script under `scripts/` takes `-h` and `--help`, and names
+  an unknown argument as `unknown argument(s): <argument>` on the line above
+  its usage, exit 2; `scripts/test_script_options.py` holds the ten scripts
+  to that. `check_sibling_rows.py --self-test` checks its altered rows
+  against sibling data built from the rows, so it reads no repository, and
+  when gh is not logged in the plain run says so on one line naming
+  `gh auth login` and `GH_TOKEN`.
 - `go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest`
   runs the Go verifier with nothing cloned, and is README.md's first
   command. With no argument the verifier walks the fixture set built into
@@ -71,6 +86,14 @@ and stability" says they should not.
 
 ### Changed
 
+- The Python verifier writes the signatures line's booleans as `true` and
+  `false`, and quotes an unsupported `atcVersion` or a duplicate member name
+  as Go's `%q` does, so its report over `fixtures/` from the repository root
+  is `docs/captures/go-verifier.txt` byte for byte; 9 of the 93 lines of the
+  two reports differed (#208). The Go verifier names a fixture given by an
+  absolute path outside the working directory by that path, as the Python
+  verifier does, where it wrote a climb of `..` elements. `docs/scope.md` and
+  `docs/fixtures.md` carry no em dash.
 - README.md names the first commit `@<commit>` works from: in place of
   `@latest`, it runs the verifier and fixtures of `ea4b485` or a later
   commit on `main`, the first commit with `go.mod` at the repository root.

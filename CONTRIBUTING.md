@@ -65,4 +65,6 @@ scripts/capture_go_verifier.py   runs the README's Go command from the tree and
                                  the sidecar's input tree ids to the working
                                  tree (run by hand)
 scripts/check_circl_pin.sh       CI gate: one cloudflare/circl version per Go module
+scripts/test_script_options.py   every script's -h, --help and unknown-argument
+                                 handling (run by hand)
 ```

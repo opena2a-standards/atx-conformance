@@ -54,6 +54,7 @@ here so it cannot come back a third time.
 Usage:
     python3 scripts/check_no_implementation_status.py
     python3 scripts/check_no_implementation_status.py --self-test
+    python3 scripts/check_no_implementation_status.py --help
 """
 from __future__ import annotations
 
@@ -290,14 +291,18 @@ CAVEAT = (
 
 
 def main() -> int:
+    usage = f"usage: {Path(sys.argv[0]).name} [--self-test]"
     # An unrecognised flag must not fall through to the default check and exit 0.
     # `--self-tets` would then report success while never running the self-test:
     # the same "believed to have run" failure this file exists to prevent.
-    unknown = [a for a in sys.argv[1:] if a != "--self-test"]
+    unknown = [a for a in sys.argv[1:] if a not in ("--self-test", "-h", "--help")]
     if unknown:
         print(f"unknown argument(s): {' '.join(unknown)}", file=sys.stderr)
-        print(f"usage: {Path(sys.argv[0]).name} [--self-test]", file=sys.stderr)
+        print(usage, file=sys.stderr)
         return 2
+    if "-h" in sys.argv[1:] or "--help" in sys.argv[1:]:
+        print(usage)
+        return 0
 
     if "--self-test" in sys.argv:
         failed = self_test()

@@ -20,7 +20,10 @@ not hex, arrays and objects nested to Go's
 depth limit (in declaredPurpose too, which the JCS serializer walks, and in a
 typed member, whose decode error writes the value to 8 levels), an integer
 with more digits than int() converts, bytes that are not UTF-8, the
-single-pass string-literal scan, and --help. Two tests
+single-pass string-literal scan, --help, an unknown option and --version.
+They hold the report to the Go reference verifier's text: a boolean, a
+string a reason quotes, and the whole report over fixtures/, which must be
+docs/captures/go-verifier.txt byte for byte. Two tests
 read verify.py itself: it imports no name it does not use, and its module
 docstring lists only the checks the verifier runs. Needs the same dependencies
 as verify.py. Run from this directory:
@@ -35,8 +38,10 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import re
 import string
+import subprocess
 import sys
 import tempfile
 import time
@@ -1995,14 +2000,152 @@ class InvalidUTF8(unittest.TestCase):
                 verify.load_fixture(written)
 
 
-class Help(unittest.TestCase):
-    def test_help_prints_the_usage_line_and_exits_0(self):
-        for flag in ("--help", "-h"):
-            with self.subTest(flag=flag):
-                self.assertEqual(_run_main(flag), (0, "usage: verify.py <fixture.json|dir>...\n", ""))
+USAGE = (
+    "usage: verify.py <fixture.json|dir>...\n"
+    "  -h, --help     print this usage and exit 0\n"
+    "  --version      print the commit this verifier runs from and exit 0\n"
+)
+
+
+class Options(unittest.TestCase):
+    def test_help_prints_the_usage_lines_and_exits_0(self):
+        for args in (("--help",), ("-h",), (str(BASELINE_V10), "-h"), ("--json", "--help")):
+            with self.subTest(args=args):
+                self.assertEqual(_run_main(*args), (0, USAGE, ""))
 
     def test_no_argument_is_a_usage_error(self):
-        self.assertEqual(_run_main(), (2, "", "usage: verify.py <fixture.json|dir>...\n"))
+        self.assertEqual(_run_main(), (2, "", USAGE))
+
+    def test_unknown_option_is_named_above_the_usage(self):
+        # Each was taken for a path: `error: --json: no such file or
+        # directory`, exit 2. The Go reference verifier names it the same way.
+        cases = (
+            (("--json",), "--json"),
+            (("--verbose",), "--verbose"),
+            (("-x",), "-x"),
+            ((str(BASELINE_V10), "--json"), "--json"),
+            (("--version", "-x"), "-x"),
+        )
+        for args, unknown in cases:
+            with self.subTest(args=args):
+                self.assertEqual(_run_main(*args), (2, "", f"unknown option: {unknown}\n{USAGE}"))
+
+    def test_version_names_the_commit_git_reads(self):
+        # git runs in this file's directory with no GIT_* variable, so a
+        # GIT_DIR a hook exports does not name another repository.
+        commit = "1234567890" * 4
+        python = f"run with Python {sys.version.split()[0]}"
+        cases = (
+            ([(0, commit + "\n"), (0, "")], f"verify.py: commit {commit}, {python}\n"),
+            ([(0, commit + "\n"), (0, " M verify.py\n")],
+             f"verify.py: commit {commit}, with uncommitted changes in its directory, {python}\n"),
+            ([(128, "")], f"verify.py: no commit recorded (not run from a git checkout), {python}\n"),
+            ([FileNotFoundError("git")],
+             f"verify.py: no commit recorded (not run from a git checkout), {python}\n"),
+        )
+        for results, want in cases:
+            calls = []
+
+            def fake_run(cmd, results=iter(results), **kwargs):
+                calls.append((cmd, kwargs))
+                result = next(results)
+                if isinstance(result, Exception):
+                    raise result
+                return subprocess.CompletedProcess(cmd, result[0], result[1], "")
+
+            with self.subTest(want=want), mock.patch.dict(os.environ, {"GIT_DIR": "/elsewhere"}), \
+                    mock.patch.object(verify.subprocess, "run", fake_run):
+                self.assertEqual(_run_main("--version"), (0, want, ""))
+                for cmd, kwargs in calls:
+                    self.assertEqual(cmd[:3], ["git", "-C", str(HERE)])
+                    self.assertFalse([name for name in kwargs["env"] if name.startswith("GIT_")])
+
+    def test_version_runs_git(self):
+        code, out, err = _run_main("--version")
+        self.assertEqual((code, err), (0, ""))
+        self.assertRegex(
+            out,
+            r"\Averify\.py: (commit [0-9a-f]{40}(, with uncommitted changes in its directory)?"
+            r"|no commit recorded \(not run from a git checkout\)), run with Python \S+\n\Z",
+        )
+
+
+# Go's %q of each string, as the Go reference verifier writes it (Go 1.26.3).
+# No character here is one a Unicode version after 6.1 assigned, so the table
+# does not depend on the Unicode tables of the Python release.
+GO_QUOTED = (
+    ("2.0", '"2.0"'),
+    ("", '""'),
+    ('a"b\\c', r'"a\"b\\c"'),
+    ("tab\there", r'"tab\there"'),
+    ("\x00\x07\x1b\x7f", r'"\x00\a\x1b\x7f"'),
+    ("\n", r'"\n"'),
+    ("\x85", '"\\u0085"'),
+    ("\N{NO-BREAK SPACE}", '"\\u00a0"'),
+    ("\N{LATIN SMALL LETTER E WITH ACUTE}", '"\N{LATIN SMALL LETTER E WITH ACUTE}"'),
+    ("\N{LINE SEPARATOR}", '"\\u2028"'),
+    (chr(0xE000), '"\\ue000"'),
+    ("\N{REPLACEMENT CHARACTER}", '"\N{REPLACEMENT CHARACTER}"'),
+    ("\U0001f600", '"\U0001f600"'),
+    ("\U000e0001", r'"\U000e0001"'),
+    ("\U0010ffff", r'"\U0010ffff"'),
+    # Go's encoding/json has decoded an unpaired surrogate to U+FFFD.
+    (chr(0xD800), '"\N{REPLACEMENT CHARACTER}"'),
+)
+
+
+class GoReportText(unittest.TestCase):
+    """The report reads as the Go reference verifier's: the signatures line
+    writes each boolean as Go's %t does, and a reason that quotes the
+    credential's atcVersion or a duplicate member name quotes it as Go's %q
+    does. This verifier wrote True and False, and Python's repr ('2.0'), so
+    9 of the 93 lines of the two reports over fixtures/ differed."""
+
+    def test_report_over_the_fixtures_is_the_go_capture(self):
+        # docs/captures/go-verifier.txt is the Go reference verifier's report
+        # over fixtures/*.json, each named fixtures/<name>; its own test,
+        # TestCaptureIsVerifierOutput, holds it to that verifier. Run from the
+        # repository root over fixtures, this verifier names each one the same.
+        with contextlib.chdir(ROOT):
+            code, out, err = _run_main("fixtures")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out, (ROOT / "docs" / "captures" / "go-verifier.txt").read_text(encoding="utf-8"))
+
+    def test_signatures_line_writes_each_boolean_as_go(self):
+        code, out, _ = _run_main(str(BASELINE_V10))
+        self.assertEqual(code, 0, out)
+        self.assertIn("       signatures: 1/1 valid (ed25519=true mldsa65=false)\n", out)
+
+    def test_go_quote(self):
+        for value, quoted in GO_QUOTED:
+            with self.subTest(value=value):
+                self.assertEqual(verify._go_quote(value), quoted)
+
+    def test_unsupported_version_is_quoted_as_go(self):
+        version = (
+            '2"0\\\x07\N{LATIN SMALL LETTER E WITH ACUTE}\N{NO-BREAK SPACE}'
+            "\N{LINE SEPARATOR}\U000e0001"
+        )
+        got = _member_verdict(BASELINE_V10, "atcVersion", json.dumps(version))
+        self.assertEqual(got.reject_category, "UNSUPPORTED_VERSION")
+        self.assertEqual(
+            got.reason,
+            'unsupported atcVersion "2\\"0\\\\\\a\N{LATIN SMALL LETTER E WITH ACUTE}'
+            '\\u00a0\\u2028\\U000e0001" (this verifier supports 1.0 and 1.1)',
+        )
+
+    def test_duplicate_member_is_quoted_as_go(self):
+        fixture = json.loads(BASELINE_V11.read_text())
+        fixture["atx"]["@@DUP@@"] = 0
+        fixture["expected"] = dict(PARSE_ERROR_EXPECTED)
+        text = json.dumps(fixture).replace('"@@DUP@@": 0', r'"q\"1\u0001": 1, "Q\"1\u0001": 2')
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "duplicate.json"
+            path.write_text(text)
+            got = verify.verify_fixture(verify.load_fixture(path))
+        self.assertEqual(got.reject_category, "PARSE_ERROR")
+        self.assertTrue(got.reason.startswith(r'credential contains duplicate member "Q\"1\x01" (strict parse:'),
+                        got.reason)
 
 
 class JCSVectorsThroughVerifierProjection(unittest.TestCase):
