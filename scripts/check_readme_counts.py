@@ -203,17 +203,21 @@ repository, is not held to it, and the closing line says so. A README that
 fails it is reported as this check's failure: the self-test's `@latest`
 cases run on the README less each fenced line the check fails.
 
-It also holds what CHANGELOG.md's Unreleased section names as README.md's
-first command to README.md. That section said `go run
+It also holds what CHANGELOG.md's top section names as README.md's first
+command to README.md; the top section is the first `## ` section, whatever
+its heading says. The section then headed Unreleased said `go run
 <module>/verifiers/go@latest` runs the Go verifier with nothing cloned and is
 README.md's first command after README.md came to open with `go run
 <module>/cmd/atx-verify@latest`, and the older command exits 1 through the
-module proxy. Each `go run` code span in a sentence of that section that
+module proxy. Each `go run` code span in a sentence of the top section that
 names README.md's first command must be the first line of README.md's first
 fenced block, with or without its `cd <dir> && ` prefix; `<module>` reads as
 the module go.mod declares, and a span with another placeholder (`go run
 <import path>@<version>`) names a form of command and is not held. The
-sections below Unreleased record past commits and are not held to it.
+sections below the top one record past commits and are not held to it. The
+check read the section headed `## Unreleased` alone, so it read no sentence
+once that section was retitled `## v0.1.0`; a CHANGELOG.md with no `## `
+heading fails it.
 
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
@@ -229,9 +233,9 @@ to module names alone), each sentence offering `@<commit>` names its first
 commit (the first with the module's go.mod at the root, where the history
 can be read), each fenced `go run <module>/<dir>@latest` command names a
 package under no directory that held a go.mod in HEAD's history (where the
-history can be read), each `go run` command CHANGELOG.md's Unreleased section
-names as README.md's first command is the one README.md opens with, no
-Python dependency site calls the Python verifier
+history can be read), each `go run` command the top `## ` section of
+CHANGELOG.md names as README.md's first command is the one README.md opens
+with, no Python dependency site calls the Python verifier
 zero-dependency while requirements.txt names a package, each jcs-vectors
 file describing canonicalize cites RFC 8785 Appendix G, none calls an RFC
 8785 library a reference implementation or port, neither description of what
@@ -854,12 +858,15 @@ def latest_run_failures(readme, go_mod, nested):
 # <module>/verifiers/go@latest` "runs the Go verifier with nothing cloned, and
 # is README.md's first command" once README.md opened with `go run
 # <module>/cmd/atx-verify@latest`, and the older command exits 1 through the
-# module proxy (LATEST_SITE above). Each `go run` command a sentence of that
-# section names as README.md's first command must be the one README.md opens
-# with. The sections below it record past commits and are not held to it.
+# module proxy (LATEST_SITE above). Each `go run` command a sentence of the
+# top section names as README.md's first command must be the one README.md
+# opens with. The top section is the first `## ` section, whatever its heading
+# says: finding it by the heading `## Unreleased` alone, the check read no
+# sentence once that section was retitled `## v0.1.0`. The sections below it
+# record past commits and are not held to it.
 CHANGELOG = ROOT / "CHANGELOG.md"
 CHANGELOG_NAME = "CHANGELOG.md"
-UNRELEASED = "## Unreleased"
+SECTION_HEADING = "## "
 FIRST_COMMAND_CLAIM = re.compile(r"\bREADME(?:\.md)?['’]s\s+first\s+command\b")
 CODE_SPAN = re.compile(r"`([^`]*)`")
 # A code span holding a `go run` command, with or without a `cd <dir> && `
@@ -873,7 +880,7 @@ PLACEHOLDER = re.compile(r"<(?!module>)[^<>\s][^<>]*>")
 SENTENCE_BREAK = re.compile(r"`[^`]*`|(?<=[.!?])\s+")
 # A paragraph ends at a blank line, and a list item where the next one opens.
 ITEM_BREAK = re.compile(r"\n[ \t]*\n|\n(?=[ \t]*[-*+][ \t])")
-FIRST_COMMAND_SITE = f"{CHANGELOG_NAME} Unreleased sentence"
+FIRST_COMMAND_SITE = f"{CHANGELOG_NAME} top-section sentence"
 # The sentence the check was written for, as it was wrapped. The check must
 # keep failing it while README.md opens with another command.
 RETRACTED_FIRST_COMMAND = (
@@ -890,15 +897,22 @@ def first_command(front_page):
     return next((line.strip() for line in lines if line.strip()), None)
 
 
-def unreleased_sentences(changelog):
-    """Each sentence of the section of `changelog` under UNRELEASED, up to the
-    next heading of level 1 or 2, on one line; none when it has no such
-    section. A paragraph or list item never shares a sentence with the next,
+def top_heading_at(lines):
+    """The index in `lines` of the first `## ` heading, or None."""
+    return next((i for i, line in enumerate(lines) if line.startswith(SECTION_HEADING)),
+                None)
+
+
+def top_section(changelog):
+    """The heading of the top section of `changelog`, its first `## ` section
+    whatever the heading says, and each sentence of that section, up to the
+    next heading of level 1 or 2, on one line; None when it has no `## `
+    heading. A paragraph or list item never shares a sentence with the next,
     and a code span is never split."""
     lines = changelog.split("\n")
-    at = next((i for i, line in enumerate(lines) if line.rstrip() == UNRELEASED), None)
+    at = top_heading_at(lines)
     if at is None:
-        return []
+        return None
     body = []
     for line in lines[at + 1:]:
         if re.match(r"#{1,2} ", line):
@@ -914,19 +928,25 @@ def unreleased_sentences(changelog):
                 start = found.end()
         if flat[start:]:
             sentences.append(flat[start:])
-    return sentences
+    return lines[at].rstrip(), sentences
 
 
 def changelog_first_command_failures(changelog, front_page, go_mod):
-    """Each `go run` code span in a sentence of CHANGELOG.md's Unreleased
-    section that names README.md's first command must be the command
+    """Each `go run` code span in a sentence of CHANGELOG.md's top section
+    (top_section()) that names README.md's first command must be the command
     first_command() reads from README.md, with or without its `cd <dir> && `
     prefix; `<module>` in a span reads as the module go.mod declares, and a
     span holding another placeholder is passed over. `changelog` is None when
-    the file is missing."""
+    the file is missing. A file with no `## ` heading is a failure, so the
+    check does not pass having read no section."""
     if changelog is None:
-        return [f"{CHANGELOG_NAME} is missing; the commands its Unreleased section "
+        return [f"{CHANGELOG_NAME} is missing; the commands its top section "
                 f"names as README.md's first command cannot be checked"]
+    top = top_section(changelog)
+    if top is None:
+        return [f"{CHANGELOG_NAME} has no `{SECTION_HEADING}` heading; the commands "
+                f"its top section names as README.md's first command cannot be "
+                f"checked"]
     first = first_command(front_page)
     named = set()
     if first is not None:
@@ -934,7 +954,7 @@ def changelog_first_command_failures(changelog, front_page, go_mod):
         named = {first, bare.group(1)} if bare else {first}
     module = GO_MODULE.search(go_mod or "")
     failures = []
-    for sentence in unreleased_sentences(changelog):
+    for sentence in top[1]:
         if not FIRST_COMMAND_CLAIM.search(sentence):
             continue
         for span in CODE_SPAN.findall(sentence):
@@ -3006,32 +3026,41 @@ def _failing_latest_run_cases(tree):
 INVENTED_FIRST_COMMAND = "go run example.invalid/not-the-first-command@latest"
 
 
-def _unreleased_with(changelog, text):
-    """`changelog` with `text` as a paragraph opening its Unreleased section,
-    which is added at the top when it has none."""
+def _top_section_with(changelog, text):
+    """`changelog` with `text` as a paragraph opening its top section, the
+    first `## ` section whatever its heading says; one headed `## Unreleased`
+    is added at the top when it has none."""
     lines = changelog.split("\n")
-    at = next((i for i, line in enumerate(lines) if line.rstrip() == UNRELEASED), None)
+    at = top_heading_at(lines)
     if at is None:
-        return f"{UNRELEASED}\n\n{text}\n\n{changelog}"
+        return f"{SECTION_HEADING}Unreleased\n\n{text}\n\n{changelog}"
     return "\n".join(lines[:at + 1] + ["", text, ""] + lines[at + 1:])
 
 
 def _changelog_first_command_cases(tree):
-    """Sentences added to the Unreleased section of the published
-    CHANGELOG.md. Against the published README.md, the retracted sentence and
-    one naming an invented command as README's first command each add a
-    failure naming the command; one naming README.md's first command adds
-    none, nor does it in the list item after one naming another command with
-    no closing period, and it adds a failure once README.md opens with another
-    command. The retracted sentence below the Unreleased section adds none,
-    nor does a form of command (`go run <import path>@<version>`). Against a
-    README.md opening with `cd verifiers/go && go run . ../../fixtures`, that
-    command with or without its `cd` prefix adds none, and the command with
-    another path adds a failure naming the span whole; `<module>` reads as the
-    module go.mod declares. A missing CHANGELOG.md is reported. Each case
+    """Sentences added to the top section of the published CHANGELOG.md, its
+    first `## ` section. Against the published README.md, the retracted
+    sentence and one naming an invented command as README's first command
+    each add a failure naming the command, the second also once the top
+    section is retitled `## v9.9.9` and under `### Added` in a CHANGELOG.md
+    whose one section is `## v0.1.0`; one naming README.md's first command
+    adds none, nor does it in the list item after one naming another command
+    with no closing period, and it adds a failure once README.md opens with
+    another command. The retracted sentence in a section below the top one
+    adds none, nor does a form of command (`go run <import path>@<version>`).
+    Against a README.md opening with `cd verifiers/go && go run .
+    ../../fixtures`, that command with or without its `cd` prefix adds none,
+    and the command with another path adds a failure naming the span whole;
+    `<module>` reads as the module go.mod declares. A missing CHANGELOG.md is
+    reported, and so is one whose `## ` headings are made `### `. Each case
     counts only the failures the text it adds brings, so over the
     CHANGELOG.md of 20799e3, which the check fails, each case stays green."""
     changelog = tree.changelog or ""
+    if top_heading_at(changelog.split("\n")) is None:
+        # The check fails a CHANGELOG.md with no `## ` heading itself; the
+        # cases run on it with a top section added, so a sentence placed
+        # below that section stays below.
+        changelog = f"{SECTION_HEADING}Unreleased\n\n{changelog}"
     first = first_command(tree.front_page)
     if first is None:
         return [(False, f"{FIRST_COMMAND_SITE} cases", "README.md has no fenced block")]
@@ -3051,13 +3080,24 @@ def _changelog_first_command_cases(tree):
                                  f"{want}, got {new}"))
 
     def opening(sentence):
-        return _unreleased_with(changelog, sentence)
+        return _top_section_with(changelog, sentence)
 
     retracted = CODE_SPAN.search(RETRACTED_FIRST_COMMAND).group(1)
     case(f"CHANGELOG.md restoring the retracted sentence on `{retracted}`",
          opening(RETRACTED_FIRST_COMMAND), retracted)
+    invented = f"`{INVENTED_FIRST_COMMAND}` is README's first command."
     case(f"CHANGELOG.md naming `{INVENTED_FIRST_COMMAND}` as README's first command",
-         opening(f"`{INVENTED_FIRST_COMMAND}` is README's first command."),
+         opening(invented), INVENTED_FIRST_COMMAND)
+    # The check found its section by the heading `## Unreleased` alone, and
+    # read no sentence once the section was retitled `## v0.1.0`.
+    lines = changelog.split("\n")
+    lines[top_heading_at(lines)] = f"{SECTION_HEADING}v9.9.9"
+    case(f"CHANGELOG.md whose top section is retitled `## v9.9.9`, naming "
+         f"`{INVENTED_FIRST_COMMAND}` as README's first command",
+         _top_section_with("\n".join(lines), invented), INVENTED_FIRST_COMMAND)
+    case(f"CHANGELOG.md whose one section is `## v0.1.0`, naming "
+         f"`{INVENTED_FIRST_COMMAND}` as README's first command under `### Added`",
+         f"# Changelog\n\n{SECTION_HEADING}v0.1.0\n\n### Added\n\n- {invented}\n",
          INVENTED_FIRST_COMMAND)
     holds = f"README.md's first command is `{first}`."
     case(f"CHANGELOG.md naming `{first}` as README.md's first command",
@@ -3071,7 +3111,7 @@ def _changelog_first_command_cases(tree):
              + tree.front_page[block.end(1):])
     case(f"README.md opening with `{INVENTED_FIRST_COMMAND}` under a CHANGELOG.md "
          f"naming `{first}` as its first command", opening(holds), first, page=other)
-    case("the retracted sentence in a CHANGELOG.md section below Unreleased",
+    case("the retracted sentence in a CHANGELOG.md section below the top one",
          f"{changelog}\n## 0000000: a past commit\n\n{RETRACTED_FIRST_COMMAND}\n", None)
     case("a form of command, `go run <import path>@<version>`, in a sentence on "
          "README.md's first command",
@@ -3100,6 +3140,11 @@ def _changelog_first_command_cases(tree):
     missing = changelog_first_command_failures(None, tree.front_page, tree.go_mod)
     cases.append((any(f"{CHANGELOG_NAME} is missing" in f for f in missing),
                   "CHANGELOG.md missing", f"got {missing}"))
+    demoted = re.sub(r"^## ", "### ", changelog, flags=re.M)
+    headless = changelog_first_command_failures(demoted, tree.front_page, tree.go_mod)
+    cases.append((any(f"{CHANGELOG_NAME} has no `{SECTION_HEADING}` heading" in f
+                      for f in headless),
+                  "CHANGELOG.md with each `## ` heading made `### `", f"got {headless}"))
     return cases
 
 
@@ -3792,7 +3837,7 @@ def _wire_latest_run(tree):
 
 def _wire_changelog_first_command(tree):
     return (f"names `{INVENTED_FIRST_COMMAND}` as README.md's first command",
-            {"changelog": _unreleased_with(
+            {"changelog": _top_section_with(
                 tree.changelog or "",
                 f"`{INVENTED_FIRST_COMMAND}` is README.md's first command.")})
 
@@ -4381,6 +4426,8 @@ def main():
         return 1
 
     first = first_command(tree.front_page)
+    # The CHANGELOG.md check passed, so the file has a top section.
+    heading = top_section(tree.changelog)[0]
     print(f"README and COSIGNERS counts match the tree: {len(fixtures)} fixtures "
           f"(each with one fixture-table row), {tree.vectors} JCS vectors, all stated "
           f"as passing; README names the MANIFEST.sha256 byte check; "
@@ -4404,11 +4451,11 @@ def main():
              if tree.nested_modules is not None else
              f"fenced `go run <module>/<dir>@latest` commands not held to the "
              f"history: none could be read in this checkout; ")
-          + (f"each `go run` command the {CHANGELOG_NAME} Unreleased section "
+          + (f"each `go run` command the {CHANGELOG_NAME} top section, `{heading}`, "
              f"names as README.md's first command is `{first}`; "
              if first is not None else
-             f"the {CHANGELOG_NAME} Unreleased section names no `go run` command "
-             f"as README.md's first command; ")
+             f"the {CHANGELOG_NAME} top section, `{heading}`, names no `go run` "
+             f"command as README.md's first command; ")
           + f"no jcs-vectors README or RFC 8785 serializer docstring calls the "
           f"Python verifier zero-dependency; "
           f"each jcs-vectors file describing canonicalize cites "

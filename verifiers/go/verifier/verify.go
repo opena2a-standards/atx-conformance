@@ -740,11 +740,13 @@ func controllerDID(keyID string) string {
 // ---------------------------------------------------------------------------
 
 // usage is what Run writes to stdout for -h or --help, and to stderr below
-// the line that names an unknown option.
-const usage = `usage: verify [fixture.json|dir]...
+// the line that names an unknown option. It names the program atx-verify,
+// the published entry point cmd/atx-verify.
+const usage = `usage: atx-verify [fixture.json|dir]...
   no argument    verify the fixture set built into this module version (fixtures/*.json)
   -h, --help     print this usage and exit 0
   --version      print the module version this verifier was built from and exit 0
+  --             end the options: every argument after it is a fixture file or directory
 `
 
 // versionLine is what Run writes for --version: the path and version of the
@@ -752,12 +754,14 @@ const usage = `usage: verify [fixture.json|dir]...
 // them, and the Go release that built it. Built by `go run
 // <module>/cmd/atx-verify@<version>`, the version is the one go run resolved:
 // the highest release tag for @latest, and for @<commit> the commit's release
-// tag, or a pseudo-version naming the commit when it has no tag.
+// tag, or a pseudo-version naming the commit when it has no tag. A build from
+// a checkout or a source archive can record (devel) instead;
+// docs/running-the-verifiers.md says which builds do.
 func versionLine(info *debug.BuildInfo, ok bool) string {
 	if !ok || info.Main.Path == "" {
-		return "verify: this binary records no module version\n"
+		return "atx-verify: this binary records no module version\n"
 	}
-	return fmt.Sprintf("verify: %s %s, built with %s\n", info.Main.Path, info.Main.Version, info.GoVersion)
+	return fmt.Sprintf("atx-verify: %s %s, built with %s\n", info.Main.Path, info.Main.Version, info.GoVersion)
 }
 
 // source is one fixture to verify: the name the report writes for it and how
@@ -796,26 +800,34 @@ func embeddedSources() ([]source, error) {
 
 // Run verifies the fixtures args name, or with no argument the fixture set
 // the module root embeds, writes a record per fixture and the summary line
-// to stdout, and returns the exit code. Options are read first, wherever
-// they stand among args: -h or --help writes usage and returns 0; any other
+// to stdout, and returns the exit code. The first "--" among args ends the
+// options: each argument after it is a path, one that starts with "-"
+// included, and "--" itself names nothing. Options are read first, wherever
+// they stand before it: -h or --help writes usage and returns 0; any other
 // argument of two or more characters that starts with "-", --version
 // aside, is an unknown option, named on stderr above the usage, and
 // returns 2; --version writes the version line and returns 0. Then Run
 // returns 2 when an argument is empty or args name no fixture or a path
 // that does not exist, 1 when a fixture's observed result differs from its
 // expected outcome, and 0 otherwise. The Python verifier reads its
-// arguments the same way; scripts/parity/parity.py runs both on each
-// argument list of its ARGUMENT_CASES. TestCaptureIsVerifierOutput holds
-// docs/captures/go-verifier.txt to what it writes.
+// arguments the same way, except that it has no embedded fixture set and
+// answers no argument with its usage and exit 2; scripts/parity/parity.py
+// runs both on each argument list of its ARGUMENT_CASES.
+// TestCaptureIsVerifierOutput holds docs/captures/go-verifier.txt to what
+// it writes.
 func Run(args []string, stdout, stderr io.Writer) int {
-	for _, a := range args {
+	options, operands := args, []string(nil)
+	if i := slices.Index(args, "--"); i >= 0 {
+		options, operands = args[:i], args[i+1:]
+	}
+	for _, a := range options {
 		if a == "-h" || a == "--help" {
 			fmt.Fprint(stdout, usage)
 			return 0
 		}
 	}
 	printVersion := false
-	for _, a := range args {
+	for _, a := range options {
 		switch {
 		case a == "--version":
 			printVersion = true
@@ -830,33 +842,36 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, versionLine(info, ok))
 		return 0
 	}
+	// Each option returned above, so every argument before "--" is a path
+	// too. Clip keeps append from writing over the "--" in args.
+	paths := append(slices.Clip(options), operands...)
 	// An empty argument names no fixture file or directory: it is a usage
 	// error, as it is in the Python verifier, and not the path that does not
 	// exist os.Stat("") would report.
-	if slices.Contains(args, "") {
+	if slices.Contains(paths, "") {
 		fmt.Fprintln(stderr, "error: an empty argument names no fixture file or directory")
 		return 2
 	}
 
 	var sources []source
-	if len(args) == 0 {
+	if len(paths) == 0 {
 		var err error
 		if sources, err = embeddedSources(); err != nil {
 			fmt.Fprintln(stderr, "error:", err)
 			return 2
 		}
 	} else {
-		paths, err := expandFixturePaths(args)
+		files, err := expandFixturePaths(paths)
 		if err != nil {
 			fmt.Fprintln(stderr, "error:", err)
 			return 2
 		}
-		if len(paths) == 0 {
+		if len(files) == 0 {
 			fmt.Fprintln(stderr, "no fixture *.json files found")
 			return 2
 		}
-		for _, p := range paths {
-			sources = append(sources, fileSource(p))
+		for _, f := range files {
+			sources = append(sources, fileSource(f))
 		}
 	}
 
@@ -1018,11 +1033,31 @@ func expandFixturePaths(args []string) ([]string, error) {
 // given otherwise. An absolute path outside the working directory is
 // written whole, as the Python verifier writes it, and not as a climb of
 // ".." elements out of the working directory.
+//
+// The working directory and the directory holding p are compared with their
+// symbolic links resolved, as the Python verifier compares them. os.Getwd
+// returns $PWD when it names the working directory, and a shell that
+// changed into a directory through a link sets $PWD to the path through the
+// link, so compared as written, a path through the link was named relative
+// and the same file through the link's target was written whole, the
+// reverse of what the Python verifier wrote. Where either cannot be
+// resolved they are compared as written.
 func relPath(p string) string {
-	if wd, err := os.Getwd(); err == nil {
-		if rel, err := filepath.Rel(wd, p); err == nil && filepath.IsLocal(rel) {
-			return rel
+	if !filepath.IsAbs(p) {
+		return p
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return p
+	}
+	base, target := wd, p
+	if w, err := filepath.EvalSymlinks(wd); err == nil {
+		if d, err := filepath.EvalSymlinks(filepath.Dir(p)); err == nil {
+			base, target = w, filepath.Join(d, filepath.Base(p))
 		}
+	}
+	if rel, err := filepath.Rel(base, target); err == nil && filepath.IsLocal(rel) {
+		return rel
 	}
 	return p
 }

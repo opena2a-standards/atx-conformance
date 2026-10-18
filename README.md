@@ -72,12 +72,17 @@ The Python verifier, from the repository root:
 
 ```bash
 cd verifiers/python
-pip install -r requirements.txt
-python verify.py ../../fixtures
+python3 -m venv .venv
+. .venv/bin/activate
+python3 -m pip install -r requirements.txt
+python3 verify.py ../../fixtures
 ```
 
-`pip install` downloads the packages `requirements.txt` names, and their
-dependencies, into the active Python environment.
+The commands expect a virtual environment: the second and third lines
+create one in `verifiers/python/.venv` and activate it, and
+`python3 -m pip install` downloads the packages `requirements.txt` names,
+and their dependencies, into it. Outside a virtual environment a system may
+provide `python3` and `pip3` only, with no `python` or `pip` on `PATH`.
 
 Each verifier needs a minimum toolchain release,
 and the release can change a result on inputs no fixture carries:

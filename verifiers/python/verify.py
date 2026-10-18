@@ -89,18 +89,21 @@ lesson and scoped to the whole body because ATX signs it all):
     with a numeric type, and is not read in a member no Go struct declares.
 
 Usage:
-    python verify.py ../../fixtures/baseline-valid.json
-    python verify.py ../../fixtures
-    python verify.py ../..                 # repo root; walks fixtures/*.json
-    python verify.py --help                # the usage lines
-    python verify.py --version             # the commit this file runs from
+    python3 verify.py ../../fixtures/baseline-valid.json
+    python3 verify.py ../../fixtures
+    python3 verify.py ../..                # repo root; walks fixtures/*.json
+    python3 verify.py -- -h.json           # -- ends the options; -h.json is a file
+    python3 verify.py --help               # the usage lines
+    python3 verify.py --version            # the commit this file runs from
 
 Exit 0 iff every fixture's observed result matches expected.verifyResult, and
 after --help, -h or --version. A file with no expected.verifyResult of ACCEPT
 or REJECT is not a fixture: it fails to load and counts as a fail, so the run
-exits 1. Exit 2 on a usage error (no argument, an empty one, or an unknown
-option, which is named above the usage lines), a path that does not exist or
-that os.stat refuses (a file named with a trailing /), or no fixture files.
+exits 1. Exit 2 on a usage error (no path argument, an empty one, or an
+unknown option, which is named above the usage lines), a path that does not
+exist or that os.stat refuses (a file named with a trailing /), or no fixture
+files. With no path argument the Go reference verifier verifies the fixture
+set its module embeds; this verifier has no embedded set.
 
 A fixture named as a file is named in the report as its argument spells it,
 ./ and // included, as the Go reference verifier names it.
@@ -135,7 +138,7 @@ try:
     from cryptography.exceptions import InvalidSignature
 except ImportError:
     sys.stderr.write(
-        "missing dependency: cryptography. install with `pip install -r requirements.txt`\n"
+        "missing dependency: cryptography. install with `python3 -m pip install -r requirements.txt`\n"
     )
     sys.exit(2)
 
@@ -143,7 +146,7 @@ try:
     from dilithium_py.ml_dsa import ML_DSA_65
 except ImportError:
     sys.stderr.write(
-        "missing dependency: dilithium-py. install with `pip install -r requirements.txt`\n"
+        "missing dependency: dilithium-py. install with `python3 -m pip install -r requirements.txt`\n"
     )
     sys.exit(2)
 
@@ -1354,14 +1357,22 @@ def _rel_path(path: str) -> str:
     """The name the report gives the fixture at path, as the Go reference
     verifier's relPath gives it: the path relative to the working directory,
     cleaned as filepath.Rel cleans it, when path is an absolute path under
-    it, and path as given otherwise."""
-    if os.path.isabs(path):
-        try:
-            rel = os.path.relpath(path, os.getcwd())
-        except (OSError, ValueError):
-            return path
-        if rel != os.pardir and not rel.startswith(os.pardir + os.sep):
-            return rel
+    it, and path as given otherwise. The working directory and the directory
+    holding path are compared with their symbolic links resolved, as the Go
+    reference verifier compares them, so a path written through a link to
+    the working directory and one written through its target get the same
+    name. The directory is cleaned before its links are resolved, as
+    filepath.Dir cleans it there."""
+    if not os.path.isabs(path):
+        return path
+    try:
+        cwd = os.path.realpath(os.getcwd())
+        directory = os.path.realpath(os.path.normpath(os.path.dirname(path)))
+        rel = os.path.relpath(os.path.join(directory, os.path.basename(path)), cwd)
+    except (OSError, ValueError):
+        return path
+    if rel != os.pardir and not rel.startswith(os.pardir + os.sep):
+        return rel
     return path
 
 
@@ -1377,6 +1388,7 @@ _USAGE = """\
 usage: verify.py <fixture.json|dir>...
   -h, --help     print this usage and exit 0
   --version      print the commit this verifier runs from and exit 0
+  --             end the options: every argument after it is a fixture file or directory
 """
 
 
@@ -1408,26 +1420,34 @@ def _version_line() -> str:
 
 
 def main(argv: list[str]) -> int:
-    # The Go reference verifier reads its arguments the same way;
-    # scripts/parity/parity.py runs both on each argument list of its
-    # ARGUMENT_CASES.
+    # The Go reference verifier reads its arguments the same way, except that
+    # with no path it verifies the fixture set its module embeds, which this
+    # verifier has none of; scripts/parity/parity.py runs both on each
+    # argument list of its ARGUMENT_CASES.
     args = argv[1:]
-    if not args:
-        sys.stderr.write(_USAGE)
-        return 2
-    if any(arg in ("-h", "--help") for arg in args):
+    # The first "--" ends the options: each argument after it is a path, one
+    # that starts with "-" included, and "--" itself names nothing.
+    options, operands = args, []
+    if "--" in args:
+        end = args.index("--")
+        options, operands = args[:end], args[end + 1 :]
+    if any(arg in ("-h", "--help") for arg in options):
         sys.stdout.write(_USAGE)
         return 0
     # Options are read before any path, as the Go reference verifier reads
     # them: an argument that starts with "-", "-" alone and --version aside,
     # is no path, and is named rather than reported as a missing file.
-    for arg in args:
+    for arg in options:
         if len(arg) > 1 and arg.startswith("-") and arg != "--version":
             sys.stderr.write(f"unknown option: {arg}\n{_USAGE}")
             return 2
-    if "--version" in args:
+    if "--version" in options:
         sys.stdout.write(_version_line())
         return 0
+    args = options + operands
+    if not args:
+        sys.stderr.write(_USAGE)
+        return 2
     # An empty argument names no path, as it names none in the Go verifier:
     # it is a usage error, where expand_paths would report a missing path.
     if "" in args:

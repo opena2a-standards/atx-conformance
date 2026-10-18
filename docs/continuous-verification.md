@@ -32,13 +32,19 @@ sentence below:
    ([`scripts/parity/parity.py`](../scripts/parity/parity.py)) asserts the Go
    and Python verifiers agree per fixture on gate status, verdict, and
    reject category, and publishes `parity-report.json` as a CI artifact.
-   On each argument list of its argument table (an empty argument, `-h` and
-   `--help` at several positions, `--version` and an unknown option after a
-   path, a repository root, a directory whose `fixtures` entry is a file, a
-   path that does not exist, a directory with no `*.json`, a path named
-   twice, a file spelled with `./` and `//`, a directory spelled with `..`,
-   a file named with a trailing `/`) the two must exit with the same code
-   and write the same first stderr line and verdict lines.
+   It runs each argument list of its argument table from a symbolic link to
+   a scratch directory, with `PWD` naming the link. On each (an empty
+   argument, `-h` and `--help` at several positions, `--version` and an
+   unknown option after a path, a repository root, a directory whose
+   `fixtures` entry is a file, a path that does not exist, a directory with
+   no `*.json`, a path named twice, a file spelled with `./` and `//`, a
+   directory spelled with `..`, a file named with a trailing `/`, a path and
+   an option after `--`, an absolute path through the link, through its
+   target and outside the working directory) the two must exit with the
+   same code and write the same first stderr line and verdict lines. With
+   no argument they must differ as documented: the Go verifier verifies its
+   embedded fixture set, every fixture passing, and the Python verifier
+   prints its usage and exits 2.
 5. `conformance.json` must match the fixture set, and every ATX citation in
    each fixture's `spec` list, each JCS vector's `spec` member and the
    `requirements[].specRefs` of `conformance.json` must link to atx-spec
