@@ -31,12 +31,12 @@ After the fixture table the gate runs the argument table, ARGUMENT_CASES:
 argument lists no fixture can carry (an empty argument, -h and --help at
 several positions, --version and an unknown option after a path, a
 repository root, a directory whose `fixtures` entry is a file, a path that
-does not exist, a directory with no *.json), each run on both verifiers from
-a scratch directory holding the paths it names. Both must exit with the same
-code and write the same first stderr line and the same verdict lines (each
-PASS or FAIL line, its observed verdict and category, the summary), once the
-program name each verifier calls itself (`verify`, `verify.py`) is
-stripped; a case they differ on is a divergence. The Go verifier runs there
+does not exist, a directory with no *.json, a path named twice), each run on
+both verifiers from a scratch directory holding the paths it names. Both
+must exit with the same code and write the same first stderr line and the
+same verdict lines (each PASS or FAIL line, its observed verdict and
+category, the summary), once the program name each verifier calls itself
+(`verify`, `verify.py`) is stripped; a case they differ on is a divergence. The Go verifier runs there
 as a binary built for the table, since `go run` reports a program's exit 2
 as its own exit 1. The --json report holds the table under `arguments`.
 
@@ -126,6 +126,7 @@ ARGUMENT_CASES: list[tuple[str, list[str]]] = [
     ("a fixtures entry that is a file", ["fixfile"]),
     ("a path that does not exist", ["missing"]),
     ("a directory with no *.json", ["nojson"]),
+    ("a path named twice", ["fixfile/x.json", "fixfile/x.json"]),
 ]
 # The shipped fixture the argument table copies to fixfile/x.json.
 ARGUMENT_FIXTURE = "baseline-valid.json"
@@ -580,13 +581,14 @@ def self_test() -> int:
     no_fixtures = _gate_without_fixtures({"one": _stand_in(both), "two": _stand_in(both)})
     unknown = _refusal(["--bogus"])
 
-    # Argument-table stand-ins: "one" writes kept for six cases, and "two"
+    # Argument-table stand-ins: "one" writes kept for seven cases, and "two"
     # the same with one case's outcome changed. A case is run alone, by name,
     # except in the gate runs, which run the whole table.
     empty_case, fixfile_case, missing_case = (
         "an empty argument", "a fixtures entry that is a file", "a path that does not exist")
     version_case, unknown_case, root_case = (
         "--version after a path", "an unknown option after a path", "a repository root")
+    twice_case = "a path named twice"
     argv_of = {case: tuple(args) for case, args in ARGUMENT_CASES}
     fixfile = (
         "PASS  fixfile/x.json\n       expected: ACCEPT\n       observed: ACCEPT\n"
@@ -603,6 +605,10 @@ def self_test() -> int:
         argv_of[unknown_case]: ("", "unknown option: --bogus\n", 2),
         argv_of[root_case]: (
             fixfile[0].replace("fixfile/x.json", "root/fixtures/x.json"), "", 0),
+        argv_of[twice_case]: (
+            fixfile[0].replace("\nsummary: 1 pass, 0 fail (1 fixtures)\n", "")
+            + fixfile[0].replace("summary: 1 pass, 0 fail (1 fixtures)",
+                                 "summary: 2 pass, 0 fail (2 fixtures)"), "", 0),
     }
 
     def changed(outcomes: dict[tuple[str, ...], tuple[str, str, int]]) -> dict[str, dict]:
@@ -640,7 +646,8 @@ def self_test() -> int:
     }, missing_case)
     # "two" as a verifier that reads --version only as its first argument,
     # one with no unknown-option rule, and one that walks a repository root
-    # for its own *.json, which loads conformance.json there.
+    # for its own *.json, which loads conformance.json there, and one that
+    # verifies a path named twice once.
     args_version = _argument_divergences(changed(
         {argv_of[version_case]: ("", "error: --version: no such file or directory\n", 2)}),
         version_case)
@@ -650,6 +657,8 @@ def self_test() -> int:
     args_root = _argument_divergences(changed({argv_of[root_case]: (
         "FAIL  root/conformance.json  (load error: no expected member)\n"
         "\nsummary: 0 pass, 1 fail (1 fixtures)\n", "", 1)}), root_case)
+    args_twice = _argument_divergences(
+        changed({argv_of[twice_case]: fixfile}), twice_case)
     gate_fails = _gate_with_arguments(lambda bin_dir: changed(exit_changed))
     gate_passes = _gate_with_arguments(lambda bin_dir: changed({}))
     gate_not_built = _gate_with_arguments(_not_built)
@@ -768,6 +777,14 @@ def self_test() -> int:
              "'summary: 1 pass, 0 fail (1 fixtures)']; "
              "two exit 1, verdict lines ['FAIL  root/conformance.json', "
              "'summary: 0 pass, 1 fail (1 fixtures)']"]),
+        ("a path named twice, which one verifier verifies once, is a divergence",
+         args_twice == [
+             'argument case "a path named twice" (fixfile/x.json fixfile/x.json): '
+             "one exit 0, verdict lines ['PASS  fixfile/x.json', 'observed: ACCEPT', "
+             "'PASS  fixfile/x.json', 'observed: ACCEPT', "
+             "'summary: 2 pass, 0 fail (2 fixtures)']; "
+             "two exit 0, verdict lines ['PASS  fixfile/x.json', 'observed: ACCEPT', "
+             "'summary: 1 pass, 0 fail (1 fixtures)']"]),
         ("the gate fails on an argument case one verifier diverges on, and that "
          "case's row in the argument table names both outcomes",
          gate_fails[0] == 1

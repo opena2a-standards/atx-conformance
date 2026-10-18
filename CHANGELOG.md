@@ -593,6 +593,18 @@ and stability" says they should not.
 
 ### Fixed
 
+- The Python verifier verifies a fixture path named twice twice, as the Go
+  verifier does (#218): `python verify.py ../../fixtures/baseline-valid.json
+  ../../fixtures/baseline-valid.json` wrote one PASS block and
+  `summary: 1 pass, 0 fail (1 fixtures)`, and writes two PASS blocks and
+  `summary: 2 pass, 0 fail (2 fixtures)`, the Go verifier's report.
+  `docs/running-the-verifiers.md` says so. The argument table of
+  `scripts/parity/parity.py` runs twelve argument lists, from eleven:
+  `fixfile/x.json fixfile/x.json`, on which both verifiers exit 0 and write
+  two PASS lines and that summary. The self-test adds one case (31 cases
+  green, from 30): a verifier that verifies a path named twice once is
+  reported as a divergence. `test_verify.py` adds `RepeatedPath`. No fixture
+  changes.
 - `docs/running-the-verifiers.md` says the parity gate runs both verifiers
   on each argument shape its "Arguments" section names, and the argument
   table of `scripts/parity/parity.py` ran none of `--version`, an unknown

@@ -1319,7 +1319,9 @@ def expand_paths(args: list[str]) -> list[Path]:
             out.extend(sorted(target.glob("*.json")))
         else:
             out.append(p)
-    return sorted(set(out))
+    # A path named twice is verified twice, as the Go reference verifier
+    # verifies it.
+    return sorted(out)
 
 
 def _say(text: str, end: str = "\n") -> None:

@@ -1590,6 +1590,18 @@ class MissingPath(unittest.TestCase):
         self.assertEqual(err, f"error: {missing}: no such file or directory\n")
 
 
+class RepeatedPath(unittest.TestCase):
+    def test_a_path_named_twice_is_verified_twice(self):
+        path = str(BASELINE_V10)
+        code, out, err = _run_main(path, path)
+        self.assertEqual(code, 0)
+        self.assertEqual(err, "")
+        self.assertEqual(
+            [line for line in out.splitlines() if line.startswith(("PASS", "FAIL"))],
+            [f"PASS  {path}", f"PASS  {path}"])
+        self.assertIn("summary: 2 pass, 0 fail (2 fixtures)", out)
+
+
 class SerializerRefusal(unittest.TestCase):
     def test_refusal_message_names_the_number(self):
         # The refusal is the serializer's stated contract; building its

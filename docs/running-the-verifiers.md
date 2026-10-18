@@ -23,7 +23,8 @@ usage error, `error: an empty argument names no fixture file or directory`
 with exit 2, and nothing is verified. A directory is walked for
 `fixtures/*.json` when its `fixtures` entry is a directory, so a repository
 root can be passed, and for its own `*.json` otherwise, as when `fixtures` is
-a file. The parity gate runs both verifiers on each of these shapes
+a file. A path named twice is verified twice. The parity gate runs both
+verifiers on each of these shapes
 ([continuous verification](continuous-verification.md)).
 
 ## Dependencies
