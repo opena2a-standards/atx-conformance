@@ -15,19 +15,14 @@
   ],
   "inputTrees": {
     "cmd/atx-verify": "8b2f9f0ff195e77490a4a892d4e6054a1c8f5a72",
-    "verifiers/go/verifier": "3c4d086853c3e1dcad1c531b16cd58a2d7d6dc34",
+    "verifiers/go/verifier": "bf630697df0bbc4193c508a57a7520a4bf234eaf",
     "go.mod": "667011a74ec65d88b16a2c7093b6e62bb4b97690",
     "go.sum": "436e141fa3870ee84f73fe087c3929df8948c07c",
     "fixtures.go": "6b2be479eaa48b5d81d87df1840e6bd0de4238c9",
     "fixtures": "e1286df4db4115deb1fbf103fdf97757a4c95b05"
   },
-  "inputsUncommitted": [
-    "cmd/atx-verify/main.go",
-    "fixtures.go",
-    "verifiers/go/verifier/verify.go",
-    "verifiers/go/verifier/verify_test.go"
-  ],
-  "ranAtUtc": "2026-10-18T04:06:05Z",
+  "inputsUncommitted": [],
+  "ranAtUtc": "2026-10-18T08:31:18Z",
   "exitCode": 0,
   "stderrLines": 0,
   "summary": "summary: 25 pass, 0 fail (25 fixtures)",
