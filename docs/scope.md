@@ -121,12 +121,12 @@ mandate: the Go verifier ([`verifiers/go`](../verifiers/go)) via
 ([`verifiers/python`](../verifiers/python)) via `dilithium-py` (FIPS 204).
 Each verifies the ML-DSA-65 signature cryptographically over the same
 canonical payload the Ed25519 signature signs. The MUST-REJECT control
-`fixtures/v1_1-hybrid-mldsa-tampered.json` — the hybrid baseline with the
-Ed25519 entry intact and the ML-DSA-65 value flipped by one bit — pins that
+`fixtures/v1_1-hybrid-mldsa-tampered.json`, the hybrid baseline with the
+Ed25519 entry intact and the ML-DSA-65 value flipped by one bit, pins that
 a forged post-quantum signature cannot ride an intact classical one. The
-MUST-REJECT control `fixtures/v1_1-hybrid-pq-only.json` — the hybrid
-baseline with the Ed25519 entry removed, leaving one ML-DSA-65 signature
-that verifies — pins that a post-quantum signature cannot verify a
+MUST-REJECT control `fixtures/v1_1-hybrid-pq-only.json`, the hybrid
+baseline with the Ed25519 entry removed and one ML-DSA-65 signature left
+that verifies, pins that a post-quantum signature cannot verify a
 credential without its Ed25519 companion.
 
 ### Trusted-issuer DID method used by this suite

@@ -999,8 +999,8 @@ def _cases(start: Start) -> list[Case]:
          "fails as named and that repository's files are unchanged", nested_no_work_tree_fails),
         ("--help prints usage", lambda: _main_on(["--help"])[:2] == (0, USAGE)),
         ("-h prints usage", lambda: _main_on(["-h"])[:2] == (0, USAGE)),
-        ("an unknown argument prints usage to stderr and exits 2",
-         lambda: _main_on(["--bogus"]) == (2, "", USAGE)),
+        ("an unknown argument is named on stderr above the usage, and exits 2",
+         lambda: _main_on(["--bogus"]) == (2, "", "unknown argument(s): --bogus\n" + USAGE)),
         ("the docstring's Usage block is USAGE",
          lambda: __doc__ is None or __doc__.endswith(USAGE)),
     ]
@@ -1037,6 +1037,10 @@ def self_test() -> int:
     ])
 
 
+# The arguments main reads. Any other is named above the usage it prints.
+OPTIONS = ("-h", "--help", "--check", "--self-test")
+
+
 def main(argv: list[str], root: Path = REPO_ROOT) -> int:
     if argv in (["-h"], ["--help"]):
         print(USAGE, end="")
@@ -1046,6 +1050,9 @@ def main(argv: list[str], root: Path = REPO_ROOT) -> int:
     if argv == ["--check"]:
         return self_test() or check_tree(root)
     if argv:
+        unknown = [arg for arg in argv if arg not in OPTIONS]
+        if unknown:
+            print(f"unknown argument(s): {' '.join(unknown)}", file=sys.stderr)
         print(USAGE, end="", file=sys.stderr)
         return 2
     return write(root)

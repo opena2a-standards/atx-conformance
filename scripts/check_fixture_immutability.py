@@ -34,6 +34,7 @@ Usage:
     python3 scripts/check_fixture_immutability.py --base REF   # vs REF
     python3 scripts/check_fixture_immutability.py --base A --head B   # commit B vs commit A
     python3 scripts/check_fixture_immutability.py --self-test
+    python3 scripts/check_fixture_immutability.py --help
 """
 from __future__ import annotations
 
@@ -544,7 +545,12 @@ def main() -> int:
                         f"base of HEAD and {DEFAULT_UPSTREAM})")
     parser.add_argument("--head", help="commit to check (default: the working tree)")
     parser.add_argument("--self-test", action="store_true")
-    args = parser.parse_args()
+    args, unknown = parser.parse_known_args()
+    if unknown:
+        # In the words every script under scripts/ names one with.
+        print(f"unknown argument(s): {' '.join(unknown)}", file=sys.stderr)
+        parser.print_usage(sys.stderr)
+        return 2
 
     if args.self_test:
         failed = self_test()

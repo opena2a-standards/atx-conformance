@@ -25,15 +25,18 @@ GitHub API and holds the row to it:
 Every run starts with a self-test: each site is altered in memory, one at a
 time, and the check must fail on it. The rows as published before this check
 existed must fail too, so the check keeps firing on the text it was written
-for.
+for. The self-test checks the altered rows against sibling data built from
+the rows themselves (offline_siblings), so it reads no repository.
 
-It needs network access. It reads through `gh api` when the GitHub CLI is
-installed, so the CLI's login applies; otherwise it reads anonymously, or
-with GH_TOKEN when that is set.
+The check needs network access. It reads through `gh api` when the GitHub CLI
+is installed, so the CLI's login applies; otherwise it reads anonymously, or
+with GH_TOKEN when that is set. When gh is installed and not logged in, the
+run says so on one line that names both ways in: `gh auth login`, or GH_TOKEN.
 
 Usage:
     python3 scripts/check_sibling_rows.py              # self-test, then the check
     python3 scripts/check_sibling_rows.py --self-test  # the self-test alone, per case
+    python3 scripts/check_sibling_rows.py --help       # the usage line
 
 Exit 0 when the self-test passes and every sibling row matches its
 repository, 1 otherwise (including when a repository cannot be read), 2 on an
@@ -105,6 +108,12 @@ class SiblingError(Exception):
     pass
 
 
+# gh's exit code for a command that needs authentication (`gh help exit-codes`).
+GH_AUTH_REQUIRED = 4
+NOT_LOGGED_IN = ("gh is not logged in to GitHub; run `gh auth login`, or set GH_TOKEN "
+                 "to a GitHub token, then run this check again")
+
+
 def fetch_json(path):
     """GET `path` (relative to the API root) through `gh api` when gh is
     installed, so its login applies; otherwise anonymously, or with GH_TOKEN."""
@@ -114,6 +123,8 @@ def fetch_json(path):
                                   text=True, timeout=60)
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise SiblingError(f"could not read {path} through gh: {exc}") from exc
+        if done.returncode == GH_AUTH_REQUIRED:
+            raise SiblingError(NOT_LOGGED_IN)
         if done.returncode != 0:
             reason = (done.stderr.strip().splitlines() or ["no output"])[0]
             raise SiblingError(f"could not read {path} through gh: {reason}")
@@ -246,7 +257,37 @@ def check(readme, siblings):
 # Each case alters one site of the published README and runs the real check()
 # on it. A case is green only when the altered text yields a failure the
 # unaltered text does not, so a README that is already stale does not make
-# every case look red-as-expected.
+# every case look red-as-expected. The sibling data the cases are checked
+# against is built from the unaltered rows (offline_siblings), so the
+# self-test needs no network and no GitHub login.
+
+def offline_siblings(readme):
+    """Sibling data, in load_sibling()'s form, under which each row of
+    `readme` holds: the counts COUNT_SITES reads on it, the verifiers it names
+    and the releases its Status cell names. Stand-in names fill the counts."""
+    rows = sibling_rows(readme)
+    data = {repo: {"fixtures": [], "verifiers": [], "tags": []}
+            for repo in set(rows) | {site[0] for site in COUNT_SITES}}
+    for repo, row in rows.items():
+        for names in NAMED_VERIFIERS.findall(row):
+            data[repo]["verifiers"] += [n.lower() for n in names
+                                        if n.lower() not in data[repo]["verifiers"]]
+        status = row.rstrip().rstrip("|").rsplit("|", 1)[-1]
+        data[repo]["tags"] += RELEASE.findall(status)
+    # A count of every fixture ("" prefix) comes last, so it includes the
+    # stand-ins the prefixed counts added.
+    for repo, _label, pattern, kind, prefix in sorted(COUNT_SITES, key=lambda s: s[4] == ""):
+        found = re.findall(pattern, rows.get(repo, ""))
+        if not found:
+            continue
+        names = data[repo][kind]
+        if kind == "verifiers":
+            names += [f"stand-in-{i}" for i in range(len(names), int(found[0]))]
+        else:
+            have = sum(1 for n in names if n.startswith(prefix))
+            names += [f"{prefix}stand-in-{i}.json" for i in range(have, int(found[0]))]
+    return data
+
 
 def _replace_row(readme, repo, new_row):
     old = sibling_rows(readme)[repo]
@@ -321,24 +362,19 @@ def self_test(readme, siblings, verbose):
 
 
 def main():
-    unknown = [a for a in sys.argv[1:] if a != "--self-test"]
+    usage = f"usage: {pathlib.Path(sys.argv[0]).name} [--self-test]"
+    unknown = [a for a in sys.argv[1:] if a not in ("--self-test", "-h", "--help")]
     if unknown:
         print(f"unknown argument(s): {' '.join(unknown)}", file=sys.stderr)
-        print(f"usage: {pathlib.Path(sys.argv[0]).name} [--self-test]", file=sys.stderr)
+        print(usage, file=sys.stderr)
         return 2
+    if "-h" in sys.argv[1:] or "--help" in sys.argv[1:]:
+        print(usage)
+        return 0
     only_self_test = "--self-test" in sys.argv
 
     readme = SIBLINGS_PAGE.read_text(encoding="utf-8")
-    repos = sorted(set(sibling_rows(readme)) | {site[0] for site in COUNT_SITES})
-    siblings = {}
-    try:
-        for repo in repos:
-            siblings[repo] = load_sibling(repo)
-    except SiblingError as exc:
-        print(f"cannot check the sibling rows: {exc}", file=sys.stderr)
-        return 1
-
-    failed, total = self_test(readme, siblings, only_self_test)
+    failed, total = self_test(readme, offline_siblings(readme), only_self_test)
     if failed:
         print(f"self-test FAILED: {failed} of {total} case(s) not caught by the check",
               file=sys.stderr)
@@ -346,6 +382,16 @@ def main():
         print(f"self-test passed: the check fails on each of {total} altered sites")
     if only_self_test:
         return 1 if failed else 0
+
+    repos = sorted(set(sibling_rows(readme)) | {site[0] for site in COUNT_SITES})
+    siblings = {}
+    try:
+        for repo in repos:
+            siblings[repo] = load_sibling(repo)
+    except SiblingError as exc:
+        sys.stdout.flush()
+        print(f"cannot check the sibling rows: {exc}", file=sys.stderr)
+        return 1
 
     failures = check(readme, siblings)
     if failures:

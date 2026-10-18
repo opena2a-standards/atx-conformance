@@ -41,6 +41,7 @@ running the checks would exit 0 there. The child skips that one case
 Usage:
     python3 scripts/check_readme_counts.py              # self-test, then the check
     python3 scripts/check_readme_counts.py --self-test  # the self-test alone, per case
+    python3 scripts/check_readme_counts.py --help       # the usage line
 
 The Scope table may name a k-of-n signature threshold as covered only when a
 fixture's verifierState declares the count it requires (THRESHOLD_FIELD).
@@ -3997,12 +3998,16 @@ def self_test(tree, verbose):
 
 
 def main():
+    usage = f"usage: {pathlib.Path(sys.argv[0]).name} [--self-test]"
     # An unrecognised flag must not fall through to the default check and exit 0.
-    unknown = [a for a in sys.argv[1:] if a != "--self-test"]
+    unknown = [a for a in sys.argv[1:] if a not in ("--self-test", "-h", "--help")]
     if unknown:
         print(f"unknown argument(s): {' '.join(unknown)}", file=sys.stderr)
-        print(f"usage: {pathlib.Path(sys.argv[0]).name} [--self-test]", file=sys.stderr)
+        print(usage, file=sys.stderr)
         return 2
+    if "-h" in sys.argv[1:] or "--help" in sys.argv[1:]:
+        print(usage)
+        return 0
     only_self_test = "--self-test" in sys.argv
 
     fixtures, failures = load_fixtures(ROOT)

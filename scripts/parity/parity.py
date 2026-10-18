@@ -31,9 +31,10 @@ Every run starts with the self-test, which proves on stand-in verifiers that
 the gate reports a disagreement, a skipped fixture, a failed verifier and a
 verifier that exits 0 without reporting any fixture, that a fixtures
 directory holding no *.json fails, that the --json report names a verifier
-that exited before reporting any fixture, and that --json is refused with
+that exited before reporting any fixture, that --json is refused with
 --self-test by a usage message the self-test holds word for word, so
-rewording that message turns the self-test red.
+rewording that message turns the self-test red, and that an unknown
+argument is named on the line above the usage.
 
 Usage:
     python3 scripts/parity/parity.py [--json parity-report.json]
@@ -278,6 +279,17 @@ def _usage_error(argv: list[str]) -> tuple[int, str] | None:
     return None
 
 
+def _refusal(argv: list[str]) -> tuple[int, str] | None:
+    """(exit code, all of stderr) when parse_args(argv) refuses argv, else None."""
+    err = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(err):
+            parse_args(argv)
+    except SystemExit as e:
+        return e.code, err.getvalue()
+    return None
+
+
 def _gate_without_fixtures(verifiers: dict[str, dict]) -> tuple[int, str, str]:
     """(exit code, stdout, stderr) of the gate over a directory with no *.json."""
     out, err = io.StringIO(), io.StringIO()
@@ -343,6 +355,7 @@ def self_test() -> int:
         "two": _stand_in("", "", 1),
     })
     no_fixtures = _gate_without_fixtures({"one": _stand_in(both), "two": _stand_in(both)})
+    unknown = _refusal(["--bogus"])
     cases: list[tuple[str, bool]] = [
         ("verifiers that agree report no divergence", agree == []),
         ("a verdict divergence is reported by fixture",
@@ -368,6 +381,10 @@ def self_test() -> int:
          "the message written out rather than reading it from the code that prints it",
          _reworded("--json cannot be used with --self-test")
          == ((2, "parity.py: error: --json cannot be used with --self-test"), False)),
+        ("an unknown argument is named on its own line above the usage, in the words every "
+         "script under scripts/ uses, and exits 2",
+         unknown is not None and unknown[0] == 2
+         and unknown[1].startswith("unknown argument(s): --bogus\nusage: parity.py ")),
         ("a verifier that exits before reporting any fixture has one line above "
          "the table, not a MISSING cell on every row",
          no_dep_table == [
@@ -426,7 +443,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="prove on stand-in verifiers that the gate can fail, then stop "
              "(writes no report; not accepted with --json)",
     )
-    args = ap.parse_args(argv)
+    args, unknown = ap.parse_known_args(argv)
+    if unknown:
+        # In the words every script under scripts/ names one with.
+        print(f"unknown argument(s): {' '.join(unknown)}", file=sys.stderr)
+        ap.print_usage(sys.stderr)
+        ap.exit(2)
     if args.self_test and args.json is not None:
         ap.error(SELF_TEST_JSON_ERROR)
     return args

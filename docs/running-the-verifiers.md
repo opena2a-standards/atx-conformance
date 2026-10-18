@@ -76,6 +76,8 @@ Depends on:
   Unicode version of the case folding the duplicate-member check applies to a
   non-ASCII member name: U+1C89 and U+1C8A are a duplicate under Python 3.14
   (Unicode 16.0) and not under Python 3.12 (Unicode 15.0), which CI uses.
-  `python verify.py --help` prints the usage line.
+  `python verify.py --help` prints the usage lines, and `--version` the
+  commit of the checkout the verifier runs from. The Go verifier's
+  `--version` prints the module version `go run` built it from.
 - `cryptography >= 42.0.0`
 - `dilithium-py >= 1.1.0` (ML-DSA-65 per FIPS 204)

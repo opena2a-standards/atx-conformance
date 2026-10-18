@@ -481,8 +481,9 @@ def self_test() -> int:
         ("--help prints usage and writes nothing",
          help_rc == 0 and help_out == USAGE and help_unchanged),
         ("-h prints usage and writes nothing", h_rc == 0 and h_out == USAGE and h_unchanged),
-        ("an unknown argument prints usage to stderr, exits 2 and writes nothing",
-         bad_rc == 2 and bad_err == USAGE and not bad_out and bad_unchanged),
+        ("an unknown argument is named on stderr above the usage, exits 2 and writes nothing",
+         bad_rc == 2 and bad_err == "unknown argument(s): --bogus\n" + USAGE and not bad_out
+         and bad_unchanged),
         ("the docstring's Usage block is USAGE", __doc__ is None or __doc__.endswith(USAGE)),
     ]
     failed = 0
@@ -493,6 +494,10 @@ def self_test() -> int:
     return 1 if failed else 0
 
 
+# The arguments main reads. Any other is named above the usage it prints.
+OPTIONS = ("-h", "--help", "--check", "--self-test")
+
+
 def main(argv: list[str], root: Path = REPO_ROOT) -> int:
     if argv in (["-h"], ["--help"]):
         print(USAGE, end="")
@@ -500,6 +505,9 @@ def main(argv: list[str], root: Path = REPO_ROOT) -> int:
     if argv == ["--self-test"]:
         return self_test()
     if argv not in ([], ["--check"]):
+        unknown = [arg for arg in argv if arg not in OPTIONS]
+        if unknown:
+            print(f"unknown argument(s): {' '.join(unknown)}", file=sys.stderr)
         print(USAGE, end="", file=sys.stderr)
         return 2
     out = root / PROFILE

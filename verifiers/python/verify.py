@@ -92,11 +92,18 @@ Usage:
     python verify.py ../../fixtures/baseline-valid.json
     python verify.py ../../fixtures
     python verify.py ../..                 # repo root; walks fixtures/*.json
-    python verify.py --help                # the usage line
+    python verify.py --help                # the usage lines
+    python verify.py --version             # the commit this file runs from
 
 Exit 0 iff every fixture's observed result matches expected.verifyResult, and
-after --help or -h. Exit 2 on a usage error, a path that does not exist, or no
-fixture files.
+after --help, -h or --version. Exit 2 on a usage error (no argument, or an
+unknown option, which is named above the usage lines), a path that does not
+exist, or no fixture files.
+
+The signatures line writes each boolean as true or false, and a rejection
+reason that quotes the credential's atcVersion or a duplicate member name
+quotes it as Go's %q does (_go_quote), so those lines read as the Go
+reference verifier writes them.
 """
 
 from __future__ import annotations
@@ -105,7 +112,9 @@ import base64
 import codecs
 import json
 import math
+import os
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from json.scanner import py_make_scanner
@@ -337,6 +346,40 @@ def _go_string(value: str) -> str:
     """A JSON string as Go's encoding/json decodes it: each unpaired UTF-16
     surrogate becomes U+FFFD."""
     return _UNPAIRED_SURROGATE.sub(_REPLACEMENT_CHARACTER, value)
+
+
+# The escapes Go's strconv.Quote writes for a character it does not write as
+# itself: the quote and the backslash, and the seven C escapes.
+_GO_QUOTE_ESCAPES = {
+    '"': '\\"', "\\": "\\\\", "\a": "\\a", "\b": "\\b", "\f": "\\f",
+    "\n": "\\n", "\r": "\\r", "\t": "\\t", "\v": "\\v",
+}
+
+
+def _go_quote(value: str) -> str:
+    """value as the Go reference verifier's %q writes it (strconv.Quote), so a
+    reason that quotes a credential's string reads the same in both reports:
+    in double quotes, with a quote or a backslash escaped, each printable
+    character written as itself, and every other one escaped: a C escape
+    where Go has one, \\xHH below U+0020 and for U+007F, \\uHHHH or
+    \\UHHHHHHHH above. Printable is a letter, mark, number, punctuation or
+    symbol, or the ASCII space, for str.isprintable and for Go's
+    strconv.IsPrint alike, each by the Unicode tables of its release. An
+    unpaired surrogate is U+FFFD, as _go_string reads it."""
+    out = ['"']
+    for ch in _go_string(value):
+        if ch in _GO_QUOTE_ESCAPES:
+            out.append(_GO_QUOTE_ESCAPES[ch])
+        elif ch.isprintable():
+            out.append(ch)
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            out.append(f"\\x{ord(ch):02x}")
+        elif ord(ch) < 0x10000:
+            out.append(f"\\u{ord(ch):04x}")
+        else:
+            out.append(f"\\U{ord(ch):08x}")
+    out.append('"')
+    return "".join(out)
 
 
 def _dup_marking_pairs(pairs: list[tuple[str, Any]]) -> "_DupMarkedDict":
@@ -949,7 +992,7 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
     if dup is not None:
         return VerifyResult(
             reject_category="PARSE_ERROR",
-            reason=f'credential contains duplicate member "{dup}" (strict parse: the whole ATX credential is a signed body; RFC 8259 §4 duplicate names are parser-divergent)',
+            reason=f"credential contains duplicate member {_go_quote(dup)} (strict parse: the whole ATX credential is a signed body; RFC 8259 §4 duplicate names are parser-divergent)",
         )
     try:
         atx = _decode_credential(atx)
@@ -967,7 +1010,7 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
     if version not in (SUPPORTED_ATC_VERSION, SUPPORTED_ATC_VERSION_V11):
         return VerifyResult(
             reject_category="UNSUPPORTED_VERSION",
-            reason=f"unsupported atcVersion {version!r} (this verifier supports {SUPPORTED_ATC_VERSION} and {SUPPORTED_ATC_VERSION_V11})",
+            reason=f"unsupported atcVersion {_go_quote(version)} (this verifier supports {SUPPORTED_ATC_VERSION} and {SUPPORTED_ATC_VERSION_V11})",
         )
 
     # Step 2: expiry.
@@ -1268,18 +1311,60 @@ def _say(text: str, end: str = "\n") -> None:
     print(text.encode(encoding, "backslashreplace").decode(encoding), end=end)
 
 
-_USAGE = "usage: verify.py <fixture.json|dir>...\n"
+_USAGE = """\
+usage: verify.py <fixture.json|dir>...
+  -h, --help     print this usage and exit 0
+  --version      print the commit this verifier runs from and exit 0
+"""
+
+
+def _version_line() -> str:
+    """The line --version writes: the commit git names as HEAD of the
+    repository this file is in, whether a tracked file in this file's
+    directory differs from it, and the Python release running the verifier.
+    Every GIT_* variable is left out of git's environment, so one that a hook
+    exports does not name another repository."""
+    here = Path(__file__).resolve().parent
+    env = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
+
+    def git(*args: str) -> subprocess.CompletedProcess | None:
+        try:
+            return subprocess.run(
+                ["git", "-C", str(here), *args], capture_output=True, text=True, env=env, timeout=60
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+    python = f"run with Python {sys.version.split()[0]}"
+    head = git("rev-parse", "--verify", "HEAD")
+    if head is None or head.returncode != 0:
+        return f"verify.py: no commit recorded (not run from a git checkout), {python}\n"
+    status = git("status", "--porcelain", "--untracked-files=no", "--", ".")
+    modified = status is not None and status.returncode == 0 and status.stdout.strip() != ""
+    changes = ", with uncommitted changes in its directory" if modified else ""
+    return f"verify.py: commit {head.stdout.strip()}{changes}, {python}\n"
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) < 2:
+    args = argv[1:]
+    if not args:
         sys.stderr.write(_USAGE)
         return 2
-    if any(arg in ("-h", "--help") for arg in argv[1:]):
+    if any(arg in ("-h", "--help") for arg in args):
         sys.stdout.write(_USAGE)
         return 0
+    # Options are read before any path, as the Go reference verifier reads
+    # them: an argument that starts with "-", "-" alone and --version aside,
+    # is no path, and is named rather than reported as a missing file.
+    for arg in args:
+        if len(arg) > 1 and arg.startswith("-") and arg != "--version":
+            sys.stderr.write(f"unknown option: {arg}\n{_USAGE}")
+            return 2
+    if "--version" in args:
+        sys.stdout.write(_version_line())
+        return 0
     try:
-        paths = expand_paths(argv[1:])
+        paths = expand_paths(args)
     except OSError as exc:
         sys.stderr.write(f"error: {exc}\n")
         return 2
@@ -1333,8 +1418,10 @@ def main(argv: list[str]) -> int:
             print()
         _say(f"       observed: {got}")
         if got.sigs_expected:
+            # Each boolean as the Go reference verifier's %t writes it.
             print(
-                f"       signatures: {got.sigs_valid}/{got.sigs_expected} valid (ed25519={got.ed25519_valid} mldsa65={got.mldsa65_valid})"
+                f"       signatures: {got.sigs_valid}/{got.sigs_expected} valid "
+                f"(ed25519={str(got.ed25519_valid).lower()} mldsa65={str(got.mldsa65_valid).lower()})"
             )
         if got.accepted and got.trust_level >= 3 and not got.step7_performed:
             print(

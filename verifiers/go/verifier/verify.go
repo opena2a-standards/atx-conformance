@@ -39,6 +39,7 @@
 //	go run . ../../fixtures              (directory; walks *.json)
 //	go run . ../..                       (repo root; walks fixtures/*.json)
 //	go run . --help                      (prints the usage lines and exits 0)
+//	go run . --version                   (prints the module version and exits 0)
 //
 // Exit 0 iff every fixture's observed result matches expected.verifyResult.
 package verifier
@@ -54,6 +55,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"time"
@@ -733,11 +735,25 @@ func controllerDID(keyID string) string {
 // driver
 // ---------------------------------------------------------------------------
 
-// usage is what Run writes to stdout for -h or --help.
+// usage is what Run writes to stdout for -h or --help, and to stderr below
+// the line that names an unknown option.
 const usage = `usage: verify [fixture.json|dir]...
   no argument    verify the fixture set built into this module version (fixtures/*.json)
   -h, --help     print this usage and exit 0
+  --version      print the module version this verifier was built from and exit 0
 `
+
+// versionLine is what Run writes for --version: the path and version of the
+// module this binary was built from, as runtime/debug.ReadBuildInfo reports
+// them, and the Go release that built it. Built by `go run
+// <module>/verifiers/go@<version>`, the version is the one go run resolved,
+// a pseudo-version naming the commit while the repository has no tags.
+func versionLine(info *debug.BuildInfo, ok bool) string {
+	if !ok || info.Main.Path == "" {
+		return "verify: this binary records no module version\n"
+	}
+	return fmt.Sprintf("verify: %s %s, built with %s\n", info.Main.Path, info.Main.Version, info.GoVersion)
+}
 
 // source is one fixture to verify: the name the report writes for it and how
 // to read its bytes.
@@ -746,7 +762,7 @@ type source struct {
 	read func() ([]byte, error)
 }
 
-// fileSource is the fixture at path, named relative to the working directory.
+// fileSource is the fixture at path, named as relPath names it.
 func fileSource(path string) source {
 	return source{relPath(path), func() ([]byte, error) {
 		// path originates from Run's args, which each main package passes from
@@ -775,14 +791,36 @@ func embeddedSources() ([]source, error) {
 
 // Run verifies the fixtures args name, or with no argument the fixture set
 // the module root embeds, writes a record per fixture and the summary line
-// to stdout, and returns the exit code: 0 for -h or --help after writing
-// usage, 2 when args name no fixture or a path that does not exist, 1 when a
-// fixture's observed result differs from its expected outcome, 0 otherwise.
-// TestCaptureIsVerifierOutput holds docs/captures/go-verifier.txt to what it
-// writes.
+// to stdout, and returns the exit code. Options are read first, wherever
+// they stand among args: -h or --help writes usage and returns 0; any other
+// argument of two or more characters that starts with "-", --version
+// aside, is an unknown option, named on stderr above the usage, and
+// returns 2; --version writes the version line and returns 0. Then Run
+// returns 2 when args name no fixture or a path that does not exist, 1 when
+// a fixture's observed result differs from its expected outcome, and 0
+// otherwise. TestCaptureIsVerifierOutput holds
+// docs/captures/go-verifier.txt to what it writes.
 func Run(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
-		fmt.Fprint(stdout, usage)
+	for _, a := range args {
+		if a == "-h" || a == "--help" {
+			fmt.Fprint(stdout, usage)
+			return 0
+		}
+	}
+	printVersion := false
+	for _, a := range args {
+		switch {
+		case a == "--version":
+			printVersion = true
+		case len(a) > 1 && a[0] == '-':
+			fmt.Fprintf(stderr, "unknown option: %s\n", a)
+			fmt.Fprint(stderr, usage)
+			return 2
+		}
+	}
+	if printVersion {
+		info, ok := debug.ReadBuildInfo()
+		fmt.Fprint(stdout, versionLine(info, ok))
 		return 0
 	}
 
@@ -924,9 +962,14 @@ func expandFixturePaths(args []string) ([]string, error) {
 	return out, nil
 }
 
+// relPath is the name the report gives the fixture at p: the path relative
+// to the working directory when p is an absolute path under it, and p as
+// given otherwise. An absolute path outside the working directory is
+// written whole, as the Python verifier writes it, and not as a climb of
+// ".." elements out of the working directory.
 func relPath(p string) string {
 	if wd, err := os.Getwd(); err == nil {
-		if rel, err := filepath.Rel(wd, p); err == nil {
+		if rel, err := filepath.Rel(wd, p); err == nil && filepath.IsLocal(rel) {
 			return rel
 		}
 	}

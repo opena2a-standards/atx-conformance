@@ -2159,8 +2159,8 @@ def self_test() -> int:
         ("--help prints usage and runs no check",
          help_rc == 0 and help_out == USAGE and "every ATX citation" not in help_out),
         ("-h prints usage and runs no check", h_rc == 0 and h_out == USAGE),
-        ("an unknown argument prints usage to stderr, exits 2 and runs no check",
-         bad_rc == 2 and bad_err == USAGE and not bad_out),
+        ("an unknown argument is named on stderr above the usage, exits 2 and runs no check",
+         bad_rc == 2 and bad_err == "unknown argument(s): --bogus\n" + USAGE and not bad_out),
         ("the docstring's Usage block is USAGE", __doc__ is None or __doc__.endswith(USAGE)),
         ("the docstring of the helper that makes the case holding the case that runs "
          "--self-test where os.chmod raises to made-up child output says that a case list "
@@ -2246,6 +2246,10 @@ def self_test() -> int:
     return _report_cases(cases, refusing, found)
 
 
+# The arguments main reads. Any other is named above the usage it prints.
+OPTIONS = ("-h", "--help", "--self-test")
+
+
 def main(argv: list[str]) -> int:
     if argv in (["-h"], ["--help"]):
         print(USAGE, end="")
@@ -2253,6 +2257,9 @@ def main(argv: list[str]) -> int:
     if argv == ["--self-test"]:
         return self_test()
     if argv:
+        unknown = [arg for arg in argv if arg not in OPTIONS]
+        if unknown:
+            print(f"unknown argument(s): {' '.join(unknown)}", file=sys.stderr)
         print(USAGE, end="", file=sys.stderr)
         return 2
     return report()
