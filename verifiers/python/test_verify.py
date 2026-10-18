@@ -22,7 +22,8 @@ depth limit (in declaredPurpose too, which the JCS serializer walks, and in a
 typed member, whose decode error writes the value to 8 levels), an integer
 with more digits than int() converts, bytes that are not UTF-8, the
 single-pass string-literal scan, --help, an unknown option, --version, an
-empty argument, a directory whose fixtures entry is a file, a path spelled
+empty argument, a directory whose fixtures entry is a file, a directory
+holding a subdirectory or a symbolic link named *.json, a path spelled
 with ./, // or .., which the report names as the Go reference verifier names
 it, a file named with a trailing /, "--", a path under a working
 directory entered through a symbolic link, and a .. after a symbolic link,
@@ -2290,6 +2291,35 @@ class ArgumentContract(unittest.TestCase):
         lines = out.splitlines()
         self.assertEqual(lines[0], f"PASS  {directory / 'x.json'}")
         self.assertEqual(lines[-1], "summary: 1 pass, 0 fail (1 fixtures)")
+
+    def test_a_subdirectory_named_json_is_skipped(self):
+        # Path.glob("*.json") listed a subdirectory named sub.json with the
+        # files of the directory it was in, and the run reported it as a
+        # load error and exited 1. The Go reference verifier keeps the *.json
+        # entries os.ReadDir does not type as a directory: it skips the
+        # subdirectory, in a directory argument and in a repository root's
+        # fixtures/, and keeps a symbolic link named *.json whatever it links
+        # to, so a link to a directory fails to load.
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            for directory in ("d/sub.json", "r/fixtures/sub.json", "l/real"):
+                os.makedirs(directory)
+            for path in ("d/x.json", "r/fixtures/x.json", "l/x.json"):
+                Path(path).write_bytes(BASELINE_V10.read_bytes())
+            Path("l", "link.json").symlink_to("real", target_is_directory=True)
+            for arg, code, want, summary in (
+                ("d", 0, ["PASS  d/x.json", "observed: ACCEPT"],
+                 "summary: 1 pass, 0 fail (1 fixtures)"),
+                ("r", 0, ["PASS  r/fixtures/x.json", "observed: ACCEPT"],
+                 "summary: 1 pass, 0 fail (1 fixtures)"),
+                ("l", 1, ["FAIL  l/link.json  (load error: [Errno 21] Is a directory: "
+                          "'l/link.json')", "PASS  l/x.json", "observed: ACCEPT"],
+                 "summary: 1 pass, 1 fail (2 fixtures)"),
+            ):
+                with self.subTest(arg=arg):
+                    got, out, err = _run_main(arg)
+                    self.assertEqual((got, err), (code, ""), out)
+                    self.assertEqual(_verdict_lines(out), want)
+                    self.assertEqual(out.splitlines()[-1], summary)
 
     def test_double_dash_ends_the_options(self):
         # "--" was an unknown option, exit 2, so a fixture file named -h.json

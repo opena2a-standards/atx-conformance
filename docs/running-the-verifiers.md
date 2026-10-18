@@ -25,7 +25,11 @@ Then an empty argument is a usage error,
 `error: an empty argument names no fixture file or directory` with exit 2,
 and nothing is verified. A directory is walked for `fixtures/*.json` when its
 `fixtures` entry is a directory, so a repository root can be passed, and for
-its own `*.json` otherwise, as when `fixtures` is a file. A path named twice
+its own `*.json` otherwise, as when `fixtures` is a file. Of the `*.json`
+entries a walk finds, a directory is skipped: for a directory holding
+`x.json` and a subdirectory `sub.json`, both verifiers verify `x.json`
+alone. A symbolic link is kept whatever it links to, so a link to a fixture
+is verified and a link to a directory is a load error. A path named twice
 is verified twice. A file is named in the report as its argument spells it,
 `./` and `//` included: for `../../fixtures/./baseline-valid.json` both
 verifiers print `PASS  ../../fixtures/./baseline-valid.json`. A file found by

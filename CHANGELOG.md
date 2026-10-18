@@ -696,6 +696,30 @@ they should not.
 
 ### Fixed
 
+- The Python reference verifier skips a subdirectory named `*.json` when
+  it walks a directory, as the Go reference verifier skips it (#234). It
+  listed a directory with `Path.glob("*.json")`, which gives
+  subdirectories too: with `g/` holding a copy of
+  `fixtures/baseline-valid.json` as `x.json` and a subdirectory
+  `sub.json`, `python3 verify.py g` wrote
+  `FAIL  g/sub.json  (load error: [Errno 21] Is a directory: 'g/sub.json')`
+  above `PASS  g/x.json` and `summary: 1 pass, 1 fail (2 fixtures)`,
+  exit 1, where `atx-verify g` wrote `PASS  g/x.json` and
+  `summary: 1 pass, 0 fail (1 fixtures)`, exit 0; both now write the
+  latter. A subdirectory named `*.json` in a repository root's `fixtures/`
+  is skipped too. It now keeps the `*.json` entries the Go verifier keeps,
+  those `os.ReadDir` does not type as a directory, so a symbolic link
+  named `*.json` is kept whatever it links to, as before, and a link to a
+  directory is still a load error in both.
+  `test_a_subdirectory_named_json_is_skipped` pins it. The "Arguments"
+  section of `docs/running-the-verifiers.md` says which entries a walk
+  skips. The argument table of `scripts/parity/parity.py` runs 23
+  argument lists, from 22, adding `subdir`, a directory holding a
+  subdirectory named `sub.json`; with the Python verifier of the previous
+  commit, the gate fails on that case alone. The self-test adds one case
+  (41 cases green, from 40): a verifier that reports `subdir/sub.json` as a
+  fixture that fails to load is reported as a divergence. No fixture
+  changes.
 - Both reference verifiers read and name the file the operating system
   resolves a path to when a `..` follows a symbolic link (#231). A
   directory argument was listed by the operating system, which resolves the
