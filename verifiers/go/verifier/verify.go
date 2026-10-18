@@ -750,8 +750,9 @@ const usage = `usage: verify [fixture.json|dir]...
 // versionLine is what Run writes for --version: the path and version of the
 // module this binary was built from, as runtime/debug.ReadBuildInfo reports
 // them, and the Go release that built it. Built by `go run
-// <module>/verifiers/go@<version>`, the version is the one go run resolved,
-// a pseudo-version naming the commit while the repository has no tags.
+// <module>/cmd/atx-verify@<version>`, the version is the one go run resolved:
+// the highest release tag for @latest, and for @<commit> the commit's release
+// tag, or a pseudo-version naming the commit when it has no tag.
 func versionLine(info *debug.BuildInfo, ok bool) string {
 	if !ok || info.Main.Path == "" {
 		return "verify: this binary records no module version\n"

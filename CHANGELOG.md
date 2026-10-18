@@ -1,12 +1,14 @@
 # Changelog
 
-This repository has no tags or releases. A consumer pins it at a commit, so
-entries name the commit that made the change. Changes to an existing fixture's
-credential, signatures, verifier state or expected outcome are listed here
-whenever one lands; [`docs/versioning.md`](docs/versioning.md) "Versioning
-and stability" says they should not.
+`v0.1.0` is this repository's first tag, and the section of that name lists
+changes it carries; the section below it, named for commit `e2f9dc4`, lists
+the fixtures that commit changed. A consumer pins this repository at a tag or
+at a commit. Changes to an existing fixture's credential, signatures,
+verifier state or expected outcome are listed here whenever one lands;
+[`docs/versioning.md`](docs/versioning.md) "Versioning and stability" says
+they should not.
 
-## Unreleased
+## v0.1.0
 
 ### Added
 
@@ -86,6 +88,21 @@ and stability" says they should not.
 
 ### Changed
 
+- README.md says `@latest` resolves to the highest release tag of this
+  repository that the Go module proxy reports, and that `go run` resolves
+  `@<commit>` to the commit's release tag, or to a pseudo-version when the
+  commit has no tag; it said the repository had no tags and `@latest`
+  resolved to a pseudo-version of a commit on `main`. This file's opening
+  paragraph names `v0.1.0` as the first tag, and two entries under
+  `v0.1.0` are amended: the #165 entry says `verify.py` imports `os`
+  again, and the #181 entry says the #151 change made a long integer in
+  `declaredPurpose` `VERIFIER_CONFIG_ERROR` in both verifiers.
+  `scripts/generate-fixtures/go.sum` carries the four `h1:` lines
+  `go mod tidy` adds there, and `go run .` in that directory rewrites
+  `fixtures/` and `MANIFEST.sha256` with no byte changed.
+  `docs/captures/go-verifier.txt` is unchanged byte for byte; its sidecar
+  records the new tree id of `verifiers/go/verifier`, whose `--version`
+  comment changed (#223). No fixture changes.
 - The two reference verifiers read their arguments alike, and
   `scripts/parity/parity.py` holds them to it. An empty argument is a usage
   error on both, `error: an empty argument names no fixture file or
@@ -430,8 +447,9 @@ and stability" says they should not.
   from the documents, where one such file was subtracted from the documents
   that pass. Its self-test covers six more constraints of the two format
   schemas, one altered document each (#165). No fixture changes.
-- `verifiers/python/verify.py` no longer imports `os` and
-  `dataclasses.field`, which it did not use (#165). No fixture changes.
+- `verifiers/python/verify.py` dropped its imports of `os` and
+  `dataclasses.field`, which it did not use (#165); it imports `os` again
+  for `--version`, which reads `os.environ` (#208). No fixture changes.
 - README's dependency list for the Go verifier says the Go release can change
   a fixture's result when one of its timestamps has a time zone offset with
   an hour above 24 or a minute above 60 (`+25:00`, `+23:61`), where it said
@@ -566,9 +584,11 @@ and stability" says they should not.
   is `SIGNATURE_INVALID`; and in a fixture wrapper member such as
   `expected.verifyResult` the file fails to load, with an error that names
   the member. The Go verifier reports the same for each. In
-  `declaredPurpose` the credential is `SIGNATURE_INVALID`, as it is for a
+  `declaredPurpose` the credential was `SIGNATURE_INVALID`, as it was for a
   shorter integer outside float64 range, where the Go verifier reports
-  `VERIFIER_CONFIG_ERROR` for both (#181). No fixture changes.
+  `VERIFIER_CONFIG_ERROR` for both (#181); the `declaredPurpose` entry for
+  #151 above makes it `VERIFIER_CONFIG_ERROR` in both verifiers, as each
+  reports for an integer of 401 or 5000 digits there. No fixture changes.
 - `test_verify.py` nests objects as well as arrays to Go's depth limit, so
   it covers the decode error of a slice member (`capabilities`,
   `issuerChain`, `signatures`, `verifierState.trustedIssuers`) that holds an
