@@ -29,7 +29,8 @@ names it in `unreported`.
 
 After the fixture table the gate runs the argument table, ARGUMENT_CASES:
 argument lists no fixture can carry (an empty argument, -h and --help at
-several positions, a directory whose `fixtures` entry is a file, a path that
+several positions, --version and an unknown option after a path, a
+repository root, a directory whose `fixtures` entry is a file, a path that
 does not exist, a directory with no *.json), each run on both verifiers from
 a scratch directory holding the paths it names. Both must exit with the same
 code and write the same first stderr line and the same verdict lines (each
@@ -109,14 +110,19 @@ OBSERVED_RE = re.compile(r"^\s*observed:\s+(ACCEPT|REJECT\[([A-Z_]+))")
 
 # The argument table: (case, arguments). Each list runs from a scratch
 # directory _argument_scratch lays out: fixfile/ holds a file named fixtures
-# and ARGUMENT_FIXTURE as x.json, nojson/ holds no *.json, and nothing there
-# is named missing.
+# and ARGUMENT_FIXTURE as x.json, root/ holds ARGUMENT_FIXTURE as
+# fixtures/x.json beside conformance.json, a *.json that is not a fixture, as
+# a repository root does, nojson/ holds no *.json, and nothing there is named
+# missing.
 ARGUMENT_CASES: list[tuple[str, list[str]]] = [
     ("an empty argument", [""]),
     ("--help first", ["--help", "fixfile"]),
     ("--help last", ["fixfile", "--help"]),
     ("--help between two paths", ["fixfile/x.json", "--help", "fixfile"]),
     ("-h alone", ["-h"]),
+    ("--version after a path", ["fixfile", "--version"]),
+    ("an unknown option after a path", ["fixfile", "--bogus"]),
+    ("a repository root", ["root"]),
     ("a fixtures entry that is a file", ["fixfile"]),
     ("a path that does not exist", ["missing"]),
     ("a directory with no *.json", ["nojson"]),
@@ -295,6 +301,9 @@ def _argument_scratch(scratch: Path, fixture: Path) -> None:
     (scratch / "fixfile").mkdir(parents=True)
     (scratch / "fixfile" / "fixtures").write_text("a file, not a directory\n")
     (scratch / "fixfile" / "x.json").write_bytes(fixture.read_bytes())
+    (scratch / "root" / "fixtures").mkdir(parents=True)
+    (scratch / "root" / "fixtures" / "x.json").write_bytes(fixture.read_bytes())
+    (scratch / "root" / "conformance.json").write_text("{}\n")
     (scratch / "nojson").mkdir()
     (scratch / "nojson" / "README.md").write_text("not a fixture\n")
 
@@ -571,11 +580,13 @@ def self_test() -> int:
     no_fixtures = _gate_without_fixtures({"one": _stand_in(both), "two": _stand_in(both)})
     unknown = _refusal(["--bogus"])
 
-    # Argument-table stand-ins: "one" writes kept for three cases, and "two"
+    # Argument-table stand-ins: "one" writes kept for six cases, and "two"
     # the same with one case's outcome changed. A case is run alone, by name,
     # except in the gate runs, which run the whole table.
     empty_case, fixfile_case, missing_case = (
         "an empty argument", "a fixtures entry that is a file", "a path that does not exist")
+    version_case, unknown_case, root_case = (
+        "--version after a path", "an unknown option after a path", "a repository root")
     argv_of = {case: tuple(args) for case, args in ARGUMENT_CASES}
     fixfile = (
         "PASS  fixfile/x.json\n       expected: ACCEPT\n       observed: ACCEPT\n"
@@ -588,6 +599,10 @@ def self_test() -> int:
             "", "error: an empty argument names no fixture file or directory\n", 2),
         argv_of[fixfile_case]: fixfile,
         argv_of[missing_case]: missing,
+        argv_of[version_case]: ("verify: (devel), built with go1.22.12\n", "", 0),
+        argv_of[unknown_case]: ("", "unknown option: --bogus\n", 2),
+        argv_of[root_case]: (
+            fixfile[0].replace("fixfile/x.json", "root/fixtures/x.json"), "", 0),
     }
 
     def changed(outcomes: dict[tuple[str, ...], tuple[str, str, int]]) -> dict[str, dict]:
@@ -623,6 +638,18 @@ def self_test() -> int:
         "two": _argument_stand_in(
             "verify.py", {argv_of[missing_case]: ("", "verify: missing\n", 2)}),
     }, missing_case)
+    # "two" as a verifier that reads --version only as its first argument,
+    # one with no unknown-option rule, and one that walks a repository root
+    # for its own *.json, which loads conformance.json there.
+    args_version = _argument_divergences(changed(
+        {argv_of[version_case]: ("", "error: --version: no such file or directory\n", 2)}),
+        version_case)
+    args_unknown = _argument_divergences(changed(
+        {argv_of[unknown_case]: ("", "error: --bogus: no such file or directory\n", 2)}),
+        unknown_case)
+    args_root = _argument_divergences(changed({argv_of[root_case]: (
+        "FAIL  root/conformance.json  (load error: no expected member)\n"
+        "\nsummary: 0 pass, 1 fail (1 fixtures)\n", "", 1)}), root_case)
     gate_fails = _gate_with_arguments(lambda bin_dir: changed(exit_changed))
     gate_passes = _gate_with_arguments(lambda bin_dir: changed({}))
     gate_not_built = _gate_with_arguments(_not_built)
@@ -723,6 +750,24 @@ def self_test() -> int:
          args_unnamed == [
              'argument case "a path that does not exist" (missing): '
              "one exit 2, stderr 'verify.py: missing'; two exit 2, stderr 'verify: missing'"]),
+        ("--version after a path, which one verifier takes for a path, is a divergence",
+         args_version == [
+             'argument case "--version after a path" (fixfile --version): '
+             "one exit 0; two exit 2, stderr 'error: --version: no such file or directory'"]),
+        ("an unknown option after a path, which one verifier reports as a missing path, "
+         "is a divergence",
+         args_unknown == [
+             'argument case "an unknown option after a path" (fixfile --bogus): '
+             "one exit 2, stderr 'unknown option: --bogus'; "
+             "two exit 2, stderr 'error: --bogus: no such file or directory'"]),
+        ("a repository root, which one verifier walks for its own *.json rather than "
+         "fixtures/*.json, is a divergence",
+         args_root == [
+             'argument case "a repository root" (root): '
+             "one exit 0, verdict lines ['PASS  root/fixtures/x.json', 'observed: ACCEPT', "
+             "'summary: 1 pass, 0 fail (1 fixtures)']; "
+             "two exit 1, verdict lines ['FAIL  root/conformance.json', "
+             "'summary: 0 pass, 1 fail (1 fixtures)']"]),
         ("the gate fails on an argument case one verifier diverges on, and that "
          "case's row in the argument table names both outcomes",
          gate_fails[0] == 1

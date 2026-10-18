@@ -593,6 +593,23 @@ and stability" says they should not.
 
 ### Fixed
 
+- `docs/running-the-verifiers.md` says the parity gate runs both verifiers
+  on each argument shape its "Arguments" section names, and the argument
+  table of `scripts/parity/parity.py` ran none of `--version`, an unknown
+  option or a repository root (#216). The table runs eleven argument lists,
+  from eight: `fixfile --version`, `fixfile --bogus` and `root`, a scratch
+  directory holding `baseline-valid.json` as `fixtures/x.json` beside a
+  `conformance.json` that is not a fixture, as a repository root does. On
+  this tree both verifiers exit 0 on `fixfile --version` and write no
+  verdict line, exit 2 on `fixfile --bogus` with `unknown option: --bogus`
+  as the first stderr line, and on `root` verify `root/fixtures/x.json`
+  alone. The self-test adds three cases (30 cases green, from 27): a
+  verifier that takes `--version` after a path for a path, one that reports
+  an unknown option as a missing path, and one that walks a repository root
+  for its own `*.json` are each reported as a divergence.
+  `docs/continuous-verification.md` names the new argument lists; the
+  sentence in `docs/running-the-verifiers.md` is unchanged. No fixture
+  changes.
 - README.md's first command is `go run
   github.com/opena2a-standards/atx-conformance/cmd/atx-verify@latest`.
   `go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest`,
