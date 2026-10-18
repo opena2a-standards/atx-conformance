@@ -32,9 +32,10 @@ argument lists no fixture can carry (an empty argument, -h and --help at
 several positions, --version and an unknown option after a path, a
 repository root, a directory whose `fixtures` entry is a file, a path that
 does not exist, a directory with no *.json, a path named twice, a file spelled
-with ./ and //, a directory spelled with .., a file named with a trailing /,
-a path and an option after `--`, an absolute path through a symbolic link to
-the working directory, through its target and outside it), each run on both
+with ./ and //, a directory spelled with .., a directory spelled with a ..
+after a symbolic link, a file named with a trailing /, a path and an option
+after `--`, an absolute path through a symbolic link to the working
+directory, through its target and outside it), each run on both
 verifiers from a symbolic link to a scratch directory holding the paths it
 names, with PWD naming the link, as a shell names a directory it changed
 into through one. Both must exit with the same code and write the same
@@ -125,7 +126,9 @@ OBSERVED_RE = re.compile(r"^\s*observed:\s+(ACCEPT|REJECT\[([A-Z_]+))")
 # link: fixfile/ holds a file named fixtures and ARGUMENT_FIXTURE as x.json,
 # root/ holds ARGUMENT_FIXTURE as fixtures/x.json beside conformance.json, a
 # *.json that is not a fixture, as a repository root does, nojson/ holds no
-# *.json, -h.json is ARGUMENT_FIXTURE, and nothing there is named missing.
+# *.json, hop/link is a symbolic link to away/deep, away/ holding
+# ARGUMENT_FIXTURE as x.json, -h.json is ARGUMENT_FIXTURE, and nothing there
+# is named missing.
 # In an argument, {link} is the link's absolute path, {target} the
 # directory's, its symbolic links resolved, and {fixture} the absolute path
 # of the fixture the table copies, outside both.
@@ -145,6 +148,7 @@ ARGUMENT_CASES: list[tuple[str, list[str]]] = [
     ("a path named twice", ["fixfile/x.json", "fixfile/x.json"]),
     ("a file spelled with ./ and //", ["fixfile//x.json", "./fixfile/./x.json"]),
     ("a directory spelled with ..", ["fixfile/../fixfile"]),
+    ("a .. after a symbolic link", ["hop/link/.."]),
     ("a file named with a trailing /", ["fixfile/x.json/"]),
     ("a path after --", ["--", "-h.json"]),
     ("an option after --", ["--", "-h.json", "--help"]),
@@ -338,6 +342,10 @@ def _argument_scratch(scratch: Path, fixture: Path) -> Path:
     (root / "root" / "conformance.json").write_text("{}\n")
     (root / "nojson").mkdir()
     (root / "nojson" / "README.md").write_text("not a fixture\n")
+    (root / "away" / "deep").mkdir(parents=True)
+    (root / "away" / "x.json").write_bytes(fixture.read_bytes())
+    (root / "hop").mkdir()
+    (root / "hop" / "link").symlink_to("../away/deep", target_is_directory=True)
     (root / "-h.json").write_bytes(fixture.read_bytes())
     link = scratch / "link"
     link.symlink_to("dir", target_is_directory=True)
@@ -674,7 +682,7 @@ def self_test() -> int:
     unknown = _refusal(["--bogus"])
 
     # Argument-table stand-ins: "one", which embeds a fixture set, writes kept
-    # for eleven cases and for no argument its report of that set, the
+    # for twelve cases and for no argument its report of that set, the
     # ARGUMENT_FIXTURE beside the table's fixture; "two", which embeds none,
     # writes kept and for no argument its usage, with one case's outcome
     # changed. A case is run alone, by name, except in the gate runs, which
@@ -689,6 +697,7 @@ def self_test() -> int:
     twice_case, no_argument_case, dashdash_case = (
         "a path named twice", "no argument", "a path after --")
     link_case, target_case = "an absolute path via the link", "an absolute path via its target"
+    link_dotdot_case = "a .. after a symbolic link"
     argv_of = {case: tuple(args) for case, args in ARGUMENT_CASES}
     fixfile = (
         "PASS  fixfile/x.json\n       expected: ACCEPT\n       observed: ACCEPT\n"
@@ -720,6 +729,7 @@ def self_test() -> int:
                                  "summary: 2 pass, 0 fail (2 fixtures)"), "", 0),
         argv_of[spelled_case]: passes("./fixfile/./x.json", "fixfile//x.json"),
         argv_of[dotdot_case]: passes("fixfile/x.json"),
+        argv_of[link_dotdot_case]: passes("hop/link/../x.json"),
         argv_of[slash_case]: ("", "error: stat fixfile/x.json/: not a directory\n", 2),
         argv_of[dashdash_case]: (fixfile[0].replace("fixfile/x.json", "-h.json"), "", 0),
     }
@@ -788,6 +798,13 @@ def self_test() -> int:
         {argv_of[spelled_case]: passes("fixfile/x.json", "fixfile/x.json")}), spelled_case)
     args_dotdot = _argument_divergences(changed(
         {argv_of[dotdot_case]: passes("fixfile/../fixfile/x.json")}), dotdot_case)
+    # "two" as a verifier that joins the files of hop/link/.. onto it as Go's
+    # filepath.Join does, which removes the .. with the link: it lists away/,
+    # which hop/link/.. resolves to, and reads hop/x.json, which does not
+    # exist.
+    args_link_dotdot = _argument_divergences(changed({argv_of[link_dotdot_case]: (
+        "FAIL  hop/x.json  (load error: open hop/x.json: no such file or directory)\n"
+        "\nsummary: 0 pass, 1 fail (1 fixtures)\n", "", 1)}), link_dotdot_case)
     args_slash = _argument_divergences(changed(
         {argv_of[slash_case]: passes("fixfile/x.json")}), slash_case)
     # With no argument: both as documented; "one" writing its usage although
@@ -950,6 +967,14 @@ def self_test() -> int:
              "'summary: 1 pass, 0 fail (1 fixtures)']; "
              "two exit 0, verdict lines ['PASS  fixfile/../fixfile/x.json', "
              "'observed: ACCEPT', 'summary: 1 pass, 0 fail (1 fixtures)']"]),
+        ("a .. after a symbolic link, whose files one verifier names with the .. removed "
+         "with the link, is a divergence",
+         args_link_dotdot == [
+             'argument case "a .. after a symbolic link" (hop/link/..): '
+             "one exit 0, verdict lines ['PASS  hop/link/../x.json', 'observed: ACCEPT', "
+             "'summary: 1 pass, 0 fail (1 fixtures)']; "
+             "two exit 1, verdict lines ['FAIL  hop/x.json', "
+             "'summary: 0 pass, 1 fail (1 fixtures)']"]),
         ("a file named with a trailing /, which one verifier verifies, is a divergence",
          args_slash == [
              'argument case "a file named with a trailing /" (fixfile/x.json/): '

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -458,6 +459,107 @@ func TestPathUnderLinkedWorkingDirectory(t *testing.T) {
 		}
 		if first := strings.SplitN(stdout.String(), "\n", 2)[0]; first != "PASS  x.json" {
 			t.Errorf("Run(%q) writes %q first, want %q", p, first, "PASS  x.json")
+		}
+	}
+}
+
+// observedLine matches a report's observed line, capturing the verdict and,
+// for a REJECT, the category, without the reason.
+var observedLine = regexp.MustCompile(`^\s+observed: (ACCEPT|REJECT\[[A-Z_]+)`)
+
+// verdictLines returns each PASS or FAIL line of a report, each followed by
+// its observed verdict and category, so a test sees which file was read as
+// well as the name the report gives it.
+func verdictLines(report string) []string {
+	var lines []string
+	for _, line := range strings.Split(report, "\n") {
+		if strings.HasPrefix(line, "PASS  ") || strings.HasPrefix(line, "FAIL  ") {
+			lines = append(lines, line)
+		} else if m := observedLine.FindStringSubmatch(line); m != nil {
+			v := "observed: " + m[1]
+			if strings.HasPrefix(m[1], "REJECT") {
+				v += "]"
+			}
+			lines = append(lines, v)
+		}
+	}
+	return lines
+}
+
+// TestDotDotAfterALinkIsAppliedWhereTheLinkLeads pins that a ".." after a
+// symbolic link names, for the file read and for the report, what the
+// operating system resolves it to: the link resolved, then the "..". With
+// d/link a link to elsewhere/deep, d/link/.. lists elsewhere, and its files
+// were joined onto d/link/.. as filepath.Join joins them, which removes the
+// ".." with the link: elsewhere/other.json was reported as d/other.json, a
+// load error, as d holds no other.json, and d/x.json, which d/link/.. does
+// not list, was verified in place of elsewhere/x.json. An absolute path
+// $PWD/d/link/../x.json was named d/x.json while elsewhere/x.json was read,
+// and r/link/.., which resolves to a directory holding fixtures/, was
+// walked for its own *.json since r/fixtures does not exist. A directory
+// spelled with a ".." that cleaning resolves alike, d/../d, still names its
+// files as filepath.Join joins them.
+func TestDotDotAfterALinkIsAppliedWhereTheLinkLeads(t *testing.T) {
+	read := func(name string) []byte {
+		t.Helper()
+		b, err := fs.ReadFile(atxconformance.Fixtures, "fixtures/"+name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	baseline, expired := read("baseline-valid.json"), read("expired.json")
+	dir := t.TempDir()
+	wd, elsewhere, root := filepath.Join(dir, "wd"), filepath.Join(dir, "elsewhere"), filepath.Join(dir, "root")
+	for _, d := range []string{
+		filepath.Join(wd, "d"), filepath.Join(wd, "r"), filepath.Join(elsewhere, "deep"),
+		filepath.Join(root, "deep"), filepath.Join(root, "fixtures"),
+	} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, b := range map[string][]byte{
+		filepath.Join(wd, "d", "x.json"):          baseline,
+		filepath.Join(elsewhere, "other.json"):    expired,
+		filepath.Join(elsewhere, "x.json"):        expired,
+		filepath.Join(root, "fixtures", "x.json"): baseline,
+		filepath.Join(root, "conformance.json"):   []byte("{}\n"),
+	} {
+		if err := os.WriteFile(path, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for link, target := range map[string]string{
+		filepath.Join(wd, "d", "link"): filepath.Join(elsewhere, "deep"),
+		filepath.Join(wd, "r", "link"): filepath.Join(root, "deep"),
+	} {
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	chdir(t, wd)
+
+	const rejected = "observed: REJECT[EXPIRED]"
+	for _, c := range []struct {
+		arg  string
+		want []string
+	}{
+		{"d/link/..", []string{"PASS  d/link/../other.json", rejected, "PASS  d/link/../x.json", rejected}},
+		{"d/link/../", []string{"PASS  d/link/../other.json", rejected, "PASS  d/link/../x.json", rejected}},
+		{wd + "/d/link/..", []string{
+			"PASS  " + wd + "/d/link/../other.json", rejected, "PASS  " + wd + "/d/link/../x.json", rejected}},
+		{wd + "/d/link/../x.json", []string{"PASS  " + wd + "/d/link/../x.json", rejected}},
+		{"r/link/..", []string{"PASS  r/link/../fixtures/x.json", "observed: ACCEPT"}},
+		{"d/../d", []string{"PASS  d/x.json", "observed: ACCEPT"}},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := Run([]string{c.arg}, &stdout, &stderr); code != 0 || stderr.Len() != 0 {
+			t.Errorf("Run(%q) exits %d with stderr %q, want exit 0 and no stderr; stdout:\n%s",
+				c.arg, code, stderr.String(), stdout.String())
+		}
+		if got := verdictLines(stdout.String()); !slices.Equal(got, c.want) {
+			t.Errorf("Run(%q) writes verdict lines %q, want %q", c.arg, got, c.want)
 		}
 	}
 }

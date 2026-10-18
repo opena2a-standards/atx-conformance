@@ -1314,25 +1314,50 @@ def load_fixture(path: Path) -> dict[str, Any]:
     return fixture
 
 
+def _go_clean(path: str) -> str:
+    """path cleaned as Go's filepath.Clean cleans it: os.path.normpath,
+    except that normpath keeps the two slashes a path may begin with and
+    Clean writes one."""
+    cleaned = os.path.normpath(path)
+    return cleaned[1:] if cleaned.startswith("//") else cleaned
+
+
 def _go_join(directory: str, name: str) -> str:
     """directory and name joined as Go's filepath.Join joins them, which
-    cleans the result as filepath.Clean does: os.path.normpath, except that
-    normpath keeps the two slashes a path may begin with and Clean writes
-    one."""
-    joined = os.path.normpath(os.path.join(directory, name))
-    return joined[1:] if joined.startswith("//") else joined
+    cleans the result as filepath.Clean does."""
+    return _go_clean(os.path.join(directory, name))
+
+
+def _spelled_join(directory: str, name: str) -> str:
+    """name joined onto directory as directory is spelled, with one
+    separator between."""
+    return directory + name if directory[-1:] in (os.sep, os.altsep) else directory + os.sep + name
+
+
+def _cleans_to_itself(directory: str, st: os.stat_result) -> bool:
+    """Whether directory, cleaned as Go's filepath.Clean cleans it, names
+    the directory it names, st being os.stat(directory). Clean removes a ..
+    with the element before it, and the operating system resolves that
+    element before it applies the .., so where the element is a symbolic
+    link the two name different directories."""
+    try:
+        return os.path.samestat(st, os.stat(_go_clean(directory)))
+    except OSError:
+        return False
 
 
 def expand_paths(args: list[str]) -> list[str]:
     """The fixture files args name, spelled as the Go reference verifier's
     expandFixturePaths spells them: a file as its argument spells it, ./ and
     // included, and a *.json file of a directory as _go_join writes the
-    directory and the file's name. An argument is read as the string it is,
+    directory and the file's name, or, where the directory cleaned names
+    another directory, as _spelled_join writes them. Each name is also the
+    path the file is read from. An argument is read as the string it is,
     not as a Path, which drops a ./ and a trailing / and collapses a //."""
     out: list[str] = []
     for a in args:
         try:
-            mode = os.stat(a).st_mode
+            st = os.stat(a)
         except FileNotFoundError:
             raise FileNotFoundError(f"{a}: no such file or directory") from None
         except OSError as exc:
@@ -1341,10 +1366,14 @@ def expand_paths(args: list[str]) -> list[str]:
             # named with a trailing /.
             reason = exc.strerror or str(exc)
             raise OSError(f"stat {a}: {reason[:1].lower()}{reason[1:]}") from None
-        if stat.S_ISDIR(mode):
-            fixtures_dir = _go_join(a, "fixtures")
+        if stat.S_ISDIR(st.st_mode):
+            # The Go reference verifier's dirJoin: with d/link a symbolic
+            # link to elsewhere/deep, d/link/.. lists elsewhere, and its
+            # other.json is d/link/../other.json, not d/other.json.
+            join = _go_join if _cleans_to_itself(a, st) else _spelled_join
+            fixtures_dir = join(a, "fixtures")
             target = fixtures_dir if os.path.isdir(fixtures_dir) else a
-            out.extend(_go_join(target, p.name) for p in Path(target).glob("*.json"))
+            out.extend(join(target, p.name) for p in Path(target).glob("*.json"))
         else:
             out.append(a)
     # A path named twice is verified twice, as the Go reference verifier
@@ -1361,13 +1390,17 @@ def _rel_path(path: str) -> str:
     holding path are compared with their symbolic links resolved, as the Go
     reference verifier compares them, so a path written through a link to
     the working directory and one written through its target get the same
-    name. The directory is cleaned before its links are resolved, as
-    filepath.Dir cleans it there."""
+    name. The directory is resolved as path spells it, each .. applied
+    after the element before it is resolved, as the operating system
+    applies it when it reads path. Cleaned first, as filepath.Dir cleans
+    it, the directory of $PWD/d/link/../x.json, with d/link a link to
+    elsewhere/deep, was $PWD/d, and the file was named d/x.json while
+    elsewhere/x.json was read."""
     if not os.path.isabs(path):
         return path
     try:
         cwd = os.path.realpath(os.getcwd())
-        directory = os.path.realpath(os.path.normpath(os.path.dirname(path)))
+        directory = os.path.realpath(os.path.dirname(path))
         rel = os.path.relpath(os.path.join(directory, os.path.basename(path)), cwd)
     except (OSError, ValueError):
         return path

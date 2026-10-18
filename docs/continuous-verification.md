@@ -38,9 +38,10 @@ sentence below:
    unknown option after a path, a repository root, a directory whose
    `fixtures` entry is a file, a path that does not exist, a directory with
    no `*.json`, a path named twice, a file spelled with `./` and `//`, a
-   directory spelled with `..`, a file named with a trailing `/`, a path and
-   an option after `--`, an absolute path through the link, through its
-   target and outside the working directory) the two must exit with the
+   directory spelled with `..`, a directory spelled with a `..` after a
+   symbolic link, a file named with a trailing `/`, a path and an option
+   after `--`, an absolute path through the link, through its target and
+   outside the working directory) the two must exit with the
    same code and write the same first stderr line and verdict lines. With
    no argument they must differ as documented: the Go verifier verifies its
    embedded fixture set, every fixture passing, and the Python verifier
