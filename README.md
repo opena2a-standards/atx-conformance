@@ -33,11 +33,12 @@ summary: 25 pass, 0 fail (25 fixtures)
 With no argument the verifier walks the fixture set built into the module
 version `go run` fetched, `fixtures/*.json` of that commit, with nothing
 cloned. The command exits 1 when any fixture's result differs from its
-expected outcome. This repository has no tags, so `@latest` resolves to a
-pseudo-version of a commit on `main`, the one the Go module proxy reports as
-latest. `@<commit>` in its place runs the verifier and fixtures of that
-commit: `cmd/atx-verify@<commit>` for a commit that has `cmd/atx-verify`, and
-`verifiers/go@<commit>` for `ea4b485` or a later commit on `main`. `ea4b485`
+expected outcome. `@latest` resolves to the highest release tag of this
+repository that the Go module proxy reports. `@<commit>` in its place runs
+the verifier and fixtures of that commit: `cmd/atx-verify@<commit>` for a
+commit that has `cmd/atx-verify`, and `verifiers/go@<commit>` for `ea4b485`
+or a later commit on `main`; `go run` resolves the commit to its release tag,
+or to a pseudo-version when the commit has no tag. `ea4b485`
 is the first commit with `go.mod` at the repository root. Before it,
 `verifiers/go` was a module of its own; the module proxy answers
 `verifiers/go@latest` with a version of that module, and
