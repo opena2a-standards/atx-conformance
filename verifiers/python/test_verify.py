@@ -24,8 +24,9 @@ with more digits than int() converts, bytes that are not UTF-8, the
 single-pass string-literal scan, --help, an unknown option, --version, an
 empty argument, a directory whose fixtures entry is a file, a path spelled
 with ./, // or .., which the report names as the Go reference verifier names
-it, a file named with a trailing /, "--", and a path under a working
-directory entered through a symbolic link.
+it, a file named with a trailing /, "--", a path under a working
+directory entered through a symbolic link, and a .. after a symbolic link,
+which is read and named where the link leads.
 They hold the report to the Go reference verifier's text: a boolean, a
 string a reason quotes, and the whole report over fixtures/, which must be
 docs/captures/go-verifier.txt byte for byte. Two tests
@@ -258,6 +259,19 @@ def _run_main(*args: str) -> tuple[int, str, str]:
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         code = verify.main(["verify.py", *args])
     return code, out.getvalue(), err.getvalue()
+
+
+def _verdict_lines(out: str) -> list[str]:
+    """Each PASS or FAIL line of a report, each followed by its observed
+    verdict and category without the reason, so a test sees which file was
+    read as well as the name the report gives it."""
+    lines = []
+    for line in out.splitlines():
+        if line.startswith(("PASS  ", "FAIL  ")):
+            lines.append(line)
+        elif m := re.match(r"\s+observed: (ACCEPT|REJECT\[[A-Z_]+)", line):
+            lines.append(f"observed: {m.group(1)}" + ("]" if m.group(1).startswith("REJECT") else ""))
+    return lines
 
 
 def _run_main_utf8(*args: str) -> tuple[int, str]:
@@ -2311,23 +2325,50 @@ class ArgumentContract(unittest.TestCase):
                         self.assertEqual((code, err), (0, ""), out)
                         self.assertEqual(out.splitlines()[0], "PASS  x.json")
 
-    def test_directory_is_cleaned_before_its_links_are_resolved(self):
-        # The Go reference verifier's filepath.Dir removes a .. with the
-        # element before it, a link included, before the directory's links
-        # are resolved. Resolved first, the .. after a link to a directory
-        # outside the working directory leaves it, and the path would be
-        # written whole.
+    def test_dotdot_after_a_link_is_applied_where_the_link_leads(self):
+        # The operating system resolves a symbolic link before it applies
+        # the .. after it; os.path.normpath, as Go's filepath.Join and
+        # filepath.Dir, removes the .. with the element before it, the link
+        # included. With d/link a link to elsewhere/deep, d/link/.. lists
+        # elsewhere, and its other.json was reported as d/other.json, a load
+        # error, as d holds no other.json, and d/x.json, which d/link/.. does
+        # not list, was verified in place of elsewhere/x.json. An absolute
+        # path $PWD/d/link/../x.json was named d/x.json while
+        # elsewhere/x.json was read, and r/link/.., which resolves to a
+        # directory holding fixtures/, was walked for its own *.json since
+        # r/fixtures does not exist. Each is now read and named where the
+        # link leads, as the Go reference verifier reads and names it;
+        # d/../d, which cleaning resolves alike, keeps the name
+        # filepath.Join gives its file.
+        expired = (ROOT / "fixtures" / "expired.json").read_bytes()
+        rejected = "observed: REJECT[EXPIRED]"
         with tempfile.TemporaryDirectory() as tmp:
-            wd, elsewhere = Path(tmp) / "wd", Path(tmp) / "elsewhere"
-            (wd / "sub").mkdir(parents=True)
-            (elsewhere / "deep").mkdir(parents=True)
-            for directory in (wd / "sub", elsewhere):
-                (directory / "x.json").write_bytes(BASELINE_V10.read_bytes())
-            (wd / "sub" / "link").symlink_to(elsewhere / "deep", target_is_directory=True)
+            wd, elsewhere, root = Path(tmp) / "wd", Path(tmp) / "elsewhere", Path(tmp) / "root"
+            for directory in (wd / "d", wd / "r", elsewhere / "deep", root / "deep", root / "fixtures"):
+                directory.mkdir(parents=True)
+            (wd / "d" / "x.json").write_bytes(BASELINE_V10.read_bytes())
+            (elsewhere / "other.json").write_bytes(expired)
+            (elsewhere / "x.json").write_bytes(expired)
+            (root / "fixtures" / "x.json").write_bytes(BASELINE_V10.read_bytes())
+            (root / "conformance.json").write_text("{}\n", encoding="utf-8")
+            (wd / "d" / "link").symlink_to(elsewhere / "deep", target_is_directory=True)
+            (wd / "r" / "link").symlink_to(root / "deep", target_is_directory=True)
             with contextlib.chdir(wd):
-                code, out, err = _run_main(str(wd / "sub" / "link" / ".." / "x.json"))
-        self.assertEqual((code, err), (0, ""), out)
-        self.assertEqual(out.splitlines()[0], "PASS  sub/x.json")
+                for arg, want in (
+                    ("d/link/..", ["PASS  d/link/../other.json", rejected,
+                                   "PASS  d/link/../x.json", rejected]),
+                    ("d/link/../", ["PASS  d/link/../other.json", rejected,
+                                    "PASS  d/link/../x.json", rejected]),
+                    (f"{wd}/d/link/..", [f"PASS  {wd}/d/link/../other.json", rejected,
+                                         f"PASS  {wd}/d/link/../x.json", rejected]),
+                    (f"{wd}/d/link/../x.json", [f"PASS  {wd}/d/link/../x.json", rejected]),
+                    ("r/link/..", ["PASS  r/link/../fixtures/x.json", "observed: ACCEPT"]),
+                    ("d/../d", ["PASS  d/x.json", "observed: ACCEPT"]),
+                ):
+                    with self.subTest(arg=arg):
+                        code, out, err = _run_main(arg)
+                        self.assertEqual((code, err), (0, ""), out)
+                        self.assertEqual(_verdict_lines(out), want)
 
 
 class JCSVectorsThroughVerifierProjection(unittest.TestCase):

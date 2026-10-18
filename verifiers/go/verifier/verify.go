@@ -1004,12 +1004,13 @@ func expandFixturePaths(args []string) ([]string, error) {
 		}
 		switch {
 		case info.IsDir():
+			join := dirJoin(a, info)
 			fixDir := a
 			// Allow passing the repo root: look in $arg/fixtures when it is a
 			// directory. A file named fixtures leaves $arg an ordinary
 			// directory, walked for its own *.json.
-			if fi, err := os.Stat(filepath.Join(a, "fixtures")); err == nil && fi.IsDir() { //nolint:gosec // G703: operator-supplied CLI arg
-				fixDir = filepath.Join(a, "fixtures")
+			if fi, err := os.Stat(join(a, "fixtures")); err == nil && fi.IsDir() { //nolint:gosec // G703: operator-supplied CLI arg
+				fixDir = join(a, "fixtures")
 			}
 			entries, err := os.ReadDir(fixDir)
 			if err != nil {
@@ -1017,7 +1018,7 @@ func expandFixturePaths(args []string) ([]string, error) {
 			}
 			for _, e := range entries {
 				if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
-					out = append(out, filepath.Join(fixDir, e.Name()))
+					out = append(out, join(fixDir, e.Name()))
 				}
 			}
 		default:
@@ -1026,6 +1027,29 @@ func expandFixturePaths(args []string) ([]string, error) {
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// dirJoin returns how expandFixturePaths joins a name onto the directory
+// argument a, or onto its fixtures directory, info being os.Stat(a): as
+// filepath.Join joins them when a, cleaned as filepath.Clean cleans it,
+// names the directory a names, and onto the directory as spelled, with one
+// separator between, when it does not. The joined path is both the file
+// read and the name the report gives it. Clean removes a ".." with the
+// element before it, and the operating system resolves that element before
+// it applies the "..", so where the element is a symbolic link the two name
+// different directories: with d/link a link to elsewhere/deep, d/link/..
+// lists elsewhere, and its other.json, joined as d/other.json, named a file
+// of d. The Python verifier joins the names the same way.
+func dirJoin(a string, info fs.FileInfo) func(dir, name string) string {
+	if c, err := os.Stat(filepath.Clean(a)); err == nil && os.SameFile(info, c) {
+		return func(dir, name string) string { return filepath.Join(dir, name) }
+	}
+	return func(dir, name string) string {
+		if os.IsPathSeparator(dir[len(dir)-1]) {
+			return dir + name
+		}
+		return dir + string(filepath.Separator) + name
+	}
 }
 
 // relPath is the name the report gives the fixture at p: the path relative
@@ -1042,6 +1066,12 @@ func expandFixturePaths(args []string) ([]string, error) {
 // and the same file through the link's target was written whole, the
 // reverse of what the Python verifier wrote. Where either cannot be
 // resolved they are compared as written.
+//
+// The directory holding p is resolved as p spells it, each ".." applied
+// after the element before it is resolved, as the operating system applies
+// it when it reads p. filepath.Dir cleaned it first, removing a ".." with
+// a link before it, so $PWD/d/link/../x.json, with d/link a link to
+// elsewhere/deep, was named d/x.json while elsewhere/x.json was read.
 func relPath(p string) string {
 	if !filepath.IsAbs(p) {
 		return p
@@ -1052,8 +1082,9 @@ func relPath(p string) string {
 	}
 	base, target := wd, p
 	if w, err := filepath.EvalSymlinks(wd); err == nil {
-		if d, err := filepath.EvalSymlinks(filepath.Dir(p)); err == nil {
-			base, target = w, filepath.Join(d, filepath.Base(p))
+		dir, file := filepath.Split(p)
+		if d, err := filepath.EvalSymlinks(dir); err == nil {
+			base, target = w, filepath.Join(d, file)
 		}
 	}
 	if rel, err := filepath.Rel(base, target); err == nil && filepath.IsLocal(rel) {

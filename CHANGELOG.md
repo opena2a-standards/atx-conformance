@@ -681,6 +681,43 @@ they should not.
 
 ### Fixed
 
+- Both reference verifiers read and name the file the operating system
+  resolves a path to when a `..` follows a symbolic link (#231). A
+  directory argument was listed by the operating system, which resolves the
+  link before it applies the `..`, and each file listed was joined onto the
+  argument as Go's `filepath.Join` joins it, which removes the `..` with the
+  link. With `d/link` a link to `elsewhere/deep` and `elsewhere/other.json`
+  a copy of `fixtures/expired.json`, `atx-verify d/link/..` and
+  `python3 verify.py d/link/..` wrote `FAIL  d/other.json` with a load
+  error, exit 1; both write `PASS  d/link/../other.json`, exit 0, having
+  verified that copy. Where a directory argument, cleaned as
+  `filepath.Clean` cleans it, names another directory than it does, its
+  files are named and read as the argument spells it, then a `/` and the
+  file name, and its `fixtures` entry is looked up there: `r/link/..`,
+  which resolves to a directory holding `fixtures/`, was walked for its own
+  `*.json` and is walked for `fixtures/*.json`. A directory argument that
+  names the same directory cleaned keeps the names `filepath.Join` gives:
+  `fixfile/../fixfile` names `fixfile/x.json`. The directory of an absolute
+  path is resolved as the path spells it, each `..` applied after the
+  element before it is resolved: with `elsewhere/x.json` a copy of
+  `fixtures/expired.json`, `$PWD/d/link/../x.json` was named `d/x.json`
+  while `elsewhere/x.json` was read, and is named by its whole path, since
+  `elsewhere` is outside the working directory. Both verifiers removed a
+  `..` from that directory with the element before it before resolving its
+  links, as `filepath.Dir` removes it, which the #224 entry below says of
+  the Python verifier; each now resolves the directory as spelled.
+  `TestDotDotAfterALinkIsAppliedWhereTheLinkLeads` and the Python
+  verifier's `test_dotdot_after_a_link_is_applied_where_the_link_leads`
+  pin it; the latter replaces
+  `test_directory_is_cleaned_before_its_links_are_resolved`, which held the
+  name `sub/x.json` for `$PWD/sub/link/../x.json`. The "Arguments" section
+  of `docs/running-the-verifiers.md` says how such a directory's files are
+  named. The argument table of `scripts/parity/parity.py` runs 22 argument
+  lists, from 21, adding `hop/link/..`; with this commit's Go verifier and
+  the Python verifier of the previous commit, the gate fails on that case
+  alone. The self-test adds one case (40 cases green, from 39): a verifier
+  that names the files of `hop/link/..` with the `..` removed is reported
+  as a divergence. No fixture changes.
 - `scripts/check_readme_counts.py` reads CHANGELOG.md's top section, its
   first `## ` section whatever the heading says, for the `go run` commands
   it names as README.md's first command, where it read the section headed
