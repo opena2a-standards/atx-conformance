@@ -25,7 +25,7 @@ and stability" says they should not.
   against sibling data built from the rows, so it reads no repository, and
   when gh is not logged in the plain run says so on one line naming
   `gh auth login` and `GH_TOKEN`.
-- `go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest`
+- `go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@latest`
   runs the Go verifier with nothing cloned, and is README.md's first
   command. With no argument the verifier walks the fixture set built into
   the module version `go run` fetched, `fixtures/*.json` of that commit,
@@ -33,15 +33,15 @@ and stability" says they should not.
   where it wrote `usage: verify <fixture.json|dir>...` and exited 2. For
   that, `go.mod` moved from `verifiers/go` to the repository root and
   declares the module `github.com/opena2a-standards/atx-conformance`, the
-  repository's path: declared as
-  `github.com/opena2a-org/atx-conformance/verifiers/go`, the command above
-  fetched the newest commit and stopped at `module declares its path as:
-  github.com/opena2a-org/atx-conformance/verifiers/go but was required as:
-  github.com/opena2a-standards/atx-conformance/verifiers/go`. `fixtures.go`
-  at the root embeds `fixtures/*.json`, `verifiers/go` is the module's main
-  package, and `cd verifiers/go && go run . ../../fixtures` writes the 93
-  lines it wrote before. `-h` and `--help` write the usage lines to stdout
-  and exit 0. `TestEmbeddedFixturesAreTheFixtureDirectory` holds the
+  repository's path, where it declared
+  `github.com/opena2a-org/atx-conformance/verifiers/go`. `go run
+  github.com/opena2a-standards/atx-conformance/verifiers/go@latest` exits 1
+  through the default module proxy, which answers it with the former
+  nested module it stored for `d8887e6`. `fixtures.go` at the root embeds
+  `fixtures/*.json`, `cmd/atx-verify` and `verifiers/go` are the module's
+  main packages, and `cd verifiers/go && go run . ../../fixtures` writes
+  the 93 lines it wrote before. `-h` and `--help` write the usage lines to
+  stdout and exit 0. `TestEmbeddedFixturesAreTheFixtureDirectory` holds the
   embedded set to `fixtures/*.json` on disk, name by name and byte for
   byte, and `TestNoArgumentVerifiesEmbeddedFixtures` holds the no-argument
   report to the report for the `fixtures/` directory with each path
@@ -619,6 +619,25 @@ and stability" says they should not.
   green, from 31): a verifier that reads each of those argument lists as a
   `pathlib.Path` reads it is reported as a divergence. `test_verify.py` adds
   `PathSpelling`. No fixture changes.
+- The Added entry on running the Go verifier with nothing cloned names
+  `go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@latest`
+  as README.md's first command; through the default module proxy it
+  printed `summary: 25 pass, 0 fail (25 fixtures)` and exited 0 (#222). The
+  entry named `go run
+  github.com/opena2a-standards/atx-conformance/verifiers/go@latest`, which
+  exits 1 there, and called `verifiers/go` the module's main package, while
+  `cmd/atx-verify` is one too. `scripts/check_readme_counts.py` fails when
+  a sentence of CHANGELOG.md's Unreleased section names as README.md's
+  first command a `go run` command other than the first line of README.md's
+  first fenced block, with or without its `cd <dir> && ` prefix and with
+  `<module>` read as the module `go.mod` declares. A command holding another
+  placeholder, such as `go run <import path>@<version>`, and the sections
+  below Unreleased are not held to it. On the CHANGELOG.md of `20799e3` it
+  names that entry's sentence and exits 1. The self-test adds fourteen
+  cases (242 altered sites, from 228), among them the sentence this entry
+  corrects, the same sentence in a section below Unreleased, and a
+  README.md opening with `cd verifiers/go && go run . ../../fixtures`, a
+  code span holding `. ` that the check reads whole. No fixture changes.
 - The Python verifier verifies a fixture path named twice twice, as the Go
   verifier does (#218): `python verify.py ../../fixtures/baseline-valid.json
   ../../fixtures/baseline-valid.json` wrote one PASS block and

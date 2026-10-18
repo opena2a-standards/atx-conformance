@@ -203,6 +203,18 @@ repository, is not held to it, and the closing line says so. A README that
 fails it is reported as this check's failure: the self-test's `@latest`
 cases run on the README less each fenced line the check fails.
 
+It also holds what CHANGELOG.md's Unreleased section names as README.md's
+first command to README.md. That section said `go run
+<module>/verifiers/go@latest` runs the Go verifier with nothing cloned and is
+README.md's first command after README.md came to open with `go run
+<module>/cmd/atx-verify@latest`, and the older command exits 1 through the
+module proxy. Each `go run` code span in a sentence of that section that
+names README.md's first command must be the first line of README.md's first
+fenced block, with or without its `cd <dir> && ` prefix; `<module>` reads as
+the module go.mod declares, and a span with another placeholder (`go run
+<import path>@<version>`) names a form of command and is not held. The
+sections below Unreleased record past commits and are not held to it.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
 declares, each signature-verification Scope row that claims a set of fixtures
@@ -217,7 +229,9 @@ to module names alone), each sentence offering `@<commit>` names its first
 commit (the first with the module's go.mod at the root, where the history
 can be read), each fenced `go run <module>/<dir>@latest` command names a
 package under no directory that held a go.mod in HEAD's history (where the
-history can be read), no Python dependency site calls the Python verifier
+history can be read), each `go run` command CHANGELOG.md's Unreleased section
+names as README.md's first command is the one README.md opens with, no
+Python dependency site calls the Python verifier
 zero-dependency while requirements.txt names a package, each jcs-vectors
 file describing canonicalize cites RFC 8785 Appendix G, none calls an RFC
 8785 library a reference implementation or port, neither description of what
@@ -833,6 +847,106 @@ def latest_run_failures(readme, go_mod, nested):
                     f"history; the module proxy can answer "
                     f"`{module}/{directory}@latest` with that module, and go run "
                     f"exits 1 when its {GO_MOD_NAME} declares another path")
+    return failures
+
+
+# CHANGELOG.md's Unreleased section still said `go run
+# <module>/verifiers/go@latest` "runs the Go verifier with nothing cloned, and
+# is README.md's first command" once README.md opened with `go run
+# <module>/cmd/atx-verify@latest`, and the older command exits 1 through the
+# module proxy (LATEST_SITE above). Each `go run` command a sentence of that
+# section names as README.md's first command must be the one README.md opens
+# with. The sections below it record past commits and are not held to it.
+CHANGELOG = ROOT / "CHANGELOG.md"
+CHANGELOG_NAME = "CHANGELOG.md"
+UNRELEASED = "## Unreleased"
+FIRST_COMMAND_CLAIM = re.compile(r"\bREADME(?:\.md)?['’]s\s+first\s+command\b")
+CODE_SPAN = re.compile(r"`([^`]*)`")
+# A code span holding a `go run` command, with or without a `cd <dir> && `
+# prefix. One holding a placeholder other than <module>, such as `go run
+# <import path>@<version>`, names a form of command and is not held.
+GO_RUN_COMMAND = re.compile(r"(?:cd [^\s&;|]+ && )?go run \S.*")
+CD_PREFIX = re.compile(r"cd [^\s&;|]+ && (.+)")
+PLACEHOLDER = re.compile(r"<(?!module>)[^<>\s][^<>]*>")
+# A sentence ends at `.`, `!` or `?` and a blank outside a code span: a span
+# is matched whole and passed over, so `go run . ../../fixtures` is not split.
+SENTENCE_BREAK = re.compile(r"`[^`]*`|(?<=[.!?])\s+")
+# A paragraph ends at a blank line, and a list item where the next one opens.
+ITEM_BREAK = re.compile(r"\n[ \t]*\n|\n(?=[ \t]*[-*+][ \t])")
+FIRST_COMMAND_SITE = f"{CHANGELOG_NAME} Unreleased sentence"
+# The sentence the check was written for, as it was wrapped. The check must
+# keep failing it while README.md opens with another command.
+RETRACTED_FIRST_COMMAND = (
+    "- `go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest`\n"
+    "  runs the Go verifier with nothing cloned, and is README.md's first\n"
+    "  command.")
+
+
+def first_command(front_page):
+    """The command README.md, read alone, opens with: the first line of its
+    first fenced block that is not blank, or None when there is none."""
+    block = FENCED.search(front_page or "")
+    lines = block.group(1).split("\n") if block else []
+    return next((line.strip() for line in lines if line.strip()), None)
+
+
+def unreleased_sentences(changelog):
+    """Each sentence of the section of `changelog` under UNRELEASED, up to the
+    next heading of level 1 or 2, on one line; none when it has no such
+    section. A paragraph or list item never shares a sentence with the next,
+    and a code span is never split."""
+    lines = changelog.split("\n")
+    at = next((i for i, line in enumerate(lines) if line.rstrip() == UNRELEASED), None)
+    if at is None:
+        return []
+    body = []
+    for line in lines[at + 1:]:
+        if re.match(r"#{1,2} ", line):
+            break
+        body.append(line)
+    sentences = []
+    for item in ITEM_BREAK.split("\n".join(body)):
+        flat = " ".join(item.split())
+        start = 0
+        for found in SENTENCE_BREAK.finditer(flat):
+            if not found.group(0).startswith("`"):
+                sentences.append(flat[start:found.start()])
+                start = found.end()
+        if flat[start:]:
+            sentences.append(flat[start:])
+    return sentences
+
+
+def changelog_first_command_failures(changelog, front_page, go_mod):
+    """Each `go run` code span in a sentence of CHANGELOG.md's Unreleased
+    section that names README.md's first command must be the command
+    first_command() reads from README.md, with or without its `cd <dir> && `
+    prefix; `<module>` in a span reads as the module go.mod declares, and a
+    span holding another placeholder is passed over. `changelog` is None when
+    the file is missing."""
+    if changelog is None:
+        return [f"{CHANGELOG_NAME} is missing; the commands its Unreleased section "
+                f"names as README.md's first command cannot be checked"]
+    first = first_command(front_page)
+    named = set()
+    if first is not None:
+        bare = CD_PREFIX.fullmatch(first)
+        named = {first, bare.group(1)} if bare else {first}
+    module = GO_MODULE.search(go_mod or "")
+    failures = []
+    for sentence in unreleased_sentences(changelog):
+        if not FIRST_COMMAND_CLAIM.search(sentence):
+            continue
+        for span in CODE_SPAN.findall(sentence):
+            if not GO_RUN_COMMAND.fullmatch(span) or PLACEHOLDER.search(span):
+                continue
+            command = span.replace("<module>", module.group(1)) if module else span
+            if command not in named:
+                failures.append(
+                    f"{FIRST_COMMAND_SITE} names `{span}` as README.md's first "
+                    f"command, but README.md opens with "
+                    + (f"`{first}`" if first is not None else "no fenced block")
+                    + f": {sentence!r}")
     return failures
 
 
@@ -2431,7 +2545,7 @@ Tree = collections.namedtuple("Tree", (
     "key_vectors used_key_ids versions go_mod verify_go py_requirements "
     "py_dependency_texts jcs_sites tbs_sites tbs_canonical jcs_readme "
     "gate_sites gate_libraries profile outcomes suites scripts front_page "
-    "module_start nested_modules"))
+    "module_start nested_modules changelog"))
 
 # One check tree_failures() runs: its name, the call (`run(tree)` returns
 # failures) and the alteration the self-test makes to prove the call is still
@@ -2885,6 +2999,107 @@ def _failing_latest_run_cases(tree):
         ok, _, detail = _wiring_case(tree._replace(readme=readme, nested_modules=held),
                                      entry)
         cases.append((ok, f"the {entry.name} wiring case over {label}", detail))
+    return cases
+
+
+# A command no README.md here opens with.
+INVENTED_FIRST_COMMAND = "go run example.invalid/not-the-first-command@latest"
+
+
+def _unreleased_with(changelog, text):
+    """`changelog` with `text` as a paragraph opening its Unreleased section,
+    which is added at the top when it has none."""
+    lines = changelog.split("\n")
+    at = next((i for i, line in enumerate(lines) if line.rstrip() == UNRELEASED), None)
+    if at is None:
+        return f"{UNRELEASED}\n\n{text}\n\n{changelog}"
+    return "\n".join(lines[:at + 1] + ["", text, ""] + lines[at + 1:])
+
+
+def _changelog_first_command_cases(tree):
+    """Sentences added to the Unreleased section of the published
+    CHANGELOG.md. Against the published README.md, the retracted sentence and
+    one naming an invented command as README's first command each add a
+    failure naming the command; one naming README.md's first command adds
+    none, nor does it in the list item after one naming another command with
+    no closing period, and it adds a failure once README.md opens with another
+    command. The retracted sentence below the Unreleased section adds none,
+    nor does a form of command (`go run <import path>@<version>`). Against a
+    README.md opening with `cd verifiers/go && go run . ../../fixtures`, that
+    command with or without its `cd` prefix adds none, and the command with
+    another path adds a failure naming the span whole; `<module>` reads as the
+    module go.mod declares. A missing CHANGELOG.md is reported. Each case
+    counts only the failures the text it adds brings, so over the
+    CHANGELOG.md of 20799e3, which the check fails, each case stays green."""
+    changelog = tree.changelog or ""
+    first = first_command(tree.front_page)
+    if first is None:
+        return [(False, f"{FIRST_COMMAND_SITE} cases", "README.md has no fenced block")]
+    cases = []
+
+    def case(label, text, want, page=tree.front_page, go_mod=tree.go_mod):
+        before = collections.Counter(
+            changelog_first_command_failures(changelog, page, go_mod))
+        after = collections.Counter(changelog_first_command_failures(text, page, go_mod))
+        new = list((after - before).elements())
+        if want is None:
+            cases.append((not new, label, f"it adds {new}"))
+        else:
+            want = f"names `{want}` as README.md's first command"
+            cases.append((any(f.startswith(FIRST_COMMAND_SITE) and want in f for f in new),
+                          label, f"expected a {FIRST_COMMAND_SITE} failure that "
+                                 f"{want}, got {new}"))
+
+    def opening(sentence):
+        return _unreleased_with(changelog, sentence)
+
+    retracted = CODE_SPAN.search(RETRACTED_FIRST_COMMAND).group(1)
+    case(f"CHANGELOG.md restoring the retracted sentence on `{retracted}`",
+         opening(RETRACTED_FIRST_COMMAND), retracted)
+    case(f"CHANGELOG.md naming `{INVENTED_FIRST_COMMAND}` as README's first command",
+         opening(f"`{INVENTED_FIRST_COMMAND}` is README's first command."),
+         INVENTED_FIRST_COMMAND)
+    holds = f"README.md's first command is `{first}`."
+    case(f"CHANGELOG.md naming `{first}` as README.md's first command",
+         opening(holds), None)
+    case("CHANGELOG.md naming README.md's first command in the list item after "
+         "one naming another command with no closing period",
+         opening(f"- `{INVENTED_FIRST_COMMAND}` exits 1\n- {holds}"), None)
+    block = FENCED.search(tree.front_page)
+    other = (tree.front_page[:block.start(1)]
+             + block.group(1).replace(first, INVENTED_FIRST_COMMAND, 1)
+             + tree.front_page[block.end(1):])
+    case(f"README.md opening with `{INVENTED_FIRST_COMMAND}` under a CHANGELOG.md "
+         f"naming `{first}` as its first command", opening(holds), first, page=other)
+    case("the retracted sentence in a CHANGELOG.md section below Unreleased",
+         f"{changelog}\n## 0000000: a past commit\n\n{RETRACTED_FIRST_COMMAND}\n", None)
+    case("a form of command, `go run <import path>@<version>`, in a sentence on "
+         "README.md's first command",
+         opening("`scripts/capture_go_verifier.py` reads README.md's first command and "
+                 "runs `go run <import path>@<version>` as `go run ./<dir>`."), None)
+    cd_page = "```bash\ncd verifiers/go && go run . ../../fixtures\n```\n"
+    for label, sentence, want in (
+            ("that command",
+             "README.md's first command is `cd verifiers/go && go run . ../../fixtures`.",
+             None),
+            ("`go run . ../../fixtures` in `verifiers/go`",
+             "README.md's first command, `go run . ../../fixtures` in `verifiers/go`, "
+             "writes 93 lines.", None),
+            ("`cd verifiers/go && go run . ../../other`, a span holding `. `",
+             "README.md's first command is `cd verifiers/go && go run . ../../other`.",
+             "cd verifiers/go && go run . ../../other")):
+        case(f"README.md opening with `cd verifiers/go && go run . ../../fixtures`: "
+             f"CHANGELOG.md naming {label} as its first command", opening(sentence), want,
+             page=cd_page)
+    case("CHANGELOG.md naming `go run <module>/cmd/x@latest` as README.md's first "
+         "command, which is `go run example.invalid/m/cmd/x@latest` in module "
+         "example.invalid/m",
+         opening("README.md's first command is `go run <module>/cmd/x@latest`."), None,
+         page="```bash\ngo run example.invalid/m/cmd/x@latest\n```\n",
+         go_mod="module example.invalid/m\n")
+    missing = changelog_first_command_failures(None, tree.front_page, tree.go_mod)
+    cases.append((any(f"{CHANGELOG_NAME} is missing" in f for f in missing),
+                  "CHANGELOG.md missing", f"got {missing}"))
     return cases
 
 
@@ -3575,6 +3790,13 @@ def _wire_latest_run(tree):
             f"{GO_MOD_NAME} is in HEAD's history")
 
 
+def _wire_changelog_first_command(tree):
+    return (f"names `{INVENTED_FIRST_COMMAND}` as README.md's first command",
+            {"changelog": _unreleased_with(
+                tree.changelog or "",
+                f"`{INVENTED_FIRST_COMMAND}` is README.md's first command.")})
+
+
 def _wire_python_dependency(tree):
     site = PY_DEPENDENCY_SITES[0]
     if tree.py_dependency_texts.get(site) is None:
@@ -3671,6 +3893,9 @@ CHECKS = (
     Check("`@latest` package path",
           lambda t: latest_run_failures(t.readme, t.go_mod, t.nested_modules),
           _wire_latest_run),
+    Check("CHANGELOG.md first command",
+          lambda t: changelog_first_command_failures(t.changelog, t.front_page, t.go_mod),
+          _wire_changelog_first_command),
     Check("Python dependency",
           lambda t: python_dependency_failures(t.py_requirements, t.py_dependency_texts),
           _wire_python_dependency),
@@ -3912,6 +4137,7 @@ def self_test(tree, verbose):
     cases.extend(_module_start_cases(readme))
     cases.extend(_latest_run_cases(readme, tree.go_mod, tree.nested_modules))
     cases.extend(_failing_latest_run_cases(tree))
+    cases.extend(_changelog_first_command_cases(tree))
     cases.extend(_python_dependency_cases(tree.py_requirements, tree.py_dependency_texts))
     cases.extend(_jcs_library_cases(tree.jcs_sites))
     cases.extend(_outside_code_cases(tree.gate_sites, tree.gate_libraries))
@@ -4129,6 +4355,7 @@ def main():
         front_page=README.read_text(encoding="utf-8"),
         module_start=first_module_commit(ROOT, go_mod),
         nested_modules=nested_module_dirs(ROOT),
+        changelog=CHANGELOG.read_text(encoding="utf-8") if CHANGELOG.exists() else None,
     )
 
     failed, total = self_test(tree, only_self_test)
@@ -4153,6 +4380,7 @@ def main():
     if failed:
         return 1
 
+    first = first_command(tree.front_page)
     print(f"README and COSIGNERS counts match the tree: {len(fixtures)} fixtures "
           f"(each with one fixture-table row), {tree.vectors} JCS vectors, all stated "
           f"as passing; README names the MANIFEST.sha256 byte check; "
@@ -4176,6 +4404,11 @@ def main():
              if tree.nested_modules is not None else
              f"fenced `go run <module>/<dir>@latest` commands not held to the "
              f"history: none could be read in this checkout; ")
+          + (f"each `go run` command the {CHANGELOG_NAME} Unreleased section "
+             f"names as README.md's first command is `{first}`; "
+             if first is not None else
+             f"the {CHANGELOG_NAME} Unreleased section names no `go run` command "
+             f"as README.md's first command; ")
           + f"no jcs-vectors README or RFC 8785 serializer docstring calls the "
           f"Python verifier zero-dependency; "
           f"each jcs-vectors file describing canonicalize cites "
