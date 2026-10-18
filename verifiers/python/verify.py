@@ -98,8 +98,9 @@ Usage:
 Exit 0 iff every fixture's observed result matches expected.verifyResult, and
 after --help, -h or --version. A file with no expected.verifyResult of ACCEPT
 or REJECT is not a fixture: it fails to load and counts as a fail, so the run
-exits 1. Exit 2 on a usage error (no argument, or an unknown option, which is
-named above the usage lines), a path that does not exist, or no fixture files.
+exits 1. Exit 2 on a usage error (no argument, an empty one, or an unknown
+option, which is named above the usage lines), a path that does not exist, or
+no fixture files.
 
 The signatures line writes each boolean as true or false, and a rejection
 reason that quotes the credential's atcVersion or a duplicate member name
@@ -1364,6 +1365,9 @@ def _version_line() -> str:
 
 
 def main(argv: list[str]) -> int:
+    # The Go reference verifier reads its arguments the same way;
+    # scripts/parity/parity.py runs both on each argument list of its
+    # ARGUMENT_CASES.
     args = argv[1:]
     if not args:
         sys.stderr.write(_USAGE)
@@ -1381,6 +1385,11 @@ def main(argv: list[str]) -> int:
     if "--version" in args:
         sys.stdout.write(_version_line())
         return 0
+    # Path("") is the current directory, which expand_paths would walk: an
+    # empty argument names no path, as it names none in the Go verifier.
+    if "" in args:
+        sys.stderr.write("error: an empty argument names no fixture file or directory\n")
+        return 2
     try:
         paths = expand_paths(args)
     except OSError as exc:

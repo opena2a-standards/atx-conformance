@@ -12,6 +12,20 @@ not a fixture, one with no `expected.verifyResult` of `ACCEPT` or `REJECT`,
 is a load error: both verifiers print `FAIL  <file>  (load error: <reason>)`
 for it, count it as a fail and exit 1.
 
+## Arguments
+
+Both verifiers read their arguments the same way, options first, wherever
+they stand. `-h` or `--help` prints the usage and exits 0, and nothing else
+runs. Any other argument that starts with `-`, `-` alone and `--version`
+aside, is an unknown option, named on stderr above the usage, with exit 2;
+`--version` prints one version line and exits 0. Then an empty argument is a
+usage error, `error: an empty argument names no fixture file or directory`
+with exit 2, and nothing is verified. A directory is walked for
+`fixtures/*.json` when its `fixtures` entry is a directory, so a repository
+root can be passed, and for its own `*.json` otherwise, as when `fixtures` is
+a file. The parity gate runs both verifiers on each of these shapes
+([continuous verification](continuous-verification.md)).
+
 ## Dependencies
 
 ### Go (full hybrid Ed25519 plus ML-DSA-65)

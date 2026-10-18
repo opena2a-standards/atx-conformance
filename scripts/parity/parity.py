@@ -27,14 +27,28 @@ mismatch naming every fixture it never reached, and has one line above the
 per-fixture table in place of a MISSING cell on every row. The --json report
 names it in `unreported`.
 
+After the fixture table the gate runs the argument table, ARGUMENT_CASES:
+argument lists no fixture can carry (an empty argument, -h and --help at
+several positions, a directory whose `fixtures` entry is a file, a path that
+does not exist, a directory with no *.json), each run on both verifiers from
+a scratch directory holding the paths it names. Both must exit with the same
+code and write the same first stderr line and the same verdict lines (each
+PASS or FAIL line, its observed verdict and category, the summary), once the
+program name each verifier calls itself (`verify`, `verify.py`) is
+stripped; a case they differ on is a divergence. The Go verifier runs there
+as a binary built for the table, since `go run` reports a program's exit 2
+as its own exit 1. The --json report holds the table under `arguments`.
+
 Every run starts with the self-test, which proves on stand-in verifiers that
 the gate reports a disagreement, a skipped fixture, a failed verifier and a
 verifier that exits 0 without reporting any fixture, that a fixtures
 directory holding no *.json fails, that the --json report names a verifier
-that exited before reporting any fixture, that --json is refused with
---self-test by a usage message the self-test holds word for word, so
-rewording that message turns the self-test red, and that an unknown
-argument is named on the line above the usage.
+that exited before reporting any fixture, that an argument case one
+verifier answers with another exit code, first stderr line or verdict lines
+fails the gate, that --json is refused with --self-test by a usage message
+the self-test holds word for word, so rewording that message turns the
+self-test red, and that an unknown argument is named on the line above the
+usage.
 
 Usage:
     python3 scripts/parity/parity.py [--json parity-report.json]
@@ -56,9 +70,11 @@ import contextlib
 import io
 import json
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -90,6 +106,23 @@ VERIFIERS = {
 BLOCK_RE = re.compile(r"^(PASS|FAIL)\s+(\S+)")
 # `observed: ACCEPT` or `observed: REJECT[CATEGORY: reason]`
 OBSERVED_RE = re.compile(r"^\s*observed:\s+(ACCEPT|REJECT\[([A-Z_]+))")
+
+# The argument table: (case, arguments). Each list runs from a scratch
+# directory _argument_scratch lays out: fixfile/ holds a file named fixtures
+# and ARGUMENT_FIXTURE as x.json, nojson/ holds no *.json, and nothing there
+# is named missing.
+ARGUMENT_CASES: list[tuple[str, list[str]]] = [
+    ("an empty argument", [""]),
+    ("--help first", ["--help", "fixfile"]),
+    ("--help last", ["fixfile", "--help"]),
+    ("--help between two paths", ["fixfile/x.json", "--help", "fixfile"]),
+    ("-h alone", ["-h"]),
+    ("a fixtures entry that is a file", ["fixfile"]),
+    ("a path that does not exist", ["missing"]),
+    ("a directory with no *.json", ["nojson"]),
+]
+# The shipped fixture the argument table copies to fixfile/x.json.
+ARGUMENT_FIXTURE = "baseline-valid.json"
 
 
 def run_verifier(name: str, spec: dict) -> tuple[int, dict[str, dict], str]:
@@ -206,20 +239,152 @@ def render_table(
 def build_report(
     table: dict[str, dict], exit_codes: dict[str, int],
     divergences: list[str], unreported: list[str],
+    arguments: list[dict] | None = None,
 ) -> dict:
     """Return the --json parity report.
 
     `unreported` names each verifier that exited before reporting any
     fixture, as the line above the table does, so a consumer need not infer
     it from a non-zero exit code and a null cell on every fixture.
+    `arguments` is the argument table, one row per case in ARGUMENT_CASES
+    order, empty when it did not run.
     """
     return {
         "fixtures": table,
+        "arguments": arguments or [],
         "exitCodes": exit_codes,
         "unreported": unreported,
         "divergences": divergences,
         "agree": not divergences,
     }
+
+
+# --- argument table ----------------------------------------------------------
+
+class BuildError(Exception):
+    """A verifier the argument table runs could not be built."""
+
+
+def argument_verifiers(bin_dir: Path) -> dict[str, dict]:
+    """The verifiers of the argument table: the argv a case's arguments
+    follow, and the program name the verifier calls itself.
+
+    The Go verifier is built into bin_dir and run as that binary: `go run`
+    reports a program's exit 2 as its own exit 1, and adds an
+    `exit status 2` line to stderr.
+    """
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    binary = bin_dir / "verify"
+    build = subprocess.run(
+        ["go", "build", "-o", str(binary), "."],
+        cwd=VERIFIERS["go"]["cwd"], capture_output=True, text=True,
+    )
+    if build.returncode != 0:
+        raise BuildError(f"go build exited {build.returncode}: {build.stderr.strip()[-2000:]}")
+    return {
+        "go": {"argv": [str(binary)], "program": "verify"},
+        "python": {
+            "argv": [sys.executable, str(VERIFIERS["python"]["cwd"] / "verify.py")],
+            "program": "verify.py",
+        },
+    }
+
+
+def _argument_scratch(scratch: Path, fixture: Path) -> None:
+    """Lay out under scratch the paths ARGUMENT_CASES name."""
+    (scratch / "fixfile").mkdir(parents=True)
+    (scratch / "fixfile" / "fixtures").write_text("a file, not a directory\n")
+    (scratch / "fixfile" / "x.json").write_bytes(fixture.read_bytes())
+    (scratch / "nojson").mkdir()
+    (scratch / "nojson" / "README.md").write_text("not a fixture\n")
+
+
+def _without_program(line: str, program: str) -> str:
+    """line without the program name it opens with or names after `usage: `,
+    so the two verifiers' lines compare on their wording alone."""
+    return re.sub(rf"^(usage:\s+)?{re.escape(program)}(?![\w.])", r"\1", line)
+
+
+def verdict_lines(stdout: str) -> list[str]:
+    """The report lines that carry a verdict: each `PASS  <path>` or
+    `FAIL  <path>` line, its observed verdict and category, and the summary.
+    The rest of a block is each verifier's own wording."""
+    lines: list[str] = []
+    for line in stdout.splitlines():
+        if m := BLOCK_RE.match(line):
+            lines.append(f"{m.group(1)}  {m.group(2)}")
+        elif m := OBSERVED_RE.match(line):
+            lines.append(f"observed: {m.group(1)}" + ("]" if m.group(2) else ""))
+        elif line.startswith("summary:"):
+            lines.append(line)
+    return lines
+
+
+def run_case(spec: dict, args: list[str], cwd: Path) -> dict:
+    """One verifier's outcome on one argument list: its exit code, first
+    stderr line and verdict lines, without its program name."""
+    proc = subprocess.run(spec["argv"] + args, cwd=cwd, capture_output=True, text=True)
+    stderr = proc.stderr.splitlines()
+    return {
+        "exitCode": proc.returncode,
+        "stderr": _without_program(stderr[0], spec["program"]) if stderr else "",
+        "verdicts": [_without_program(v, spec["program"]) for v in verdict_lines(proc.stdout)],
+    }
+
+
+def _outcome(outcome: dict) -> str:
+    text = f"exit {outcome['exitCode']}"
+    if outcome["stderr"]:
+        text += f", stderr {outcome['stderr']!r}"
+    if outcome["verdicts"]:
+        text += f", verdict lines {outcome['verdicts']!r}"
+    return text
+
+
+def _outcomes(outcomes: dict[str, dict]) -> str:
+    return "; ".join(f"{name} {_outcome(o)}" for name, o in outcomes.items())
+
+
+def compare_arguments(
+    programs: dict[str, dict], fixture: Path, scratch: Path,
+    cases: list[tuple[str, list[str]]] = ARGUMENT_CASES,
+) -> tuple[list[dict], list[str]]:
+    """Run every case of cases on every verifier in programs, from scratch,
+    with fixture as fixfile/x.json.
+
+    Return (rows, divergences): a row per case holding each verifier's
+    outcome, and a divergence naming each case the outcomes differ on.
+    """
+    _argument_scratch(scratch, fixture)
+    rows: list[dict] = []
+    divergences: list[str] = []
+    for case, args in cases:
+        outcomes = {name: run_case(spec, args, scratch) for name, spec in programs.items()}
+        agree = len({json.dumps(o, sort_keys=True) for o in outcomes.values()}) == 1
+        rows.append({"case": case, "args": args, "agree": agree, "outcomes": outcomes})
+        if not agree:
+            divergences.append(
+                f'argument case "{case}" ({shlex.join(args)}): {_outcomes(outcomes)}')
+    return rows, divergences
+
+
+def _argument_row(case: str, args: list[str], text: str) -> str:
+    return f"  {case:32s} {shlex.join(args):30s} {text}"
+
+
+def render_arguments(rows: list[dict]) -> list[str]:
+    """Return the lines of the argument table: per case its arguments and
+    the outcome the verifiers share, or each verifier's where they differ."""
+    if not rows:
+        return ["arguments: not run (see PARITY: FAIL below)"]
+    lines = [f"arguments: {len(rows)} cases x {len(rows[0]['outcomes'])} verifiers"]
+    for row in rows:
+        if row["agree"]:
+            text = "agree: " + _outcome(next(iter(row["outcomes"].values())))
+        else:
+            text = "differ: " + _outcomes(row["outcomes"])
+        lines.append(_argument_row(row["case"], row["args"], text))
+    return lines
 
 
 # --- self-test ---------------------------------------------------------------
@@ -331,6 +496,55 @@ def _reworded(message: str) -> tuple[tuple[int, str] | None, bool]:
         SELF_TEST_JSON_ERROR = kept
 
 
+def _argument_stand_in(
+    program: str, outcomes: dict[tuple[str, ...], tuple[str, str, int]]
+) -> dict:
+    """An argument-table stand-in calling itself program: for an argument
+    list outcomes holds it writes that stdout and stderr and exits with that
+    code; for any other it writes nothing and exits 0."""
+    src = (
+        "import sys\n"
+        f"out, err, code = {outcomes!r}.get(tuple(sys.argv[1:]), ('', '', 0))\n"
+        "sys.stdout.write(out)\n"
+        "sys.stderr.write(err)\n"
+        "sys.exit(code)\n"
+    )
+    return {"argv": [sys.executable, "-c", src], "program": program}
+
+
+def _argument_divergences(programs: dict[str, dict], *cases: str) -> list[str]:
+    """The divergences of the argument-table cases named cases, run on
+    stand-ins."""
+    run = [(case, args) for case, args in ARGUMENT_CASES if case in cases]
+    if len(run) != len(cases):
+        raise ValueError(f"not every one of {cases} is a case of ARGUMENT_CASES")
+    with tempfile.TemporaryDirectory() as d:
+        fixture = Path(d) / ARGUMENT_FIXTURE
+        fixture.write_text("{}\n")
+        return compare_arguments(programs, fixture, Path(d) / "run", run)[1]
+
+
+def _gate_with_arguments(
+    programs: Callable[[Path], dict[str, dict]],
+) -> tuple[int, str, dict]:
+    """(exit code, stdout, --json report) of the gate over one fixture the
+    fixture-table stand-ins agree on, with programs giving the argument
+    table's verifiers."""
+    out = io.StringIO()
+    with tempfile.TemporaryDirectory() as d:
+        fixtures, report = Path(d) / "fixtures", Path(d) / "report.json"
+        fixtures.mkdir()
+        (fixtures / ARGUMENT_FIXTURE).write_text("{}\n")
+        agree = _stand_in(_block(ARGUMENT_FIXTURE, "ACCEPT"))
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            code = gate(fixtures, {"one": agree, "two": agree}, str(report), programs)
+        return code, out.getvalue(), json.loads(report.read_text())
+
+
+def _not_built(bin_dir: Path) -> dict[str, dict]:
+    raise BuildError("go build exited 1: boom")
+
+
 def self_test() -> int:
     fx = ["a.json", "b.json"]
     both = _block("a.json", "ACCEPT") + _block("b.json", "REJECT[EXPIRED: past expiry]")
@@ -356,6 +570,62 @@ def self_test() -> int:
     })
     no_fixtures = _gate_without_fixtures({"one": _stand_in(both), "two": _stand_in(both)})
     unknown = _refusal(["--bogus"])
+
+    # Argument-table stand-ins: "one" writes kept for three cases, and "two"
+    # the same with one case's outcome changed. A case is run alone, by name,
+    # except in the gate runs, which run the whole table.
+    empty_case, fixfile_case, missing_case = (
+        "an empty argument", "a fixtures entry that is a file", "a path that does not exist")
+    argv_of = {case: tuple(args) for case, args in ARGUMENT_CASES}
+    fixfile = (
+        "PASS  fixfile/x.json\n       expected: ACCEPT\n       observed: ACCEPT\n"
+        "       signatures: 1/1 valid (ed25519=true mldsa65=false)\n"
+        "\nsummary: 1 pass, 0 fail (1 fixtures)\n", "", 0,
+    )
+    missing = ("", "error: missing: no such file or directory\n", 2)
+    kept = {
+        argv_of[empty_case]: (
+            "", "error: an empty argument names no fixture file or directory\n", 2),
+        argv_of[fixfile_case]: fixfile,
+        argv_of[missing_case]: missing,
+    }
+
+    def changed(outcomes: dict[tuple[str, ...], tuple[str, str, int]]) -> dict[str, dict]:
+        return {"one": _argument_stand_in("verify", kept),
+                "two": _argument_stand_in("verify.py", {**kept, **outcomes})}
+
+    exit_changed = {argv_of[missing_case]: ("", missing[1], 1)}
+    args_exit = _argument_divergences(changed(exit_changed), missing_case)
+    args_stderr = _argument_divergences(changed(
+        {argv_of[empty_case]: ("", "error: stat : no such file or directory\n", 2)}),
+        empty_case)
+    args_verdicts = _argument_divergences(changed({argv_of[fixfile_case]: (
+        fixfile[0].replace("observed: ACCEPT", "observed: REJECT[EXPIRED: past expiry]"),
+        "", 0)}), fixfile_case)
+    args_wording = _argument_divergences(changed({
+        argv_of[fixfile_case]: (
+            fixfile[0].replace("=true", "=True").replace("=false", "=False"), "", 0),
+        argv_of[missing_case]: ("", missing[1] + "run with --help for the usage\n", 2),
+    }), fixfile_case, missing_case)
+    args_named = _argument_divergences({
+        "one": _argument_stand_in("verify", {
+            argv_of[empty_case]: ("", "usage: verify [fixture.json|dir]...\n", 2),
+            argv_of[missing_case]: ("", "verify: missing: no such file or directory\n", 2),
+        }),
+        "two": _argument_stand_in("verify.py", {
+            argv_of[empty_case]: ("", "usage: verify.py [fixture.json|dir]...\n", 2),
+            argv_of[missing_case]: ("", "verify.py: missing: no such file or directory\n", 2),
+        }),
+    }, empty_case, missing_case)
+    args_unnamed = _argument_divergences({
+        "one": _argument_stand_in(
+            "verify", {argv_of[missing_case]: ("", "verify.py: missing\n", 2)}),
+        "two": _argument_stand_in(
+            "verify.py", {argv_of[missing_case]: ("", "verify: missing\n", 2)}),
+    }, missing_case)
+    gate_fails = _gate_with_arguments(lambda bin_dir: changed(exit_changed))
+    gate_passes = _gate_with_arguments(lambda bin_dir: changed({}))
+    gate_not_built = _gate_with_arguments(_not_built)
     cases: list[tuple[str, bool]] = [
         ("verifiers that agree report no divergence", agree == []),
         ("a verdict divergence is reported by fixture",
@@ -423,6 +693,61 @@ def self_test() -> int:
          crashed_report.get("unreported") == []),
         ("the --json report names every verifier when none reports any fixture",
          none_ran_report.get("unreported") == ["one", "two"]),
+        ("an argument case on which a verifier exits with another code is a "
+         "divergence naming the case and both outcomes",
+         args_exit == [
+             'argument case "a path that does not exist" (missing): '
+             "one exit 2, stderr 'error: missing: no such file or directory'; "
+             "two exit 1, stderr 'error: missing: no such file or directory'"]),
+        ("an argument case on which a verifier writes another first stderr line "
+         "is a divergence",
+         args_stderr == [
+             "argument case \"an empty argument\" (''): "
+             "one exit 2, stderr 'error: an empty argument names no fixture file or directory'; "
+             "two exit 2, stderr 'error: stat : no such file or directory'"]),
+        ("an argument case on which a verifier writes other verdict lines is a "
+         "divergence",
+         args_verdicts == [
+             'argument case "a fixtures entry that is a file" (fixfile): '
+             "one exit 0, verdict lines ['PASS  fixfile/x.json', 'observed: ACCEPT', "
+             "'summary: 1 pass, 0 fail (1 fixtures)']; "
+             "two exit 0, verdict lines ['PASS  fixfile/x.json', 'observed: REJECT[EXPIRED]', "
+             "'summary: 1 pass, 0 fail (1 fixtures)']"]),
+        ("a later stderr line, and a report line that is not a verdict line, are "
+         "each verifier's own wording and make no divergence",
+         args_wording == []),
+        ("the program name a first stderr line opens with, or names after "
+         "`usage: `, is stripped before the lines are compared",
+         args_named == []),
+        ("only a verifier's own program name is stripped",
+         args_unnamed == [
+             'argument case "a path that does not exist" (missing): '
+             "one exit 2, stderr 'verify.py: missing'; two exit 2, stderr 'verify: missing'"]),
+        ("the gate fails on an argument case one verifier diverges on, and that "
+         "case's row in the argument table names both outcomes",
+         gate_fails[0] == 1
+         and "\nPARITY: FAIL\n" in gate_fails[1]
+         and _argument_row(missing_case, list(argv_of[missing_case]),
+                           "differ: one exit 2, stderr 'error: missing: no such file "
+                           "or directory'; two exit 1, stderr 'error: missing: no "
+                           "such file or directory'") in gate_fails[1].splitlines()),
+        ("the --json report holds the argument table under `arguments`, the "
+         "diverging case marked",
+         [(r["case"], r["agree"]) for r in gate_fails[2].get("arguments", [])]
+         == [(case, case != missing_case) for case, _ in ARGUMENT_CASES]
+         and gate_fails[2]["agree"] is False),
+        ("the gate passes when the verifiers agree on every fixture and every "
+         "argument case",
+         gate_passes[0] == 0
+         and "\nPARITY: PASS" in gate_passes[1]
+         and len(gate_passes[2].get("arguments", [])) == len(ARGUMENT_CASES)
+         and all(r["agree"] for r in gate_passes[2]["arguments"])),
+        ("a verifier the argument table cannot build fails the gate, which names "
+         "the build error",
+         gate_not_built[0] == 1
+         and gate_not_built[2]["divergences"] == [
+             "argument table not run: go build exited 1: boom"]
+         and gate_not_built[2].get("arguments") == []),
     ]
     failed = 0
     for label, ok in cases:
@@ -454,22 +779,39 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
-def gate(fixtures_dir: Path, verifiers: dict[str, dict], json_path: str | None) -> int:
-    """Run the verifiers over the *.json in fixtures_dir; return the exit code."""
+def gate(
+    fixtures_dir: Path, verifiers: dict[str, dict], json_path: str | None,
+    programs: Callable[[Path], dict[str, dict]] = argument_verifiers,
+) -> int:
+    """Run the verifiers over the *.json in fixtures_dir, then the argument
+    table on the verifiers programs returns for a scratch directory; return
+    the exit code."""
     fixture_files = sorted(p.name for p in fixtures_dir.glob("*.json"))
     if not fixture_files:
         sys.stderr.write(NO_FIXTURES)
         return 1
 
     table, exit_codes, divergences, unreported = compare(fixture_files, verifiers)
+    arguments: list[dict] = []
+    with tempfile.TemporaryDirectory() as scratch:
+        try:
+            argument_programs = programs(Path(scratch) / "bin")
+        except BuildError as exc:
+            divergences.append(f"argument table not run: {exc}")
+        else:
+            arguments, argument_divergences = compare_arguments(
+                argument_programs, fixtures_dir / ARGUMENT_FIXTURE, Path(scratch) / "run")
+            divergences += argument_divergences
 
     print()
     print("\n".join(render_table(table, list(verifiers), exit_codes, unreported)))
+    print()
+    print("\n".join(render_arguments(arguments)))
 
     if json_path:
         Path(json_path).write_text(
             json.dumps(
-                build_report(table, exit_codes, divergences, unreported),
+                build_report(table, exit_codes, divergences, unreported, arguments),
                 indent=2,
                 sort_keys=True,
             )
@@ -482,7 +824,8 @@ def gate(fixtures_dir: Path, verifiers: dict[str, dict], json_path: str | None) 
             # Relayed stderr can span lines; keep them under their bullet.
             print("  - " + d.replace("\n", "\n    "))
         return 1
-    print("\nPARITY: PASS (all implementations agree on gate, verdict, and category)")
+    print("\nPARITY: PASS (all implementations agree on gate, verdict, and category, "
+          "and on every argument case)")
     return 0
 
 
