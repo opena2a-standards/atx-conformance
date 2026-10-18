@@ -24,7 +24,8 @@ with more digits than int() converts, bytes that are not UTF-8, the
 single-pass string-literal scan, --help, an unknown option, --version, an
 empty argument, a directory whose fixtures entry is a file, a path spelled
 with ./, // or .., which the report names as the Go reference verifier names
-it, and a file named with a trailing /.
+it, a file named with a trailing /, "--", and a path under a working
+directory entered through a symbolic link.
 They hold the report to the Go reference verifier's text: a boolean, a
 string a reason quotes, and the whole report over fixtures/, which must be
 docs/captures/go-verifier.txt byte for byte. Two tests
@@ -2094,6 +2095,7 @@ USAGE = (
     "usage: verify.py <fixture.json|dir>...\n"
     "  -h, --help     print this usage and exit 0\n"
     "  --version      print the commit this verifier runs from and exit 0\n"
+    "  --             end the options: every argument after it is a fixture file or directory\n"
 )
 
 
@@ -2263,6 +2265,69 @@ class ArgumentContract(unittest.TestCase):
         lines = out.splitlines()
         self.assertEqual(lines[0], f"PASS  {directory / 'x.json'}")
         self.assertEqual(lines[-1], "summary: 1 pass, 0 fail (1 fixtures)")
+
+    def test_double_dash_ends_the_options(self):
+        # "--" was an unknown option, exit 2, so a fixture file named -h.json
+        # could be named only as ./-h.json. After the first "--" each argument
+        # is a path, and "--" alone is no path argument; an option before it
+        # is still read.
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "-h.json").write_bytes(BASELINE_V10.read_bytes())
+            with contextlib.chdir(tmp):
+                code, out, err = _run_main("--", "-h.json")
+                self.assertEqual((code, err), (0, ""), out)
+                self.assertTrue(out.startswith("PASS  -h.json\n"), out)
+                self.assertTrue(out.endswith("\nsummary: 1 pass, 0 fail (1 fixtures)\n"), out)
+                for args, stderr in (
+                    (("--", "-h.json", "--help"), "error: --help: no such file or directory\n"),
+                    (("--", "--version"), "error: --version: no such file or directory\n"),
+                    (("--", "--"), "error: --: no such file or directory\n"),
+                    (("--", ""), "error: an empty argument names no fixture file or directory\n"),
+                    (("-x", "--", "-h.json"), f"unknown option: -x\n{USAGE}"),
+                    (("--",), USAGE),
+                ):
+                    with self.subTest(args=args):
+                        self.assertEqual(_run_main(*args), (2, "", stderr))
+                code, out, err = _run_main("--version", "--", "-x")
+                self.assertEqual((code, err), (0, ""))
+                self.assertTrue(out.startswith("verify.py: "), out)
+
+    def test_path_under_a_linked_working_directory_is_named_relative(self):
+        # Entered through a symbolic link, the working directory os.getcwd()
+        # names is the link's target, so a path written through the link was
+        # written whole and one written through the target named relative.
+        # The Go reference verifier did the reverse: its os.Getwd returns PWD,
+        # which a shell sets to the path through the link. Both now compare
+        # the two with their links resolved.
+        with tempfile.TemporaryDirectory() as tmp:
+            target, link = Path(tmp) / "target", Path(tmp) / "link"
+            target.mkdir()
+            (target / "x.json").write_bytes(BASELINE_V10.read_bytes())
+            link.symlink_to("target", target_is_directory=True)
+            with contextlib.chdir(link):
+                for path in (link / "x.json", target / "x.json"):
+                    with self.subTest(path=str(path)):
+                        code, out, err = _run_main(str(path))
+                        self.assertEqual((code, err), (0, ""), out)
+                        self.assertEqual(out.splitlines()[0], "PASS  x.json")
+
+    def test_directory_is_cleaned_before_its_links_are_resolved(self):
+        # The Go reference verifier's filepath.Dir removes a .. with the
+        # element before it, a link included, before the directory's links
+        # are resolved. Resolved first, the .. after a link to a directory
+        # outside the working directory leaves it, and the path would be
+        # written whole.
+        with tempfile.TemporaryDirectory() as tmp:
+            wd, elsewhere = Path(tmp) / "wd", Path(tmp) / "elsewhere"
+            (wd / "sub").mkdir(parents=True)
+            (elsewhere / "deep").mkdir(parents=True)
+            for directory in (wd / "sub", elsewhere):
+                (directory / "x.json").write_bytes(BASELINE_V10.read_bytes())
+            (wd / "sub" / "link").symlink_to(elsewhere / "deep", target_is_directory=True)
+            with contextlib.chdir(wd):
+                code, out, err = _run_main(str(wd / "sub" / "link" / ".." / "x.json"))
+        self.assertEqual((code, err), (0, ""), out)
+        self.assertEqual(out.splitlines()[0], "PASS  sub/x.json")
 
 
 class JCSVectorsThroughVerifierProjection(unittest.TestCase):

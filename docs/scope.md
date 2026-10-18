@@ -22,9 +22,9 @@ What this suite verifies:
 | ATX v1.0 schema-version gate | `fixtures/malformed-schema.json` |
 | Expiry gate against a pinned verifier clock | `fixtures/expired.json` |
 | Revocation via the credential `revoked` flag | `fixtures/revoked.json` |
-| Revocation via CRL membership alone, the credential's own flag being false (§1.3 step 6) | `fixtures/revoked-crl-only.json` |
+| Revocation via CRL membership alone, the credential's own flag being false (§1.3 step 6, which both reference verifiers perform at their step 3, before any signature) | `fixtures/revoked-crl-only.json` |
 | Trusted-issuer DID set | `fixtures/wrong-issuer.json` |
-| Ed25519 signature verification over the canonical payload | every fixture that passes steps 0 to 4 (strict parse, schema version, expiry, revocation, trusted issuer): 18 of 25. The others reject before step 5; `go test` in `verifiers/go` checks that their signatures verify once that gate is lifted |
+| Ed25519 signature verification over the canonical payload | every fixture that passes steps 0 to 4 of the reference verifiers (strict parse, schema version, expiry, revocation by the flag or the CRL, trusted issuer): 18 of 25. The others reject before step 5; `go test` in `verifiers/go` checks that their signatures verify once that gate is lifted. The count follows the reference verifiers' order, which checks the CRL (§1.3 step 6) before the signatures (§1.3 steps 4 and 5), so `fixtures/revoked-crl-only.json` is among the others. Both fixtures whose CRL lists their agent carry valid signatures, so in the spec's order they reject as `REVOKED` too |
 | Hybrid Ed25519 + ML-DSA-65 signature verification (FIPS 204) | `fixtures/baseline-valid-hybrid.json` |
 | Multi-signature: every declared signature must verify (three Ed25519 signatures from three distinct keys) | `fixtures/threshold-2of3-cosignature.json` |
 | Tampered-signature rejection | `fixtures/tampered-signature.json` |

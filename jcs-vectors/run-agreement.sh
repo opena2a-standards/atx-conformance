@@ -52,11 +52,12 @@ echo
 echo "=== [ts] erdtman/canonicalize ==="
 # A failed install fails this leg and the gate goes on to its other legs and
 # its summary line. Under `set -e` a bare failing install ended the script
-# here, and npm's error was discarded with its output.
+# here, and npm's error was discarded with its output. --ignore-scripts keeps
+# a package's install scripts from running inside the gate.
 ts_installed=1
 if [ ! -d ts/node_modules ]; then
   echo "[ts] installing pinned dependency (canonicalize) from ts/package-lock.json ..."
-  if ! install_out=$( cd ts && npm ci --no-audit --no-fund 2>&1 ); then
+  if ! install_out=$( cd ts && npm ci --ignore-scripts --no-audit --no-fund 2>&1 ); then
     echo "$install_out"
     echo "[ts] FAIL  npm ci in jcs-vectors/ts failed (npm output above): the TS/JS leg did not run"
     ts_installed=0; fail=1

@@ -32,12 +32,19 @@ argument lists no fixture can carry (an empty argument, -h and --help at
 several positions, --version and an unknown option after a path, a
 repository root, a directory whose `fixtures` entry is a file, a path that
 does not exist, a directory with no *.json, a path named twice, a file spelled
-with ./ and //, a directory spelled with .., a file named with a trailing /),
-each run on both verifiers from a scratch directory holding the paths it
-names. Both must exit with the same code and write the same first stderr
-line and the same verdict lines (each PASS or FAIL line, its observed
-verdict and category, the summary), once the program name each verifier
-calls itself (`verify`, `verify.py`) is stripped; a case they differ on is a
+with ./ and //, a directory spelled with .., a file named with a trailing /,
+a path and an option after `--`, an absolute path through a symbolic link to
+the working directory, through its target and outside it), each run on both
+verifiers from a symbolic link to a scratch directory holding the paths it
+names, with PWD naming the link, as a shell names a directory it changed
+into through one. Both must exit with the same code and write the same
+first stderr line and the same verdict lines (each PASS or FAIL line, its
+observed verdict and category, the summary), once the program name each
+verifier calls itself (`atx-verify`, `verify.py`) is stripped; a case they
+differ on is a divergence. No argument is the one case the two answer
+differently by design: the Go verifier must verify the fixture set its
+module embeds, each fixture passing, and exit 0, and the Python verifier,
+which has none, must write its usage and exit 2; any other outcome is a
 divergence. The Go verifier runs there as a binary built for the table,
 since `go run` reports a program's exit 2 as its own exit 1. The --json
 report holds the table under `arguments`.
@@ -48,10 +55,12 @@ verifier that exits 0 without reporting any fixture, that a fixtures
 directory holding no *.json fails, that the --json report names a verifier
 that exited before reporting any fixture, that an argument case one
 verifier answers with another exit code, first stderr line or verdict lines
-fails the gate, that --json is refused with --self-test by a usage message
-the self-test holds word for word, so rewording that message turns the
-self-test red, and that an unknown argument is named on the line above the
-usage.
+fails the gate, as does a verifier that answers no argument other than its
+spec says, that the cases with an absolute path via the link and via its
+target run from a symbolic link with PWD naming it, that --json is refused
+with --self-test by a usage message the self-test holds word for word, so
+rewording that message turns the self-test red, and that an unknown
+argument is named on the line above the usage.
 
 Usage:
     python3 scripts/parity/parity.py [--json parity-report.json]
@@ -72,6 +81,7 @@ import argparse
 import contextlib
 import io
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -110,13 +120,17 @@ BLOCK_RE = re.compile(r"^(PASS|FAIL)\s+(\S+)")
 # `observed: ACCEPT` or `observed: REJECT[CATEGORY: reason]`
 OBSERVED_RE = re.compile(r"^\s*observed:\s+(ACCEPT|REJECT\[([A-Z_]+))")
 
-# The argument table: (case, arguments). Each list runs from a scratch
-# directory _argument_scratch lays out: fixfile/ holds a file named fixtures
-# and ARGUMENT_FIXTURE as x.json, root/ holds ARGUMENT_FIXTURE as
-# fixtures/x.json beside conformance.json, a *.json that is not a fixture, as
-# a repository root does, nojson/ holds no *.json, and nothing there is named
-# missing.
+# The argument table: (case, arguments). Each list runs from a symbolic link
+# to a scratch directory _argument_scratch lays out, with PWD naming the
+# link: fixfile/ holds a file named fixtures and ARGUMENT_FIXTURE as x.json,
+# root/ holds ARGUMENT_FIXTURE as fixtures/x.json beside conformance.json, a
+# *.json that is not a fixture, as a repository root does, nojson/ holds no
+# *.json, -h.json is ARGUMENT_FIXTURE, and nothing there is named missing.
+# In an argument, {link} is the link's absolute path, {target} the
+# directory's, its symbolic links resolved, and {fixture} the absolute path
+# of the fixture the table copies, outside both.
 ARGUMENT_CASES: list[tuple[str, list[str]]] = [
+    ("no argument", []),
     ("an empty argument", [""]),
     ("--help first", ["--help", "fixfile"]),
     ("--help last", ["fixfile", "--help"]),
@@ -132,9 +146,17 @@ ARGUMENT_CASES: list[tuple[str, list[str]]] = [
     ("a file spelled with ./ and //", ["fixfile//x.json", "./fixfile/./x.json"]),
     ("a directory spelled with ..", ["fixfile/../fixfile"]),
     ("a file named with a trailing /", ["fixfile/x.json/"]),
+    ("a path after --", ["--", "-h.json"]),
+    ("an option after --", ["--", "-h.json", "--help"]),
+    ("an absolute path via the link", ["{link}/fixfile/x.json"]),
+    ("an absolute path via its target", ["{target}/fixfile/x.json"]),
+    ("an absolute path outside the cwd", ["{fixture}"]),
 ]
 # The shipped fixture the argument table copies to fixfile/x.json.
 ARGUMENT_FIXTURE = "baseline-valid.json"
+# Verdict lines an outcome in a report line names one by one; a longer run,
+# such as the walk of a whole fixture set, is named by its count and last line.
+SHOWN_VERDICT_LINES = 5
 
 
 def run_verifier(name: str, spec: dict) -> tuple[int, dict[str, dict], str]:
@@ -279,14 +301,15 @@ class BuildError(Exception):
 
 def argument_verifiers(bin_dir: Path) -> dict[str, dict]:
     """The verifiers of the argument table: the argv a case's arguments
-    follow, and the program name the verifier calls itself.
+    follow, the program name the verifier calls itself, and whether it
+    embeds a fixture set, which it verifies when given no argument.
 
     The Go verifier is built into bin_dir and run as that binary: `go run`
     reports a program's exit 2 as its own exit 1, and adds an
     `exit status 2` line to stderr.
     """
     bin_dir.mkdir(parents=True, exist_ok=True)
-    binary = bin_dir / "verify"
+    binary = bin_dir / "atx-verify"
     build = subprocess.run(
         ["go", "build", "-o", str(binary), "."],
         cwd=VERIFIERS["go"]["cwd"], capture_output=True, text=True,
@@ -294,24 +317,31 @@ def argument_verifiers(bin_dir: Path) -> dict[str, dict]:
     if build.returncode != 0:
         raise BuildError(f"go build exited {build.returncode}: {build.stderr.strip()[-2000:]}")
     return {
-        "go": {"argv": [str(binary)], "program": "verify"},
+        "go": {"argv": [str(binary)], "program": "atx-verify", "embeds": True},
         "python": {
             "argv": [sys.executable, str(VERIFIERS["python"]["cwd"] / "verify.py")],
             "program": "verify.py",
+            "embeds": False,
         },
     }
 
 
-def _argument_scratch(scratch: Path, fixture: Path) -> None:
-    """Lay out under scratch the paths ARGUMENT_CASES name."""
-    (scratch / "fixfile").mkdir(parents=True)
-    (scratch / "fixfile" / "fixtures").write_text("a file, not a directory\n")
-    (scratch / "fixfile" / "x.json").write_bytes(fixture.read_bytes())
-    (scratch / "root" / "fixtures").mkdir(parents=True)
-    (scratch / "root" / "fixtures" / "x.json").write_bytes(fixture.read_bytes())
-    (scratch / "root" / "conformance.json").write_text("{}\n")
-    (scratch / "nojson").mkdir()
-    (scratch / "nojson" / "README.md").write_text("not a fixture\n")
+def _argument_scratch(scratch: Path, fixture: Path) -> Path:
+    """Lay out under scratch/dir the paths ARGUMENT_CASES name, and return
+    scratch/link, a symbolic link to it, which the cases run from."""
+    root = scratch / "dir"
+    (root / "fixfile").mkdir(parents=True)
+    (root / "fixfile" / "fixtures").write_text("a file, not a directory\n")
+    (root / "fixfile" / "x.json").write_bytes(fixture.read_bytes())
+    (root / "root" / "fixtures").mkdir(parents=True)
+    (root / "root" / "fixtures" / "x.json").write_bytes(fixture.read_bytes())
+    (root / "root" / "conformance.json").write_text("{}\n")
+    (root / "nojson").mkdir()
+    (root / "nojson" / "README.md").write_text("not a fixture\n")
+    (root / "-h.json").write_bytes(fixture.read_bytes())
+    link = scratch / "link"
+    link.symlink_to("dir", target_is_directory=True)
+    return link
 
 
 def _without_program(line: str, program: str) -> str:
@@ -336,9 +366,13 @@ def verdict_lines(stdout: str) -> list[str]:
 
 
 def run_case(spec: dict, args: list[str], cwd: Path) -> dict:
-    """One verifier's outcome on one argument list: its exit code, first
-    stderr line and verdict lines, without its program name."""
-    proc = subprocess.run(spec["argv"] + args, cwd=cwd, capture_output=True, text=True)
+    """One verifier's outcome on one argument list, run from cwd with PWD
+    naming it: its exit code, first stderr line and verdict lines, without
+    its program name."""
+    proc = subprocess.run(
+        spec["argv"] + args, cwd=cwd, capture_output=True, text=True,
+        env={**os.environ, "PWD": str(cwd)},
+    )
     stderr = proc.stderr.splitlines()
     return {
         "exitCode": proc.returncode,
@@ -351,8 +385,11 @@ def _outcome(outcome: dict) -> str:
     text = f"exit {outcome['exitCode']}"
     if outcome["stderr"]:
         text += f", stderr {outcome['stderr']!r}"
-    if outcome["verdicts"]:
-        text += f", verdict lines {outcome['verdicts']!r}"
+    verdicts = outcome["verdicts"]
+    if len(verdicts) > SHOWN_VERDICT_LINES:
+        text += f", {len(verdicts)} verdict lines ending {verdicts[-1]!r}"
+    elif verdicts:
+        text += f", verdict lines {verdicts!r}"
     return text
 
 
@@ -360,22 +397,51 @@ def _outcomes(outcomes: dict[str, dict]) -> str:
     return "; ".join(f"{name} {_outcome(o)}" for name, o in outcomes.items())
 
 
+def _answers_no_argument(spec: dict, outcome: dict, fixtures: list[str]) -> bool:
+    """Whether outcome is the answer to no argument that spec documents: a
+    verifier that embeds a fixture set reports it, here fixtures, each
+    named fixtures/<name> and passing, and exits 0; one that embeds none
+    writes its usage on stderr, reports nothing and exits 2."""
+    verdicts = outcome["verdicts"]
+    if not spec.get("embeds"):
+        return outcome["exitCode"] == 2 and outcome["stderr"].startswith("usage:") and not verdicts
+    n = len(fixtures)
+    return (
+        outcome["exitCode"] == 0 and outcome["stderr"] == ""
+        and [v for v in verdicts if BLOCK_RE.match(v)] == [f"PASS  fixtures/{f}" for f in fixtures]
+        and verdicts[-1:] == [f"summary: {n} pass, 0 fail ({n} fixtures)"]
+    )
+
+
 def compare_arguments(
     programs: dict[str, dict], fixture: Path, scratch: Path,
     cases: list[tuple[str, list[str]]] = ARGUMENT_CASES,
 ) -> tuple[list[dict], list[str]]:
-    """Run every case of cases on every verifier in programs, from scratch,
-    with fixture as fixfile/x.json.
+    """Run every case of cases on every verifier in programs, from a
+    symbolic link to scratch, with fixture as fixfile/x.json. A verifier that
+    embeds a fixture set is taken to embed the *.json beside fixture.
 
     Return (rows, divergences): a row per case holding each verifier's
-    outcome, and a divergence naming each case the outcomes differ on.
+    outcome, and a divergence naming each case the outcomes differ on, or,
+    for no argument, are not each the one _answers_no_argument documents.
     """
-    _argument_scratch(scratch, fixture)
+    cwd = _argument_scratch(scratch, fixture)
+    # str.format expands {link}, {target} and {fixture}, so a misspelt name
+    # raises instead of reaching a verifier as written.
+    names = {
+        "link": str(cwd), "target": os.path.realpath(cwd), "fixture": os.path.abspath(fixture),
+    }
+    embedded = sorted(p.name for p in fixture.parent.glob("*.json"))
     rows: list[dict] = []
     divergences: list[str] = []
     for case, args in cases:
-        outcomes = {name: run_case(spec, args, scratch) for name, spec in programs.items()}
-        agree = len({json.dumps(o, sort_keys=True) for o in outcomes.values()}) == 1
+        argv = [arg.format(**names) for arg in args]
+        outcomes = {name: run_case(spec, argv, cwd) for name, spec in programs.items()}
+        if args:
+            agree = len({json.dumps(o, sort_keys=True) for o in outcomes.values()}) == 1
+        else:
+            agree = all(_answers_no_argument(programs[name], o, embedded)
+                        for name, o in outcomes.items())
         rows.append({"case": case, "args": args, "agree": agree, "outcomes": outcomes})
         if not agree:
             divergences.append(
@@ -389,12 +455,16 @@ def _argument_row(case: str, args: list[str], text: str) -> str:
 
 def render_arguments(rows: list[dict]) -> list[str]:
     """Return the lines of the argument table: per case its arguments and
-    the outcome the verifiers share, or each verifier's where they differ."""
+    the outcome the verifiers share, or each verifier's where they differ
+    and for no argument, which they answer differently by design."""
     if not rows:
         return ["arguments: not run (see PARITY: FAIL below)"]
     lines = [f"arguments: {len(rows)} cases x {len(rows[0]['outcomes'])} verifiers"]
     for row in rows:
-        if row["agree"]:
+        if not row["args"]:
+            text = ("as documented: " if row["agree"] else "not as documented: ") \
+                + _outcomes(row["outcomes"])
+        elif row["agree"]:
             text = "agree: " + _outcome(next(iter(row["outcomes"].values())))
         else:
             text = "differ: " + _outcomes(row["outcomes"])
@@ -408,7 +478,7 @@ def render_arguments(rows: list[dict]) -> list[str]:
 # fixtures or the Python verifier's dependencies.
 
 MISSING_DEP = (
-    "missing dependency: dilithium-py. install with `pip install -r requirements.txt`"
+    "missing dependency: dilithium-py. install with `python3 -m pip install -r requirements.txt`"
 )
 
 
@@ -512,17 +582,34 @@ def _reworded(message: str) -> tuple[tuple[int, str] | None, bool]:
 
 
 def _argument_stand_in(
-    program: str, outcomes: dict[tuple[str, ...], tuple[str, str, int]]
+    program: str, outcomes: dict[tuple[str, ...], tuple[str, str, int]],
+    embeds: bool = False,
 ) -> dict:
-    """An argument-table stand-in calling itself program: for an argument
-    list outcomes holds it writes that stdout and stderr and exits with that
-    code; for any other it writes nothing and exits 0."""
+    """An argument-table stand-in calling itself program, embedding a
+    fixture set or not: for an argument list outcomes holds it writes that
+    stdout and stderr and exits with that code; for any other it writes
+    nothing and exits 0."""
     src = (
         "import sys\n"
         f"out, err, code = {outcomes!r}.get(tuple(sys.argv[1:]), ('', '', 0))\n"
         "sys.stdout.write(out)\n"
         "sys.stderr.write(err)\n"
         "sys.exit(code)\n"
+    )
+    return {"argv": [sys.executable, "-c", src], "program": program, "embeds": embeds}
+
+
+def _naming_stand_in(program: str, wd: str) -> dict:
+    """An argument-table stand-in calling itself program that reports each
+    argument as a passing fixture, named relative to wd when under it: the
+    directory PWD names, as the Go verifier's os.Getwd reads it, for "PWD",
+    and the one os.getcwd() names, its links resolved, for "cwd". So the two
+    verifiers named a path before both compared resolved paths."""
+    src = (
+        "import os, sys\n"
+        f"wd = os.environ['PWD'] if {wd!r} == 'PWD' else os.getcwd()\n"
+        "for a in sys.argv[1:]:\n"
+        "    print('PASS  ' + (os.path.relpath(a, wd) if a.startswith(wd + os.sep) else a))\n"
     )
     return {"argv": [sys.executable, "-c", src], "program": program}
 
@@ -586,17 +673,22 @@ def self_test() -> int:
     no_fixtures = _gate_without_fixtures({"one": _stand_in(both), "two": _stand_in(both)})
     unknown = _refusal(["--bogus"])
 
-    # Argument-table stand-ins: "one" writes kept for ten cases, and "two"
-    # the same with one case's outcome changed. A case is run alone, by name,
-    # except in the gate runs, which run the whole table.
+    # Argument-table stand-ins: "one", which embeds a fixture set, writes kept
+    # for eleven cases and for no argument its report of that set, the
+    # ARGUMENT_FIXTURE beside the table's fixture; "two", which embeds none,
+    # writes kept and for no argument its usage, with one case's outcome
+    # changed. A case is run alone, by name, except in the gate runs, which
+    # run the whole table.
     empty_case, fixfile_case, missing_case = (
         "an empty argument", "a fixtures entry that is a file", "a path that does not exist")
     version_case, unknown_case, root_case = (
         "--version after a path", "an unknown option after a path", "a repository root")
-    twice_case = "a path named twice"
     spelled_case, dotdot_case, slash_case = (
         "a file spelled with ./ and //", "a directory spelled with ..",
         "a file named with a trailing /")
+    twice_case, no_argument_case, dashdash_case = (
+        "a path named twice", "no argument", "a path after --")
+    link_case, target_case = "an absolute path via the link", "an absolute path via its target"
     argv_of = {case: tuple(args) for case, args in ARGUMENT_CASES}
     fixfile = (
         "PASS  fixfile/x.json\n       expected: ACCEPT\n       observed: ACCEPT\n"
@@ -618,7 +710,7 @@ def self_test() -> int:
             "", "error: an empty argument names no fixture file or directory\n", 2),
         argv_of[fixfile_case]: fixfile,
         argv_of[missing_case]: missing,
-        argv_of[version_case]: ("verify: (devel), built with go1.22.12\n", "", 0),
+        argv_of[version_case]: ("atx-verify: (devel), built with go1.22.12\n", "", 0),
         argv_of[unknown_case]: ("", "unknown option: --bogus\n", 2),
         argv_of[root_case]: (
             fixfile[0].replace("fixfile/x.json", "root/fixtures/x.json"), "", 0),
@@ -629,11 +721,22 @@ def self_test() -> int:
         argv_of[spelled_case]: passes("./fixfile/./x.json", "fixfile//x.json"),
         argv_of[dotdot_case]: passes("fixfile/x.json"),
         argv_of[slash_case]: ("", "error: stat fixfile/x.json/: not a directory\n", 2),
+        argv_of[dashdash_case]: (fixfile[0].replace("fixfile/x.json", "-h.json"), "", 0),
     }
+    embedded = (fixfile[0].replace("fixfile/x.json", f"fixtures/{ARGUMENT_FIXTURE}"), "", 0)
+    no_argument = argv_of[no_argument_case]
 
-    def changed(outcomes: dict[tuple[str, ...], tuple[str, str, int]]) -> dict[str, dict]:
-        return {"one": _argument_stand_in("verify", kept),
-                "two": _argument_stand_in("verify.py", {**kept, **outcomes})}
+    def changed(
+        outcomes: dict[tuple[str, ...], tuple[str, str, int]],
+        one: dict[tuple[str, ...], tuple[str, str, int]] | None = None,
+    ) -> dict[str, dict]:
+        return {
+            "one": _argument_stand_in(
+                "atx-verify", {**kept, no_argument: embedded, **(one or {})}, embeds=True),
+            "two": _argument_stand_in("verify.py", {
+                **kept, no_argument: ("", "usage: verify.py <fixture.json|dir>...\n", 2),
+                **outcomes}),
+        }
 
     exit_changed = {argv_of[missing_case]: ("", missing[1], 1)}
     args_exit = _argument_divergences(changed(exit_changed), missing_case)
@@ -687,6 +790,21 @@ def self_test() -> int:
         {argv_of[dotdot_case]: passes("fixfile/../fixfile/x.json")}), dotdot_case)
     args_slash = _argument_divergences(changed(
         {argv_of[slash_case]: passes("fixfile/x.json")}), slash_case)
+    # With no argument: both as documented; "one" writing its usage although
+    # it embeds a fixture set; "two" reporting a set although it embeds none.
+    args_documented = _argument_divergences(changed({}), no_argument_case)
+    args_no_walk = _argument_divergences(changed({}, {
+        no_argument: ("", "usage: atx-verify [fixture.json|dir]...\n", 2)}), no_argument_case)
+    args_walks = _argument_divergences(changed({no_argument: embedded}), no_argument_case)
+    # "two" as a verifier with no "--" rule, and two that name a path under
+    # the working directory relative to PWD and to os.getcwd(), as the Go and
+    # the Python verifier named it before both compared resolved paths.
+    args_dashdash = _argument_divergences(changed(
+        {argv_of[dashdash_case]: ("", "unknown option: --\n", 2)}), dashdash_case)
+    args_link = _argument_divergences({
+        "one": _naming_stand_in("atx-verify", "PWD"),
+        "two": _naming_stand_in("verify.py", "cwd"),
+    }, link_case, target_case)
     gate_fails = _gate_with_arguments(lambda bin_dir: changed(exit_changed))
     gate_passes = _gate_with_arguments(lambda bin_dir: changed({}))
     gate_not_built = _gate_with_arguments(_not_built)
@@ -838,6 +956,35 @@ def self_test() -> int:
              "one exit 2, stderr 'error: stat fixfile/x.json/: not a directory'; "
              "two exit 0, verdict lines ['PASS  fixfile/x.json', 'observed: ACCEPT', "
              "'summary: 1 pass, 0 fail (1 fixtures)']"]),
+        ("with no argument, a verifier that embeds a fixture set reports it and exits 0, "
+         "and one that embeds none writes its usage and exits 2, which is no divergence",
+         args_documented == []),
+        ("a verifier that embeds a fixture set and writes its usage for no argument is a "
+         "divergence",
+         args_no_walk == [
+             'argument case "no argument" (): '
+             "one exit 2, stderr 'usage:  [fixture.json|dir]...'; "
+             "two exit 2, stderr 'usage:  <fixture.json|dir>...'"]),
+        ("a verifier that embeds no fixture set and reports one for no argument is a "
+         "divergence",
+         args_walks == [
+             'argument case "no argument" (): '
+             "one exit 0, verdict lines ['PASS  fixtures/baseline-valid.json', "
+             "'observed: ACCEPT', 'summary: 1 pass, 0 fail (1 fixtures)']; "
+             "two exit 0, verdict lines ['PASS  fixtures/baseline-valid.json', "
+             "'observed: ACCEPT', 'summary: 1 pass, 0 fail (1 fixtures)']"]),
+        ("a path after --, which one verifier names an unknown option, is a divergence",
+         args_dashdash == [
+             'argument case "a path after --" (-- -h.json): '
+             "one exit 0, verdict lines ['PASS  -h.json', 'observed: ACCEPT', "
+             "'summary: 1 pass, 0 fail (1 fixtures)']; "
+             "two exit 2, stderr 'unknown option: --'"]),
+        ("the cases with an absolute path via the link and via its target run from a "
+         "symbolic link with PWD naming it, so a verifier naming a path relative to PWD "
+         "and one naming it relative to the directory os.getcwd() names diverge on both",
+         [d.split(" (", 1)[0] for d in args_link]
+         == [f'argument case "{link_case}"', f'argument case "{target_case}"']
+         and all(d.count("verdict lines ['PASS  fixfile/x.json']") == 1 for d in args_link)),
         ("the gate fails on an argument case one verifier diverges on, and that "
          "case's row in the argument table names both outcomes",
          gate_fails[0] == 1

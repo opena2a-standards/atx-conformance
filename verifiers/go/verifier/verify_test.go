@@ -276,8 +276,13 @@ func TestNoArgumentVerifiesEmbeddedFixtures(t *testing.T) {
 }
 
 // TestHelpPrintsUsage pins that -h and --help write the usage lines to stdout
-// and exit 0, wherever they stand among the arguments.
+// and exit 0, wherever they stand among the arguments, and that the usage
+// names the program atx-verify, the published entry point. It named a
+// program `verify`, which neither entry point builds.
 func TestHelpPrintsUsage(t *testing.T) {
+	if first := strings.SplitN(usage, "\n", 2)[0]; first != "usage: atx-verify [fixture.json|dir]..." {
+		t.Errorf("the usage opens with %q, want it to name atx-verify", first)
+	}
 	for _, args := range [][]string{{"-h"}, {"--help"}, {repoRoot + "/fixtures", "-h"}, {"--json", "--help"}} {
 		var stdout, stderr bytes.Buffer
 		if code := Run(args, &stdout, &stderr); code != 0 {
@@ -349,11 +354,11 @@ func TestVersionNamesTheModuleVersion(t *testing.T) {
 		want string
 	}{
 		{&debug.BuildInfo{GoVersion: "go1.22.12", Main: debug.Module{Path: module, Version: "v0.0.0-20261018005751-ea4b48544534"}}, true,
-			"verify: " + module + " v0.0.0-20261018005751-ea4b48544534, built with go1.22.12\n"},
+			"atx-verify: " + module + " v0.0.0-20261018005751-ea4b48544534, built with go1.22.12\n"},
 		{&debug.BuildInfo{GoVersion: "go1.26.3", Main: debug.Module{Path: module, Version: "(devel)"}}, true,
-			"verify: " + module + " (devel), built with go1.26.3\n"},
-		{&debug.BuildInfo{GoVersion: "go1.26.3"}, true, "verify: this binary records no module version\n"},
-		{nil, false, "verify: this binary records no module version\n"},
+			"atx-verify: " + module + " (devel), built with go1.26.3\n"},
+		{&debug.BuildInfo{GoVersion: "go1.26.3"}, true, "atx-verify: this binary records no module version\n"},
+		{nil, false, "atx-verify: this binary records no module version\n"},
 	}
 	for _, c := range lines {
 		if got := versionLine(c.info, c.ok); got != c.want {
@@ -398,6 +403,116 @@ func TestPathOutsideWorkingDirectoryIsWrittenWhole(t *testing.T) {
 	}
 	if first, want := strings.SplitN(stdout.String(), "\n", 2)[0], "PASS  "+outside; first != want {
 		t.Errorf("Run(%q) writes %q first, want %q", outside, first, want)
+	}
+}
+
+// chdir makes dir the working directory until the test ends.
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	here, err := filepath.Abs(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(here); err != nil {
+			t.Error(err)
+		}
+	})
+}
+
+// TestPathUnderLinkedWorkingDirectory pins the name the report gives a
+// fixture named by an absolute path when the working directory was entered
+// through a symbolic link, with PWD the path through the link, as a shell
+// sets it: the path relative to the working directory, whether written
+// through the link or through its target. The two were compared as written,
+// so the path through the link was named x.json and the path through the
+// target was written whole, where the Python verifier did the reverse.
+func TestPathUnderLinkedWorkingDirectory(t *testing.T) {
+	baseline, err := fs.ReadFile(atxconformance.Fixtures, "fixtures/baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	target, link := filepath.Join(dir, "target"), filepath.Join(dir, "link")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "x.json"), baseline, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target", link); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, link)
+	t.Setenv("PWD", link)
+	if wd, err := os.Getwd(); err != nil || wd != link {
+		t.Fatalf("os.Getwd() = %q, %v; want %q, the path through the link", wd, err, link)
+	}
+	for _, p := range []string{filepath.Join(link, "x.json"), filepath.Join(target, "x.json")} {
+		var stdout, stderr bytes.Buffer
+		if code := Run([]string{p}, &stdout, &stderr); code != 0 {
+			t.Fatalf("Run(%q) exits %d, want 0 (stderr %q)", p, code, stderr.String())
+		}
+		if first := strings.SplitN(stdout.String(), "\n", 2)[0]; first != "PASS  x.json" {
+			t.Errorf("Run(%q) writes %q first, want %q", p, first, "PASS  x.json")
+		}
+	}
+}
+
+// TestDoubleDashEndsOptions pins that the first "--" ends the options: each
+// argument after it is a path, one that starts with "-" included, and "--"
+// itself names nothing, so "--" alone verifies what no argument does. An
+// option before it is still read. Run named "--" an unknown option, exit 2,
+// so a fixture file named -h.json could be named only as ./-h.json.
+func TestDoubleDashEndsOptions(t *testing.T) {
+	baseline, err := fs.ReadFile(atxconformance.Fixtures, "fixtures/baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "-h.json"), baseline, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, dir)
+	run := func(args ...string) (int, string, string) {
+		var stdout, stderr bytes.Buffer
+		code := Run(args, &stdout, &stderr)
+		return code, stdout.String(), stderr.String()
+	}
+
+	code, stdout, stderr := run("--", "-h.json")
+	if code != 0 || stderr != "" || !strings.HasPrefix(stdout, "PASS  -h.json\n") ||
+		!strings.HasSuffix(stdout, "\nsummary: 1 pass, 0 fail (1 fixtures)\n") {
+		t.Errorf("Run(-- -h.json) exits %d with stdout %q and stderr %q; want -h.json verified, exit 0",
+			code, stdout, stderr)
+	}
+	for _, c := range []struct {
+		args   []string
+		stderr string
+	}{
+		{[]string{"--", "-h.json", "--help"}, "error: --help: no such file or directory\n"},
+		{[]string{"--", "--version"}, "error: --version: no such file or directory\n"},
+		{[]string{"--", "--"}, "error: --: no such file or directory\n"},
+		{[]string{"--", ""}, "error: an empty argument names no fixture file or directory\n"},
+		{[]string{"-x", "--", "-h.json"}, "unknown option: -x\n" + usage},
+	} {
+		if code, stdout, stderr := run(c.args...); code != 2 || stdout != "" || stderr != c.stderr {
+			t.Errorf("Run(%q) exits %d with stdout %q and stderr %q; want exit 2 and stderr %q",
+				c.args, code, stdout, stderr, c.stderr)
+		}
+	}
+	if code, stdout, stderr := run("--version", "--", "-x"); code != 0 || stderr != "" ||
+		!strings.HasPrefix(stdout, "atx-verify: ") {
+		t.Errorf("Run(--version -- -x) exits %d with stdout %q and stderr %q; want the version line, exit 0",
+			code, stdout, stderr)
+	}
+	_, noArgument, _ := run()
+	if code, stdout, stderr := run("--"); code != 0 || stderr != "" || stdout != noArgument {
+		t.Errorf("Run(--) exits %d with stdout %q and stderr %q; want the report Run writes with no argument, exit 0",
+			code, stdout, stderr)
 	}
 }
 

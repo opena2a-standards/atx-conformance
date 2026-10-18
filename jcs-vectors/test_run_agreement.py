@@ -102,6 +102,14 @@ class RunAgreementInstall(unittest.TestCase):
         self.assertEqual(len(npm_calls), 1, calls)
         self.assertEqual(npm_calls[0].split()[1], "ci", calls)
 
+    def test_install_runs_no_install_script(self):
+        # `npm ci` ran each package's install scripts inside the gate; a
+        # lockfile update adding a package that has one would have run it.
+        _, calls = self.run_gate(NPM_FAIL_STUB)
+        npm_calls = [c for c in calls if c.startswith("npm ")]
+        self.assertEqual(len(npm_calls), 1, calls)
+        self.assertIn("--ignore-scripts", npm_calls[0].split(), calls)
+
     def test_successful_install_runs_ts_leg_and_passes(self):
         proc, calls = self.run_gate(NPM_OK_STUB)
         out = proc.stdout

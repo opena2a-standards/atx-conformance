@@ -1,6 +1,6 @@
 module github.com/opena2a-standards/atx-conformance/jcs-vectors
 
-go 1.24
+go 1.22.0
 
 require (
 	github.com/cloudflare/circl v1.6.2

@@ -12,6 +12,15 @@ they should not.
 
 ### Added
 
+- Both reference verifiers read the first `--` as the end of the options
+  (#224): each argument after it is a path, one that starts with `-`
+  included, and `--` itself names nothing. `atx-verify -- -h.json` and
+  `python3 verify.py -- -h.json` verify a fixture file named `-h.json`,
+  where both named `--` an unknown option and exited 2, and the file could
+  be named only with a directory in front, as `./-h.json`. An option before
+  `--` is still read, and `--` alone is no path argument. Both usages have
+  a `--` line. `TestDoubleDashEndsOptions` and the Python verifier's
+  `ArgumentContract` class pin it. No fixture changes.
 - Both reference verifiers take `--version`, and name an unknown option on
   stderr above their usage lines, exit 2 (#208): `verify --json` wrote
   `error: stat --json: no such file or directory`, and writes
@@ -103,6 +112,65 @@ they should not.
   `docs/captures/go-verifier.txt` is unchanged byte for byte; its sidecar
   records the new tree id of `verifiers/go/verifier`, whose `--version`
   comment changed (#223). No fixture changes.
+- The Go verifier's usage and `--version` lines name the program
+  `atx-verify`, the published entry point `cmd/atx-verify` (#224). They
+  named `verify`, the name of neither main package's binary (`atx-verify`,
+  `go`): `--help` wrote `usage: verify [fixture.json|dir]...` and writes
+  `usage: atx-verify [fixture.json|dir]...`, and `--version` writes
+  `atx-verify: <module> <version>, built with <Go release>`. The parity
+  gate builds its Go binary as `atx-verify` and strips that name. No
+  fixture changes.
+- `scripts/parity/parity.py` runs twenty-one argument lists, from fifteen
+  (#224): no argument; `-- -h.json` and `-- -h.json --help`; and an
+  absolute path through a symbolic link to the working directory, through
+  the link's target and outside the working directory. Every list runs from
+  a symbolic link to the scratch directory, with `PWD` naming the link, as
+  a shell names a directory it changed into through one; run on the
+  verifiers before this change, the gate fails on the two paths under the
+  link. No argument is held to the difference the verifiers document
+  rather than to agreement: the Go verifier must report the fixture set its
+  module embeds, each fixture `PASS  fixtures/<name>`, and exit 0, and the
+  Python verifier, which has no embedded set, must write its usage and
+  exit 2. A table row with more than five verdict lines names their count
+  and last line. The self-test adds five cases (39 cases green, from 34).
+  `docs/running-the-verifiers.md` names the no-argument difference and
+  `docs/continuous-verification.md` the new lists. No fixture changes.
+- `jcs-vectors/go.mod` declares `go 1.22.0`, as the root module and
+  `scripts/generate-fixtures` do, where it declared `go 1.24` (#224): under
+  `GOTOOLCHAIN=go1.22.12`, `go mod tidy` there stopped with
+  `go: go.mod requires go >= 1.24`, and CI sets up Go 1.22. Under go1.22.12
+  and go1.26.3 the module builds and vets, `go run ./check` passes its 8
+  vectors and `go mod tidy` changes nothing; under go1.22.12 `go run ./pin`
+  writes the vectors and `MANIFEST.sha256` byte for byte and
+  `run-agreement.sh` ends `BYTE-AGREEMENT GATE: PASS`.
+  `scripts/generate-fixtures/go.sum` holds the four `h1:` lines
+  `go mod tidy` adds there (go-spew, go-difflib, testify, yaml.v3), which
+  makes it the root module's `go.sum` byte for byte; the generator under
+  go1.22.12 rewrites the 25 fixtures and `MANIFEST.sha256` byte for byte.
+  `run-agreement.sh` installs the TS dependency with
+  `npm ci --ignore-scripts`, which tells npm not to run package scripts
+  inside the gate; `test_run_agreement.py` checks the flag. No fixture
+  changes.
+- README.md, `docs/running-the-verifiers.md` and `COSIGNERS.md` run the
+  Python verifier in a virtual environment, `python3 -m venv .venv` and
+  `. .venv/bin/activate`, then `python3 -m pip install -r requirements.txt`
+  and `python3 verify.py ../../fixtures`, and say one is expected (#224).
+  They ran `pip install` and `python verify.py`, and on a macOS host
+  outside a virtual environment `command -v pip` and `command -v python`
+  print nothing while `pip3` and `python3` exist. The Python verifier's
+  missing-dependency line names
+  `python3 -m pip install -r requirements.txt`, as `jcs-vectors/README.md`
+  does.
+  `docs/running-the-verifiers.md` says under "Which commit a run verified"
+  what `--version` names for each way of running a verifier, as measured:
+  the Go verifier run through the module proxy names the commit's
+  pseudo-version; built from a git clone it names it under Go 1.24.0 and
+  1.26.3 and `(devel)` under 1.22.12 and 1.23.0; built from a `git archive`
+  copy it names `(devel)`, and the Python verifier run from that copy names
+  no commit. `docs/scope.md` says both reference verifiers check the CRL,
+  §1.3 step 6, at their step 3, before any signature, so the count of
+  fixtures that reach signature verification follows their order. No
+  fixture changes.
 - The two reference verifiers read their arguments alike, and
   `scripts/parity/parity.py` holds them to it. An empty argument is a usage
   error on both, `error: an empty argument names no fixture file or
@@ -613,6 +681,19 @@ they should not.
 
 ### Fixed
 
+- Both reference verifiers name a fixture given by an absolute path under
+  the working directory alike when the working directory was entered
+  through a symbolic link (#224): each compares the working directory and
+  the directory holding the fixture with their links resolved. Run from a
+  link to a directory holding `fixtures/`, with `PWD` naming the link as a
+  shell sets it, the Go verifier wrote `PASS  fixtures/baseline-valid.json`
+  for the path through the link and the whole path for the same file
+  through the link's target, and the Python verifier the reverse; both
+  write `PASS  fixtures/baseline-valid.json` for each. The Python verifier
+  removes a `..` from that directory with the element before it before it
+  resolves the directory's links, as Go's `filepath.Dir` does.
+  `TestPathUnderLinkedWorkingDirectory` and the Python verifier's
+  `ArgumentContract` class pin it. No fixture changes.
 - The Python verifier names a fixture in its report as the Go verifier
   does, however its argument is spelled (#220). It made each argument a
   `pathlib.Path`, which drops `./` and a trailing `/`, collapses `//` and
