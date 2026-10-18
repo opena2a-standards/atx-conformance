@@ -23,7 +23,8 @@ typed member, whose decode error writes the value to 8 levels), an integer
 with more digits than int() converts, bytes that are not UTF-8, the
 single-pass string-literal scan, --help, an unknown option, --version, an
 empty argument, a directory whose fixtures entry is a file, a directory
-holding a subdirectory or a symbolic link named *.json, a path spelled
+holding a subdirectory or a symbolic link named *.json, a directory that
+cannot be listed, a path spelled
 with ./, // or .., which the report names as the Go reference verifier names
 it, a file named with a trailing /, "--", a path under a working
 directory entered through a symbolic link, and a .. after a symbolic link,
@@ -2320,6 +2321,30 @@ class ArgumentContract(unittest.TestCase):
                     self.assertEqual((got, err), (code, ""), out)
                     self.assertEqual(_verdict_lines(out), want)
                     self.assertEqual(out.splitlines()[-1], summary)
+
+    @unittest.skipIf(os.name != "posix" or os.geteuid() == 0, "needs a POSIX user other than root")
+    def test_a_directory_that_cannot_be_listed_is_refused(self):
+        # A directory os.scandir could not open gave no name, and the run
+        # wrote `no fixture *.json files found`, exit 2, though the directory
+        # held a fixture. The Go reference verifier writes the error
+        # os.ReadDir returns, `error: open locked: permission denied`, exit 2,
+        # naming the directory as the argument spells it, or a repository
+        # root's fixtures/ when that is the directory it cannot list.
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            locked = ("locked", "r/fixtures")
+            for directory in locked:
+                os.makedirs(directory)
+                Path(directory, "x.json").write_bytes(BASELINE_V10.read_bytes())
+                os.chmod(directory, 0)
+            try:
+                for arg, named in (("locked", "locked"), ("locked/", "locked/"),
+                                   ("./locked", "./locked"), ("r", "r/fixtures")):
+                    with self.subTest(arg=arg):
+                        self.assertEqual(_run_main(arg), (
+                            2, "", f"error: open {named}: permission denied\n"))
+            finally:
+                for directory in locked:
+                    os.chmod(directory, 0o755)
 
     def test_double_dash_ends_the_options(self):
         # "--" was an unknown option, exit 2, so a fixture file named -h.json

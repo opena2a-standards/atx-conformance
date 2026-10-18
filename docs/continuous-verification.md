@@ -37,8 +37,9 @@ sentence below:
    argument, `-h` and `--help` at several positions, `--version` and an
    unknown option after a path, a repository root, a directory whose
    `fixtures` entry is a file, a path that does not exist, a directory with
-   no `*.json`, a directory holding a subdirectory named `*.json`, a path
-   named twice, a file spelled with `./` and `//`, a
+   no `*.json`, a directory holding a subdirectory named `*.json`, a
+   directory that cannot be listed, a path named twice, a file spelled
+   with `./` and `//`, a
    directory spelled with `..`, a directory spelled with a `..` after a
    symbolic link, a file named with a trailing `/`, a path and an option
    after `--`, an absolute path through the link, through its target and
