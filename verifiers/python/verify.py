@@ -111,7 +111,11 @@ A fixture named as a file is named in the report as its argument spells it,
 an unknown option and the error line of a path that does not exist or
 cannot be read are written as bytes (_say_err), so an argument that is not
 UTF-8 is written as the bytes it was given, as the Go reference verifier
-writes it, and not as a backslash escape.
+writes it, and not as a backslash escape. A report line naming a fixture
+whose path is not UTF-8, its PASS or FAIL line, writes the path's bytes too,
+as the argument gave them or as the directory listing named the file:
+standard output is set to write each surrogate escape as the byte it stands
+for before the first report line (_write_surrogate_escapes_as_bytes, _say).
 
 The signatures line writes each boolean as true or false, and a rejection
 reason that quotes the credential's atcVersion or a duplicate member name
@@ -1441,12 +1445,47 @@ def _rel_path(path: str) -> str:
     return path
 
 
+# A run of surrogate escapes, U+DC80 to U+DCFF: os.fsdecode, and so sys.argv
+# and os.scandir, hold each byte of a path that does not decode as one, the
+# byte 0xff as \udcff.
+_SURROGATE_ESCAPES = re.compile("([\udc80-\udcff]+)")
+
+
 def _say(text: str, end: str = "\n") -> None:
     """print() for a line that quotes a fixture or its path. A character
     standard output cannot encode, an unpaired surrogate for one, is written
-    as a backslash escape instead of raising and ending the run."""
+    as a backslash escape instead of raising and ending the run, except a
+    surrogate escape where standard output writes it as the byte it stands
+    for (errors="surrogateescape"), as main sets it to before the first
+    report line. sys.argv and os.scandir hold each byte of a path that does
+    not decode as one, so a path that is not UTF-8 is then written as its
+    bytes, as the Go reference verifier writes it, where the line was
+    written with the six characters \\udcff for the byte 0xff, in
+    `PASS  d/\\udcff.json`."""
     encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
-    print(text.encode(encoding, "backslashreplace").decode(encoding), end=end)
+
+    def escaped(part: str) -> str:
+        return part.encode(encoding, "backslashreplace").decode(encoding)
+
+    if getattr(sys.stdout, "errors", None) != "surrogateescape":
+        print(escaped(text), end=end)
+        return
+    # split puts each run of surrogate escapes at an odd index.
+    parts = _SURROGATE_ESCAPES.split(text)
+    print("".join(part if i % 2 else escaped(part) for i, part in enumerate(parts)), end=end)
+
+
+def _write_surrogate_escapes_as_bytes(stream: Any) -> None:
+    """Set stream, standard output, to write each surrogate escape as the
+    byte it stands for, so _say writes a path that is not UTF-8 as its
+    bytes. A stream that cannot be reconfigured, such as an io.StringIO, is
+    left as it is. reconfigure flushes the stream before it sets errors, so
+    main calls this before the first report line, with nothing yet written
+    to flush. Writing a line's bytes to sys.stdout.buffer instead would need
+    a flush of the text written before it, to keep the lines in order."""
+    reconfigure = getattr(stream, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(errors="surrogateescape")
 
 
 def _say_err(text: str) -> None:
@@ -1546,6 +1585,7 @@ def main(argv: list[str]) -> int:
         sys.stderr.write("no fixture *.json files found\n")
         return 2
 
+    _write_surrogate_escapes_as_bytes(sys.stdout)
     total_pass = total_fail = 0
     for path in paths:
         name = _rel_path(path)

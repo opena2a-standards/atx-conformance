@@ -28,8 +28,9 @@ cannot be listed, a path spelled
 with ./, // or .., which the report names as the Go reference verifier names
 it, a file named with a trailing /, "--", a path under a working
 directory entered through a symbolic link, a .. after a symbolic link,
-which is read and named where the link leads, and an argument that is not
-UTF-8, which a line on stderr writes as its bytes.
+which is read and named where the link leads, an argument that is not
+UTF-8, which a line on stderr writes as its bytes, and a fixture path that
+is not UTF-8, which the report line naming it writes as its bytes.
 They hold the report to the Go reference verifier's text: a boolean, a
 string a reason quotes, and the whole report over fixtures/, which must be
 docs/captures/go-verifier.txt byte for byte. Two tests
@@ -293,6 +294,18 @@ def _run_main_utf8(*args: str) -> tuple[int, str]:
         code = verify.main(["verify.py", *args])
         out.flush()
     return code, raw.getvalue().decode("utf-8")
+
+
+def _run_main_stdout_bytes(*args: str) -> tuple[int, bytes]:
+    """verify.main with standard output a strict UTF-8 stream over bytes, as
+    _run_main_utf8 sets it, and the bytes written to it, which
+    _run_main_utf8 would fail to decode where a path is not UTF-8."""
+    raw = io.BytesIO()
+    out = io.TextIOWrapper(raw, encoding="utf-8", newline="\n")
+    with contextlib.redirect_stdout(out):
+        code = verify.main(["verify.py", *args])
+        out.flush()
+    return code, raw.getvalue()
 
 
 def _run_main_stderr_bytes(*args: str) -> tuple[int, str, bytes]:
@@ -2530,6 +2543,64 @@ class NonUTF8Argument(unittest.TestCase):
             )
         self.assertEqual((proc.returncode, proc.stdout, proc.stderr),
                          (2, b"", b"error: \xff: no such file or directory\n"))
+
+
+@unittest.skipIf(os.name != "posix", "a path of bytes that are not UTF-8 is a POSIX path")
+class NonUTF8FixtureName(unittest.TestCase):
+    """A fixture whose path is not UTF-8, which sys.argv and os.scandir hold
+    with each byte that does not decode as a surrogate escape, the byte 0xff
+    as \\udcff. The report line naming it wrote that escape as the six
+    characters \\udcff, where the Go reference verifier writes the byte.
+    scripts/parity/parity.py runs both verifiers on such a fixture, named as
+    a file and found in a directory, where the file system takes the name."""
+
+    def test_a_report_line_writes_a_listed_name_as_its_bytes(self):
+        # _json_names gives the name os.scandir gives a file named by the
+        # byte 0xff then .json, so this runs where the file system refuses
+        # such a name, and standard output is a strict UTF-8 stream over
+        # bytes, as a pipe gives it, which main sets to write the surrogate
+        # escape as its byte. Another character it cannot encode, U+D800 in
+        # the verify error, is still a backslash escape.
+        real_load, real_verify = verify.load_fixture, verify.verify_fixture
+
+        def raises(fixture):
+            raise RuntimeError("bad \ud800")
+
+        for verifier, code, first in (
+            (real_verify, 0, b"PASS  d/\xff.json"),
+            (raises, 1, b"FAIL  d/\xff.json  (verify error: RuntimeError: bad \\ud800)"),
+        ):
+            with self.subTest(first=first), tempfile.TemporaryDirectory() as tmp, \
+                    contextlib.chdir(tmp):
+                Path("d").mkdir()
+                with mock.patch.object(verify, "_json_names",
+                                       return_value=[os.fsdecode(b"\xff.json")]), \
+                        mock.patch.object(verify, "load_fixture",
+                                          lambda path: real_load(BASELINE_V10)), \
+                        mock.patch.object(verify, "verify_fixture", verifier):
+                    got, out = _run_main_stdout_bytes("d")
+                self.assertEqual((got, out.splitlines()[0]), (code, first), out)
+
+    def test_a_run_names_the_fixture_by_its_bytes(self):
+        # Run as a shell runs it, writing to the stream sys.stdout is: the
+        # Go reference verifier writes `PASS  d/`, the byte 0xff, then
+        # `.json`, for the directory and for the file named as an argument.
+        with tempfile.TemporaryDirectory() as tmp:
+            os.mkdir(os.path.join(tmp, "d"))
+            try:
+                Path(tmp, "d", os.fsdecode(b"\xff.json")).write_bytes(BASELINE_V10.read_bytes())
+            except OSError as exc:
+                # A file system that takes only UTF-8 names refuses it,
+                # APFS with EILSEQ.
+                self.skipTest(f"the file system refuses a name that is not UTF-8: {exc}")
+            for arg in (b"d", b"d/\xff.json"):
+                with self.subTest(arg=arg):
+                    proc = subprocess.run(
+                        [sys.executable, str(HERE / "verify.py"), arg],
+                        cwd=tmp, capture_output=True, timeout=120,
+                    )
+                    self.assertEqual((proc.returncode, proc.stderr), (0, b""), proc.stdout)
+                    self.assertEqual(proc.stdout.splitlines()[0], b"PASS  d/\xff.json")
 
 
 class OsWithoutGeteuid(unittest.TestCase):

@@ -696,6 +696,31 @@ they should not.
 
 ### Fixed
 
+- The Python reference verifier names a fixture whose path is not UTF-8 by
+  the path's bytes in its report, as the Go reference verifier names it
+  (#241). `sys.argv` and `os.scandir` hold a byte of a path that does not
+  decode as a surrogate escape, which the report line wrote as a backslash
+  escape: for `d`, a directory holding a copy of
+  `fixtures/baseline-valid.json` named by the byte 0xff then `.json`,
+  `python3 verify.py d` wrote `PASS  d/\udcff.json`, the six characters
+  `\udcff` where `atx-verify d` wrote the byte, both exit 0, and naming the
+  file as the argument gave the same two lines; both now write the byte.
+  The verifier sets standard output to write each surrogate escape as the
+  byte it stands for before the first report line. An unpaired surrogate
+  outside the escapes, U+D800 in a verify error for one, is still written
+  as a backslash escape. The Python verifier's `NonUTF8FixtureName` class
+  pins it; its test that runs the verifier on such a file is skipped where
+  the file system refuses the name, as APFS does. The "Arguments" section
+  of `docs/running-the-verifiers.md` says so. The argument table of
+  `scripts/parity/parity.py` runs 27 argument lists, from 25, adding that
+  file named as a file and found in a directory, which
+  `docs/continuous-verification.md` lists; where the file system refuses
+  the name, the two cases are skipped, each row saying why, and the PASS
+  line counts them. Each row of the `--json` report's `arguments` holds
+  `skipped`, null for a case that ran. With the Python verifier of the
+  previous commit, the gate fails on those two cases alone, run on Linux.
+  The self-test adds three cases (46 cases green, from 43). No fixture
+  changes.
 - `verifiers/python/test_verify.py` imports where Python's `os` has no
   `geteuid`, as on Windows (#240). `NonUTF8Argument`'s test of a directory
   that cannot be listed was decorated with `skipIf(os.geteuid() == 0, ...)`,
