@@ -36,8 +36,9 @@ sentence below:
    a scratch directory, with `PWD` naming the link. On each (an empty
    argument, `-h` and `--help` at several positions, `--version` and an
    unknown option after a path, a repository root, a directory whose
-   `fixtures` entry is a file, a path that does not exist, a directory with
-   no `*.json`, a directory holding a subdirectory named `*.json`, a
+   `fixtures` entry is a file, a path that does not exist, a path that is
+   not UTF-8, a directory with no `*.json`, a directory holding a
+   subdirectory named `*.json`, a
    directory that cannot be listed, a path named twice, a file spelled
    with `./` and `//`, a
    directory spelled with `..`, a directory spelled with a `..` after a

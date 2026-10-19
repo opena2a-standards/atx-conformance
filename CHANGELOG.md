@@ -696,6 +696,26 @@ they should not.
 
 ### Fixed
 
+- The Python reference verifier writes an argument that is not UTF-8 on
+  stderr as the bytes it was given, as the Go reference verifier writes it
+  (#238). `sys.argv` holds a byte that does not decode as a surrogate
+  escape, which `sys.stderr` wrote as a backslash escape: for the one byte
+  0xff, `python3 verify.py $'\xff'` wrote
+  `error: \udcff: no such file or directory`, the six characters `\udcff`
+  where `atx-verify $'\xff'` wrote the byte, both exit 2; both now write
+  the byte. The line naming an unknown option goes through the same write:
+  for `-` followed by that byte, both write `unknown option: -` and the
+  byte. The Python verifier's `NonUTF8Argument` class pins it; its test of
+  a directory that cannot be listed, named by that byte, is skipped where
+  the file system refuses such a name, as APFS does. The "Arguments"
+  section of `docs/running-the-verifiers.md` says so. The argument table
+  of `scripts/parity/parity.py` runs 25 argument lists, from 24, adding
+  `{xff}`, the byte 0xff, and reads a byte of a verifier's output that is
+  not UTF-8 as a surrogate escape, where the byte the Go verifier writes
+  raised `UnicodeDecodeError`; with the Python verifier of the previous
+  commit, the gate fails on that case alone. The self-test adds one case
+  (43 cases green, from 42): a verifier that writes the six characters
+  `\udcff` for that byte is reported as a divergence. No fixture changes.
 - The Python reference verifier refuses a directory it cannot list as the
   Go reference verifier refuses it (#236). It gave no name for a directory
   `os.scandir` could not open: with `locked/` holding a copy of

@@ -27,8 +27,9 @@ holding a subdirectory or a symbolic link named *.json, a directory that
 cannot be listed, a path spelled
 with ./, // or .., which the report names as the Go reference verifier names
 it, a file named with a trailing /, "--", a path under a working
-directory entered through a symbolic link, and a .. after a symbolic link,
-which is read and named where the link leads.
+directory entered through a symbolic link, a .. after a symbolic link,
+which is read and named where the link leads, and an argument that is not
+UTF-8, which a line on stderr writes as its bytes.
 They hold the report to the Go reference verifier's text: a boolean, a
 string a reason quotes, and the whole report over fixtures/, which must be
 docs/captures/go-verifier.txt byte for byte. Two tests
@@ -288,6 +289,20 @@ def _run_main_utf8(*args: str) -> tuple[int, str]:
         code = verify.main(["verify.py", *args])
         out.flush()
     return code, raw.getvalue().decode("utf-8")
+
+
+def _run_main_stderr_bytes(*args: str) -> tuple[int, str, bytes]:
+    """verify.main with standard error a UTF-8 stream over bytes that writes
+    a character it cannot encode as a backslash escape, as sys.stderr writes
+    it, and the bytes written to it. The io.StringIO of _run_main holds an
+    argument's surrogate escapes as they are, and has no bytes under it."""
+    raw = io.BytesIO()
+    err = io.TextIOWrapper(raw, encoding="utf-8", errors="backslashreplace", newline="\n")
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = verify.main(["verify.py", *args])
+        err.flush()
+    return code, out.getvalue(), raw.getvalue()
 
 
 def _load_serializer(path: Path):
@@ -2460,6 +2475,57 @@ class ArgumentContract(unittest.TestCase):
                         self.assertEqual(_verdict_lines(out), [printed, "observed: REJECT[EXPIRED]"])
                         self.assertIn(f"`{arg}`", text)
                         self.assertIn(f"`{printed}`", text)
+
+
+@unittest.skipIf(os.name != "posix", "an argument of bytes that are not UTF-8 is a POSIX argument")
+class NonUTF8Argument(unittest.TestCase):
+    """An argument the operating system passes as bytes that are not UTF-8,
+    which sys.argv holds with each byte that does not decode as a surrogate
+    escape, the byte 0xff as \\udcff. sys.stderr wrote that escape as the
+    six characters \\udcff in a line that quotes the argument, where the Go
+    reference verifier writes the byte. scripts/parity/parity.py runs both
+    verifiers on the byte 0xff."""
+
+    def test_a_line_on_stderr_writes_the_argument_as_its_bytes(self):
+        xff = os.fsdecode(b"\xff")
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            Path("x.json").write_bytes(BASELINE_V10.read_bytes())
+            for args, stderr in (
+                ((xff,), b"error: \xff: no such file or directory\n"),
+                ((f"x.json/{xff}",), b"error: stat x.json/\xff: not a directory\n"),
+                ((f"-{xff}",), b"unknown option: -\xff\n" + USAGE.encode()),
+            ):
+                with self.subTest(args=args):
+                    self.assertEqual(_run_main_stderr_bytes(*args), (2, "", stderr))
+
+    @unittest.skipIf(os.geteuid() == 0, "needs a user other than root")
+    def test_a_directory_that_cannot_be_listed_is_named_by_its_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            try:
+                os.mkdir(b"\xff")
+            except OSError as exc:
+                # A file system that takes only UTF-8 names refuses it,
+                # APFS with EILSEQ.
+                self.skipTest(f"the file system refuses a name that is not UTF-8: {exc}")
+            Path(os.fsdecode(b"\xff"), "x.json").write_bytes(BASELINE_V10.read_bytes())
+            os.chmod(b"\xff", 0)
+            try:
+                self.assertEqual(_run_main_stderr_bytes(os.fsdecode(b"\xff")), (
+                    2, "", b"error: open \xff: permission denied\n"))
+            finally:
+                os.chmod(b"\xff", 0o755)
+
+    def test_a_run_writes_the_first_stderr_line_go_writes(self):
+        # Run as a shell runs it, writing to the stream sys.stderr is: the
+        # Go reference verifier writes `error: `, the byte 0xff, then
+        # `: no such file or directory`, and exits 2.
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = subprocess.run(
+                [sys.executable, str(HERE / "verify.py"), b"\xff"],
+                cwd=tmp, capture_output=True, timeout=120,
+            )
+        self.assertEqual((proc.returncode, proc.stdout, proc.stderr),
+                         (2, b"", b"error: \xff: no such file or directory\n"))
 
 
 class JCSVectorsThroughVerifierProjection(unittest.TestCase):

@@ -31,9 +31,9 @@ After the fixture table the gate runs the argument table, ARGUMENT_CASES:
 argument lists no fixture can carry (an empty argument, -h and --help at
 several positions, --version and an unknown option after a path, a
 repository root, a directory whose `fixtures` entry is a file, a path that
-does not exist, a directory with no *.json, a directory holding a
-subdirectory named *.json, a directory that cannot be listed, a path named
-twice, a file spelled
+does not exist, a path that is not UTF-8, a directory with no *.json, a
+directory holding a subdirectory named *.json, a directory that cannot be
+listed, a path named twice, a file spelled
 with ./ and //, a directory spelled with .., a directory spelled with a ..
 after a symbolic link, a file named with a trailing /, a path and an option
 after `--`, an absolute path through a symbolic link to the working
@@ -44,7 +44,9 @@ into through one. Both must exit with the same code and write the same
 first stderr line and the same verdict lines (each PASS or FAIL line, its
 observed verdict and category, the summary), once the program name each
 verifier calls itself (`atx-verify`, `verify.py`) is stripped; a case they
-differ on is a divergence. No argument is the one case the two answer
+differ on is a divergence. A byte of their output that is not UTF-8 is read
+as a surrogate escape, so the byte 0xff and the six characters \\udcff
+differ. No argument is the one case the two answer
 differently by design: the Go verifier must verify the fixture set its
 module embeds, each fixture passing, and exit 0, and the Python verifier,
 which has none, must write its usage and exit 2; any other outcome is a
@@ -134,8 +136,9 @@ OBSERVED_RE = re.compile(r"^\s*observed:\s+(ACCEPT|REJECT\[([A-Z_]+))")
 # ARGUMENT_FIXTURE as x.json, -h.json is ARGUMENT_FIXTURE, and nothing there
 # is named missing.
 # In an argument, {link} is the link's absolute path, {target} the
-# directory's, its symbolic links resolved, and {fixture} the absolute path
-# of the fixture the table copies, outside both.
+# directory's, its symbolic links resolved, {fixture} the absolute path of
+# the fixture the table copies, outside both, and {xff} NOT_UTF8, which
+# names nothing there either.
 ARGUMENT_CASES: list[tuple[str, list[str]]] = [
     ("no argument", []),
     ("an empty argument", [""]),
@@ -148,6 +151,7 @@ ARGUMENT_CASES: list[tuple[str, list[str]]] = [
     ("a repository root", ["root"]),
     ("a fixtures entry that is a file", ["fixfile"]),
     ("a path that does not exist", ["missing"]),
+    ("a path that is not UTF-8", ["{xff}"]),
     ("a directory with no *.json", ["nojson"]),
     ("a subdirectory named *.json", ["subdir"]),
     ("a directory that cannot be listed", ["locked"]),
@@ -164,6 +168,9 @@ ARGUMENT_CASES: list[tuple[str, list[str]]] = [
 ]
 # The shipped fixture the argument table copies to fixfile/x.json.
 ARGUMENT_FIXTURE = "baseline-valid.json"
+# The argument {xff} stands for: the byte 0xff, which is not UTF-8, as
+# sys.argv holds it, a surrogate escape, which subprocess passes as the byte.
+NOT_UTF8 = os.fsdecode(b"\xff")
 # Verdict lines an outcome in a report line names one by one; a longer run,
 # such as the walk of a whole fixture set, is named by its count and last line.
 SHOWN_VERDICT_LINES = 5
@@ -387,10 +394,12 @@ def verdict_lines(stdout: str) -> list[str]:
 def run_case(spec: dict, args: list[str], cwd: Path) -> dict:
     """One verifier's outcome on one argument list, run from cwd with PWD
     naming it: its exit code, first stderr line and verdict lines, without
-    its program name."""
+    its program name. Its output is read as UTF-8, a byte that is not UTF-8
+    as a surrogate escape: read strictly, the byte 0xff the Go verifier
+    writes for the argument {xff} raised UnicodeDecodeError."""
     proc = subprocess.run(
         spec["argv"] + args, cwd=cwd, capture_output=True, text=True,
-        env={**os.environ, "PWD": str(cwd)},
+        encoding="utf-8", errors="surrogateescape", env={**os.environ, "PWD": str(cwd)},
     )
     stderr = proc.stderr.splitlines()
     return {
@@ -445,10 +454,11 @@ def compare_arguments(
     for no argument, are not each the one _answers_no_argument documents.
     """
     cwd = _argument_scratch(scratch, fixture)
-    # str.format expands {link}, {target} and {fixture}, so a misspelt name
-    # raises instead of reaching a verifier as written.
+    # str.format expands {link}, {target}, {fixture} and {xff}, so a
+    # misspelt name raises instead of reaching a verifier as written.
     names = {
         "link": str(cwd), "target": os.path.realpath(cwd), "fixture": os.path.abspath(fixture),
+        "xff": NOT_UTF8,
     }
     embedded = sorted(p.name for p in fixture.parent.glob("*.json"))
     rows: list[dict] = []
@@ -612,12 +622,14 @@ def _argument_stand_in(
     """An argument-table stand-in calling itself program, embedding a
     fixture set or not: for an argument list outcomes holds it writes that
     stdout and stderr and exits with that code; for any other it writes
-    nothing and exits 0."""
+    nothing and exits 0. It writes each as the bytes os.fsencode gives, so a
+    surrogate escape, NOT_UTF8 for one, is written as the byte it stands for,
+    as the Go verifier writes an argument's bytes."""
     src = (
-        "import sys\n"
+        "import os, sys\n"
         f"out, err, code = {outcomes!r}.get(tuple(sys.argv[1:]), ('', '', 0))\n"
-        "sys.stdout.write(out)\n"
-        "sys.stderr.write(err)\n"
+        "sys.stdout.buffer.write(os.fsencode(out))\n"
+        "sys.stderr.buffer.write(os.fsencode(err))\n"
         "sys.exit(code)\n"
     )
     return {"argv": [sys.executable, "-c", src], "program": program, "embeds": embeds}
@@ -698,7 +710,7 @@ def self_test() -> int:
     unknown = _refusal(["--bogus"])
 
     # Argument-table stand-ins: "one", which embeds a fixture set, writes kept
-    # for fourteen cases and for no argument its report of that set, the
+    # for fifteen cases and for no argument its report of that set, the
     # ARGUMENT_FIXTURE beside the table's fixture; "two", which embeds none,
     # writes kept and for no argument its usage, with one case's outcome
     # changed. A case is run alone, by name, except in the gate runs, which
@@ -714,7 +726,7 @@ def self_test() -> int:
         "a path named twice", "no argument", "a path after --")
     link_case, target_case = "an absolute path via the link", "an absolute path via its target"
     link_dotdot_case, subdir_case = "a .. after a symbolic link", "a subdirectory named *.json"
-    locked_case = "a directory that cannot be listed"
+    locked_case, xff_case = "a directory that cannot be listed", "a path that is not UTF-8"
     argv_of = {case: tuple(args) for case, args in ARGUMENT_CASES}
     fixfile = (
         "PASS  fixfile/x.json\n       expected: ACCEPT\n       observed: ACCEPT\n"
@@ -751,6 +763,9 @@ def self_test() -> int:
         argv_of[locked_case]: ("", "error: open locked: permission denied\n", 2),
         argv_of[slash_case]: ("", "error: stat fixfile/x.json/: not a directory\n", 2),
         argv_of[dashdash_case]: (fixfile[0].replace("fixfile/x.json", "-h.json"), "", 0),
+        # Keyed on the argument as the stand-in's sys.argv holds it, not on
+        # {xff} as ARGUMENT_CASES writes it.
+        (NOT_UTF8,): ("", f"error: {NOT_UTF8}: no such file or directory\n", 2),
     }
     embedded = (fixfile[0].replace("fixfile/x.json", f"fixtures/{ARGUMENT_FIXTURE}"), "", 0)
     no_argument = argv_of[no_argument_case]
@@ -837,6 +852,11 @@ def self_test() -> int:
         {argv_of[locked_case]: ("", "no fixture *.json files found\n", 2)}), locked_case)
     args_slash = _argument_divergences(changed(
         {argv_of[slash_case]: passes("fixfile/x.json")}), slash_case)
+    # "two" as a verifier that writes the byte 0xff of an argument as the
+    # six characters \udcff, as sys.stderr writes the surrogate escape
+    # sys.argv holds for it.
+    args_xff = _argument_divergences(changed(
+        {(NOT_UTF8,): ("", "error: \\udcff: no such file or directory\n", 2)}), xff_case)
     # With no argument: both as documented; "one" writing its usage although
     # it embeds a fixture set; "two" reporting a set although it embeds none.
     args_documented = _argument_divergences(changed({}), no_argument_case)
@@ -1025,6 +1045,12 @@ def self_test() -> int:
              "one exit 2, stderr 'error: stat fixfile/x.json/: not a directory'; "
              "two exit 0, verdict lines ['PASS  fixfile/x.json', 'observed: ACCEPT', "
              "'summary: 1 pass, 0 fail (1 fixtures)']"]),
+        ("a path that is not UTF-8, which one verifier writes as a backslash escape "
+         "rather than as its byte, is a divergence",
+         args_xff == [
+             "argument case \"a path that is not UTF-8\" ('{xff}'): "
+             r"one exit 2, stderr 'error: \udcff: no such file or directory'; "
+             r"two exit 2, stderr 'error: \\udcff: no such file or directory'"]),
         ("with no argument, a verifier that embeds a fixture set reports it and exits 0, "
          "and one that embeds none writes its usage and exits 2, which is no divergence",
          args_documented == []),

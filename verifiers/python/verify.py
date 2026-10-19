@@ -107,7 +107,11 @@ reference verifier verifies the fixture set its module embeds; this verifier
 has no embedded set.
 
 A fixture named as a file is named in the report as its argument spells it,
-./ and // included, as the Go reference verifier names it.
+./ and // included, as the Go reference verifier names it. The line naming
+an unknown option and the error line of a path that does not exist or
+cannot be read are written as bytes (_say_err), so an argument that is not
+UTF-8 is written as the bytes it was given, as the Go reference verifier
+writes it, and not as a backslash escape.
 
 The signatures line writes each boolean as true or false, and a rejection
 reason that quotes the credential's atcVersion or a duplicate member name
@@ -1445,6 +1449,25 @@ def _say(text: str, end: str = "\n") -> None:
     print(text.encode(encoding, "backslashreplace").decode(encoding), end=end)
 
 
+def _say_err(text: str) -> None:
+    """sys.stderr.write for a line that quotes an argument. sys.argv holds
+    each byte of an argument that does not decode, as 0xff does not, as a
+    surrogate escape, which sys.stderr writes as a backslash escape, the six
+    characters \\udcff for the byte 0xff in
+    `error: \\udcff: no such file or directory`, where the Go reference
+    verifier writes the byte. The line is written to the binary stream under
+    sys.stderr as the bytes os.fsencode gives, the argument's own bytes among
+    them, and as text to a stream with no binary stream under it, such as an
+    io.StringIO."""
+    stream = getattr(sys.stderr, "buffer", None)
+    if stream is None:
+        sys.stderr.write(text)
+        return
+    sys.stderr.flush()
+    stream.write(os.fsencode(text))
+    stream.flush()
+
+
 _USAGE = """\
 usage: verify.py <fixture.json|dir>...
   -h, --help     print this usage and exit 0
@@ -1500,7 +1523,7 @@ def main(argv: list[str]) -> int:
     # is no path, and is named rather than reported as a missing file.
     for arg in options:
         if len(arg) > 1 and arg.startswith("-") and arg != "--version":
-            sys.stderr.write(f"unknown option: {arg}\n{_USAGE}")
+            _say_err(f"unknown option: {arg}\n{_USAGE}")
             return 2
     if "--version" in options:
         sys.stdout.write(_version_line())
@@ -1517,7 +1540,7 @@ def main(argv: list[str]) -> int:
     try:
         paths = expand_paths(args)
     except OSError as exc:
-        sys.stderr.write(f"error: {exc}\n")
+        _say_err(f"error: {exc}\n")
         return 2
     if not paths:
         sys.stderr.write("no fixture *.json files found\n")
