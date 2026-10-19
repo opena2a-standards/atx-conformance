@@ -24,13 +24,15 @@ with more digits than int() converts, bytes that are not UTF-8, the
 single-pass string-literal scan, --help, an unknown option, --version, an
 empty argument, a directory whose fixtures entry is a file, a directory
 holding a subdirectory or a symbolic link named *.json, a directory that
-cannot be listed, a path spelled
+cannot be listed, a fixture file that cannot be read, whose load error is
+worded as the Go reference verifier words it, a path spelled
 with ./, // or .., which the report names as the Go reference verifier names
 it, a file named with a trailing /, "--", a path under a working
 directory entered through a symbolic link, a .. after a symbolic link,
 which is read and named where the link leads, an argument that is not
 UTF-8, which a line on stderr writes as its bytes, and a fixture path that
-is not UTF-8, which the report line naming it writes as its bytes.
+is not UTF-8, which the report line naming it, and the load error of such a
+file that cannot be read, write as its bytes.
 They hold the report to the Go reference verifier's text: a boolean, a
 string a reason quotes, and the whole report over fixtures/, which must be
 docs/captures/go-verifier.txt byte for byte. Two tests
@@ -50,6 +52,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import errno
 import importlib.util
 import io
 import json
@@ -2332,7 +2335,8 @@ class ArgumentContract(unittest.TestCase):
         # entries os.ReadDir does not type as a directory: it skips the
         # subdirectory, in a directory argument and in a repository root's
         # fixtures/, and keeps a symbolic link named *.json whatever it links
-        # to, so a link to a directory fails to load.
+        # to, so a link to a directory fails to load, with the error
+        # os.ReadFile returns there.
         with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
             for directory in ("d/sub.json", "r/fixtures/sub.json", "l/real"):
                 os.makedirs(directory)
@@ -2344,8 +2348,8 @@ class ArgumentContract(unittest.TestCase):
                  "summary: 1 pass, 0 fail (1 fixtures)"),
                 ("r", 0, ["PASS  r/fixtures/x.json", "observed: ACCEPT"],
                  "summary: 1 pass, 0 fail (1 fixtures)"),
-                ("l", 1, ["FAIL  l/link.json  (load error: [Errno 21] Is a directory: "
-                          "'l/link.json')", "PASS  l/x.json", "observed: ACCEPT"],
+                ("l", 1, ["FAIL  l/link.json  (load error: read l/link.json: is a directory)",
+                          "PASS  l/x.json", "observed: ACCEPT"],
                  "summary: 1 pass, 1 fail (2 fixtures)"),
             ):
                 with self.subTest(arg=arg):
@@ -2494,6 +2498,52 @@ class ArgumentContract(unittest.TestCase):
                         self.assertIn(f"`{printed}`", text)
 
 
+class UnreadableFixture(unittest.TestCase):
+    """A fixture file the verifier cannot read fails to load with the error
+    the Go reference verifier's os.ReadFile returns, which names the step
+    that failed and the path as spelled. Path.read_bytes raised Python's
+    OSError, `[Errno 13] Permission denied: 'd/x.json'`, the path written
+    as a Path holds it and quoted through repr. scripts/parity/parity.py
+    runs both verifiers on such a file."""
+
+    @unittest.skipIf(os.name != "posix" or os.geteuid() == 0, "needs a POSIX user other than root")
+    def test_a_file_that_cannot_be_read_is_named_as_go_names_it(self):
+        # The error names the path as spelled, ./d//x.json as written where a
+        # Path wrote d/x.json, and an absolute path whole, though the report
+        # line names that file relative to the working directory.
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            os.mkdir("d")
+            Path("d", "x.json").write_bytes(BASELINE_V10.read_bytes())
+            os.chmod(os.path.join("d", "x.json"), 0)
+            absolute = os.path.join(os.getcwd(), "d", "x.json")
+            for arg, line in (
+                ("d", "FAIL  d/x.json  (load error: open d/x.json: permission denied)"),
+                ("d/x.json", "FAIL  d/x.json  (load error: open d/x.json: permission denied)"),
+                ("./d//x.json",
+                 "FAIL  ./d//x.json  (load error: open ./d//x.json: permission denied)"),
+                (absolute, f"FAIL  d/x.json  (load error: open {absolute}: permission denied)"),
+            ):
+                with self.subTest(arg=arg):
+                    self.assertEqual(_run_main(arg), (
+                        1, f"{line}\n\nsummary: 0 pass, 1 fail (1 fixtures)\n", ""))
+
+    def test_a_failed_read_is_named_as_go_names_it(self):
+        # os.ReadFile writes an error of the read after the file opened as
+        # `read <path>: <reason>`. The file here opens, and its read raises
+        # the OSError of an I/O error, which names no path.
+        class FailingRead(io.BytesIO):
+            def read(self, *args):
+                raise OSError(errno.EIO, os.strerror(errno.EIO))
+
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            Path("x.json").write_bytes(BASELINE_V10.read_bytes())
+            with mock.patch.object(verify, "open", lambda path, mode: FailingRead(), create=True):
+                code, out, err = _run_main("x.json")
+        self.assertEqual((code, err), (1, ""), out)
+        self.assertEqual(out.splitlines()[0],
+                         "FAIL  x.json  (load error: read x.json: input/output error)")
+
+
 @unittest.skipIf(os.name != "posix", "an argument of bytes that are not UTF-8 is a POSIX argument")
 class NonUTF8Argument(unittest.TestCase):
     """An argument the operating system passes as bytes that are not UTF-8,
@@ -2550,9 +2600,11 @@ class NonUTF8FixtureName(unittest.TestCase):
     """A fixture whose path is not UTF-8, which sys.argv and os.scandir hold
     with each byte that does not decode as a surrogate escape, the byte 0xff
     as \\udcff. The report line naming it wrote that escape as the six
-    characters \\udcff, where the Go reference verifier writes the byte.
+    characters \\udcff, where the Go reference verifier writes the byte, and
+    so did the load error of such a file the verifier cannot read.
     scripts/parity/parity.py runs both verifiers on such a fixture, named as
-    a file and found in a directory, where the file system takes the name."""
+    a file and found in a directory, and on such a file of mode 000, where
+    the file system takes the name."""
 
     def test_a_report_line_writes_a_listed_name_as_its_bytes(self):
         # _json_names gives the name os.scandir gives a file named by the
@@ -2601,6 +2653,45 @@ class NonUTF8FixtureName(unittest.TestCase):
                     )
                     self.assertEqual((proc.returncode, proc.stderr), (0, b""), proc.stdout)
                     self.assertEqual(proc.stdout.splitlines()[0], b"PASS  d/\xff.json")
+
+    def test_a_load_error_writes_a_listed_name_as_its_bytes(self):
+        # The load error quoted the path through repr, which writes the byte
+        # 0xff as the six characters \udcff, so the FAIL line named the file
+        # once by its byte and once by those characters. _json_names gives
+        # the name os.scandir gives such a file, so this runs where the file
+        # system refuses the name; d holds no file of that name.
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            Path("d").mkdir()
+            with mock.patch.object(verify, "_json_names", return_value=[os.fsdecode(b"\xff.json")]):
+                got, out = _run_main_stdout_bytes("d")
+        self.assertEqual((got, out.splitlines()[0]), (
+            1, b"FAIL  d/\xff.json  (load error: open d/\xff.json: no such file or directory)"), out)
+
+    @unittest.skipIf(os.name != "posix" or os.geteuid() == 0, "needs a POSIX user other than root")
+    def test_a_run_names_a_fixture_it_cannot_read_by_its_bytes(self):
+        # Run as a shell runs it: the Go reference verifier writes the path's
+        # bytes in the FAIL line and in its load error, for the directory and
+        # for the file named as an argument, and exits 1.
+        with tempfile.TemporaryDirectory() as tmp:
+            os.mkdir(os.path.join(tmp, "d"))
+            name = os.path.join(tmp, "d", os.fsdecode(b"\xff.json"))
+            try:
+                Path(name).write_bytes(BASELINE_V10.read_bytes())
+            except OSError as exc:
+                # A file system that takes only UTF-8 names refuses it,
+                # APFS with EILSEQ.
+                self.skipTest(f"the file system refuses a name that is not UTF-8: {exc}")
+            os.chmod(name, 0)
+            for arg in (b"d", b"d/\xff.json"):
+                with self.subTest(arg=arg):
+                    proc = subprocess.run(
+                        [sys.executable, str(HERE / "verify.py"), arg],
+                        cwd=tmp, capture_output=True, timeout=120,
+                    )
+                    self.assertEqual((proc.returncode, proc.stderr), (1, b""), proc.stdout)
+                    self.assertEqual(
+                        proc.stdout.splitlines()[0],
+                        b"FAIL  d/\xff.json  (load error: open d/\xff.json: permission denied)")
 
 
 class OsWithoutGeteuid(unittest.TestCase):

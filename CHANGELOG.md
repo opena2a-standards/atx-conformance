@@ -696,6 +696,38 @@ they should not.
 
 ### Fixed
 
+- The Python reference verifier words the load error of a fixture file it
+  cannot read as the Go reference verifier does, naming the path as spelled
+  and, where it is not UTF-8, by its bytes (#244). The error was Python's
+  `OSError`, the path quoted through `repr` as a `Path` holds it: run on
+  Linux as a user other than root, for `d`, a directory holding a copy of
+  `fixtures/baseline-valid.json` of mode 000 named by the byte 0xff then
+  `.json`, `python3 verify.py d` wrote `FAIL  d/`, that byte, then
+  `.json  (load error: [Errno 13] Permission denied: 'd/\udcff.json')`,
+  naming the file once by its byte and once by the six characters
+  `\udcff`, where `atx-verify d` wrote `(load error: open d/`, that byte,
+  then `.json: permission denied)`, both exit 1; both now write the Go
+  verifier's line. A file of mode 000 named as `./d//x.json` was named
+  `d/x.json` in the error, and is named `./d//x.json`, and for `l`, a
+  directory holding `link.json`, a symbolic link to a directory, the error
+  `[Errno 21] Is a directory: 'l/link.json'` is
+  `read l/link.json: is a directory`. `verify.py` reads the file with
+  `_read_file`, which words the error of `open` or of the read after it as
+  Go's `os.ReadFile` does. The Python verifier's `UnreadableFixture` class
+  and two tests of
+  `NonUTF8FixtureName` pin it; the test that runs the verifier on such a
+  file needs a user other than root and a file system that takes the name,
+  which APFS refuses. The "Arguments" section of
+  `docs/running-the-verifiers.md` says so. The argument table of
+  `scripts/parity/parity.py` runs 29 argument lists, from 27, adding a
+  file of mode 000 named `x.json` and one named by the byte 0xff then
+  `.json`, which `docs/continuous-verification.md` lists; where the file
+  system refuses that name, the second is skipped with the two cases that
+  already need one. The verdict lines the table compares carry the load
+  error a FAIL line names, which they dropped. With the Python verifier of
+  the previous commit, the gate fails on the two new cases alone, run on
+  Linux as a user other than root. The self-test adds three cases (51
+  cases green, from 48). No fixture changes.
 - `scripts/parity/parity.py` takes only `EILSEQ` or `EINVAL`, raised writing
   the scratch file whose name is not UTF-8, for the file system refusing
   that name (#243). Its `except OSError` took `ENOSPC` there for a refusal:
