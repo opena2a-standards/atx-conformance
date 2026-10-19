@@ -55,7 +55,8 @@ sentence below:
    the file system refuses a file name that is not UTF-8, as APFS does, the
    three cases that need one are skipped, their rows saying why. Only
    `EILSEQ` or `EINVAL`, raised writing the scratch file so named, is a
-   refusal; another error writing it, `ENOSPC` for one, fails the gate. With
+   refusal; another error writing it, `ENOSPC` for one, fails the gate, as
+   does an error reading the fixture copied there, whatever its errno. With
    no argument, and with `--` alone, they must differ as documented: the Go
    verifier verifies its embedded fixture set, every fixture passing, and
    the Python verifier prints its usage and exits 2.
