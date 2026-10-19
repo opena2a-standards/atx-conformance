@@ -48,7 +48,9 @@ sentence below:
    outside the working directory) the two must exit with the
    same code and write the same first stderr line and verdict lines. Where
    the file system refuses a file name that is not UTF-8, as APFS does, the
-   two cases that need one are skipped, their rows saying why. With
+   two cases that need one are skipped, their rows saying why. Only
+   `EILSEQ` or `EINVAL`, raised writing the scratch file so named, is a
+   refusal; another error writing it, `ENOSPC` for one, fails the gate. With
    no argument they must differ as documented: the Go verifier verifies its
    embedded fixture set, every fixture passing, and the Python verifier
    prints its usage and exits 2.

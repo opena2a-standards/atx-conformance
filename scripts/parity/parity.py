@@ -49,7 +49,9 @@ differ on is a divergence. A byte of their output that is not UTF-8 is read
 as a surrogate escape, so the byte 0xff and the six characters \\udcff
 differ. Where the file system refuses a file name that is not UTF-8, as
 APFS does, the two cases that need one are skipped, not run: their rows say
-so, a skipped case is no divergence, and the PASS line counts them. No
+so, a skipped case is no divergence, and the PASS line counts them. Only
+EILSEQ or EINVAL, raised writing the scratch file so named, is a refusal;
+another error writing it, ENOSPC for one, is raised, and the gate exits 1. No
 argument is the one case the two answer
 differently by design: the Go verifier must verify the fixture set its
 module embeds, each fixture passing, and exit 0, and the Python verifier,
@@ -68,8 +70,10 @@ fails the gate, as does a verifier that answers no argument other than its
 spec says, that the cases with an absolute path via the link and via its
 target run from a symbolic link with PWD naming it, that the cases needing a
 file name that is not UTF-8 are skipped where the file system refuses one,
-whatever the verifiers would write, and counted in the PASS line, that
---json is refused
+whatever the verifiers would write, and counted in the PASS line, that of
+the errors writing the scratch file so named, EILSEQ and EINVAL are
+refusals and ENOSPC, EACCES, EROFS and EIO are raised, by the gate for
+ENOSPC, that --json is refused
 with --self-test by a usage message the self-test holds word for word, so
 rewording that message turns the self-test red, and that an unknown
 argument is named on the line above the usage.
@@ -91,6 +95,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import errno
 import io
 import json
 import os
@@ -101,6 +106,7 @@ import sys
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 # Not sliced from __doc__, which `python -OO` strips. The self-test holds the
@@ -184,6 +190,10 @@ NOT_UTF8 = os.fsdecode(b"\xff")
 # The cases that need xff/{xff}.json, skipped where the file system refuses
 # a name that is not UTF-8.
 NOT_UTF8_NAME_CASES = ("a file whose name is not UTF-8", "a directory whose file name is not UTF-8")
+# The errnos taken for a file system refusing that name: APFS raises EILSEQ,
+# and exFAT on macOS EINVAL. An error writing xff/{xff}.json with another
+# errno is raised, as an error writing another scratch file is.
+NOT_UTF8_NAME_REFUSALS = (errno.EILSEQ, errno.EINVAL)
 # Verdict lines an outcome in a report line names one by one; a longer run,
 # such as the walk of a whole fixture set, is named by its count and last line.
 SHOWN_VERDICT_LINES = 5
@@ -360,7 +370,9 @@ def argument_verifiers(bin_dir: Path) -> dict[str, dict]:
 def _argument_scratch(scratch: Path, fixture: Path) -> tuple[Path, str]:
     """Lay out under scratch/dir the paths ARGUMENT_CASES name, and return
     scratch/link, a symbolic link to it, which the cases run from, and the
-    reason the file system refused xff/{xff}.json, "" when it took it."""
+    reason the file system refused xff/{xff}.json, "" when it took it. An
+    error writing that file with an errno outside NOT_UTF8_NAME_REFUSALS is
+    no refusal, and is raised."""
     root = scratch / "dir"
     (root / "fixfile").mkdir(parents=True)
     (root / "fixfile" / "fixtures").write_text("a file, not a directory\n")
@@ -385,7 +397,8 @@ def _argument_scratch(scratch: Path, fixture: Path) -> tuple[Path, str]:
     try:
         (root / "xff" / f"{NOT_UTF8}.json").write_bytes(fixture.read_bytes())
     except OSError as exc:
-        # APFS refuses the name, with EILSEQ.
+        if exc.errno not in NOT_UTF8_NAME_REFUSALS:
+            raise
         refusal = f"the file system refuses a name that is not UTF-8 ({exc.strerror or exc})"
     link = scratch / "link"
     link.symlink_to("dir", target_is_directory=True)
@@ -714,12 +727,13 @@ def _argument_divergences(programs: dict[str, dict], *cases: str) -> list[str]:
 
 
 def _gate_with_arguments(
-    programs: Callable[[Path], dict[str, dict]], refusal: str = "",
+    programs: Callable[[Path], dict[str, dict]], refusal: str | None = "",
 ) -> tuple[int, str, dict]:
     """(exit code, stdout, --json report) of the gate over one fixture the
     fixture-table stand-ins agree on, with programs giving the argument
     table's verifiers, every case run on any file system or, given a
-    refusal, the cases needing a name that is not UTF-8 skipped."""
+    refusal, the cases needing a name that is not UTF-8 skipped, or, given
+    None, the file system's answer to xff/{xff}.json deciding."""
     out = io.StringIO()
     with tempfile.TemporaryDirectory() as d:
         fixtures, report = Path(d) / "fixtures", Path(d) / "report.json"
@@ -733,6 +747,36 @@ def _gate_with_arguments(
 
 def _not_built(bin_dir: Path) -> dict[str, dict]:
     raise BuildError("go build exited 1: boom")
+
+
+def _writing_xff_raising(error: int, run: Callable[[], object]) -> object:
+    """What run returns while writing xff/{xff}.json raises an OSError with
+    errno error, on any file system, or the errno of the OSError run raises."""
+    write_bytes = Path.write_bytes
+
+    def failing(path: Path, data: bytes) -> int:
+        if path.name == f"{NOT_UTF8}.json":
+            raise OSError(error, os.strerror(error))
+        return write_bytes(path, data)
+
+    try:
+        with mock.patch.object(Path, "write_bytes", failing):
+            return run()
+    except OSError as exc:
+        return exc.errno
+
+
+def _scratch_refusal() -> str:
+    """The refusal _argument_scratch returns for xff/{xff}.json, laying out
+    a scratch directory with a fixture of {}."""
+    with tempfile.TemporaryDirectory() as d:
+        fixture, scratch = Path(d) / ARGUMENT_FIXTURE, Path(d) / "run"
+        fixture.write_text("{}\n")
+        try:
+            return _argument_scratch(scratch, fixture)[1]
+        finally:
+            # As compare_arguments does, so the scratch can be removed.
+            (scratch / "dir" / "locked").chmod(0o755)
 
 
 def self_test() -> int:
@@ -943,6 +987,14 @@ def self_test() -> int:
     gate_passes = _gate_with_arguments(lambda bin_dir: changed({}))
     gate_skips = _gate_with_arguments(lambda bin_dir: changed({}), refused)
     gate_not_built = _gate_with_arguments(_not_built)
+    # Writing xff/{xff}.json raising an OSError with each errno: EILSEQ and
+    # EINVAL are the file system refusing the name, and the others are
+    # raised, by the gate too, which reads the file system's own answer.
+    scratch_errors = (
+        errno.EILSEQ, errno.EINVAL, errno.ENOSPC, errno.EACCES, errno.EROFS, errno.EIO)
+    scratch_answers = [_writing_xff_raising(e, _scratch_refusal) for e in scratch_errors]
+    gate_out_of_space = _writing_xff_raising(
+        errno.ENOSPC, lambda: _gate_with_arguments(lambda bin_dir: changed({}), None))
     cases: list[tuple[str, bool]] = [
         ("verifiers that agree report no divergence", agree == []),
         ("a verdict divergence is reported by fixture",
@@ -1137,6 +1189,13 @@ def self_test() -> int:
          and render_arguments(xff_skipped[0])[1:] == [
              _argument_row(xff_file_case, list(argv_of[xff_file_case]), f"skipped: {refused}"),
              _argument_row(xff_dir_case, list(argv_of[xff_dir_case]), f"skipped: {refused}")]),
+        ("writing xff/{xff}.json, EILSEQ and EINVAL are the file system refusing the name, "
+         "the refusal naming the error, and ENOSPC, EACCES, EROFS and EIO are raised rather "
+         "than taken for a refusal",
+         scratch_answers == [
+             f"the file system refuses a name that is not UTF-8 ({os.strerror(errno.EILSEQ)})",
+             f"the file system refuses a name that is not UTF-8 ({os.strerror(errno.EINVAL)})",
+             errno.ENOSPC, errno.EACCES, errno.EROFS, errno.EIO]),
         ("with no argument, a verifier that embeds a fixture set reports it and exits 0, "
          "and one that embeds none writes its usage and exits 2, which is no divergence",
          args_documented == []),
@@ -1193,6 +1252,9 @@ def self_test() -> int:
          and [(r["case"], r["agree"], r["skipped"]) for r in gate_skips[2].get("arguments", [])
               if r["agree"] is not True]
          == [(xff_file_case, None, refused), (xff_dir_case, None, refused)]),
+        ("the gate raises ENOSPC writing xff/{xff}.json, rather than passing with the "
+         "cases that need that name skipped",
+         gate_out_of_space == errno.ENOSPC),
         ("a verifier the argument table cannot build fails the gate, which names "
          "the build error",
          gate_not_built[0] == 1
