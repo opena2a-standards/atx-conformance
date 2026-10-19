@@ -721,6 +721,17 @@ they should not.
 
 ### Fixed
 
+- `scripts/parity/parity.py` reads the fixture it copies to the two scratch
+  files whose name is not UTF-8, `xff/{xff}.json` and `noread/{xff}.json`,
+  once, before the `try` that classifies their writes, so an `EILSEQ` or
+  `EINVAL` raised by that read is raised rather than taken for the file
+  system refusing the name (#246). With the read for `xff/{xff}.json`
+  raising `EINVAL`, `_argument_scratch` returned `the file system refuses a
+  name that is not UTF-8 (Invalid argument)` and wrote neither file; with
+  the name standing in as `ff`, which any file system takes, and the read
+  for `noread/{xff}.json` raising `EINVAL`, it returned the same, that file
+  unwritten. It now raises `EINVAL` from the one read. The self-test adds
+  one case (64 cases green, from 63). No fixture changes.
 - The Python reference verifier words the load error of a fixture file it
   cannot read as the Go reference verifier does, naming the path as spelled
   and, where it is not UTF-8, by its bytes (#244). The error was Python's

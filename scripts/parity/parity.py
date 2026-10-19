@@ -80,7 +80,9 @@ file name that is not UTF-8 are skipped where the file system refuses one,
 whatever the verifiers would write, and counted in the PASS line, that of
 the errors writing the scratch file so named, EILSEQ and EINVAL are
 refusals and ENOSPC, EACCES, EROFS and EIO are raised, by the gate for
-ENOSPC, that --json is refused
+ENOSPC, that EILSEQ or EINVAL raised reading the fixture copied to each
+scratch file so named is raised, not taken for a refusal, that --json is
+refused
 with --self-test by a usage message the self-test holds word for word, so
 rewording that message turns the self-test red, and that an unknown
 argument is named on the line above the usage.
@@ -443,9 +445,13 @@ def _argument_scratch(scratch: Path, fixture: Path) -> tuple[Path, str]:
     (root / "-h.json").write_bytes(fixture.read_bytes())
     (root / "xff").mkdir()
     refusal = ""
+    # Read once, outside the try, so an error reading the fixture is raised,
+    # as it is for the reads above, and only writing the two files can be a
+    # refusal.
+    data = fixture.read_bytes()
     try:
-        (root / "xff" / f"{NOT_UTF8}.json").write_bytes(fixture.read_bytes())
-        (root / "noread" / f"{NOT_UTF8}.json").write_bytes(fixture.read_bytes())
+        (root / "xff" / f"{NOT_UTF8}.json").write_bytes(data)
+        (root / "noread" / f"{NOT_UTF8}.json").write_bytes(data)
         (root / "noread" / f"{NOT_UTF8}.json").chmod(0)
     except OSError as exc:
         if exc.errno not in NOT_UTF8_NAME_REFUSALS:
@@ -840,6 +846,37 @@ def _writing_xff_raising(error: int, run: Callable[[], object]) -> object:
         return exc.errno
 
 
+def _reading_fixture_raising(error: int, nth: int, run: Callable[[], object]) -> object:
+    """What run returns while the nth read once a directory named xff is
+    made raises an OSError with errno error, on any file system, NOT_UTF8
+    standing in as ff, a name each takes, or the errno of the OSError run
+    raises."""
+    mkdir, read_bytes = Path.mkdir, Path.read_bytes
+    reads: int | None = None
+
+    def marking(path: Path, *args, **kwargs) -> None:
+        nonlocal reads
+        mkdir(path, *args, **kwargs)
+        if reads is None and path.name == "xff":
+            reads = 0
+
+    def failing(path: Path) -> bytes:
+        nonlocal reads
+        if reads is not None:
+            reads += 1
+            if reads == nth:
+                raise OSError(error, os.strerror(error))
+        return read_bytes(path)
+
+    try:
+        with mock.patch.dict(globals(), NOT_UTF8="ff"), \
+                mock.patch.object(Path, "mkdir", marking), \
+                mock.patch.object(Path, "read_bytes", failing):
+            return run()
+    except OSError as exc:
+        return exc.errno
+
+
 def _scratch_refusal() -> str:
     """The refusal _argument_scratch returns for xff/{xff}.json, laying out
     a scratch directory with a fixture of {}."""
@@ -1171,6 +1208,13 @@ def self_test() -> int:
     scratch_errors = (
         errno.EILSEQ, errno.EINVAL, errno.ENOSPC, errno.EACCES, errno.EROFS, errno.EIO)
     scratch_answers = [_writing_xff_raising(e, _scratch_refusal) for e in scratch_errors]
+    # Reading the fixture for xff/{xff}.json and noread/{xff}.json raising
+    # EILSEQ or EINVAL: no write of either name was tried, so neither is a
+    # refusal. That one read is the first once xff/ is made; a second, which
+    # would follow the write of xff/{xff}.json, is never made, so failing it
+    # leaves both files written.
+    read_answers = [_reading_fixture_raising(e, nth, _scratch_refusal)
+                    for nth in (1, 2) for e in (errno.EILSEQ, errno.EINVAL)]
     gate_out_of_space = _writing_xff_raising(
         errno.ENOSPC, lambda: _gate_with_arguments(lambda bin_dir: changed({}), None))
     cases: list[tuple[str, bool]] = [
@@ -1402,6 +1446,10 @@ def self_test() -> int:
              f"the file system refuses a name that is not UTF-8 ({os.strerror(errno.EILSEQ)})",
              f"the file system refuses a name that is not UTF-8 ({os.strerror(errno.EINVAL)})",
              errno.ENOSPC, errno.EACCES, errno.EROFS, errno.EIO]),
+        ("reading the fixture for xff/{xff}.json and noread/{xff}.json, EILSEQ and EINVAL "
+         "are raised rather than taken for the file system refusing either name, the "
+         "fixture read once, before either write",
+         read_answers == [errno.EILSEQ, errno.EINVAL, "", ""]),
         ("with no argument, a verifier that embeds a fixture set reports it and exits 0, "
          "and one that embeds none writes its usage and exits 2, which is no divergence",
          args_documented == []),
