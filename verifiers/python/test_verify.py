@@ -37,6 +37,9 @@ read verify.py itself: it imports no name it does not use, and its module
 docstring lists only the checks the verifier runs. Another test reads the
 "Arguments" section of docs/running-the-verifiers.md, which must quote
 d/link/.. and d/link/../ and the PASS line the verifier prints for each.
+One test imports this file with an os whose name is "nt" and which has no
+geteuid, as Python's os is on Windows: it must import, with NonUTF8Argument
+and ArgumentContract's test of a directory that cannot be listed skipped.
 Needs the same dependencies as verify.py. Run from this directory:
 
     python3 -m unittest -v test_verify
@@ -56,6 +59,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
 from datetime import date
 from pathlib import Path
@@ -2498,7 +2502,7 @@ class NonUTF8Argument(unittest.TestCase):
                 with self.subTest(args=args):
                     self.assertEqual(_run_main_stderr_bytes(*args), (2, "", stderr))
 
-    @unittest.skipIf(os.geteuid() == 0, "needs a user other than root")
+    @unittest.skipIf(os.name != "posix" or os.geteuid() == 0, "needs a POSIX user other than root")
     def test_a_directory_that_cannot_be_listed_is_named_by_its_bytes(self):
         with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
             try:
@@ -2526,6 +2530,33 @@ class NonUTF8Argument(unittest.TestCase):
             )
         self.assertEqual((proc.returncode, proc.stdout, proc.stderr),
                          (2, b"", b"error: \xff: no such file or directory\n"))
+
+
+class OsWithoutGeteuid(unittest.TestCase):
+    """An os module whose name is "nt" and which has no geteuid, as Python's
+    os module is on Windows. A decorator on a method is evaluated when its
+    class body runs, at import, before a skipIf on the class applies, so this
+    file must import with that os."""
+
+    def test_this_file_imports_with_the_posix_tests_skipped(self):
+        # NonUTF8Argument's test of a directory that cannot be listed was
+        # decorated with skipIf(os.geteuid() == 0, ...): with this os its
+        # class definition raised AttributeError, which stopped the import.
+        # That guard reads os.name first, as ArgumentContract's does.
+        nt = types.ModuleType("os")
+        vars(nt).update(vars(os))
+        vars(nt).pop("geteuid", None)
+        nt.name = "nt"
+        spec = importlib.util.spec_from_file_location("test_verify_on_nt", HERE / "test_verify.py")
+        module = importlib.util.module_from_spec(spec)
+        # The file's `import os` takes nt from sys.modules, and its
+        # sys.path.insert changes a copy.
+        with mock.patch.dict(sys.modules, {"os": nt}), mock.patch.object(sys, "path", list(sys.path)):
+            spec.loader.exec_module(module)
+        self.assertIs(module.os, nt)
+        self.assertTrue(getattr(module.NonUTF8Argument, "__unittest_skip__", False))
+        test = module.ArgumentContract.test_a_directory_that_cannot_be_listed_is_refused
+        self.assertTrue(getattr(test, "__unittest_skip__", False))
 
 
 class JCSVectorsThroughVerifierProjection(unittest.TestCase):

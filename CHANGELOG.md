@@ -696,6 +696,20 @@ they should not.
 
 ### Fixed
 
+- `verifiers/python/test_verify.py` imports where Python's `os` has no
+  `geteuid`, as on Windows (#240). `NonUTF8Argument`'s test of a directory
+  that cannot be listed was decorated with `skipIf(os.geteuid() == 0, ...)`,
+  which is evaluated when the class body runs, at import, before the
+  class's `skipIf(os.name != "posix", ...)` applies: run with an `os`
+  stand-in whose `name` is `"nt"` and which has no `geteuid`, the module
+  raised `AttributeError: module 'os' has no attribute 'geteuid'` there, so
+  it did not import. That guard reads `os.name` first, as
+  `ArgumentContract`'s does, and the module imports with that stand-in,
+  `NonUTF8Argument` skipped. The new `OsWithoutGeteuid` class imports the
+  file with the stand-in in place of `os`, and checks that
+  `NonUTF8Argument` and `ArgumentContract`'s test of a directory that
+  cannot be listed are skipped; run on the file as it was before this
+  change, it raises that `AttributeError`. No fixture changes.
 - The Python reference verifier writes an argument that is not UTF-8 on
   stderr as the bytes it was given, as the Go reference verifier writes it
   (#238). `sys.argv` holds a byte that does not decode as a surrogate
