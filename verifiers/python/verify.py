@@ -116,6 +116,11 @@ whose path is not UTF-8, its PASS or FAIL line, writes the path's bytes too,
 as the argument gave them or as the directory listing named the file:
 standard output is set to write each surrogate escape as the byte it stands
 for before the first report line (_write_surrogate_escapes_as_bytes, _say).
+A fixture file that cannot be read fails to load with the error the Go
+reference verifier's os.ReadFile returns, which names the step that failed
+and the path as spelled, its bytes where it is not UTF-8: run as a user
+other than root, `open d/x.json: permission denied` for a file of mode 000
+(_read_file).
 
 The signatures line writes each boolean as true or false, and a rejection
 reason that quotes the credential's atcVersion or a duplicate member name
@@ -1287,11 +1292,37 @@ def _parse_json(text: str, **hooks: Any) -> Any:
         sys.setrecursionlimit(limit)
 
 
-def load_fixture(path: Path) -> dict[str, Any]:
+def _read_file(path: str) -> bytes:
+    """The bytes of the file at path, as the Go reference verifier's
+    os.ReadFile reads them, or OSError worded as the error it returns: the
+    step that failed and path as spelled (_go_path_error). Run as a user
+    other than root, that is `open d/x.json: permission denied` for a file
+    of mode 000, and `read l/link.json: is a directory` for a symbolic link
+    to a directory, which os.ReadFile opens and fails to read and Python's
+    open refuses. Path.read_bytes raised
+    `[Errno 13] Permission denied: 'd/x.json'`, the path quoted through
+    repr, which writes the byte 0xff of a path that is not UTF-8 as the six
+    characters \\udcff, so the load-error line named such a file once by
+    its bytes and once by those characters."""
+    try:
+        f = open(path, "rb")
+    except IsADirectoryError as exc:
+        raise _go_path_error("read", path, exc) from None
+    except OSError as exc:
+        raise _go_path_error("open", path, exc) from None
+    with f:
+        try:
+            return f.read()
+        except OSError as exc:
+            raise _go_path_error("read", path, exc) from None
+
+
+def load_fixture(path: str | os.PathLike[str]) -> dict[str, Any]:
     """The fixture file at path as the Go reference verifier's json.Unmarshal
     reads it, before its members are decoded (_decode_fixture). Raises
-    ValueError where Go fails to load the file."""
-    text = path.read_bytes().decode("utf-8", _GO_UTF8_ERRORS)
+    ValueError where Go fails to load the file, and OSError, worded as Go
+    words it, where the file cannot be read (_read_file)."""
+    text = _read_file(os.fspath(path)).decode("utf-8", _GO_UTF8_ERRORS)
     literals = _string_literals(text)
     # The duplicate-marking hook preserves last-wins values (plain dict
     # semantics) while recording duplicates for the strict-parse check in
@@ -1590,9 +1621,10 @@ def main(argv: list[str]) -> int:
     for path in paths:
         name = _rel_path(path)
         # A fixture the Go reference verifier's fixture struct cannot hold
-        # fails to load, as it does there.
+        # fails to load, as it does there. path is read as spelled, so the
+        # error of a file that cannot be read names it as Go's does.
         try:
-            fixture = load_fixture(Path(path))
+            fixture = load_fixture(path)
             expected = _expected_outcome(fixture)
         except Exception as exc:
             _say(f"FAIL  {name}  (load error: {exc})")

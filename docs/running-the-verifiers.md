@@ -61,6 +61,20 @@ bytes too, where the file system takes such a name (APFS refuses it): for
 `d`, a directory holding a copy of `fixtures/baseline-valid.json` named by
 the byte 0xff then `.json`, and for that file named as an argument, both
 verifiers write `PASS  d/`, that byte, then `.json`.
+A fixture file that cannot be read is a load error worded as the error Go's
+`os.ReadFile` returns, which names the step that failed and the path as
+spelled. Run as a user other than root, with `d/x.json` a copy of
+`fixtures/baseline-valid.json` of mode 000, both verifiers write
+`FAIL  d/x.json  (load error: open d/x.json: permission denied)` for `d` and
+for `d/x.json`, and
+`FAIL  ./d//x.json  (load error: open ./d//x.json: permission denied)` for
+`./d//x.json`; for `l`, a directory holding `link.json`, a symbolic link to
+a directory, they write
+`FAIL  l/link.json  (load error: read l/link.json: is a directory)`. Where
+the path is not UTF-8, both write its bytes in the FAIL line and in the load
+error: for such a file of mode 000 in `d`, named by the byte 0xff then
+`.json`, `FAIL  d/`, that byte, `.json  (load error: open d/`, that byte,
+then `.json: permission denied)`.
 A fixture named by an absolute path under the working directory is reported
 relative to it instead, the two compared with their symbolic links
 resolved, each `..` applied after the element before it is resolved, as the

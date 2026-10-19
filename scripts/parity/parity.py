@@ -34,7 +34,8 @@ repository root, a directory whose `fixtures` entry is a file, a path that
 does not exist, a path that is not UTF-8, a file whose name is not UTF-8
 and a directory holding it, a directory with no *.json, a
 directory holding a subdirectory named *.json, a directory that cannot be
-listed, a path named twice, a file spelled
+listed, a file that cannot be read, its name UTF-8 or not, a path named
+twice, a file spelled
 with ./ and //, a directory spelled with .., a directory spelled with a ..
 after a symbolic link, a file named with a trailing /, a path and an option
 after `--`, an absolute path through a symbolic link to the working
@@ -42,13 +43,14 @@ directory, through its target and outside it), each run on both
 verifiers from a symbolic link to a scratch directory holding the paths it
 names, with PWD naming the link, as a shell names a directory it changed
 into through one. Both must exit with the same code and write the same
-first stderr line and the same verdict lines (each PASS or FAIL line, its
-observed verdict and category, the summary), once the program name each
+first stderr line and the same verdict lines (each PASS or FAIL line, with
+the load error a FAIL line names, its observed verdict and category, the
+summary), once the program name each
 verifier calls itself (`atx-verify`, `verify.py`) is stripped; a case they
 differ on is a divergence. A byte of their output that is not UTF-8 is read
 as a surrogate escape, so the byte 0xff and the six characters \\udcff
 differ. Where the file system refuses a file name that is not UTF-8, as
-APFS does, the two cases that need one are skipped, not run: their rows say
+APFS does, the three cases that need one are skipped, not run: their rows say
 so, a skipped case is no divergence, and the PASS line counts them. Only
 EILSEQ or EINVAL, raised writing the scratch file so named, is a refusal;
 another error writing it, ENOSPC for one, is raised, and the gate exits 1. No
@@ -65,8 +67,9 @@ the gate reports a disagreement, a skipped fixture, a failed verifier and a
 verifier that exits 0 without reporting any fixture, that a fixtures
 directory holding no *.json fails, that the --json report names a verifier
 that exited before reporting any fixture, that an argument case one
-verifier answers with another exit code, first stderr line or verdict lines
-fails the gate, as does a verifier that answers no argument other than its
+verifier answers with another exit code, first stderr line or verdict lines,
+the load error a FAIL line names included, fails the gate, as does a
+verifier that answers no argument other than its
 spec says, that the cases with an absolute path via the link and via its
 target run from a symbolic link with PWD naming it, that the cases needing a
 file name that is not UTF-8 are skipped where the file system refuses one,
@@ -133,8 +136,10 @@ VERIFIERS = {
     },
 }
 
-# `PASS  <path>` or `FAIL  <path>` opens a per-fixture block.
-BLOCK_RE = re.compile(r"^(PASS|FAIL)\s+(\S+)")
+# `PASS  <path>` or `FAIL  <path>` opens a per-fixture block. A fixture that
+# fails to load has no block: its FAIL line names the load error after the
+# path, `FAIL  <path>  (load error: <reason>)`.
+BLOCK_RE = re.compile(r"^(PASS|FAIL)\s+(\S+)(?:\s+(\(load error: .*\)))?")
 # `observed: ACCEPT` or `observed: REJECT[CATEGORY: reason]`
 OBSERVED_RE = re.compile(r"^\s*observed:\s+(ACCEPT|REJECT\[([A-Z_]+))")
 
@@ -145,10 +150,11 @@ OBSERVED_RE = re.compile(r"^\s*observed:\s+(ACCEPT|REJECT\[([A-Z_]+))")
 # *.json that is not a fixture, as a repository root does, nojson/ holds no
 # *.json, subdir/ holds ARGUMENT_FIXTURE as x.json beside a directory named
 # sub.json, locked/ holds ARGUMENT_FIXTURE as x.json and has mode 000 while
-# the cases run, hop/link is a symbolic link to away/deep, away/ holding
-# ARGUMENT_FIXTURE as x.json, -h.json is ARGUMENT_FIXTURE, xff/ holds
-# ARGUMENT_FIXTURE as {xff}.json where the file system takes that name, and
-# nothing there is named missing.
+# the cases run, noread/ holds ARGUMENT_FIXTURE as x.json and, where the file
+# system takes that name, as {xff}.json, each of mode 000, hop/link is a
+# symbolic link to away/deep, away/ holding ARGUMENT_FIXTURE as x.json,
+# -h.json is ARGUMENT_FIXTURE, xff/ holds ARGUMENT_FIXTURE as {xff}.json
+# where the file system takes that name, and nothing there is named missing.
 # In an argument, {link} is the link's absolute path, {target} the
 # directory's, its symbolic links resolved, {fixture} the absolute path of
 # the fixture the table copies, outside both, and {xff} NOT_UTF8, which as a
@@ -171,6 +177,8 @@ ARGUMENT_CASES: list[tuple[str, list[str]]] = [
     ("a directory with no *.json", ["nojson"]),
     ("a subdirectory named *.json", ["subdir"]),
     ("a directory that cannot be listed", ["locked"]),
+    ("a file that cannot be read", ["noread/x.json"]),
+    ("a file that cannot be read whose name is not UTF-8", ["noread/{xff}.json"]),
     ("a path named twice", ["fixfile/x.json", "fixfile/x.json"]),
     ("a file spelled with ./ and //", ["fixfile//x.json", "./fixfile/./x.json"]),
     ("a directory spelled with ..", ["fixfile/../fixfile"]),
@@ -187,12 +195,16 @@ ARGUMENT_FIXTURE = "baseline-valid.json"
 # The argument {xff} stands for: the byte 0xff, which is not UTF-8, as
 # sys.argv holds it, a surrogate escape, which subprocess passes as the byte.
 NOT_UTF8 = os.fsdecode(b"\xff")
-# The cases that need xff/{xff}.json, skipped where the file system refuses
-# a name that is not UTF-8.
-NOT_UTF8_NAME_CASES = ("a file whose name is not UTF-8", "a directory whose file name is not UTF-8")
+# The cases that need xff/{xff}.json or noread/{xff}.json, skipped where the
+# file system refuses a name that is not UTF-8.
+NOT_UTF8_NAME_CASES = (
+    "a file whose name is not UTF-8", "a directory whose file name is not UTF-8",
+    "a file that cannot be read whose name is not UTF-8",
+)
 # The errnos taken for a file system refusing that name: APFS raises EILSEQ,
-# and exFAT on macOS EINVAL. An error writing xff/{xff}.json with another
-# errno is raised, as an error writing another scratch file is.
+# and exFAT on macOS EINVAL. An error writing xff/{xff}.json or
+# noread/{xff}.json with another errno is raised, as an error writing another
+# scratch file is.
 NOT_UTF8_NAME_REFUSALS = (errno.EILSEQ, errno.EINVAL)
 # Verdict lines an outcome in a report line names one by one; a longer run,
 # such as the walk of a whole fixture set, is named by its count and last line.
@@ -370,9 +382,9 @@ def argument_verifiers(bin_dir: Path) -> dict[str, dict]:
 def _argument_scratch(scratch: Path, fixture: Path) -> tuple[Path, str]:
     """Lay out under scratch/dir the paths ARGUMENT_CASES name, and return
     scratch/link, a symbolic link to it, which the cases run from, and the
-    reason the file system refused xff/{xff}.json, "" when it took it. An
-    error writing that file with an errno outside NOT_UTF8_NAME_REFUSALS is
-    no refusal, and is raised."""
+    reason the file system refused xff/{xff}.json or noread/{xff}.json, ""
+    when it took both. An error writing either file with an errno outside
+    NOT_UTF8_NAME_REFUSALS is no refusal, and is raised."""
     root = scratch / "dir"
     (root / "fixfile").mkdir(parents=True)
     (root / "fixfile" / "fixtures").write_text("a file, not a directory\n")
@@ -387,6 +399,9 @@ def _argument_scratch(scratch: Path, fixture: Path) -> tuple[Path, str]:
     (root / "locked").mkdir()
     (root / "locked" / "x.json").write_bytes(fixture.read_bytes())
     (root / "locked").chmod(0)
+    (root / "noread").mkdir()
+    (root / "noread" / "x.json").write_bytes(fixture.read_bytes())
+    (root / "noread" / "x.json").chmod(0)
     (root / "away" / "deep").mkdir(parents=True)
     (root / "away" / "x.json").write_bytes(fixture.read_bytes())
     (root / "hop").mkdir()
@@ -396,6 +411,8 @@ def _argument_scratch(scratch: Path, fixture: Path) -> tuple[Path, str]:
     refusal = ""
     try:
         (root / "xff" / f"{NOT_UTF8}.json").write_bytes(fixture.read_bytes())
+        (root / "noread" / f"{NOT_UTF8}.json").write_bytes(fixture.read_bytes())
+        (root / "noread" / f"{NOT_UTF8}.json").chmod(0)
     except OSError as exc:
         if exc.errno not in NOT_UTF8_NAME_REFUSALS:
             raise
@@ -413,12 +430,13 @@ def _without_program(line: str, program: str) -> str:
 
 def verdict_lines(stdout: str) -> list[str]:
     """The report lines that carry a verdict: each `PASS  <path>` or
-    `FAIL  <path>` line, its observed verdict and category, and the summary.
-    The rest of a block is each verifier's own wording."""
+    `FAIL  <path>` line, with the load error a FAIL line names, its observed
+    verdict and category, and the summary. The rest of a block is each
+    verifier's own wording."""
     lines: list[str] = []
     for line in stdout.splitlines():
         if m := BLOCK_RE.match(line):
-            lines.append(f"{m.group(1)}  {m.group(2)}")
+            lines.append(f"{m.group(1)}  {m.group(2)}" + (f"  {m.group(3)}" if m.group(3) else ""))
         elif m := OBSERVED_RE.match(line):
             lines.append(f"observed: {m.group(1)}" + ("]" if m.group(2) else ""))
         elif line.startswith("summary:"):
@@ -806,7 +824,7 @@ def self_test() -> int:
     unknown = _refusal(["--bogus"])
 
     # Argument-table stand-ins: "one", which embeds a fixture set, writes kept
-    # for seventeen cases and for no argument its report of that set, the
+    # for nineteen cases and for no argument its report of that set, the
     # ARGUMENT_FIXTURE beside the table's fixture; "two", which embeds none,
     # writes kept and for no argument its usage, with one case's outcome
     # changed. A case is run alone, by name, except in the gate runs, which
@@ -825,6 +843,8 @@ def self_test() -> int:
     locked_case, xff_case = "a directory that cannot be listed", "a path that is not UTF-8"
     xff_file_case, xff_dir_case = (
         "a file whose name is not UTF-8", "a directory whose file name is not UTF-8")
+    unread_case, unread_xff_case = (
+        "a file that cannot be read", "a file that cannot be read whose name is not UTF-8")
     argv_of = {case: tuple(args) for case, args in ARGUMENT_CASES}
     fixfile = (
         "PASS  fixfile/x.json\n       expected: ACCEPT\n       observed: ACCEPT\n"
@@ -839,6 +859,14 @@ def self_test() -> int:
         report = "".join(block.replace("fixfile/x.json", name) for name in names)
         return (report + f"\nsummary: {len(names)} pass, 0 fail ({len(names)} fixtures)\n",
                 "", 0)
+
+    def unreadable(name: str, reason: str = "") -> tuple[str, str, int]:
+        """What a verifier writes and exits with when it cannot read the file
+        name names: its FAIL line, naming reason as the load error, by
+        default the Go verifier's error for a file of mode 000."""
+        reason = reason or f"open {name}: permission denied"
+        return (f"FAIL  {name}  (load error: {reason})\n\nsummary: 0 pass, 1 fail (1 fixtures)\n",
+                "", 1)
 
     missing = ("", "error: missing: no such file or directory\n", 2)
     kept = {
@@ -859,6 +887,7 @@ def self_test() -> int:
         argv_of[link_dotdot_case]: passes("hop/link/../x.json"),
         argv_of[subdir_case]: passes("subdir/x.json"),
         argv_of[locked_case]: ("", "error: open locked: permission denied\n", 2),
+        argv_of[unread_case]: unreadable("noread/x.json"),
         argv_of[slash_case]: ("", "error: stat fixfile/x.json/: not a directory\n", 2),
         argv_of[dashdash_case]: (fixfile[0].replace("fixfile/x.json", "-h.json"), "", 0),
         # Keyed on the argument as the stand-in's sys.argv holds it, not on
@@ -866,6 +895,7 @@ def self_test() -> int:
         (NOT_UTF8,): ("", f"error: {NOT_UTF8}: no such file or directory\n", 2),
         (f"xff/{NOT_UTF8}.json",): passes(f"xff/{NOT_UTF8}.json"),
         argv_of[xff_dir_case]: passes(f"xff/{NOT_UTF8}.json"),
+        (f"noread/{NOT_UTF8}.json",): unreadable(f"noread/{NOT_UTF8}.json"),
     }
     embedded = (fixfile[0].replace("fixfile/x.json", f"fixtures/{ARGUMENT_FIXTURE}"), "", 0)
     no_argument = argv_of[no_argument_case]
@@ -966,6 +996,19 @@ def self_test() -> int:
         argv_of[xff_dir_case]: passes("xff/\\udcff.json"),
     })
     args_xff_name = _argument_divergences(escaped_name, xff_file_case, xff_dir_case)
+    # "two" as a verifier that writes the load error of a file it cannot read
+    # as Python's OSError writes it, the path quoted through repr, which
+    # writes the byte 0xff as the six characters \udcff; then one that words
+    # it as the Go verifier does and still writes that byte as those
+    # characters, though its FAIL line writes the byte.
+    args_unread = _argument_divergences(changed({argv_of[unread_case]: unreadable(
+        "noread/x.json", "[Errno 13] Permission denied: 'noread/x.json'")}), unread_case)
+    args_unread_xff = _argument_divergences(changed({(f"noread/{NOT_UTF8}.json",): unreadable(
+        f"noread/{NOT_UTF8}.json", "[Errno 13] Permission denied: 'noread/\\udcff.json'")}),
+        unread_xff_case)
+    args_unread_escaped = _argument_divergences(changed({(f"noread/{NOT_UTF8}.json",): unreadable(
+        f"noread/{NOT_UTF8}.json", "open noread/\\udcff.json: permission denied")}),
+        unread_xff_case)
     refused = "the file system refuses a name that is not UTF-8 (Illegal byte sequence)"
     xff_skipped = _argument_rows(escaped_name, xff_file_case, xff_dir_case, refusal=refused)
     # With no argument: both as documented; "one" writing its usage although
@@ -1108,8 +1151,8 @@ def self_test() -> int:
              'argument case "a repository root" (root): '
              "one exit 0, verdict lines ['PASS  root/fixtures/x.json', 'observed: ACCEPT', "
              "'summary: 1 pass, 0 fail (1 fixtures)']; "
-             "two exit 1, verdict lines ['FAIL  root/conformance.json', "
-             "'summary: 0 pass, 1 fail (1 fixtures)']"]),
+             "two exit 1, verdict lines ['FAIL  root/conformance.json  "
+             "(load error: no expected member)', 'summary: 0 pass, 1 fail (1 fixtures)']"]),
         ("a path named twice, which one verifier verifies once, is a divergence",
          args_twice == [
              'argument case "a path named twice" (fixfile/x.json fixfile/x.json): '
@@ -1143,15 +1186,16 @@ def self_test() -> int:
              'argument case "a .. after a symbolic link" (hop/link/..): '
              "one exit 0, verdict lines ['PASS  hop/link/../x.json', 'observed: ACCEPT', "
              "'summary: 1 pass, 0 fail (1 fixtures)']; "
-             "two exit 1, verdict lines ['FAIL  hop/x.json', "
-             "'summary: 0 pass, 1 fail (1 fixtures)']"]),
+             "two exit 1, verdict lines ['FAIL  hop/x.json  (load error: open hop/x.json: "
+             "no such file or directory)', 'summary: 0 pass, 1 fail (1 fixtures)']"]),
         ("a subdirectory named *.json, which one verifier reports as a fixture that fails "
          "to load, is a divergence",
          args_subdir == [
              'argument case "a subdirectory named *.json" (subdir): '
              "one exit 0, verdict lines ['PASS  subdir/x.json', 'observed: ACCEPT', "
              "'summary: 1 pass, 0 fail (1 fixtures)']; "
-             "two exit 1, verdict lines ['FAIL  subdir/sub.json', 'PASS  subdir/x.json', "
+             "two exit 1, verdict lines [\"FAIL  subdir/sub.json  (load error: [Errno 21] "
+             "Is a directory: 'subdir/sub.json')\", 'PASS  subdir/x.json', "
              "'observed: ACCEPT', 'summary: 1 pass, 1 fail (2 fixtures)']"]),
         ("a directory that cannot be listed, for which one verifier writes that it found "
          "no *.json, is a divergence",
@@ -1180,6 +1224,33 @@ def self_test() -> int:
              r"two exit 0, verdict lines ['PASS  xff/\\udcff.json', 'observed: ACCEPT', "
              "'summary: 1 pass, 0 fail (1 fixtures)']"
              for case, spelled in ((xff_file_case, "'xff/{xff}.json'"), (xff_dir_case, "xff"))]),
+        ("a file that cannot be read, whose load error one verifier writes as Python's "
+         "OSError writes it, is a divergence, though both FAIL it under one name",
+         args_unread == [
+             'argument case "a file that cannot be read" (noread/x.json): '
+             "one exit 1, verdict lines ['FAIL  noread/x.json  (load error: open "
+             "noread/x.json: permission denied)', 'summary: 0 pass, 1 fail (1 fixtures)']; "
+             "two exit 1, verdict lines [\"FAIL  noread/x.json  (load error: [Errno 13] "
+             "Permission denied: 'noread/x.json')\", 'summary: 0 pass, 1 fail (1 fixtures)']"]),
+        ("a file that cannot be read whose name is not UTF-8, whose load error one verifier "
+         "writes as Python's OSError writes it, is a divergence",
+         args_unread_xff == [
+             "argument case \"a file that cannot be read whose name is not UTF-8\" "
+             "('noread/{xff}.json'): "
+             r"one exit 1, verdict lines ['FAIL  noread/\udcff.json  (load error: open "
+             r"noread/\udcff.json: permission denied)', 'summary: 0 pass, 1 fail (1 fixtures)']; "
+             r"""two exit 1, verdict lines ["FAIL  noread/\udcff.json  (load error: [Errno 13] """
+             r"""Permission denied: 'noread/\\udcff.json')", 'summary: 0 pass, 1 fail """
+             "(1 fixtures)']"]),
+        ("a load error that writes the byte 0xff of a path as the six characters \\udcff, "
+         "where its FAIL line writes the byte, is a divergence",
+         args_unread_escaped == [
+             "argument case \"a file that cannot be read whose name is not UTF-8\" "
+             "('noread/{xff}.json'): "
+             r"one exit 1, verdict lines ['FAIL  noread/\udcff.json  (load error: open "
+             r"noread/\udcff.json: permission denied)', 'summary: 0 pass, 1 fail (1 fixtures)']; "
+             r"two exit 1, verdict lines ['FAIL  noread/\udcff.json  (load error: open "
+             r"noread/\\udcff.json: permission denied)', 'summary: 0 pass, 1 fail (1 fixtures)']"]),
         ("where the file system refuses a name that is not UTF-8, the cases that need one "
          "are skipped whatever the verifiers would write, each row naming the refusal, "
          "and are no divergence",
@@ -1248,10 +1319,11 @@ def self_test() -> int:
          "PASS line naming the skipped cases, which the --json report marks",
          gate_skips[0] == 0
          and "\nPARITY: PASS (all implementations agree on gate, verdict, and category, "
-             "and on every argument case but the 2 skipped)\n" in gate_skips[1]
+             "and on every argument case but the 3 skipped)\n" in gate_skips[1]
          and [(r["case"], r["agree"], r["skipped"]) for r in gate_skips[2].get("arguments", [])
               if r["agree"] is not True]
-         == [(xff_file_case, None, refused), (xff_dir_case, None, refused)]),
+         == [(xff_file_case, None, refused), (xff_dir_case, None, refused),
+             (unread_xff_case, None, refused)]),
         ("the gate raises ENOSPC writing xff/{xff}.json, rather than passing with the "
          "cases that need that name skipped",
          gate_out_of_space == errno.ENOSPC),
