@@ -696,6 +696,20 @@ they should not.
 
 ### Fixed
 
+- `scripts/parity/parity.py` takes only `EILSEQ` or `EINVAL`, raised writing
+  the scratch file whose name is not UTF-8, for the file system refusing
+  that name (#243). Its `except OSError` took `ENOSPC` there for a refusal:
+  run on stand-in verifiers with that write raising `ENOSPC`, the gate
+  skipped the two cases that need the name, each row reading `skipped: the
+  file system refuses a name that is not UTF-8 (No space left on device)`,
+  and wrote `PARITY: PASS (all implementations agree on gate, verdict, and
+  category, and on every argument case but the 2 skipped)`, exit 0;
+  `EACCES`, `EROFS` and `EIO` were taken for refusals too. Those four are
+  now raised, as an error writing another scratch file is, and on the same
+  stand-ins the gate stops with `ENOSPC`, exit 1. APFS refuses the name with
+  `EILSEQ`, and exFAT on macOS with `EINVAL`.
+  `docs/continuous-verification.md` says which errors are a refusal. The
+  self-test adds two cases (48 cases green, from 46). No fixture changes.
 - The Python reference verifier names a fixture whose path is not UTF-8 by
   the path's bytes in its report, as the Go reference verifier names it
   (#241). `sys.argv` and `os.scandir` hold a byte of a path that does not
