@@ -45,7 +45,13 @@ the directory as spelled ends in `/`: with `d/link` a link to
 `fixtures/expired.json`, both verifiers verify that copy for `d/link/..`
 and for `d/link/../`, and print `PASS  d/link/../other.json` for each. A
 file named with a trailing `/` is refused,
-`error: stat <path>: not a directory` with exit 2.
+`error: stat <path>: not a directory` with exit 2. A directory that cannot
+be listed is refused, `error: open <dir>: <reason>` with exit 2, `<dir>`
+being the directory argument as spelled or, for a repository root, its
+`fixtures` directory: run as a user other than root, both verifiers write
+`error: open locked: permission denied` for `locked`, a directory of mode
+000 holding a fixture, and `error: open r/fixtures: permission denied` for
+`r`, whose `fixtures` directory has mode 000.
 A fixture named by an absolute path under the working directory is reported
 relative to it instead, the two compared with their symbolic links
 resolved, each `..` applied after the element before it is resolved, as the

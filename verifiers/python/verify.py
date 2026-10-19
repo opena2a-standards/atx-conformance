@@ -101,9 +101,10 @@ after --help, -h or --version. A file with no expected.verifyResult of ACCEPT
 or REJECT is not a fixture: it fails to load and counts as a fail, so the run
 exits 1. Exit 2 on a usage error (no path argument, an empty one, or an
 unknown option, which is named above the usage lines), a path that does not
-exist or that os.stat refuses (a file named with a trailing /), or no fixture
-files. With no path argument the Go reference verifier verifies the fixture
-set its module embeds; this verifier has no embedded set.
+exist or that os.stat refuses (a file named with a trailing /), a directory
+os.scandir cannot open, or no fixture files. With no path argument the Go
+reference verifier verifies the fixture set its module embeds; this verifier
+has no embedded set.
 
 A fixture named as a file is named in the report as its argument spells it,
 ./ and // included, as the Go reference verifier names it.
@@ -1346,6 +1347,13 @@ def _cleans_to_itself(directory: str, st: os.stat_result) -> bool:
         return False
 
 
+def _go_path_error(op: str, path: str, exc: OSError) -> OSError:
+    """exc worded as the Go reference verifier writes the error of op on
+    path, its reason lowercase: `stat d/x.json/: not a directory`."""
+    reason = exc.strerror or str(exc)
+    return OSError(f"{op} {path}: {reason[:1].lower()}{reason[1:]}")
+
+
 def _json_names(directory: str) -> list[str]:
     """The names of the entries of directory that end in .json and are not
     directories, the entries of os.ReadDir the Go reference verifier's
@@ -1353,12 +1361,16 @@ def _json_names(directory: str) -> list[str]:
     link named *.json is kept whatever it links to, and a link to a
     directory then fails to load, as it does there. Path.glob("*.json")
     gave a subdirectory named *.json too, which then failed to load. A
-    directory that cannot be listed gives no name, as Path.glob gave none."""
+    directory os.scandir cannot open raises the error os.ReadDir returns
+    there, `open locked: permission denied` for a directory of mode 000
+    run as a user other than root. It gave no name, and the run wrote
+    `no fixture *.json files found`."""
     try:
-        with os.scandir(directory) as it:
-            entries = list(it)
-    except OSError:
-        return []
+        it = os.scandir(directory)
+    except OSError as exc:
+        raise _go_path_error("open", directory, exc) from None
+    with it:
+        entries = list(it)
     return [e.name for e in entries
             if e.name.endswith(".json") and not e.is_dir(follow_symlinks=False)]
 
@@ -1378,11 +1390,10 @@ def expand_paths(args: list[str]) -> list[str]:
         except FileNotFoundError:
             raise FileNotFoundError(f"{a}: no such file or directory") from None
         except OSError as exc:
-            # Go's os.Stat error as the Go reference verifier writes it, its
-            # reason lowercase: `stat d/x.json/: not a directory` for a file
-            # named with a trailing /.
-            reason = exc.strerror or str(exc)
-            raise OSError(f"stat {a}: {reason[:1].lower()}{reason[1:]}") from None
+            # Go's os.Stat error as the Go reference verifier writes it:
+            # `stat d/x.json/: not a directory` for a file named with a
+            # trailing /.
+            raise _go_path_error("stat", a, exc) from None
         if stat.S_ISDIR(st.st_mode):
             # The Go reference verifier's dirJoin: with d/link a symbolic
             # link to elsewhere/deep, d/link/.. lists elsewhere, and its

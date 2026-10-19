@@ -696,6 +696,24 @@ they should not.
 
 ### Fixed
 
+- The Python reference verifier refuses a directory it cannot list as the
+  Go reference verifier refuses it (#236). It gave no name for a directory
+  `os.scandir` could not open: with `locked/` holding a copy of
+  `fixtures/baseline-valid.json` as `x.json` and mode 000, run as a user
+  other than root, `python3 verify.py locked` wrote
+  `no fixture *.json files found` where `atx-verify locked` wrote
+  `error: open locked: permission denied`, both exit 2; both now write
+  the latter, and name `locked/` and `./locked` as spelled. A repository
+  root whose `fixtures/` cannot be listed is refused naming it,
+  `error: open r/fixtures: permission denied` for `r`.
+  `test_a_directory_that_cannot_be_listed_is_refused` pins it. The
+  "Arguments" section of `docs/running-the-verifiers.md` says so. The
+  argument table of `scripts/parity/parity.py` runs 24 argument lists,
+  from 23, adding `locked`, a directory of mode 000 while the cases run;
+  with the Python verifier of the previous commit, the gate fails on that
+  case alone. The self-test adds one case (42 cases green, from 41): a
+  verifier that writes `no fixture *.json files found` for that directory
+  is reported as a divergence. No fixture changes.
 - The Python reference verifier skips a subdirectory named `*.json` when
   it walks a directory, as the Go reference verifier skips it (#234). It
   listed a directory with `Path.glob("*.json")`, which gives

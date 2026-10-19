@@ -32,7 +32,8 @@ argument lists no fixture can carry (an empty argument, -h and --help at
 several positions, --version and an unknown option after a path, a
 repository root, a directory whose `fixtures` entry is a file, a path that
 does not exist, a directory with no *.json, a directory holding a
-subdirectory named *.json, a path named twice, a file spelled
+subdirectory named *.json, a directory that cannot be listed, a path named
+twice, a file spelled
 with ./ and //, a directory spelled with .., a directory spelled with a ..
 after a symbolic link, a file named with a trailing /, a path and an option
 after `--`, an absolute path through a symbolic link to the working
@@ -128,7 +129,8 @@ OBSERVED_RE = re.compile(r"^\s*observed:\s+(ACCEPT|REJECT\[([A-Z_]+))")
 # root/ holds ARGUMENT_FIXTURE as fixtures/x.json beside conformance.json, a
 # *.json that is not a fixture, as a repository root does, nojson/ holds no
 # *.json, subdir/ holds ARGUMENT_FIXTURE as x.json beside a directory named
-# sub.json, hop/link is a symbolic link to away/deep, away/ holding
+# sub.json, locked/ holds ARGUMENT_FIXTURE as x.json and has mode 000 while
+# the cases run, hop/link is a symbolic link to away/deep, away/ holding
 # ARGUMENT_FIXTURE as x.json, -h.json is ARGUMENT_FIXTURE, and nothing there
 # is named missing.
 # In an argument, {link} is the link's absolute path, {target} the
@@ -148,6 +150,7 @@ ARGUMENT_CASES: list[tuple[str, list[str]]] = [
     ("a path that does not exist", ["missing"]),
     ("a directory with no *.json", ["nojson"]),
     ("a subdirectory named *.json", ["subdir"]),
+    ("a directory that cannot be listed", ["locked"]),
     ("a path named twice", ["fixfile/x.json", "fixfile/x.json"]),
     ("a file spelled with ./ and //", ["fixfile//x.json", "./fixfile/./x.json"]),
     ("a directory spelled with ..", ["fixfile/../fixfile"]),
@@ -347,6 +350,9 @@ def _argument_scratch(scratch: Path, fixture: Path) -> Path:
     (root / "nojson" / "README.md").write_text("not a fixture\n")
     (root / "subdir" / "sub.json").mkdir(parents=True)
     (root / "subdir" / "x.json").write_bytes(fixture.read_bytes())
+    (root / "locked").mkdir()
+    (root / "locked" / "x.json").write_bytes(fixture.read_bytes())
+    (root / "locked").chmod(0)
     (root / "away" / "deep").mkdir(parents=True)
     (root / "away" / "x.json").write_bytes(fixture.read_bytes())
     (root / "hop").mkdir()
@@ -447,18 +453,23 @@ def compare_arguments(
     embedded = sorted(p.name for p in fixture.parent.glob("*.json"))
     rows: list[dict] = []
     divergences: list[str] = []
-    for case, args in cases:
-        argv = [arg.format(**names) for arg in args]
-        outcomes = {name: run_case(spec, argv, cwd) for name, spec in programs.items()}
-        if args:
-            agree = len({json.dumps(o, sort_keys=True) for o in outcomes.values()}) == 1
-        else:
-            agree = all(_answers_no_argument(programs[name], o, embedded)
-                        for name, o in outcomes.items())
-        rows.append({"case": case, "args": args, "agree": agree, "outcomes": outcomes})
-        if not agree:
-            divergences.append(
-                f'argument case "{case}" ({shlex.join(args)}): {_outcomes(outcomes)}')
+    try:
+        for case, args in cases:
+            argv = [arg.format(**names) for arg in args]
+            outcomes = {name: run_case(spec, argv, cwd) for name, spec in programs.items()}
+            if args:
+                agree = len({json.dumps(o, sort_keys=True) for o in outcomes.values()}) == 1
+            else:
+                agree = all(_answers_no_argument(programs[name], o, embedded)
+                            for name, o in outcomes.items())
+            rows.append({"case": case, "args": args, "agree": agree, "outcomes": outcomes})
+            if not agree:
+                divergences.append(
+                    f'argument case "{case}" ({shlex.join(args)}): {_outcomes(outcomes)}')
+    finally:
+        # shutil.rmtree raises PermissionError on a directory it cannot list,
+        # so locked/ is set to mode 755 before scratch is removed.
+        (cwd / "locked").chmod(0o755)
     return rows, divergences
 
 
@@ -687,7 +698,7 @@ def self_test() -> int:
     unknown = _refusal(["--bogus"])
 
     # Argument-table stand-ins: "one", which embeds a fixture set, writes kept
-    # for thirteen cases and for no argument its report of that set, the
+    # for fourteen cases and for no argument its report of that set, the
     # ARGUMENT_FIXTURE beside the table's fixture; "two", which embeds none,
     # writes kept and for no argument its usage, with one case's outcome
     # changed. A case is run alone, by name, except in the gate runs, which
@@ -703,6 +714,7 @@ def self_test() -> int:
         "a path named twice", "no argument", "a path after --")
     link_case, target_case = "an absolute path via the link", "an absolute path via its target"
     link_dotdot_case, subdir_case = "a .. after a symbolic link", "a subdirectory named *.json"
+    locked_case = "a directory that cannot be listed"
     argv_of = {case: tuple(args) for case, args in ARGUMENT_CASES}
     fixfile = (
         "PASS  fixfile/x.json\n       expected: ACCEPT\n       observed: ACCEPT\n"
@@ -736,6 +748,7 @@ def self_test() -> int:
         argv_of[dotdot_case]: passes("fixfile/x.json"),
         argv_of[link_dotdot_case]: passes("hop/link/../x.json"),
         argv_of[subdir_case]: passes("subdir/x.json"),
+        argv_of[locked_case]: ("", "error: open locked: permission denied\n", 2),
         argv_of[slash_case]: ("", "error: stat fixfile/x.json/: not a directory\n", 2),
         argv_of[dashdash_case]: (fixfile[0].replace("fixfile/x.json", "-h.json"), "", 0),
     }
@@ -818,6 +831,10 @@ def self_test() -> int:
         + passes("subdir/x.json")[0].replace(
             "summary: 1 pass, 0 fail (1 fixtures)", "summary: 1 pass, 1 fail (2 fixtures)"),
         "", 1)}), subdir_case)
+    # "two" as a verifier that gives no name for a directory it cannot list
+    # and writes that it found no *.json.
+    args_locked = _argument_divergences(changed(
+        {argv_of[locked_case]: ("", "no fixture *.json files found\n", 2)}), locked_case)
     args_slash = _argument_divergences(changed(
         {argv_of[slash_case]: passes("fixfile/x.json")}), slash_case)
     # With no argument: both as documented; "one" writing its usage although
@@ -996,6 +1013,12 @@ def self_test() -> int:
              "'summary: 1 pass, 0 fail (1 fixtures)']; "
              "two exit 1, verdict lines ['FAIL  subdir/sub.json', 'PASS  subdir/x.json', "
              "'observed: ACCEPT', 'summary: 1 pass, 1 fail (2 fixtures)']"]),
+        ("a directory that cannot be listed, for which one verifier writes that it found "
+         "no *.json, is a divergence",
+         args_locked == [
+             'argument case "a directory that cannot be listed" (locked): '
+             "one exit 2, stderr 'error: open locked: permission denied'; "
+             "two exit 2, stderr 'no fixture *.json files found'"]),
         ("a file named with a trailing /, which one verifier verifies, is a divergence",
          args_slash == [
              'argument case "a file named with a trailing /" (fixfile/x.json/): '
