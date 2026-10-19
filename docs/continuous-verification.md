@@ -35,27 +35,30 @@ sentence below:
    It runs each argument list of its argument table from a symbolic link to
    a scratch directory, with `PWD` naming the link. On each (an empty
    argument, `-h` and `--help` at several positions, `--version` and an
-   unknown option after a path, a repository root, a directory whose
-   `fixtures` entry is a file, a path that does not exist, a path that is
-   not UTF-8, a file whose name is not UTF-8 and a directory holding it,
-   a directory with no `*.json`, a directory holding a
-   subdirectory named `*.json`, a
-   directory that cannot be listed, a file that cannot be read, its name
-   UTF-8 or not, a path named twice, a file spelled
-   with `./` and `//`, a
-   directory spelled with `..`, a directory spelled with a `..` after a
-   symbolic link, a file named with a trailing `/`, a path and an option
-   after `--`, an absolute path through the link, through its target and
-   outside the working directory) the two must exit with the
-   same code and write the same first stderr line and verdict lines, the
-   load error a FAIL line names included. Where
+   unknown option after a path, an unknown option that is not UTF-8, `-`
+   alone, a repository root, a directory whose `fixtures` entry is a file,
+   a path that does not exist, a path that is not UTF-8, a file whose name
+   is not UTF-8 and a directory holding it, a directory with no `*.json`,
+   a directory holding a subdirectory named `*.json`, a directory holding
+   a symbolic link to a fixture and one holding a link to a directory, a
+   directory that cannot be listed and a repository root whose `fixtures`
+   directory cannot be, a file that cannot be read, its name UTF-8 or not,
+   spelled with `./` and `//` and found in a directory, a path named
+   twice, a file spelled with `./` and `//` and one spelled with `..`, a
+   directory spelled with `./` and `//` and one spelled with `..`, a
+   directory spelled with a `..` after a symbolic link, with a trailing
+   `/` and without, a file named with a trailing `/`, a path and an option
+   after `--`, an absolute path through the link, through its target, with
+   a `..` after a symbolic link and outside the working directory) the two
+   must exit with the same code and write the same first stderr line and
+   verdict lines, the load error a FAIL line names included. Where
    the file system refuses a file name that is not UTF-8, as APFS does, the
    three cases that need one are skipped, their rows saying why. Only
    `EILSEQ` or `EINVAL`, raised writing the scratch file so named, is a
    refusal; another error writing it, `ENOSPC` for one, fails the gate. With
-   no argument they must differ as documented: the Go verifier verifies its
-   embedded fixture set, every fixture passing, and the Python verifier
-   prints its usage and exits 2.
+   no argument, and with `--` alone, they must differ as documented: the Go
+   verifier verifies its embedded fixture set, every fixture passing, and
+   the Python verifier prints its usage and exits 2.
 5. `conformance.json` must match the fixture set, and every ATX citation in
    each fixture's `spec` list, each JCS vector's `spec` member and the
    `requirements[].specRefs` of `conformance.json` must link to atx-spec
