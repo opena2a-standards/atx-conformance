@@ -56,6 +56,11 @@ option and an error line write an argument that is not UTF-8 as the bytes
 it was given: for the one byte 0xff, which names no file, both verifiers
 write `error: `, that byte, then `: no such file or directory`, with exit
 2, and for `-` followed by that byte, `unknown option: -` and that byte.
+A fixture whose path is not UTF-8 is named in its report line by the path's
+bytes too, where the file system takes such a name (APFS refuses it): for
+`d`, a directory holding a copy of `fixtures/baseline-valid.json` named by
+the byte 0xff then `.json`, and for that file named as an argument, both
+verifiers write `PASS  d/`, that byte, then `.json`.
 A fixture named by an absolute path under the working directory is reported
 relative to it instead, the two compared with their symbolic links
 resolved, each `..` applied after the element before it is resolved, as the

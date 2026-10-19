@@ -31,7 +31,8 @@ After the fixture table the gate runs the argument table, ARGUMENT_CASES:
 argument lists no fixture can carry (an empty argument, -h and --help at
 several positions, --version and an unknown option after a path, a
 repository root, a directory whose `fixtures` entry is a file, a path that
-does not exist, a path that is not UTF-8, a directory with no *.json, a
+does not exist, a path that is not UTF-8, a file whose name is not UTF-8
+and a directory holding it, a directory with no *.json, a
 directory holding a subdirectory named *.json, a directory that cannot be
 listed, a path named twice, a file spelled
 with ./ and //, a directory spelled with .., a directory spelled with a ..
@@ -46,7 +47,10 @@ observed verdict and category, the summary), once the program name each
 verifier calls itself (`atx-verify`, `verify.py`) is stripped; a case they
 differ on is a divergence. A byte of their output that is not UTF-8 is read
 as a surrogate escape, so the byte 0xff and the six characters \\udcff
-differ. No argument is the one case the two answer
+differ. Where the file system refuses a file name that is not UTF-8, as
+APFS does, the two cases that need one are skipped, not run: their rows say
+so, a skipped case is no divergence, and the PASS line counts them. No
+argument is the one case the two answer
 differently by design: the Go verifier must verify the fixture set its
 module embeds, each fixture passing, and exit 0, and the Python verifier,
 which has none, must write its usage and exit 2; any other outcome is a
@@ -62,7 +66,10 @@ that exited before reporting any fixture, that an argument case one
 verifier answers with another exit code, first stderr line or verdict lines
 fails the gate, as does a verifier that answers no argument other than its
 spec says, that the cases with an absolute path via the link and via its
-target run from a symbolic link with PWD naming it, that --json is refused
+target run from a symbolic link with PWD naming it, that the cases needing a
+file name that is not UTF-8 are skipped where the file system refuses one,
+whatever the verifiers would write, and counted in the PASS line, that
+--json is refused
 with --self-test by a usage message the self-test holds word for word, so
 rewording that message turns the self-test red, and that an unknown
 argument is named on the line above the usage.
@@ -133,12 +140,13 @@ OBSERVED_RE = re.compile(r"^\s*observed:\s+(ACCEPT|REJECT\[([A-Z_]+))")
 # *.json, subdir/ holds ARGUMENT_FIXTURE as x.json beside a directory named
 # sub.json, locked/ holds ARGUMENT_FIXTURE as x.json and has mode 000 while
 # the cases run, hop/link is a symbolic link to away/deep, away/ holding
-# ARGUMENT_FIXTURE as x.json, -h.json is ARGUMENT_FIXTURE, and nothing there
-# is named missing.
+# ARGUMENT_FIXTURE as x.json, -h.json is ARGUMENT_FIXTURE, xff/ holds
+# ARGUMENT_FIXTURE as {xff}.json where the file system takes that name, and
+# nothing there is named missing.
 # In an argument, {link} is the link's absolute path, {target} the
 # directory's, its symbolic links resolved, {fixture} the absolute path of
-# the fixture the table copies, outside both, and {xff} NOT_UTF8, which
-# names nothing there either.
+# the fixture the table copies, outside both, and {xff} NOT_UTF8, which as a
+# whole argument names nothing there either.
 ARGUMENT_CASES: list[tuple[str, list[str]]] = [
     ("no argument", []),
     ("an empty argument", [""]),
@@ -152,6 +160,8 @@ ARGUMENT_CASES: list[tuple[str, list[str]]] = [
     ("a fixtures entry that is a file", ["fixfile"]),
     ("a path that does not exist", ["missing"]),
     ("a path that is not UTF-8", ["{xff}"]),
+    ("a file whose name is not UTF-8", ["xff/{xff}.json"]),
+    ("a directory whose file name is not UTF-8", ["xff"]),
     ("a directory with no *.json", ["nojson"]),
     ("a subdirectory named *.json", ["subdir"]),
     ("a directory that cannot be listed", ["locked"]),
@@ -171,6 +181,9 @@ ARGUMENT_FIXTURE = "baseline-valid.json"
 # The argument {xff} stands for: the byte 0xff, which is not UTF-8, as
 # sys.argv holds it, a surrogate escape, which subprocess passes as the byte.
 NOT_UTF8 = os.fsdecode(b"\xff")
+# The cases that need xff/{xff}.json, skipped where the file system refuses
+# a name that is not UTF-8.
+NOT_UTF8_NAME_CASES = ("a file whose name is not UTF-8", "a directory whose file name is not UTF-8")
 # Verdict lines an outcome in a report line names one by one; a longer run,
 # such as the walk of a whole fixture set, is named by its count and last line.
 SHOWN_VERDICT_LINES = 5
@@ -298,7 +311,8 @@ def build_report(
     fixture, as the line above the table does, so a consumer need not infer
     it from a non-zero exit code and a null cell on every fixture.
     `arguments` is the argument table, one row per case in ARGUMENT_CASES
-    order, empty when it did not run.
+    order, empty when it did not run; a row's `skipped` names why the case
+    was not run, null when it ran.
     """
     return {
         "fixtures": table,
@@ -343,9 +357,10 @@ def argument_verifiers(bin_dir: Path) -> dict[str, dict]:
     }
 
 
-def _argument_scratch(scratch: Path, fixture: Path) -> Path:
+def _argument_scratch(scratch: Path, fixture: Path) -> tuple[Path, str]:
     """Lay out under scratch/dir the paths ARGUMENT_CASES name, and return
-    scratch/link, a symbolic link to it, which the cases run from."""
+    scratch/link, a symbolic link to it, which the cases run from, and the
+    reason the file system refused xff/{xff}.json, "" when it took it."""
     root = scratch / "dir"
     (root / "fixfile").mkdir(parents=True)
     (root / "fixfile" / "fixtures").write_text("a file, not a directory\n")
@@ -365,9 +380,16 @@ def _argument_scratch(scratch: Path, fixture: Path) -> Path:
     (root / "hop").mkdir()
     (root / "hop" / "link").symlink_to("../away/deep", target_is_directory=True)
     (root / "-h.json").write_bytes(fixture.read_bytes())
+    (root / "xff").mkdir()
+    refusal = ""
+    try:
+        (root / "xff" / f"{NOT_UTF8}.json").write_bytes(fixture.read_bytes())
+    except OSError as exc:
+        # APFS refuses the name, with EILSEQ.
+        refusal = f"the file system refuses a name that is not UTF-8 ({exc.strerror or exc})"
     link = scratch / "link"
     link.symlink_to("dir", target_is_directory=True)
-    return link
+    return link, refusal
 
 
 def _without_program(line: str, program: str) -> str:
@@ -444,6 +466,7 @@ def _answers_no_argument(spec: dict, outcome: dict, fixtures: list[str]) -> bool
 def compare_arguments(
     programs: dict[str, dict], fixture: Path, scratch: Path,
     cases: list[tuple[str, list[str]]] = ARGUMENT_CASES,
+    refusal: str | None = None,
 ) -> tuple[list[dict], list[str]]:
     """Run every case of cases on every verifier in programs, from a
     symbolic link to scratch, with fixture as fixfile/x.json. A verifier that
@@ -452,8 +475,16 @@ def compare_arguments(
     Return (rows, divergences): a row per case holding each verifier's
     outcome, and a divergence naming each case the outcomes differ on, or,
     for no argument, are not each the one _answers_no_argument documents.
+    A case of NOT_UTF8_NAME_CASES is skipped where the file system refused
+    xff/{xff}.json: its row holds that reason under `skipped`, no outcome,
+    and `agree` null, and it is no divergence. refusal, when given, stands
+    in for the file system's answer, "" for a name it took, so the
+    self-test runs those cases on stand-ins, which read no file, or skips
+    them, on any file system.
     """
-    cwd = _argument_scratch(scratch, fixture)
+    cwd, refused = _argument_scratch(scratch, fixture)
+    if refusal is not None:
+        refused = refusal
     # str.format expands {link}, {target}, {fixture} and {xff}, so a
     # misspelt name raises instead of reaching a verifier as written.
     names = {
@@ -465,6 +496,10 @@ def compare_arguments(
     divergences: list[str] = []
     try:
         for case, args in cases:
+            if refused and case in NOT_UTF8_NAME_CASES:
+                rows.append({"case": case, "args": args, "agree": None, "skipped": refused,
+                             "outcomes": {}})
+                continue
             argv = [arg.format(**names) for arg in args]
             outcomes = {name: run_case(spec, argv, cwd) for name, spec in programs.items()}
             if args:
@@ -472,7 +507,8 @@ def compare_arguments(
             else:
                 agree = all(_answers_no_argument(programs[name], o, embedded)
                             for name, o in outcomes.items())
-            rows.append({"case": case, "args": args, "agree": agree, "outcomes": outcomes})
+            rows.append({"case": case, "args": args, "agree": agree, "skipped": None,
+                         "outcomes": outcomes})
             if not agree:
                 divergences.append(
                     f'argument case "{case}" ({shlex.join(args)}): {_outcomes(outcomes)}')
@@ -490,12 +526,17 @@ def _argument_row(case: str, args: list[str], text: str) -> str:
 def render_arguments(rows: list[dict]) -> list[str]:
     """Return the lines of the argument table: per case its arguments and
     the outcome the verifiers share, or each verifier's where they differ
-    and for no argument, which they answer differently by design."""
+    and for no argument, which they answer differently by design, or why it
+    was skipped."""
     if not rows:
         return ["arguments: not run (see PARITY: FAIL below)"]
-    lines = [f"arguments: {len(rows)} cases x {len(rows[0]['outcomes'])} verifiers"]
+    # A skipped row holds no outcome, so it does not count the verifiers.
+    verifiers = max(len(row["outcomes"]) for row in rows)
+    lines = [f"arguments: {len(rows)} cases x {verifiers} verifiers"]
     for row in rows:
-        if not row["args"]:
+        if row.get("skipped"):
+            text = "skipped: " + row["skipped"]
+        elif not row["args"]:
             text = ("as documented: " if row["agree"] else "not as documented: ") \
                 + _outcomes(row["outcomes"])
         elif row["agree"]:
@@ -650,24 +691,35 @@ def _naming_stand_in(program: str, wd: str) -> dict:
     return {"argv": [sys.executable, "-c", src], "program": program}
 
 
-def _argument_divergences(programs: dict[str, dict], *cases: str) -> list[str]:
-    """The divergences of the argument-table cases named cases, run on
-    stand-ins."""
+def _argument_rows(
+    programs: dict[str, dict], *cases: str, refusal: str = "",
+) -> tuple[list[dict], list[str]]:
+    """The rows and divergences of the argument-table cases named cases, run
+    on stand-ins, refusal standing in for the file system's answer to
+    xff/{xff}.json: "", which runs the cases that need it on any file
+    system, or the reason it refused the name."""
     run = [(case, args) for case, args in ARGUMENT_CASES if case in cases]
     if len(run) != len(cases):
         raise ValueError(f"not every one of {cases} is a case of ARGUMENT_CASES")
     with tempfile.TemporaryDirectory() as d:
         fixture = Path(d) / ARGUMENT_FIXTURE
         fixture.write_text("{}\n")
-        return compare_arguments(programs, fixture, Path(d) / "run", run)[1]
+        return compare_arguments(programs, fixture, Path(d) / "run", run, refusal)
+
+
+def _argument_divergences(programs: dict[str, dict], *cases: str) -> list[str]:
+    """The divergences of the argument-table cases named cases, run on
+    stand-ins on any file system."""
+    return _argument_rows(programs, *cases)[1]
 
 
 def _gate_with_arguments(
-    programs: Callable[[Path], dict[str, dict]],
+    programs: Callable[[Path], dict[str, dict]], refusal: str = "",
 ) -> tuple[int, str, dict]:
     """(exit code, stdout, --json report) of the gate over one fixture the
     fixture-table stand-ins agree on, with programs giving the argument
-    table's verifiers."""
+    table's verifiers, every case run on any file system or, given a
+    refusal, the cases needing a name that is not UTF-8 skipped."""
     out = io.StringIO()
     with tempfile.TemporaryDirectory() as d:
         fixtures, report = Path(d) / "fixtures", Path(d) / "report.json"
@@ -675,7 +727,7 @@ def _gate_with_arguments(
         (fixtures / ARGUMENT_FIXTURE).write_text("{}\n")
         agree = _stand_in(_block(ARGUMENT_FIXTURE, "ACCEPT"))
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-            code = gate(fixtures, {"one": agree, "two": agree}, str(report), programs)
+            code = gate(fixtures, {"one": agree, "two": agree}, str(report), programs, refusal)
         return code, out.getvalue(), json.loads(report.read_text())
 
 
@@ -710,7 +762,7 @@ def self_test() -> int:
     unknown = _refusal(["--bogus"])
 
     # Argument-table stand-ins: "one", which embeds a fixture set, writes kept
-    # for fifteen cases and for no argument its report of that set, the
+    # for seventeen cases and for no argument its report of that set, the
     # ARGUMENT_FIXTURE beside the table's fixture; "two", which embeds none,
     # writes kept and for no argument its usage, with one case's outcome
     # changed. A case is run alone, by name, except in the gate runs, which
@@ -727,6 +779,8 @@ def self_test() -> int:
     link_case, target_case = "an absolute path via the link", "an absolute path via its target"
     link_dotdot_case, subdir_case = "a .. after a symbolic link", "a subdirectory named *.json"
     locked_case, xff_case = "a directory that cannot be listed", "a path that is not UTF-8"
+    xff_file_case, xff_dir_case = (
+        "a file whose name is not UTF-8", "a directory whose file name is not UTF-8")
     argv_of = {case: tuple(args) for case, args in ARGUMENT_CASES}
     fixfile = (
         "PASS  fixfile/x.json\n       expected: ACCEPT\n       observed: ACCEPT\n"
@@ -766,6 +820,8 @@ def self_test() -> int:
         # Keyed on the argument as the stand-in's sys.argv holds it, not on
         # {xff} as ARGUMENT_CASES writes it.
         (NOT_UTF8,): ("", f"error: {NOT_UTF8}: no such file or directory\n", 2),
+        (f"xff/{NOT_UTF8}.json",): passes(f"xff/{NOT_UTF8}.json"),
+        argv_of[xff_dir_case]: passes(f"xff/{NOT_UTF8}.json"),
     }
     embedded = (fixfile[0].replace("fixfile/x.json", f"fixtures/{ARGUMENT_FIXTURE}"), "", 0)
     no_argument = argv_of[no_argument_case]
@@ -857,6 +913,17 @@ def self_test() -> int:
     # sys.argv holds for it.
     args_xff = _argument_divergences(changed(
         {(NOT_UTF8,): ("", "error: \\udcff: no such file or directory\n", 2)}), xff_case)
+    # "two" as a verifier that writes the byte 0xff of a fixture's name as
+    # the six characters \udcff in its PASS line, as the Python verifier
+    # wrote the surrogate escape sys.argv and os.scandir hold for it; then
+    # the same two where the file system refuses that name.
+    escaped_name = changed({
+        (f"xff/{NOT_UTF8}.json",): passes("xff/\\udcff.json"),
+        argv_of[xff_dir_case]: passes("xff/\\udcff.json"),
+    })
+    args_xff_name = _argument_divergences(escaped_name, xff_file_case, xff_dir_case)
+    refused = "the file system refuses a name that is not UTF-8 (Illegal byte sequence)"
+    xff_skipped = _argument_rows(escaped_name, xff_file_case, xff_dir_case, refusal=refused)
     # With no argument: both as documented; "one" writing its usage although
     # it embeds a fixture set; "two" reporting a set although it embeds none.
     args_documented = _argument_divergences(changed({}), no_argument_case)
@@ -874,6 +941,7 @@ def self_test() -> int:
     }, link_case, target_case)
     gate_fails = _gate_with_arguments(lambda bin_dir: changed(exit_changed))
     gate_passes = _gate_with_arguments(lambda bin_dir: changed({}))
+    gate_skips = _gate_with_arguments(lambda bin_dir: changed({}), refused)
     gate_not_built = _gate_with_arguments(_not_built)
     cases: list[tuple[str, bool]] = [
         ("verifiers that agree report no divergence", agree == []),
@@ -1051,6 +1119,24 @@ def self_test() -> int:
              "argument case \"a path that is not UTF-8\" ('{xff}'): "
              r"one exit 2, stderr 'error: \udcff: no such file or directory'; "
              r"two exit 2, stderr 'error: \\udcff: no such file or directory'"]),
+        ("a file whose name is not UTF-8, named as a file or found in a directory, which "
+         "one verifier names with a backslash escape rather than its byte, is a divergence",
+         args_xff_name == [
+             f"argument case \"{case}\" ({spelled}): "
+             r"one exit 0, verdict lines ['PASS  xff/\udcff.json', 'observed: ACCEPT', "
+             "'summary: 1 pass, 0 fail (1 fixtures)']; "
+             r"two exit 0, verdict lines ['PASS  xff/\\udcff.json', 'observed: ACCEPT', "
+             "'summary: 1 pass, 0 fail (1 fixtures)']"
+             for case, spelled in ((xff_file_case, "'xff/{xff}.json'"), (xff_dir_case, "xff"))]),
+        ("where the file system refuses a name that is not UTF-8, the cases that need one "
+         "are skipped whatever the verifiers would write, each row naming the refusal, "
+         "and are no divergence",
+         xff_skipped[1] == []
+         and [(r["case"], r["agree"], r["skipped"], r["outcomes"]) for r in xff_skipped[0]]
+         == [(xff_file_case, None, refused, {}), (xff_dir_case, None, refused, {})]
+         and render_arguments(xff_skipped[0])[1:] == [
+             _argument_row(xff_file_case, list(argv_of[xff_file_case]), f"skipped: {refused}"),
+             _argument_row(xff_dir_case, list(argv_of[xff_dir_case]), f"skipped: {refused}")]),
         ("with no argument, a verifier that embeds a fixture set reports it and exits 0, "
          "and one that embeds none writes its usage and exits 2, which is no divergence",
          args_documented == []),
@@ -1099,6 +1185,14 @@ def self_test() -> int:
          and "\nPARITY: PASS" in gate_passes[1]
          and len(gate_passes[2].get("arguments", [])) == len(ARGUMENT_CASES)
          and all(r["agree"] for r in gate_passes[2]["arguments"])),
+        ("the gate passes where the file system refuses a name that is not UTF-8, its "
+         "PASS line naming the skipped cases, which the --json report marks",
+         gate_skips[0] == 0
+         and "\nPARITY: PASS (all implementations agree on gate, verdict, and category, "
+             "and on every argument case but the 2 skipped)\n" in gate_skips[1]
+         and [(r["case"], r["agree"], r["skipped"]) for r in gate_skips[2].get("arguments", [])
+              if r["agree"] is not True]
+         == [(xff_file_case, None, refused), (xff_dir_case, None, refused)]),
         ("a verifier the argument table cannot build fails the gate, which names "
          "the build error",
          gate_not_built[0] == 1
@@ -1139,10 +1233,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def gate(
     fixtures_dir: Path, verifiers: dict[str, dict], json_path: str | None,
     programs: Callable[[Path], dict[str, dict]] = argument_verifiers,
+    refusal: str | None = None,
 ) -> int:
     """Run the verifiers over the *.json in fixtures_dir, then the argument
     table on the verifiers programs returns for a scratch directory; return
-    the exit code."""
+    the exit code. refusal is compare_arguments' own."""
     fixture_files = sorted(p.name for p in fixtures_dir.glob("*.json"))
     if not fixture_files:
         sys.stderr.write(NO_FIXTURES)
@@ -1157,7 +1252,8 @@ def gate(
             divergences.append(f"argument table not run: {exc}")
         else:
             arguments, argument_divergences = compare_arguments(
-                argument_programs, fixtures_dir / ARGUMENT_FIXTURE, Path(scratch) / "run")
+                argument_programs, fixtures_dir / ARGUMENT_FIXTURE, Path(scratch) / "run",
+                refusal=refusal)
             divergences += argument_divergences
 
     print()
@@ -1181,8 +1277,10 @@ def gate(
             # Relayed stderr can span lines; keep them under their bullet.
             print("  - " + d.replace("\n", "\n    "))
         return 1
+    skipped = sum(1 for row in arguments if row.get("skipped"))
+    cases = f"every argument case but the {skipped} skipped" if skipped else "every argument case"
     print("\nPARITY: PASS (all implementations agree on gate, verdict, and category, "
-          "and on every argument case)")
+          f"and on {cases})")
     return 0
 
 
