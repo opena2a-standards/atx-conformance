@@ -51,7 +51,11 @@ being the directory argument as spelled or, for a repository root, its
 `fixtures` directory: run as a user other than root, both verifiers write
 `error: open locked: permission denied` for `locked`, a directory of mode
 000 holding a fixture, and `error: open r/fixtures: permission denied` for
-`r`, whose `fixtures` directory has mode 000.
+`r`, whose `fixtures` directory has mode 000. The line naming an unknown
+option and an error line write an argument that is not UTF-8 as the bytes
+it was given: for the one byte 0xff, which names no file, both verifiers
+write `error: `, that byte, then `: no such file or directory`, with exit
+2, and for `-` followed by that byte, `unknown option: -` and that byte.
 A fixture named by an absolute path under the working directory is reported
 relative to it instead, the two compared with their symbolic links
 resolved, each `..` applied after the element before it is resolved, as the
