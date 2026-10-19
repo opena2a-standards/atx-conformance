@@ -97,6 +97,31 @@ they should not.
 
 ### Changed
 
+- The argument table of `scripts/parity/parity.py` runs twelve argument
+  shapes that the "Arguments" section of `docs/running-the-verifiers.md`
+  describes, whose closing sentence says the parity gate runs both
+  verifiers on each shape it describes (#249). Its `--json` report listed
+  29 argument lists, none of them one of these: `--` alone, which the
+  section answers as it answers no argument; `-` alone, which is no
+  unknown option; `-` followed by the byte 0xff, an unknown option that is
+  not UTF-8; a directory holding a symbolic link named `*.json` to a
+  fixture, and one holding such a link to a directory; a repository root
+  whose `fixtures` directory has mode 000; a directory holding a file of
+  mode 000, and that file named with `./` and `//`; a file spelled with
+  `..`; a directory spelled with `./` and `//`; a `..` after a symbolic
+  link with a trailing `/`; and an absolute path with a `..` after a
+  symbolic link. The table runs 41 argument lists, from 29, and holds `--`
+  alone to the answer it holds no argument to: the Go verifier verifies
+  its embedded fixture set, each fixture passing, exit 0, and the Python
+  verifier writes its usage, exit 2. Run on macOS, both verifiers agree on
+  each new case and the gate passes, the three cases that need a file name
+  that is not UTF-8 skipped, as APFS refuses one. Stand-in verifiers that
+  diverge on eleven of the new argument lists pass the previous commit's
+  argument table, 29 cases, with no divergence, and fail this one on those
+  eleven. The section's closing sentence names `--` alone beside no
+  argument, and `docs/continuous-verification.md` lists the new cases. The
+  self-test adds twelve cases (63 cases green, from 51). No verifier or
+  fixture changes.
 - `docs/running-the-verifiers.md` says the file of a directory argument
   that names another directory once cleaned, as `d/link/..` can with
   `d/link` a symbolic link, is named and read as the argument spells the

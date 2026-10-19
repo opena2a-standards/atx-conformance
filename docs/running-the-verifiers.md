@@ -87,7 +87,7 @@ verifies the fixture set built into it and the Python verifier, which has no
 embedded set, prints its usage and exits 2. Their usage lines say so,
 `atx-verify [fixture.json|dir]...` and `verify.py <fixture.json|dir>...`.
 The parity gate runs both verifiers on each of these shapes, no argument
-included, which it holds to this difference
+and `--` alone included, which it holds to this difference
 ([continuous verification](continuous-verification.md)).
 
 ## Which commit a run verified
