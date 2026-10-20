@@ -57,7 +57,13 @@ differ. Where the file system refuses a file name that is not UTF-8, as
 APFS does, the three cases that need one are skipped, not run: their rows say
 so, a skipped case is no divergence, and the PASS line counts them. Only
 EILSEQ or EINVAL, raised writing the scratch file so named, is a refusal;
-another error writing it, ENOSPC for one, is raised, and the gate exits 1. No
+another error writing it, ENOSPC for one, is raised, and the gate exits 1.
+The six cases that need a path of mode 000 (a directory or a repository
+root's fixtures that cannot be listed, a file that cannot be read, however
+named or found) are skipped the same way where that mode does not deny the
+gate access, as it does not where the gate runs as root: the gate lists
+each directory of mode 000 and opens noread/x.json, and where one of them
+opens, each of the six rows names it and the effective uid. No
 argument and -- alone, which names no path either, are the two cases the
 two answer differently by design: on each the Go verifier must verify the
 fixture set its module embeds, each fixture passing, and exit 0, and the
@@ -77,7 +83,9 @@ verifier that answers no argument or -- alone other than its
 spec says, that the cases with an absolute path via the link and via its
 target run from a symbolic link with PWD naming it, that the cases needing a
 file name that is not UTF-8 are skipped where the file system refuses one,
-whatever the verifiers would write, and counted in the PASS line, that of
+and the cases needing a path of mode 000 where one opens, whatever the
+verifiers would write, and counted in the PASS line, that a path of mode 000
+opens where chmod leaves its mode as it was, and that of
 the errors writing the scratch file so named, EILSEQ and EINVAL are
 refusals and ENOSPC, EACCES, EROFS and EIO are raised, by the gate for
 ENOSPC, that EILSEQ or EINVAL raised reading the fixture copied to each
@@ -235,6 +243,16 @@ NOT_UTF8_NAME_CASES = (
 # noread/{xff}.json with another errno is raised, as an error writing another
 # scratch file is.
 NOT_UTF8_NAME_REFUSALS = (errno.EILSEQ, errno.EINVAL)
+# The cases that need locked/, lockedroot/fixtures/, noread/x.json or
+# noread/{xff}.json, each of mode 000, skipped where this process opens one:
+# mode 000 does not deny root access, and run as root the verifiers verify
+# the fixture each holds.
+MODE_000_CASES = (
+    "a directory that cannot be listed", "a repository root whose fixtures cannot be listed",
+    "a file that cannot be read", "a file that cannot be read spelled with ./ and //",
+    "a directory holding a file that cannot be read",
+    "a file that cannot be read whose name is not UTF-8",
+)
 # Verdict lines an outcome in a report line names one by one; a longer run,
 # such as the walk of a whole fixture set, is named by its count and last line.
 SHOWN_VERDICT_LINES = 5
@@ -462,6 +480,28 @@ def _argument_scratch(scratch: Path, fixture: Path) -> tuple[Path, str]:
     return link, refusal
 
 
+def _mode_000_access(cwd: Path) -> str:
+    """"" where this process is denied listing each directory of LOCKED_DIRS
+    under cwd and opening noread/x.json, all of mode 000, or the reason the
+    cases of MODE_000_CASES are skipped: the first of them it opened, and
+    its effective uid. noread/{xff}.json, which _argument_scratch may not
+    have written, shares the mode of noread/x.json. An error other than
+    PermissionError listing or opening one is raised."""
+    for name in (*LOCKED_DIRS, "noread/x.json"):
+        path = cwd / name
+        try:
+            if name in LOCKED_DIRS:
+                os.listdir(path)
+            else:
+                os.close(os.open(path, os.O_RDONLY))
+        except PermissionError:
+            continue
+        # os has no geteuid on Windows.
+        uid = f" (effective uid {os.geteuid()})" if hasattr(os, "geteuid") else ""
+        return f"mode 000 does not deny this process access: it opened {name}{uid}"
+    return ""
+
+
 def _without_program(line: str, program: str) -> str:
     """line without the program name it opens with or names after `usage: `,
     so the two verifiers' lines compare on their wording alone."""
@@ -538,7 +578,7 @@ def _answers_no_argument(spec: dict, outcome: dict, fixtures: list[str]) -> bool
 def compare_arguments(
     programs: dict[str, dict], fixture: Path, scratch: Path,
     cases: list[tuple[str, list[str]]] = ARGUMENT_CASES,
-    refusal: str | None = None,
+    refusal: str | None = None, access: str | None = None,
 ) -> tuple[list[dict], list[str]]:
     """Run every case of cases on every verifier in programs, from a
     symbolic link to scratch, with fixture as fixfile/x.json. A verifier that
@@ -549,11 +589,14 @@ def compare_arguments(
     for an argument list of NO_PATH_ARGUMENTS, are not each the one
     _answers_no_argument documents.
     A case of NOT_UTF8_NAME_CASES is skipped where the file system refused
-    xff/{xff}.json: its row holds that reason under `skipped`, no outcome,
-    and `agree` null, and it is no divergence. refusal, when given, stands
-    in for the file system's answer, "" for a name it took, so the
-    self-test runs those cases on stand-ins, which read no file, or skips
-    them, on any file system.
+    xff/{xff}.json, and one of MODE_000_CASES where _mode_000_access names a
+    path of mode 000 this process opened: its row holds that reason under
+    `skipped`, the refusal where both apply, no outcome, and `agree` null,
+    and it is no divergence. refusal, when given, stands in for the file
+    system's answer, "" for a name it took, and access for
+    _mode_000_access's, "" for every path denied, so the self-test runs
+    those cases on stand-ins, which read no file, or skips them, on any file
+    system and as any user.
     """
     cwd, refused = _argument_scratch(scratch, fixture)
     if refusal is not None:
@@ -568,9 +611,12 @@ def compare_arguments(
     rows: list[dict] = []
     divergences: list[str] = []
     try:
+        opened = _mode_000_access(cwd) if access is None else access
         for case, args in cases:
-            if refused and case in NOT_UTF8_NAME_CASES:
-                rows.append({"case": case, "args": args, "agree": None, "skipped": refused,
+            skipped = ((refused if case in NOT_UTF8_NAME_CASES else "")
+                       or (opened if case in MODE_000_CASES else ""))
+            if skipped:
+                rows.append({"case": case, "args": args, "agree": None, "skipped": skipped,
                              "outcomes": {}})
                 continue
             argv = [arg.format(**names) for arg in args]
@@ -785,19 +831,21 @@ def _resolving_stand_in(program: str, clean_first: bool) -> dict:
 
 
 def _argument_rows(
-    programs: dict[str, dict], *cases: str, refusal: str = "",
+    programs: dict[str, dict], *cases: str, refusal: str = "", access: str = "",
 ) -> tuple[list[dict], list[str]]:
     """The rows and divergences of the argument-table cases named cases, run
     on stand-ins, refusal standing in for the file system's answer to
     xff/{xff}.json: "", which runs the cases that need it on any file
-    system, or the reason it refused the name."""
+    system, or the reason it refused the name; and access for
+    _mode_000_access's: "", which runs the cases that need a path of mode
+    000 as any user, or the reason they are skipped."""
     run = [(case, args) for case, args in ARGUMENT_CASES if case in cases]
     if len(run) != len(cases):
         raise ValueError(f"not every one of {cases} is a case of ARGUMENT_CASES")
     with tempfile.TemporaryDirectory() as d:
         fixture = Path(d) / ARGUMENT_FIXTURE
         fixture.write_text("{}\n")
-        return compare_arguments(programs, fixture, Path(d) / "run", run, refusal)
+        return compare_arguments(programs, fixture, Path(d) / "run", run, refusal, access)
 
 
 def _argument_divergences(programs: dict[str, dict], *cases: str) -> list[str]:
@@ -807,13 +855,14 @@ def _argument_divergences(programs: dict[str, dict], *cases: str) -> list[str]:
 
 
 def _gate_with_arguments(
-    programs: Callable[[Path], dict[str, dict]], refusal: str | None = "",
+    programs: Callable[[Path], dict[str, dict]], refusal: str | None = "", access: str = "",
 ) -> tuple[int, str, dict]:
     """(exit code, stdout, --json report) of the gate over one fixture the
     fixture-table stand-ins agree on, with programs giving the argument
-    table's verifiers, every case run on any file system or, given a
-    refusal, the cases needing a name that is not UTF-8 skipped, or, given
-    None, the file system's answer to xff/{xff}.json deciding."""
+    table's verifiers, every case run on any file system and as any user
+    or, given a refusal, the cases needing a name that is not UTF-8 skipped,
+    or, given None, the file system's answer to xff/{xff}.json deciding,
+    and, given an access, the cases needing a path of mode 000 skipped."""
     out = io.StringIO()
     with tempfile.TemporaryDirectory() as d:
         fixtures, report = Path(d) / "fixtures", Path(d) / "report.json"
@@ -821,7 +870,8 @@ def _gate_with_arguments(
         (fixtures / ARGUMENT_FIXTURE).write_text("{}\n")
         agree = _stand_in(_block(ARGUMENT_FIXTURE, "ACCEPT"))
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-            code = gate(fixtures, {"one": agree, "two": agree}, str(report), programs, refusal)
+            code = gate(fixtures, {"one": agree, "two": agree}, str(report), programs, refusal,
+                        access)
         return code, out.getvalue(), json.loads(report.read_text())
 
 
@@ -889,6 +939,33 @@ def _scratch_refusal() -> str:
             # As compare_arguments does, so the scratch can be removed.
             for name in LOCKED_DIRS:
                 (scratch / "dir" / name).chmod(0o755)
+
+
+def _scratch_access(listing: int | None = None, opening: int | None = None) -> object:
+    """The answer _mode_000_access gives for a scratch directory laid out
+    with a fixture of {} and chmod leaving each mode as it was, so each path
+    meant to be of mode 000 opens as any user, unless os.listdir raises an
+    OSError with errno listing, or os.open one with errno opening; or the
+    errno of the OSError it raises."""
+
+    def raising(error: int) -> Callable[..., object]:
+        def failing(*args, **kwargs) -> object:
+            raise OSError(error, os.strerror(error))
+        return failing
+
+    with tempfile.TemporaryDirectory() as d:
+        fixture, scratch = Path(d) / ARGUMENT_FIXTURE, Path(d) / "run"
+        fixture.write_text("{}\n")
+        with mock.patch.object(Path, "chmod", lambda path, mode, **kwargs: None):
+            cwd = _argument_scratch(scratch, fixture)[0]
+        with contextlib.ExitStack() as patches:
+            for name, error in (("listdir", listing), ("open", opening)):
+                if error is not None:
+                    patches.enter_context(mock.patch.object(os, name, raising(error)))
+            try:
+                return _mode_000_access(cwd)
+            except OSError as exc:
+                return exc.errno
 
 
 def self_test() -> int:
@@ -1217,6 +1294,22 @@ def self_test() -> int:
                     for nth in (1, 2) for e in (errno.EILSEQ, errno.EINVAL)]
     gate_out_of_space = _writing_xff_raising(
         errno.ENOSPC, lambda: _gate_with_arguments(lambda bin_dir: changed({}), None))
+    # Where mode 000 does not deny this process access, as where it runs as
+    # root: the cases that need such a path, "two" verifying the fixture of
+    # noread/x.json, as a verifier run as root does; then the gate, the file
+    # system taking a name that is not UTF-8 and refusing one.
+    opened = "mode 000 does not deny this process access: it opened locked (effective uid 0)"
+    mode_000_skipped = _argument_rows(changed({argv_of[unread_case]: passes("noread/x.json")}),
+                                      *MODE_000_CASES, access=opened)
+    gate_opens = _gate_with_arguments(lambda bin_dir: changed({}), access=opened)
+    gate_opens_refused = _gate_with_arguments(lambda bin_dir: changed({}), refused, opened)
+    # _mode_000_access with chmod leaving each mode as it was: each path
+    # opens, until listing, then opening, raises EACCES; EPERM is a denial
+    # too, and EIO is raised.
+    uid = f" (effective uid {os.geteuid()})" if hasattr(os, "geteuid") else ""
+    access_answers = [_scratch_access(*errors) for errors in (
+        (None, None), (errno.EACCES, None), (errno.EACCES, errno.EACCES),
+        (errno.EPERM, errno.EPERM), (errno.EIO, None), (errno.EACCES, errno.EIO))]
     cases: list[tuple[str, bool]] = [
         ("verifiers that agree report no divergence", agree == []),
         ("a verdict divergence is reported by fixture",
@@ -1597,6 +1690,39 @@ def self_test() -> int:
         ("the gate raises ENOSPC writing xff/{xff}.json, rather than passing with the "
          "cases that need that name skipped",
          gate_out_of_space == errno.ENOSPC),
+        ("where mode 000 does not deny this process access, the cases that need a path of "
+         "that mode are skipped whatever the verifiers would write, each row naming the "
+         "path it opened, and are no divergence",
+         mode_000_skipped[1] == []
+         and [(r["case"], r["agree"], r["skipped"], r["outcomes"]) for r in mode_000_skipped[0]]
+         == [(case, None, opened, {}) for case in MODE_000_CASES]
+         and render_arguments(mode_000_skipped[0])[1:] == [
+             _argument_row(case, list(argv_of[case]), f"skipped: {opened}")
+             for case in MODE_000_CASES]),
+        ("the gate passes where mode 000 does not deny it access, its PASS line counting "
+         "the 6 cases that need that mode as skipped, which the --json report marks",
+         gate_opens[0] == 0
+         and "\nPARITY: PASS (all implementations agree on gate, verdict, and category, "
+             "and on every argument case but the 6 skipped)\n" in gate_opens[1]
+         and [(r["case"], r["agree"], r["skipped"]) for r in gate_opens[2].get("arguments", [])
+              if r["agree"] is not True]
+         == [(case, None, opened) for case in MODE_000_CASES]),
+        ("where the file system also refuses a name that is not UTF-8, the gate counts 8 "
+         "cases skipped, a file that cannot be read whose name is not UTF-8 naming the "
+         "refusal",
+         gate_opens_refused[0] == 0
+         and "and on every argument case but the 8 skipped)\n" in gate_opens_refused[1]
+         and [(r["case"], r["skipped"]) for r in gate_opens_refused[2].get("arguments", [])
+              if r["agree"] is not True]
+         == [(case, refused if case in NOT_UTF8_NAME_CASES else opened)
+             for case, _ in ARGUMENT_CASES
+             if case in NOT_UTF8_NAME_CASES or case in MODE_000_CASES]),
+        ("a path of mode 000 that opens is named, the directories listed first, then "
+         "noread/x.json opened; EACCES and EPERM deny access, and EIO is raised",
+         access_answers == [
+             f"mode 000 does not deny this process access: it opened locked{uid}",
+             f"mode 000 does not deny this process access: it opened noread/x.json{uid}",
+             "", "", errno.EIO, errno.EIO]),
         ("a verifier the argument table cannot build fails the gate, which names "
          "the build error",
          gate_not_built[0] == 1
@@ -1637,11 +1763,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def gate(
     fixtures_dir: Path, verifiers: dict[str, dict], json_path: str | None,
     programs: Callable[[Path], dict[str, dict]] = argument_verifiers,
-    refusal: str | None = None,
+    refusal: str | None = None, access: str | None = None,
 ) -> int:
     """Run the verifiers over the *.json in fixtures_dir, then the argument
     table on the verifiers programs returns for a scratch directory; return
-    the exit code. refusal is compare_arguments' own."""
+    the exit code. refusal and access are compare_arguments' own."""
     fixture_files = sorted(p.name for p in fixtures_dir.glob("*.json"))
     if not fixture_files:
         sys.stderr.write(NO_FIXTURES)
@@ -1657,7 +1783,7 @@ def gate(
         else:
             arguments, argument_divergences = compare_arguments(
                 argument_programs, fixtures_dir / ARGUMENT_FIXTURE, Path(scratch) / "run",
-                refusal=refusal)
+                refusal=refusal, access=access)
             divergences += argument_divergences
 
     print()

@@ -56,7 +56,10 @@ sentence below:
    three cases that need one are skipped, their rows saying why. Only
    `EILSEQ` or `EINVAL`, raised writing the scratch file so named, is a
    refusal; another error writing it, `ENOSPC` for one, fails the gate, as
-   does an error reading the fixture copied there, whatever its errno. With
+   does an error reading the fixture copied there, whatever its errno. The
+   six cases that need a path of mode 000 are skipped where that mode does
+   not deny the gate access, as it does not where the gate runs as root:
+   their rows name the path the gate opened and its effective uid. With
    no argument, and with `--` alone, they must differ as documented: the Go
    verifier verifies its embedded fixture set, every fixture passing, and
    the Python verifier prints its usage and exits 2.
