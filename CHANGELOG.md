@@ -721,6 +721,26 @@ they should not.
 
 ### Fixed
 
+- `scripts/parity/parity.py` skips the six argument cases that need a path
+  of mode 000 (`locked`, `lockedroot`, `noread/x.json`, `./noread//x.json`,
+  `noread` and `noread/{xff}.json`) where that mode does not deny the gate
+  access, rather than running them on paths the verifiers can open (#252).
+  Mode 000 does not deny root access: run as root in a `python:3.12-slim`
+  container, stand-in verifiers that list or open their argument opened all
+  six paths, and the rows read `agree: exit 0` with no word that the cases
+  tested nothing they are named for. The gate now lists `locked` and
+  `lockedroot/fixtures` and opens `noread/x.json` before the cases run;
+  where one opens, each of the six rows reads `skipped: mode 000 does not
+  deny this process access: it opened locked (effective uid 0)`, naming the
+  path and the effective uid, the PASS line counts them, and the `--json`
+  report marks them, as it does the cases the file system refuses a name
+  that is not UTF-8 for. Run as root in a `python:3.12` container with Go
+  1.26 and both verifiers, the gate exits 0 with `PARITY: PASS (... and on
+  every argument case but the 6 skipped)`. In the `python:3.12-slim`
+  container run as uid 1000, or as root with `DAC_OVERRIDE` and
+  `DAC_READ_SEARCH` dropped, the stand-ins were denied those paths and the
+  cases ran. The self-test adds four cases (68 cases green, from 64). No
+  fixture changes.
 - `scripts/parity/parity.py` reads the fixture it copies to the two scratch
   files whose name is not UTF-8, `xff/{xff}.json` and `noread/{xff}.json`,
   once, before the `try` that classifies their writes, so an `EILSEQ` or
