@@ -21,8 +21,8 @@ Contract:
 - fixtures whose expected.rejectCategory is UNSUPPORTED_VERSION, which MUST
   fail validation and MUST fail on exactly the `atcVersion` enum (they carry
   an unregistered version by design), and
-- the declared-purpose injection fixtures (issue #11), which carry an
-  attacker-appended NON-OBJECT declaredPurpose by design and MUST fail
+- the declared-purpose injection fixtures (issues #11 and #130), which carry
+  an attacker-appended NON-OBJECT declaredPurpose by design and MUST fail
   validation on exactly the `declaredPurpose` member, and
 - the case-variant fixture (atx-conformance#16), which carries a decoy
   top-level member whose name folds to a real field, and MUST fail validation
@@ -339,6 +339,7 @@ def check_credentials() -> int:
         expect_purpose_invalid = path.name in (
             "v1_1-declared-purpose-array-injected.json",
             "v1_1-declared-purpose-string-injected.json",
+            "v1_1-declared-purpose-number-injected.json",
         )
         expect_case_variant_invalid = path.name == "v1_1-case-variant-member.json"
         if expect_version_invalid:

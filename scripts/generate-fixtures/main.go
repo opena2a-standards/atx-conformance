@@ -888,6 +888,24 @@ func main() {
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
 				atx)
 		}},
+		{"fixtures/v1_1-declared-purpose-number-injected.json", func() Fixture {
+			// Same injection with a NUMBER value that is not an integer
+			// (atx-conformance#130). JCS writes it with the number
+			// serialization of RFC 8785 section 3.2.2.3, which a serializer
+			// that handles integers only does not implement. Such a verifier
+			// has no canonical bytes for a signature to verify over, and the
+			// fixture holds it to the same REJECT, not to an error that ends
+			// its run without a verdict.
+			atx := newBaselineV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			atx.DeclaredPurpose = json.RawMessage(`1.5`)
+			return wrap("atx-v1_1/declared-purpose-number-injected",
+				"An ATX v1.1 credential signed with no declaredPurpose, carrying an attacker-appended NUMBER declaredPurpose value, 1.5, which is not an integer. Non-object values are included in the TBS verbatim (atx-spec \u00a71.3a.2 rule 5), so the recomputed canonical bytes no longer match the signature and the verifier MUST REJECT with a signature-validation reason. JCS writes a number that is not an integer with the number serialization of RFC 8785 \u00a73.2.2.3; a verifier whose serializer does not implement it has no canonical bytes for a signature to verify over, and its expected outcome is the same REJECT.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
 		// ---- duplicate-member strict parse (issue opena2a-registry#305) ----
 		{"fixtures/v1_1-duplicate-purpose-member.json", func() Fixture {
 			// DUPLICATE-MEMBER SMUGGLING. Sign the honest purpose (category
@@ -1103,6 +1121,7 @@ var fixtureSections = map[string][]string{
 	"atx-v1_1/declared-purpose-empty-whitespace": {secDeclaredPurpose},
 	"atx-v1_1/declared-purpose-array-injected":   {secDeclaredPurpose},
 	"atx-v1_1/declared-purpose-string-injected":  {secDeclaredPurpose},
+	"atx-v1_1/declared-purpose-number-injected":  {secDeclaredPurpose},
 	"atx-v1_1/duplicate-purpose-member":          {secDeclaredPurpose},
 }
 
@@ -1137,6 +1156,7 @@ var fixtureRequirements = map[string]string{
 	"atx-v1_1/declared-purpose-empty-whitespace": "§1.3a.2 rule 5: an empty declaredPurpose object, whatever whitespace it is written with, is treated as absent and left out of the TBS",
 	"atx-v1_1/declared-purpose-array-injected":   "§1.3a.2 rule 5: a present non-object declaredPurpose value enters the TBS verbatim, so an array added after signing is a signature failure",
 	"atx-v1_1/declared-purpose-string-injected":  "§1.3a.2 rule 5: a present non-object declaredPurpose value enters the TBS verbatim, so a string added after signing is a signature failure",
+	"atx-v1_1/declared-purpose-number-injected":  "§1.3a.2 rule 5: a present non-object declaredPurpose value enters the TBS verbatim, so a number that is not an integer, added after signing, is a signature failure",
 	"atx-v1_1/duplicate-purpose-member":          "§1.3 step 1: parsing the credential rejects an object member repeated at any depth (RFC 8259 §4) as PARSE_ERROR before any field is read (§12)",
 	"atx-v1_1/case-variant-member":               "§1.3 step 1: parsing the credential rejects two member names that fold to one field (TRUSTLEVEL and trustLevel) as PARSE_ERROR before any field is read (§12)",
 	"atx-v1_1/cross-issuer-key":                  "§1.3 step 4, key eligibility: under atcVersion 1.1 a key is eligible only for the issuerDid or a trusted issuer the signed issuerChain names, so a signature made with a trusted authority's key outside both is a signature failure",

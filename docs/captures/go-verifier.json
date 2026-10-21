@@ -19,22 +19,21 @@
     "go.mod": "667011a74ec65d88b16a2c7093b6e62bb4b97690",
     "go.sum": "436e141fa3870ee84f73fe087c3929df8948c07c",
     "fixtures.go": "6b2be479eaa48b5d81d87df1840e6bd0de4238c9",
-    "fixtures": "e1286df4db4115deb1fbf103fdf97757a4c95b05"
+    "fixtures": "835480763ec2a328a005395c4ac9aba8e631e5dc"
   },
   "inputsUncommitted": [
-    "verifiers/go/verifier/verify.go",
-    "verifiers/go/verifier/verify_test.go"
+    "fixtures/v1_1-declared-purpose-number-injected.json"
   ],
-  "ranAtUtc": "2026-10-18T20:15:14Z",
+  "ranAtUtc": "2026-10-21T07:04:55Z",
   "exitCode": 0,
   "stderrLines": 0,
-  "summary": "summary: 25 pass, 0 fail (25 fixtures)",
+  "summary": "summary: 26 pass, 0 fail (26 fixtures)",
   "outputs": {
     "capture": {
       "path": "docs/captures/go-verifier.txt",
-      "sha256": "7d9c2bce423c1308ac33d5b08d40c1c47c39b29e3ad8d083ab798b7055059879",
-      "bytes": 5893,
-      "lines": 93
+      "sha256": "a1592169c01a968e90393c81d6ca4b5e67ad93fe57e4b113ce82e9c2d29f906e",
+      "bytes": 6146,
+      "lines": 96
     }
   }
 }

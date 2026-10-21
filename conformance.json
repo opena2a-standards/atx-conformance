@@ -616,6 +616,47 @@
       "description": "An ATX v1.1 credential signed with no declaredPurpose, carrying a whitespace-empty declaredPurpose object ({ }) appended after signing. Emptiness is a JSON-parse-level property (atx-spec §1.3a.2 rule 5): any serialization of the empty object is the empty object, treated as absent and omitted from the TBS, so the signature still verifies. Verifier MUST ACCEPT. A verifier that compares the raw byte string against \"{}\" instead of parsing wrongly includes the value and REJECTs."
     },
     {
+      "fixture": "fixtures/v1_1-declared-purpose-number-injected.json",
+      "name": "atx-v1_1/declared-purpose-number-injected",
+      "requirement": "§1.3a.2 rule 5: a present non-object declaredPurpose value enters the TBS verbatim, so a number that is not an integer, added after signing, is a signature failure",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.5 Declared purpose (optional)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md",
+          "section": "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "An ATX v1.1 credential signed with no declaredPurpose, carrying an attacker-appended NUMBER declaredPurpose value, 1.5, which is not an integer. Non-object values are included in the TBS verbatim (atx-spec §1.3a.2 rule 5), so the recomputed canonical bytes no longer match the signature and the verifier MUST REJECT with a signature-validation reason. JCS writes a number that is not an integer with the number serialization of RFC 8785 §3.2.2.3; a verifier whose serializer does not implement it has no canonical bytes for a signature to verify over, and its expected outcome is the same REJECT."
+    },
+    {
       "fixture": "fixtures/v1_1-declared-purpose-string-injected.json",
       "name": "atx-v1_1/declared-purpose-string-injected",
       "requirement": "§1.3a.2 rule 5: a present non-object declaredPurpose value enters the TBS verbatim, so a string added after signing is a signature failure",

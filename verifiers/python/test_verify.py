@@ -367,6 +367,22 @@ class InjectedNumberPurpose(unittest.TestCase):
                 self.assertEqual(got.reject_category, "SIGNATURE_INVALID")
                 self.assertIn("signature", got.reason.lower())
 
+    def test_reason_is_the_go_verifier_reason(self):
+        # The Go reference verifier canonicalizes the number, and the
+        # signature does not verify over those bytes. This verifier cannot
+        # write them, so no key verifies the signature here either, and the
+        # reason names it in the Go verifier's words, read from its run over
+        # these values. GoReportText holds the report over fixtures/, which
+        # holds fixtures/v1_1-declared-purpose-number-injected.json, to the
+        # Go capture.
+        for purpose in (1.5, {"autonomy": 0.5}, ["billing:inquiry", 0.25]):
+            with self.subTest(purpose=purpose):
+                self.assertEqual(
+                    _verdict(purpose).reason,
+                    "Ed25519 signature did:opena2a:authority:opena2a.org#key-1 "
+                    "did not verify against any configured public key",
+                )
+
     def test_integer_and_boolean_reject_in_the_same_category(self):
         # Controls: values the serializer does canonicalize reach the verdict
         # through signature verification itself.
