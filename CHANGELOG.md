@@ -1,10 +1,11 @@
 # Changelog
 
-`v0.1.0` is this repository's first tag, and the section of that name lists
-changes it carries; the section below it, named for commit `e2f9dc4`, lists
-the fixtures that commit changed. A consumer pins this repository at a tag or
-at a commit. Changes to an existing fixture's credential, signatures,
-verifier state or expected outcome are listed here whenever one lands;
+This repository carries no tag yet: the section `v0.1.0` lists the changes
+its first tag, `v0.1.0`, is to carry, and the section below it, named for
+commit `e2f9dc4`, lists the fixtures that commit changed. Until that tag
+exists, a consumer pins this repository at a commit. Changes to an existing
+fixture's credential, signatures, verifier state or expected outcome are
+listed here whenever one lands;
 [`docs/versioning.md`](docs/versioning.md) "Versioning and stability" says
 they should not.
 
@@ -154,12 +155,12 @@ they should not.
   which fails unless that section quotes `d/link/..` and `d/link/../` and
   the `PASS` line the Python verifier prints for each; on the previous
   commit's page it fails for `d/link/../`. No fixture changes.
-- README.md says `@latest` resolves to the highest release tag of this
-  repository that the Go module proxy reports, and that `go run` resolves
-  `@<commit>` to the commit's release tag, or to a pseudo-version when the
-  commit has no tag; it said the repository had no tags and `@latest`
-  resolved to a pseudo-version of a commit on `main`. This file's opening
-  paragraph names `v0.1.0` as the first tag, and two entries under
+- README.md says that `go run` resolves `@<commit>` to the commit's release
+  tag, or to a pseudo-version when the commit has no tag. It said
+  `@latest` resolves to the highest release tag of this repository that
+  the Go module proxy reports, and this file's opening paragraph named
+  `v0.1.0` as the first tag, until both were found to describe a tag the
+  repository did not carry (#255, under Fixed). Two entries under
   `v0.1.0` are amended: the #165 entry says `verify.py` imports `os`
   again, and the #181 entry says the #151 change made a long integer in
   `declaredPurpose` `VERIFIER_CONFIG_ERROR` in both verifiers.
@@ -738,6 +739,33 @@ they should not.
 
 ### Fixed
 
+- README.md and this file's opening paragraph describe the repository as
+  carrying no tag, where both described a `v0.1.0` tag it does not carry
+  (#255). README.md said `@latest` resolves to the highest release tag of
+  this repository that the Go module proxy reports, and this file said
+  `v0.1.0` is this repository's first tag, while the tags API of
+  `opena2a-standards/atx-conformance` returned an empty list and
+  `go list -m -json github.com/opena2a-standards/atx-conformance@latest`
+  resolved to `v0.0.0-20261020031110-014aa2e7700c`, a pseudo-version of
+  commit `014aa2e` on `main`. README.md says the repository has no release
+  tag, so `@latest` resolves to a pseudo-version of a commit on `main`, the
+  one the Go module proxy reports as latest; this file says the repository
+  carries no tag yet and that the `v0.1.0` section lists the changes its
+  first tag is to carry. `scripts/check_readme_counts.py` holds the README
+  and this file's opening paragraph to the version tags the checkout
+  carries, where they can be read: a sentence naming a tag as this
+  repository's must name one it carries; while it carries none, a sentence
+  saying what `@latest` resolves to must name the pseudo-version; once it
+  carries one, no sentence may say it has no tag. On the README.md and
+  CHANGELOG.md of the previous commit it names both sentences and exits 1.
+  Held to a `v0.1.0` tag, it names the three sentences that say the
+  repository has no tag: README.md's, the `--version` item of
+  `docs/running-the-verifiers.md` and this file's opening. A shallow
+  clone, or a tree with no repository, is not held to it, and the closing
+  line says so; the workflow's checkout of this repository sets no
+  `fetch-depth`, whose default fetches one commit, so in CI the self-test's
+  cases are what hold the check. The self-test adds sixteen cases (261
+  altered sites, from 245). No fixture changes.
 - `scripts/parity/parity.py` skips the six argument cases that need a path
   of mode 000 (`locked`, `lockedroot`, `noread/x.json`, `./noread//x.json`,
   `noread` and `noread/{xff}.json`) where that mode does not deny the gate

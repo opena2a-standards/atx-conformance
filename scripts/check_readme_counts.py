@@ -219,6 +219,19 @@ check read the section headed `## Unreleased` alone, so it read no sentence
 once that section was retitled `## v0.1.0`; a CHANGELOG.md with no `## `
 heading fails it.
 
+It also holds what the README and CHANGELOG.md's opening paragraph, the text
+above its first `## ` heading, say about this repository's tags to the tags
+the repository carries. README.md said `@latest` resolves to the highest
+release tag of this repository that the Go module proxy reports, and
+CHANGELOG.md said `v0.1.0` is this repository's first tag, while the
+repository carried no tag and `go list -m <module>@latest` answered a
+pseudo-version of a commit on main. A sentence naming a tag as this
+repository's (`v0.1.0` is this repository's first tag) must name a version
+tag the repository carries; while it carries none, a sentence saying what
+`@latest` resolves to must name the pseudo-version; once it carries one, no
+sentence may say the repository has no tag. A shallow clone, or a tree with
+no repository, is not held to it, and the closing line says so.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
 declares, each signature-verification Scope row that claims a set of fixtures
@@ -235,7 +248,9 @@ can be read), each fenced `go run <module>/<dir>@latest` command names a
 package under no directory that held a go.mod in HEAD's history (where the
 history can be read), each `go run` command the top `## ` section of
 CHANGELOG.md names as README.md's first command is the one README.md opens
-with, no Python dependency site calls the Python verifier
+with, each README and CHANGELOG.md opening-paragraph sentence on this
+repository's tags matches the version tags it carries (where they can be
+read), no Python dependency site calls the Python verifier
 zero-dependency while requirements.txt names a package, each jcs-vectors
 file describing canonicalize cites RFC 8785 Appendix G, none calls an RFC
 8785 library a reference implementation or port, neither description of what
@@ -967,6 +982,94 @@ def changelog_first_command_failures(changelog, front_page, go_mod):
                     f"command, but README.md opens with "
                     + (f"`{first}`" if first is not None else "no fenced block")
                     + f": {sentence!r}")
+    return failures
+
+
+# README.md said `@latest` resolves to the highest release tag of this
+# repository that the Go module proxy reports, and CHANGELOG.md's opening
+# paragraph said `v0.1.0` is this repository's first tag, while the repository
+# carried no tag and `go list -m <module>@latest` answered a pseudo-version of
+# a commit on main. Where the tags can be read, each sentence of the README and
+# of CHANGELOG.md's opening paragraph (the text above its first `## ` heading)
+# is held to them: one naming a tag as this repository's must name one the
+# repository carries; while it carries no version tag, one saying what
+# `@latest` resolves to must name the pseudo-version; once it carries one, none
+# may say the repository has no tag. The sections below the opening paragraph
+# record past changes and are not held to it.
+VERSION_TAG = re.compile(r"v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?")
+TAG_CLAIM = re.compile(
+    r"`(v\d+\.\d+\.\d+[0-9A-Za-z.+-]*)`\s+is\s+(?:this|the)\s+repository['’]s\s+"
+    r"(?:[\w-]+\s+){0,2}tag\b")
+LATEST_RESOLVES = re.compile(r"`@latest`\s+resolves\s+to\b")
+PSEUDO_VERSION = "pseudo-version"
+UNTAGGED_CLAIM = re.compile(
+    r"\brepository\s+(?:has|carries)\s+no\s+(?:release\s+|version\s+)?tags?\b")
+TAG_SITE = f"README or {CHANGELOG_NAME} opening-paragraph sentence on this repository's tags"
+# The two sentences the check was written for, as they were wrapped.
+RETRACTED_LATEST = (
+    "`@latest` resolves to the highest release tag of this\n"
+    "repository that the Go module proxy reports.")
+RETRACTED_FIRST_TAG = (
+    "`v0.1.0` is this repository's first tag, and the section of that name lists\n"
+    "changes it carries; the section below it, named for commit `e2f9dc4`, lists\n"
+    "the fixtures that commit changed.")
+
+
+def version_tags(root):
+    """The tags of the repository at `root` that name a version (`v1.2.3`,
+    `v1.2.3-rc.1`), sorted, or None when they cannot be read: git cannot run,
+    `root` is not a repository's top level, or the clone is shallow (cut at
+    one commit, a clone's tags are not a reading of the repository's)."""
+    git = _history_git(root)
+    try:
+        shallow = git("rev-parse", "--is-shallow-repository")
+        if shallow.returncode != 0 or shallow.stdout.strip() != "false":
+            return None
+        listed = git("for-each-ref", "--format=%(refname)", "refs/tags/")
+        if listed.returncode != 0:
+            return None
+    except OSError:
+        return None
+    names = (ref[len("refs/tags/"):] for ref in listed.stdout.split())
+    return sorted(name for name in names if VERSION_TAG.fullmatch(name))
+
+
+def changelog_opening(changelog):
+    """The text of `changelog` above its first `## ` heading, the whole text
+    when it has none, and "" when it is None."""
+    lines = (changelog or "").split("\n")
+    at = top_heading_at(lines)
+    return "\n".join(lines if at is None else lines[:at])
+
+
+def release_tag_failures(readme, changelog, tags):
+    """Each sentence of the README and of CHANGELOG.md's opening paragraph
+    (changelog_opening()) held to `tags` (version_tags()): one naming a tag as
+    this repository's must name one of `tags`; while `tags` is empty, one
+    saying what `@latest` resolves to must name the pseudo-version; while it
+    is not, none may say the repository has no tag. With `tags` None nothing
+    is checked."""
+    if tags is None:
+        return []
+    carried = f"the version tags {', '.join(tags)}" if tags else "no version tag"
+    failures = []
+    sentences = [*statements(readme), *statements(changelog_opening(changelog))]
+    for sentence in dict.fromkeys(sentences):
+        for tag in TAG_CLAIM.findall(sentence):
+            if tag not in tags:
+                failures.append(
+                    f"{TAG_SITE} names `{tag}` as a tag of this repository, but "
+                    f"the repository carries {carried}: {sentence!r}")
+        if not tags and LATEST_RESOLVES.search(sentence) and PSEUDO_VERSION not in sentence:
+            failures.append(
+                f"{TAG_SITE} says what `@latest` resolves to and names no "
+                f"{PSEUDO_VERSION}, but the repository carries no version tag, so "
+                f"`@latest` resolves to a {PSEUDO_VERSION} of a commit on the "
+                f"default branch: {sentence!r}")
+        if tags and UNTAGGED_CLAIM.search(sentence):
+            failures.append(
+                f"{TAG_SITE} says the repository has no tag, but it carries "
+                f"{carried}: {sentence!r}")
     return failures
 
 
@@ -2565,7 +2668,7 @@ Tree = collections.namedtuple("Tree", (
     "key_vectors used_key_ids versions go_mod verify_go py_requirements "
     "py_dependency_texts jcs_sites tbs_sites tbs_canonical jcs_readme "
     "gate_sites gate_libraries profile outcomes suites scripts front_page "
-    "module_start nested_modules changelog"))
+    "module_start nested_modules changelog release_tags"))
 
 # One check tree_failures() runs: its name, the call (`run(tree)` returns
 # failures) and the alteration the self-test makes to prove the call is still
@@ -3216,6 +3319,134 @@ def _first_module_commit_cases():
         ]
 
 
+def _opening_with(changelog, text):
+    """`changelog` with `text` as the last paragraph of its opening, above its
+    first `## ` heading; appended when it has none."""
+    lines = changelog.split("\n")
+    at = top_heading_at(lines)
+    if at is None:
+        return f"{changelog}\n\n{text}\n"
+    return "\n".join(lines[:at] + [text, ""] + lines[at:])
+
+
+TAGGED = ["v0.1.0"]
+
+
+def _release_tag_cases(tree):
+    """Held to no version tag, the retracted README sentence appended to the
+    README adds a failure naming the pseudo-version, as does the README's own
+    `@latest` sentence with its pseudo-version made a version, and the
+    retracted CHANGELOG.md sentence made the last paragraph of its opening
+    adds one naming `v0.1.0`. Held to a `v0.1.0` tag, that sentence adds none
+    and one naming `v9.9.9` adds a failure, the retracted README sentence
+    adds none, and a README sentence saying the repository has no release tag
+    adds a failure, one saying a commit has no tag none. With the tags unread
+    both retracted sentences add none, and the retracted CHANGELOG.md
+    sentence in the top section, below the opening, adds none. Each case
+    counts only the failures its text adds over the published text held to
+    the same tags. Then version_tags() is read off temporary repositories."""
+    readme, changelog = tree.readme, tree.changelog or ""
+    cases = []
+
+    def case(label, needle, text=readme, log=changelog, tags=()):
+        tags = None if tags is None else list(tags)
+        baseline = set(release_tag_failures(readme, changelog, tags))
+        new = [f for f in release_tag_failures(text, log, tags) if f not in baseline]
+        if needle is None:
+            cases.append((not new, label, f"expected no new failure, got {new}"))
+        else:
+            cases.append((any(f.startswith(TAG_SITE) and needle in f for f in new),
+                          label, f"expected a {TAG_SITE} failure naming {needle!r}, "
+                                 f"got {new}"))
+
+    with_latest = readme + "\n\n" + RETRACTED_LATEST + "\n"
+    with_first_tag = _opening_with(changelog, RETRACTED_FIRST_TAG)
+    case("README restating the retracted `@latest` sentence with no version tag",
+         f"names no {PSEUDO_VERSION}", text=with_latest)
+    site = LATEST_RESOLVES.search(readme)
+    at = readme.find(PSEUDO_VERSION, site.end()) if site else -1
+    if at < 0:
+        cases.append((False, f"README's `@latest` sentence with its {PSEUDO_VERSION} "
+                             f"made a version",
+                      f"no sentence saying what `@latest` resolves to, followed by "
+                      f"{PSEUDO_VERSION!r}, found in README.md or its pages"))
+    else:
+        case(f"README's `@latest` sentence with its {PSEUDO_VERSION} made a version, "
+             f"with no version tag", f"names no {PSEUDO_VERSION}",
+             text=readme[:at] + "version" + readme[at + len(PSEUDO_VERSION):])
+    case(f"{CHANGELOG_NAME} opening restating the retracted `v0.1.0` sentence with "
+         f"no version tag", "names `v0.1.0`", log=with_first_tag)
+    case(f"{CHANGELOG_NAME} opening restating the retracted `v0.1.0` sentence held "
+         f"to a `v0.1.0` tag", None, log=with_first_tag, tags=TAGGED)
+    case(f"{CHANGELOG_NAME} opening naming `v9.9.9` as this repository's first tag "
+         f"held to a `v0.1.0` tag", "names `v9.9.9`",
+         log=_opening_with(changelog, "`v9.9.9` is this repository's first tag."),
+         tags=TAGGED)
+    case("README restating the retracted `@latest` sentence held to a `v0.1.0` tag",
+         None, text=with_latest, tags=TAGGED)
+    case("README saying the repository has no release tag held to a `v0.1.0` tag",
+         "says the repository has no tag",
+         text=readme + "\n\nThis repository has no release tag.\n", tags=TAGGED)
+    case("README saying a commit has no tag held to a `v0.1.0` tag", None,
+         text=readme + "\n\n`go run` resolves the commit to a version, or to a "
+                       "pseudo-version when the commit has no tag.\n", tags=TAGGED)
+    case("both retracted sentences with the tags unread", None,
+         text=with_latest, log=with_first_tag, tags=None)
+    case(f"the retracted `v0.1.0` sentence in the {CHANGELOG_NAME} top section, "
+         f"below its opening, with no version tag", None,
+         log=_top_section_with(changelog, RETRACTED_FIRST_TAG))
+    cases.extend(_version_tags_cases())
+    return cases
+
+
+def _version_tags_cases():
+    """version_tags() over a repository with one commit: [] untagged; once the
+    commit carries `v0.1.0`, `v0.2.0-rc.1` and `not-a-version`, the two
+    version tags; None for a shallow clone of it and a directory that is no
+    repository. A git command that fails is a red case."""
+    label = "version_tags() over a temporary repository"
+    env = {name: value for name, value in os.environ.items()
+           if not name.startswith("GIT_")}
+    config = ("-c", "user.name=self-test", "-c", "user.email=self-test@example.invalid",
+              "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false",
+              "-c", "core.hooksPath=/dev/null")
+
+    def git(cwd, *args):
+        return subprocess.run(["git", *config, *args], cwd=cwd, env=env, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    with tempfile.TemporaryDirectory(prefix="readme-counts-tags-") as tmp:
+        repo = pathlib.Path(tmp) / "repo"
+        repo.mkdir()
+        try:
+            git(repo, "-c", "init.defaultBranch=main", "init", "-q")
+            (repo / "README.md").write_text("x\n", encoding="utf-8")
+            git(repo, "add", "--", "README.md")
+            git(repo, "commit", "-q", "-m", "one commit")
+            untagged = version_tags(repo)
+            git(repo, "tag", "v0.1.0")
+            git(repo, "tag", "-a", "-m", "rc", "v0.2.0-rc.1")
+            git(repo, "tag", "not-a-version")
+            shallow = pathlib.Path(tmp) / "shallow"
+            git(tmp, "clone", "-q", "--depth", "1", repo.resolve().as_uri(), str(shallow))
+            plain = pathlib.Path(tmp) / "plain"
+            plain.mkdir()
+        except (OSError, subprocess.CalledProcessError) as exc:
+            detail = getattr(exc, "stderr", None) or exc
+            return [(False, label, f"git failed building the repository: {detail}")]
+        return [
+            (untagged == [], f"{label}: a commit with no tag",
+             f"expected [], got {untagged}"),
+            (version_tags(repo) == ["v0.1.0", "v0.2.0-rc.1"],
+             f"{label}: `v0.1.0`, `v0.2.0-rc.1` (annotated) and `not-a-version`",
+             f"expected ['v0.1.0', 'v0.2.0-rc.1'], got {version_tags(repo)}"),
+            (version_tags(shallow) is None, f"{label}: a shallow clone of it",
+             f"expected None, got {version_tags(shallow)}"),
+            (version_tags(plain) is None, f"{label}: a directory that is no repository",
+             f"expected None, got {version_tags(plain)}"),
+        ]
+
+
 # The two forms the zero-dependency claim was published in, with their
 # original line wraps: the jcs-vectors README row and the serializer docstring.
 RETRACTED_PY_CLAIMS = (
@@ -3842,6 +4073,11 @@ def _wire_changelog_first_command(tree):
                 f"`{INVENTED_FIRST_COMMAND}` is README.md's first command.")})
 
 
+def _wire_release_tag(tree):
+    return (f"names no {PSEUDO_VERSION}",
+            {"readme": tree.readme + "\n\n" + RETRACTED_LATEST + "\n", "release_tags": []})
+
+
 def _wire_python_dependency(tree):
     site = PY_DEPENDENCY_SITES[0]
     if tree.py_dependency_texts.get(site) is None:
@@ -3941,6 +4177,9 @@ CHECKS = (
     Check("CHANGELOG.md first command",
           lambda t: changelog_first_command_failures(t.changelog, t.front_page, t.go_mod),
           _wire_changelog_first_command),
+    Check("release tag",
+          lambda t: release_tag_failures(t.readme, t.changelog, t.release_tags),
+          _wire_release_tag),
     Check("Python dependency",
           lambda t: python_dependency_failures(t.py_requirements, t.py_dependency_texts),
           _wire_python_dependency),
@@ -4183,6 +4422,7 @@ def self_test(tree, verbose):
     cases.extend(_latest_run_cases(readme, tree.go_mod, tree.nested_modules))
     cases.extend(_failing_latest_run_cases(tree))
     cases.extend(_changelog_first_command_cases(tree))
+    cases.extend(_release_tag_cases(tree))
     cases.extend(_python_dependency_cases(tree.py_requirements, tree.py_dependency_texts))
     cases.extend(_jcs_library_cases(tree.jcs_sites))
     cases.extend(_outside_code_cases(tree.gate_sites, tree.gate_libraries))
@@ -4401,6 +4641,7 @@ def main():
         module_start=first_module_commit(ROOT, go_mod),
         nested_modules=nested_module_dirs(ROOT),
         changelog=CHANGELOG.read_text(encoding="utf-8") if CHANGELOG.exists() else None,
+        release_tags=version_tags(ROOT),
     )
 
     failed, total = self_test(tree, only_self_test)
@@ -4456,6 +4697,13 @@ def main():
              if first is not None else
              f"the {CHANGELOG_NAME} top section, `{heading}`, names no `go run` "
              f"command as README.md's first command; ")
+          + ((f"each README and {CHANGELOG_NAME} opening-paragraph sentence on this "
+              f"repository's tags matches "
+              + (f"its version tags, {', '.join(tree.release_tags)}; "
+                 if tree.release_tags else "its carrying no version tag; "))
+             if tree.release_tags is not None else
+             f"sentences on this repository's tags not held to them: none could be "
+             f"read in this checkout; ")
           + f"no jcs-vectors README or RFC 8785 serializer docstring calls the "
           f"Python verifier zero-dependency; "
           f"each jcs-vectors file describing canonicalize cites "
