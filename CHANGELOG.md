@@ -923,6 +923,38 @@ they should not.
 
 ### Fixed
 
+- The Go verifier names the time zone offset, as Go 1.23 and later and the
+  Python verifier do, when a timestamp's day is out of range and its offset
+  has an hour above 24 or a minute above 60 (#259). Built with Go 1.22.12,
+  it rejected a credential whose `issuedAt` was `2026-02-30T00:00:00+25:00`
+  with `PARSE_ERROR: parsing time "2026-02-30T00:00:00+25:00": day out of
+  range`, and named the day for that value in `clockRfc3339` and in a CRL's
+  `issuedAt` too; built with Go 1.23.0 or Go 1.26.3 it named `time zone
+  offset hour out of range` in each, as the Python verifier does. The
+  verdict category did not differ between them. Go 1.22's time package
+  refuses such a timestamp for the day, and `checkOffset` ran only on a
+  timestamp Go had decoded; the verifier now checks the offset before it
+  reports a day out of range (`offsetBeforeDay`), and built with Go 1.22.12
+  and with Go 1.26.3 it names the offset in each of the three. The offsets
+  table in `TestTimestampDecode` adds `2099-02-30T23:59:59+25:00` and
+  `1900-02-29T00:00:00+23:61`, with three controls whose offset is in range
+  and whose error names the day, and `TestOffsetOutOfRangeVerdict` adds
+  `2026-02-30T00:00:00+25:00` as an `issuedAt`, a clock and a CRL
+  `issuedAt`. Built with Go 1.22.12, both tests fail without the change;
+  with it they pass built with each of Go 1.22.0, 1.22.12, 1.23.0, 1.24.0,
+  1.25.0, 1.25.3, 1.25.7, 1.26.0, 1.26.3, 1.26.5, 1.26.7, 1.26.8, 1.27.2
+  and 1.27.3. `GO_OFFSET_OUT_OF_RANGE`, `GO_OFFSET_VERDICTS`,
+  `GO_UNLOADABLE_OFFSETS` and the clock test in
+  `verifiers/python/test_verify.py` carry the new rows, and
+  `docs/running-the-verifiers.md` says Go 1.22 refuses such a timestamp for
+  the day when its day is out of range. Outside the RFC 3339 layout the
+  error can still differ by release: built with Go 1.22.12 the verifier
+  names the extra text in an `issuedAt` of `2099-12-31T23:59:59+25:00x`,
+  and built with Go 1.23.0 or Go 1.26.3 the offset. The sidecar
+  `docs/captures/go-verifier.json`, re-taken with
+  `scripts/capture_go_verifier.py`, records the new tree of
+  `verifiers/go/verifier`; `docs/captures/go-verifier.txt` is unchanged
+  byte for byte. No fixture changes.
 - The Python verifier rejects a v1.1 credential whose `declaredPurpose`
   holds an unpaired UTF-16 surrogate escape as `VERIFIER_CONFIG_ERROR` when
   it also holds a number its JCS serializer cannot write, `1.5` for one, as

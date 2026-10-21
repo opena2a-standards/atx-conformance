@@ -575,11 +575,11 @@ GO_REJECTED_TIMESTAMPS = (
 )
 
 # Offsets with an hour above 24 or a minute above 60, and the error the Go
-# reference verifier refuses each with: Go 1.23 and later's time.Parse error,
-# which the Go verifier's checkOffset gives under Go 1.22 too. The offsets
-# table in TestTimestampDecode carries the same rows but the last; it is
-# recorded from time.Parse(time.RFC3339) with Go 1.23.0 and Go 1.26.3, which
-# check the offset before the day.
+# reference verifier refuses each with: the error time.Parse gives in Go 1.23
+# and later, which check the offset before the day. Built with Go 1.22, the Go
+# verifier gives the same error: checkOffset for the first seven, which Go
+# 1.22 decodes, and offsetBeforeDay for the last two, which Go 1.22 refuses
+# for the day. The offsets table in TestTimestampDecode carries the same rows.
 GO_OFFSET_OUT_OF_RANGE = (
     ("2099-12-31T23:59:59+25:00", "time zone offset hour out of range"),
     ("2099-12-31T23:59:59-25:00", "time zone offset hour out of range"),
@@ -589,18 +589,21 @@ GO_OFFSET_OUT_OF_RANGE = (
     ("2099-12-31T23:59:59+25:61", "time zone offset minute out of range"),
     ("2099-12-31T23:59:59-99:99", "time zone offset minute out of range"),
     ("2099-02-30T23:59:59+25:00", "time zone offset hour out of range"),
+    ("1900-02-29T00:00:00+23:61", "time zone offset minute out of range"),
 )
 
 # The verdict `go run .` in ../go reaches on the v1.0 and v1.1 baselines when
 # atx[member] holds one of those offsets, built with Go 1.22.12 and with Go
 # 1.26.3, which agree on each. Built with Go 1.22 before checkOffset, it
-# reached SIGNATURE_INVALID on each.
+# reached SIGNATURE_INVALID on each but the last, whose day is out of range:
+# built with Go 1.22.12, it named the day in that one until offsetBeforeDay.
 GO_OFFSET_VERDICTS = (
     ("expiresAt", '"2099-12-31T23:59:59+25:00"', "time zone offset hour out of range"),
     ("expiresAt", '"2099-12-31T23:59:59+00:61"', "time zone offset minute out of range"),
     ("expiresAt", '"2099-12-31T23:59:59-99:99"', "time zone offset minute out of range"),
     ("issuedAt", '"2026-05-23T00:00:00+00:61"', "time zone offset minute out of range"),
     ("issuedAt", '"2026-05-23T00:00:00+25:00"', "time zone offset hour out of range"),
+    ("issuedAt", '"2026-02-30T00:00:00+25:00"', "time zone offset hour out of range"),
 )
 
 # A CRL timestamp with such an offset, on the CRL baseline: the file fails to
@@ -609,6 +612,7 @@ GO_OFFSET_VERDICTS = (
 # names).
 GO_UNLOADABLE_OFFSETS = (
     (("verifierState", "crl", "issuedAt"), '"2026-05-23T00:00:00+25:00"', "verifierState.crl.issuedAt"),
+    (("verifierState", "crl", "issuedAt"), '"2026-02-30T00:00:00+25:00"', "verifierState.crl.issuedAt"),
     (("verifierState", "crl", "nextUpdate"), '"2026-05-23T00:00:00+23:61"', "verifierState.crl.nextUpdate"),
     (
         ("verifierState", "crl", "entries", 0, "revokedAt"),
@@ -1303,12 +1307,16 @@ class GoDecodedVerdict(unittest.TestCase):
 
     def test_clock_offset_out_of_range_is_a_config_error(self):
         for baseline in (BASELINE_V10, BASELINE_V11):
-            with self.subTest(baseline=baseline.name):
-                fixture = json.loads(baseline.read_text())
-                fixture["verifierState"]["clockRfc3339"] = "2026-06-01T00:00:00+23:61"
-                got = verify.verify_fixture(fixture)
-                self.assertEqual(got.reject_category, "VERIFIER_CONFIG_ERROR", got.reason)
-                self.assertIn("time zone offset minute out of range", got.reason)
+            for clock, message in (
+                ("2026-06-01T00:00:00+23:61", "time zone offset minute out of range"),
+                ("2026-02-30T00:00:00+25:00", "time zone offset hour out of range"),
+            ):
+                with self.subTest(baseline=baseline.name, clock=clock):
+                    fixture = json.loads(baseline.read_text())
+                    fixture["verifierState"]["clockRfc3339"] = clock
+                    got = verify.verify_fixture(fixture)
+                    self.assertEqual(got.reject_category, "VERIFIER_CONFIG_ERROR", got.reason)
+                    self.assertIn(message, got.reason)
 
     def test_crl_offset_out_of_range_is_a_load_error(self):
         for path, literal, member in GO_UNLOADABLE_OFFSETS:

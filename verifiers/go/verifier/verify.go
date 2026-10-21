@@ -127,12 +127,14 @@ type crlEntry struct {
 // decodes the escaped form too. Every timestamp this verifier decodes from a
 // fixture is one of these, so the Go release does not change which ones
 // decode (the Python verifier follows the same rule). It also refuses a time
-// zone offset hour above 24 or minute above 60 (checkOffset).
+// zone offset hour above 24 or minute above 60 (checkOffset), and names the
+// offset rather than the day when the day is out of range too
+// (offsetBeforeDay).
 type timestamp struct{ time.Time }
 
 func (t *timestamp) UnmarshalJSON(b []byte) error {
 	if err := t.Time.UnmarshalJSON(b); err != nil {
-		return err
+		return offsetBeforeDay(err)
 	}
 	if s := string(b); s != "null" {
 		return checkOffset(s[1 : len(s)-1])
@@ -144,17 +146,36 @@ func (t *timestamp) UnmarshalJSON(b []byte) error {
 func parseRFC3339(s string) (time.Time, error) {
 	t, err := time.Parse(time.RFC3339, s)
 	if err != nil {
-		return t, err
+		return t, offsetBeforeDay(err)
 	}
 	return t, checkOffset(s)
 }
 
+// offsetBeforeDay returns checkOffset's error in place of err, the error
+// time.Time's decoder or time.Parse(time.RFC3339) returned for a timestamp,
+// when err says the day is out of range and checkOffset refuses the
+// timestamp's offset. Go 1.23 and later check the offset before the day and
+// return that error themselves; Go 1.22, which does not check the offset's
+// range, returns the day's. The time package reports a day out of range only
+// once the whole timestamp has matched the layout, so the timestamp ends in
+// Z or in an offset where checkOffset reads it.
+func offsetBeforeDay(err error) error {
+	var pe *time.ParseError
+	if errors.As(err, &pe) && pe.Message == ": day out of range" {
+		if offsetErr := checkOffset(pe.Value); offsetErr != nil {
+			return offsetErr
+		}
+	}
+	return err
+}
+
 // checkOffset refuses a timestamp that time.Parse(time.RFC3339, s) has
-// decoded when its time zone offset has an hour above 24 or a minute above
-// 60, with the error Go 1.23 and later return for it. Go 1.22 decodes such an
-// offset (+25:00, +23:61) and Go 1.23 and later refuse it, so without this
-// check the verdict on it depended on the Go release the verifier was built
-// with. An offset of +24:00 or +23:60 decodes under every release.
+// decoded, or has refused for its day (offsetBeforeDay), when its time zone
+// offset has an hour above 24 or a minute above 60, with the error Go 1.23
+// and later return for it. Go 1.22 decodes such an offset (+25:00, +23:61)
+// and Go 1.23 and later refuse it, so without this check the verdict on it
+// depended on the Go release the verifier was built with. An offset of
+// +24:00 or +23:60 decodes under every release.
 func checkOffset(s string) error {
 	if len(s) < len("+00:00") || s[len(s)-1] == 'Z' {
 		return nil
