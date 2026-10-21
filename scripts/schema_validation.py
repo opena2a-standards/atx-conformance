@@ -28,7 +28,10 @@ Contract:
   validation on exactly the `declaredPurpose` member, and
 - the case-variant fixture (atx-conformance#16), which carries a decoy
   top-level member whose name folds to a real field, and MUST fail validation
-  on exactly one root `additionalProperties` error.
+  on exactly one root `additionalProperties` error, and
+- the scanSummary type fixture (atx-conformance#173), which carries
+  scanSummary.criticalFindings as a string by design and MUST fail validation
+  on exactly one `type` error, at that member.
 
 Any other schema error means fixture and schema have drifted apart.
 Exit 0 only if the whole contract holds.
@@ -406,6 +409,7 @@ def check_credentials() -> int:
             "v1_1-declared-purpose-number-injected.json",
         )
         expect_case_variant_invalid = path.name == "v1_1-case-variant-member.json"
+        expect_scan_summary_invalid = path.name == "v1_1-scan-summary-member-outside-type.json"
         if expect_version_invalid:
             only_version_enum = len(errors) == 1 and list(errors[0].absolute_path) == ["atcVersion"]
             if only_version_enum:
@@ -454,6 +458,23 @@ def check_credentials() -> int:
                     print(f"      {err.json_path}: {err.message}")
                 if not errors:
                     print("      (validated cleanly - fixture no longer carries the case-variant decoy)")
+                failures += 1
+        elif expect_scan_summary_invalid:
+            # The string written over the signed integer count is the one
+            # schema error: a `type` error at scanSummary.criticalFindings.
+            only_count_type = (
+                len(errors) == 1
+                and errors[0].validator == "type"
+                and list(errors[0].absolute_path) == ["scanSummary", "criticalFindings"]
+            )
+            if only_count_type:
+                print(f"PASS  {path.name}: schema-invalid on exactly scanSummary.criticalFindings (type, as pinned)")
+            else:
+                print(f"FAIL  {path.name}: expected exactly one type error at scanSummary.criticalFindings, got:")
+                for err in errors or []:
+                    print(f"      {err.json_path}: {err.message}")
+                if not errors:
+                    print("      (validated cleanly - fixture no longer carries a string count)")
                 failures += 1
         elif errors:
             print(f"FAIL  {path.name}:")

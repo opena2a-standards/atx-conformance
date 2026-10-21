@@ -51,6 +51,7 @@ Needs the same dependencies as verify.py. Run from this directory:
 from __future__ import annotations
 
 import ast
+import base64
 import contextlib
 import errno
 import importlib.util
@@ -265,6 +266,28 @@ def _fixture_verdict(baseline: Path, path: tuple, literal, rename: str | None = 
     with tempfile.TemporaryDirectory() as tmp:
         written = _write_fixture_at(Path(tmp), "fixture.json", baseline, path, literal, rename)
         return verify.verify_fixture(verify.load_fixture(written))
+
+
+def _write_signed_v11(directory: Path, name: str, fixture: dict) -> Path:
+    """Write fixture, whose atx is a v1.1 credential, with that credential
+    carrying one Ed25519 signature over its own JCS(TBS) as this verifier
+    projects it, made with the primary issuer's key (the RFC 8032 test vector
+    in vectors/issuer-primary.json), and return its path."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    key = json.loads((ROOT / "vectors" / "issuer-primary.json").read_text())
+    path = directory / name
+    path.write_text(json.dumps(fixture))
+    payload = verify.canonical_payload_v11(verify._decode_credential(verify.load_fixture(path)["atx"]))
+    signer = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(key["seedHex"]))
+    signed = json.loads(json.dumps(fixture))
+    signed["atx"]["signatures"] = [{
+        "keyId": key["keyId"],
+        "algorithm": "Ed25519",
+        "value": base64.b64encode(signer.sign(payload)).decode("ascii"),
+    }]
+    path.write_text(json.dumps(signed))
+    return path
 
 
 def _run_main(*args: str) -> tuple[int, str, str]:
@@ -757,8 +780,11 @@ GO_SURROGATE_VERDICTS = (
 )
 
 # The same on the v1.1 baseline, for members only the v1.1 payload signs.
-# declaredPurpose enters that payload undecoded, and the Go verifier's JCS
-# library refuses an unpaired surrogate escape in it.
+# declaredPurpose enters that payload undecoded, and the Go verifier refuses
+# an unpaired surrogate escape in it before its JCS library reads it, one
+# followed by another \u escape included, which that library reads as a
+# single U+FFFD, and one beside a number the Python verifier's JCS serializer
+# cannot write, 1.5.
 GO_SURROGATE_VERDICTS_V11 = (
     (("publisher",), '"\\ud800"', "SIGNATURE_INVALID"),
     (("capabilities",), '["\\ud800"]', "SIGNATURE_INVALID"),
@@ -770,7 +796,23 @@ GO_SURROGATE_VERDICTS_V11 = (
     (("declaredPurpose",), '{"k": "\\ud800"}', "VERIFIER_CONFIG_ERROR"),
     (("declaredPurpose",), '{"\\ud800": 1}', "VERIFIER_CONFIG_ERROR"),
     (("declaredPurpose",), '["\\ud800"]', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '"\\ud800\\u0041"', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '"\\ud800\\ud800"', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '"\\udc00\\u0041"', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '"\\udc00\\ud800"', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '"\\udbff\\ue000"', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '"\\ud800\\udc00\\udc00"', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '{"k": "x\\ud800\\u0041"}', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '{"x\\ud800\\u0041": 1}', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '{"a": 1.5, "b": "\\ud800\\u0041"}', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '{"a": 1.5, "b": "\\ud800"}', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '{"b": "\\ud800\\u0041", "c": 1.5}', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '["\\ud800\\u0041", 1.5]', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '{"a": 1.5, "\\udc00x": 1}', "VERIFIER_CONFIG_ERROR"),
     (("declaredPurpose",), '"\\ud83d\\ude00"', "SIGNATURE_INVALID"),
+    (("declaredPurpose",), '"\\\\ud800"', "SIGNATURE_INVALID"),
+    (("declaredPurpose",), '{"a": 1.5, "b": "\\ud83d\\ude00"}', "SIGNATURE_INVALID"),
+    (("declaredPurpose",), '["\\\\ud800", 1.5]', "SIGNATURE_INVALID"),
 )
 
 # trustScore as Go formats it with %.6f into both signed payloads: the float64
@@ -856,7 +898,9 @@ GO_BEHAVIORAL_PROFILE_PROJECTIONS = (
 
 # scanSummary as the Go verifier's projectScanSummaryV11 projects it. It
 # ignores the decode error, so a member outside its Go type takes the zero
-# value and the others keep theirs. (path, raw literal, projection).
+# value and the others keep theirs; the verifier refuses such a credential
+# before it reads a signature over that projection (the verdicts below).
+# (path, raw literal, projection).
 GO_SCAN_SUMMARY_PROJECTIONS = (
     (("scanSummary", "criticalFindings"), "3", {**SIGNED_SCAN, "criticalFindings": 3}),
     (("scanSummary", "criticalFindings"), '"3"', SIGNED_SCAN),
@@ -885,14 +929,18 @@ GO_SCAN_SUMMARY_PROJECTIONS = (
 
 # The verdict on the v1.1 baseline with such a member. The baseline signs
 # criticalFindings 0 and highFindings 0, so a scanSummary count the Go verifier
-# cannot decode projects the signed 0 and the signature still verifies; a null
+# cannot decode projects the signed 0; it has no value in the signed payload,
+# which holds each scanSummary member typed, so the Go verifier refuses the
+# credential as no signature covers it (decodeScanSummaryV11), and a null
 # behavioralProfile is not what was signed. (path, raw literal, Go verdict).
 GO_UNDECODABLE_MEMBER_VERDICTS = (
-    (("scanSummary", "criticalFindings"), '"3"', "ACCEPT"),
-    (("scanSummary", "criticalFindings"), '"abc"', "ACCEPT"),
-    (("scanSummary", "highFindings"), '"1"', "ACCEPT"),
+    (("scanSummary", "criticalFindings"), '"3"', "SIGNATURE_INVALID"),
+    (("scanSummary", "criticalFindings"), "3.5", "SIGNATURE_INVALID"),
+    (("scanSummary", "criticalFindings"), '"abc"', "SIGNATURE_INVALID"),
+    (("scanSummary", "highFindings"), '"1"', "SIGNATURE_INVALID"),
     (("scanSummary", "criticalFindings"), "3", "SIGNATURE_INVALID"),
     (("scanSummary", "hma"), "7", "SIGNATURE_INVALID"),
+    (("scanSummary", "criticalFindings"), "null", "ACCEPT"),
     (("behavioralProfile", "observationDays"), '"14"', "SIGNATURE_INVALID"),
     (("behavioralProfile", "observationDays"), "14.0", "SIGNATURE_INVALID"),
     (("behavioralProfile", "observationDays"), "14.5", "SIGNATURE_INVALID"),
@@ -1142,14 +1190,14 @@ LONG_INTEGER = "1" + "0" * 5000
 # keeps a member no struct declares as bytes it never decodes, so there the
 # fixture verifies as the baseline does. The number is out of range for a
 # member Go decodes into int64 or float64 and of the wrong type for any other
-# typed member. The v1.1 projection leaves a scanSummary member it cannot
-# decode at its zero value, which for criticalFindings is the 0 the baseline
-# signs.
+# typed member. A scanSummary member the v1.1 projection cannot decode has no
+# value in the signed payload, so the verifier refuses it before it reads a
+# signature, though the projection holds the 0 the baseline signs in its place.
 GO_LONG_INTEGER_VERDICTS = (
     (("unknownMember",), "ACCEPT"),
     (("atx", "unknownMember"), "ACCEPT"),
     (("verifierState", "unknownMember"), "ACCEPT"),
-    (("atx", "scanSummary", "criticalFindings"), "ACCEPT"),
+    (("atx", "scanSummary", "criticalFindings"), "SIGNATURE_INVALID"),
     (("atx", "scanSummary", "hma"), "SIGNATURE_INVALID"),
     (("atx", "behavioralProfile", "observationDays"), "SIGNATURE_INVALID"),
     (("atx",), "PARSE_ERROR"),
@@ -1413,6 +1461,45 @@ class GoUnpairedSurrogate(unittest.TestCase):
                 got = _at_verdict(BASELINE_V11, path, literal)
                 self.assertEqual(_outcome(got), outcome, got.reason)
 
+    def test_declared_purpose_escape_is_refused_before_a_number(self):
+        # The JCS serializer cannot write 1.5, which left no payload to
+        # verify, so a declaredPurpose holding one beside an unpaired
+        # surrogate escape was a signature failure here. The Go verifier
+        # refuses the escape before it canonicalizes, naming the first one
+        # the text writes, and so does this one, before the 1e400 it would
+        # otherwise name.
+        for literal, escape in (
+            ('{"a": 1.5, "b": "\\ud800\\u0041"}', "\\ud800"),
+            ('{"a": 1.5, "b": "\\ud800"}', "\\ud800"),
+            ('["\\ud800\\udc00\\udc00", 2.5]', "\\udc00"),
+            ('{"a": 1e400, "b": "\\ud800"}', "\\ud800"),
+        ):
+            with self.subTest(value=literal):
+                got = _at_verdict(BASELINE_V11, ("declaredPurpose",), literal)
+                self.assertEqual(got.reject_category, "VERIFIER_CONFIG_ERROR", got.reason)
+                self.assertEqual(
+                    got.reason,
+                    "v1.1 canonicalization failed: declaredPurpose holds an unpaired "
+                    f"UTF-16 surrogate escape ({escape})",
+                )
+
+    def test_declared_purpose_signed_with_the_replacement_character(self):
+        # The Go verifier's JCS library reads an unpaired surrogate escape
+        # followed by another \u escape as one U+FFFD, the second escape
+        # included, so before the Go verifier refused the escape itself a
+        # credential signed holding U+FFFD verified there with such a pair
+        # written in its place. Both verifiers refuse it.
+        fixture = json.loads(BASELINE_V11.read_text())
+        fixture["atx"]["declaredPurpose"] = "\N{REPLACEMENT CHARACTER}"
+        with tempfile.TemporaryDirectory() as tmp:
+            signed = _write_signed_v11(Path(tmp), "signed.json", fixture)
+            got = verify.verify_fixture(verify.load_fixture(signed))
+            self.assertTrue(got.accepted, got.reason)
+            for literal in ('"\\ud800\\u0041"', '"\\ud800\\ud800"', '"\\udc00\\ufffd"'):
+                with self.subTest(value=literal):
+                    got = _at_verdict(signed, ("declaredPurpose",), literal)
+                    self.assertEqual(got.reject_category, "VERIFIER_CONFIG_ERROR", got.reason)
+
     def test_names_that_decode_alike_are_duplicates(self):
         # Go decodes both names to U+FFFD, so its strict parse sees one name
         # twice, at the top of the credential and below it.
@@ -1515,6 +1602,63 @@ class GoUndecodableProjection(unittest.TestCase):
         self.assertEqual(code, 0, text + err)
         self.assertNotIn("verify error", text)
         self.assertEqual(text.splitlines()[-1], f"summary: {n} pass, 0 fail ({n} fixtures)")
+
+
+class GoScanSummaryOutsideItsType(unittest.TestCase):
+    """A v1.1 scanSummary member outside its Go type, or a scanSummary that is
+    not an object, has no value in the signed payload, which holds each of
+    its six members typed, so the Go verifier refuses the credential as no
+    signature covers it, before it reads one, naming scanSummary
+    (fixtures/v1_1-scan-summary-member-outside-type.json). Its projection
+    would hold the zero value in that member's place."""
+
+    def test_baseline_member_outside_its_type_names_scan_summary(self):
+        for path, literal in (
+            (("scanSummary", "criticalFindings"), '"3"'),
+            (("scanSummary", "criticalFindings"), "3.5"),
+            (("scanSummary", "criticalFindings"), "1e1"),
+            (("scanSummary", "criticalFindings"), "9223372036854775808"),
+            (("scanSummary", "highFindings"), '"1"'),
+            (("scanSummary", "hma"), "7"),
+            (("scanSummary", "oasbLevel"), '["L1"]'),
+        ):
+            with self.subTest(path=path, value=literal):
+                got = _at_verdict(BASELINE_V11, path, literal)
+                self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+                self.assertIn("scanSummary", got.reason)
+                self.assertIn("signature", got.reason)
+
+    def test_credential_signed_with_a_zero_scan_summary(self):
+        # The baseline signs a scanSummary that is not zero, so one projected
+        # as zero fails that signature whether or not it is refused first; a
+        # credential signed with a zero scanSummary is where the two differ.
+        fixture = json.loads(BASELINE_V11.read_text())
+        fixture["atx"]["scanSummary"] = None
+        with tempfile.TemporaryDirectory() as tmp:
+            signed = _write_signed_v11(Path(tmp), "signed.json", fixture)
+            got = verify.verify_fixture(verify.load_fixture(signed))
+            self.assertTrue(got.accepted, got.reason)
+            for literal, outcome in (
+                ("7", "SIGNATURE_INVALID"),
+                ('"x"', "SIGNATURE_INVALID"),
+                ("[1.5]", "SIGNATURE_INVALID"),
+                ("true", "SIGNATURE_INVALID"),
+                ('{"criticalFindings": "3"}', "SIGNATURE_INVALID"),
+                ('{"hma": 0}', "SIGNATURE_INVALID"),
+                ("{}", "ACCEPT"),
+                ('{"criticalFindings": null, "hma": null}', "ACCEPT"),
+                (None, "ACCEPT"),
+            ):
+                with self.subTest(value=literal):
+                    got = _at_verdict(signed, ("scanSummary",), literal)
+                    self.assertEqual(_outcome(got), outcome, got.reason)
+                    if outcome != "ACCEPT":
+                        self.assertIn("scanSummary", got.reason)
+
+    def test_v1_0_scan_summary_is_not_read(self):
+        # atcVersion 1.0 signs no scanSummary (core.md section 1.3a.1).
+        got = _at_verdict(BASELINE_V10, ("scanSummary", "criticalFindings"), '"3"')
+        self.assertTrue(got.accepted, got.reason)
 
 
 class GoNonObjectCredential(unittest.TestCase):

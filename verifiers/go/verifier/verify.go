@@ -285,6 +285,10 @@ func canonicalPayloadV11(a *atx) ([]byte, error) {
 	if chain == nil {
 		chain = []string{}
 	}
+	purpose := projectDeclaredPurposeV11(a.DeclaredPurpose)
+	if escape := unpairedSurrogateEscape(purpose); escape != "" {
+		return nil, fmt.Errorf("declaredPurpose holds an unpaired UTF-16 surrogate escape (%s)", escape)
+	}
 	tbs := tbsV11{
 		ATCVersion:        a.ATCVersion,
 		AgentID:           a.AgentID,
@@ -295,7 +299,7 @@ func canonicalPayloadV11(a *atx) ([]byte, error) {
 		ContentHash:       a.ContentHash,
 		BuildAttestation:  a.BuildAttestation,
 		Capabilities:      caps,
-		DeclaredPurpose:   projectDeclaredPurposeV11(a.DeclaredPurpose),
+		DeclaredPurpose:   purpose,
 		BehavioralProfile: projectBehavioralProfileV11(a.BehavioralProfile),
 		ScanSummary:       projectScanSummaryV11(a.ScanSummary),
 		TrustScore:        fmt.Sprintf("%.6f", a.TrustScore),
@@ -312,12 +316,81 @@ func canonicalPayloadV11(a *atx) ([]byte, error) {
 	return jcs.Transform(raw)
 }
 
-func projectScanSummaryV11(raw json.RawMessage) tbsScanSummaryV11 {
+// unpairedSurrogateEscape returns the first \u escape in the JSON text raw
+// that writes one half of a UTF-16 surrogate pair without the other: a high
+// surrogate (D800 to DBFF) that the next six bytes do not complete with the
+// escape of a low one (DC00 to DFFF), or a low surrogate that does not
+// complete a high one. It returns "" when raw has none. raw is JSON that
+// encoding/json has decoded, so every backslash in it starts an escape
+// inside a string.
+//
+// RFC 8785 §3.2.2.2 requires a canonicalizer to refuse a string holding a
+// lone surrogate. The JCS library refuses a surrogate escape that the next
+// six bytes do not follow with another \u escape, and reads one followed by
+// a \u escape that does not complete the pair as a single U+FFFD, the second
+// escape included. declaredPurpose enters the v1.1 TBS as written, so the
+// verifier refuses every unpaired surrogate escape in it before the library
+// reads it: a declaredPurpose signed holding U+FFFD would otherwise verify
+// with such a pair of escapes written in its place, which another JSON
+// decoder reads as two other characters.
+func unpairedSurrogateEscape(raw []byte) string {
+	for i := 0; i+1 < len(raw); i++ {
+		if raw[i] != '\\' {
+			continue
+		}
+		if raw[i+1] != 'u' || i+6 > len(raw) {
+			i++ // the escaped character, a backslash among them
+			continue
+		}
+		unit := escapedCodeUnit(raw[i+2 : i+6])
+		if unit < 0xd800 || unit > 0xdfff {
+			i += 5
+			continue
+		}
+		if unit < 0xdc00 && i+12 <= len(raw) && raw[i+6] == '\\' && raw[i+7] == 'u' {
+			if low := escapedCodeUnit(raw[i+8 : i+12]); 0xdc00 <= low && low <= 0xdfff {
+				i += 11
+				continue
+			}
+		}
+		return string(raw[i : i+6])
+	}
+	return ""
+}
+
+// escapedCodeUnit is the UTF-16 code unit the four hex digits of a \u escape
+// write, or -1 if they are not four hex digits.
+func escapedCodeUnit(digits []byte) rune {
+	var b [2]byte
+	if len(digits) != 4 {
+		return -1
+	}
+	if _, err := hex.Decode(b[:], digits); err != nil {
+		return -1
+	}
+	return rune(b[0])<<8 | rune(b[1])
+}
+
+// decodeScanSummaryV11 decodes scanSummary into the six members the v1.1 TBS
+// carries (atx-spec §1.3a.2 rule 2). An absent or null scanSummary, or
+// member, is the zero value. A member outside its type, or a scanSummary
+// that is not an object, returns the decode error, with each member that
+// did not decode left at its zero value.
+func decodeScanSummaryV11(raw json.RawMessage) (tbsScanSummaryV11, error) {
 	var ss tbsScanSummaryV11
 	if len(raw) == 0 || string(raw) == "null" {
-		return ss
+		return ss, nil
 	}
-	_ = json.Unmarshal(raw, &ss)
+	err := json.Unmarshal(raw, &ss)
+	return ss, err
+}
+
+// projectScanSummaryV11 is scanSummary as the v1.1 TBS carries it. A member
+// that does not decode is left at its zero value; verifySignatures refuses
+// such a credential before it reads a signature, so no signature over that
+// zero value verifies it.
+func projectScanSummaryV11(raw json.RawMessage) tbsScanSummaryV11 {
+	ss, _ := decodeScanSummaryV11(raw)
 	return ss
 }
 
@@ -605,6 +678,19 @@ func verifySignatures(a *atx, state verifierState) result {
 	// Spec mandate: every declared signature MUST verify.
 	var payload []byte
 	if a.ATCVersion == "1.1" {
+		// scanSummary enters the TBS as six typed members (atx-spec §1.3a.2
+		// rule 2). A member outside its type, or a scanSummary that is not an
+		// object, has no value there, so no signature covers the credential:
+		// the projection would leave it at its zero value, and a signature
+		// over that zero value would verify a credential carrying another.
+		// The reason names no decode error, whose text the Go release sets,
+		// so the Python reference verifier writes the same line.
+		if _, err := decodeScanSummaryV11(a.ScanSummary); err != nil {
+			return result{
+				RejectCategory: "SIGNATURE_INVALID",
+				Reason:         "no signature covers scanSummary, which holds a member outside its type or is not an object",
+			}
+		}
 		pb, err := canonicalPayloadV11(a)
 		if err != nil {
 			return result{RejectCategory: "VERIFIER_CONFIG_ERROR", Reason: "v1.1 canonicalization failed: " + err.Error()}

@@ -68,15 +68,21 @@ lesson and scoped to the whole body because ATX signs it all):
     decodes the escaped form when built with Go 1.27). The members of
     scanSummary, behavioralProfile and each signatures entry are read the
     same way.
+  - under atcVersion 1.1 a scanSummary member outside its type, or a
+    scanSummary that is not an object, rejects as SIGNATURE_INVALID: the
+    signed payload holds each of its six members typed (core.md section
+    1.3a.2 rule 2), so no signature covers such a value, and the Go reference
+    verifier refuses it before projecting the zero value in its place.
   - declaredPurpose is the one member no decoder reads: it enters the v1.1
-    signed payload as written. An unpaired surrogate escape in it cannot be
-    canonicalized and rejects as VERIFIER_CONFIG_ERROR, the category the Go
-    reference verifier's JCS library leads to. One input still differs: an
-    unpaired surrogate escape followed directly by another \\u escape, which
-    that library reads as a single U+FFFD and this verifier refuses. A number
-    in it outside the float64 range (1e400, or an integer of 401 digits)
-    rejects as VERIFIER_CONFIG_ERROR too: that library parses every number as
-    a float64.
+    signed payload as written. An unpaired surrogate escape in it, alone or
+    followed directly by another \\u escape, cannot be canonicalized (RFC 8785
+    section 3.2.2.2) and rejects as VERIFIER_CONFIG_ERROR, as it does in the
+    Go reference verifier, which refuses it before its JCS library reads the
+    escape. This verifier refuses it before it canonicalizes the payload too,
+    so a number beside it that the serializer cannot write (1.5) does not
+    make the credential a signature failure. A number in it outside the
+    float64 range (1e400, or an integer of 401 digits) rejects as
+    VERIFIER_CONFIG_ERROR too: that library parses every number as a float64.
   - NaN, Infinity and -Infinity are not JSON, so a file carrying one fails to
     load, as it does in the Go reference verifier.
   - the file is read as UTF-8 the way Go's encoding/json reads it: each byte
@@ -498,11 +504,9 @@ def canonical_payload_v11(atx: dict[str, Any]) -> bytes:
     """
     # The Go verifier's projectScanSummaryV11 ignores a decode error, which
     # leaves each member it could not decode at its zero value; a scanSummary
-    # that is not an object leaves all six there.
-    scan = atx.get("scanSummary")
-    scan_summary = _decode_members(
-        _SCAN_SUMMARY_TYPES, scan if isinstance(scan, dict) else {}, "scanSummary.", lenient=True
-    )
+    # that is not an object leaves all six there. verify_fixture refuses such
+    # a credential before it reads a signature (_decode_scan_summary).
+    scan_summary = _decode_scan_summary(atx.get("scanSummary"), lenient=True)
 
     # The Go verifier's projectBehavioralProfileV11 projects behavioralProfile
     # as null when it is absent, null or not an object, and when one member
@@ -642,6 +646,33 @@ def _holds_number_outside_float64(value: Any) -> bool:
         elif isinstance(item, (int, float)) and not isinstance(item, bool) and not _finite_number(item):
             return True
     return False
+
+
+def _first_unpaired_surrogate(value: Any) -> str | None:
+    """The first unpaired UTF-16 surrogate in a string or member name of the
+    raw JSON value, in the order the text writes them, or None. json.loads
+    joins a high surrogate escape and the low one directly after it into one
+    character and keeps every other surrogate escape as that surrogate, so
+    each one found is an escape the Go reference verifier's
+    unpairedSurrogateEscape finds; a byte of the file outside UTF-8 loads as
+    U+FFFD (_go_replace), never as a surrogate. Walked with a stack, not by
+    recursion, as _holds_number_outside_float64 is."""
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            found = _UNPAIRED_SURROGATE.search(item)
+            if found is not None:
+                return found.group()
+        elif isinstance(item, dict):
+            # Pushed last to first, so each name is read before its value and
+            # the members in the order the text writes them.
+            for name, member in reversed(list(item.items())):
+                stack.append(member)
+                stack.append(name)
+        elif isinstance(item, list):
+            stack.extend(reversed(item))
+    return None
 
 
 # The Go type of each credential member the Go reference verifier's atx struct
@@ -912,6 +943,30 @@ def _decode_members(
     return decoded
 
 
+# The reason a v1.1 credential whose scanSummary _decode_scan_summary refuses
+# rejects with, the Go reference verifier's text, which names no Go decode
+# error, so a report over the fixtures reads the same under every Go release.
+_SCAN_SUMMARY_UNSIGNED = "no signature covers scanSummary, which holds a member outside its type or is not an object"
+
+
+def _decode_scan_summary(scan: Any, lenient: bool = False) -> dict[str, Any]:
+    """scanSummary as the Go reference verifier's decodeScanSummaryV11 decodes
+    it into the six members the v1.1 signed payload holds, each the zero value
+    when it is absent or null, as is all of an absent or null scanSummary. A
+    member outside its type, or a scanSummary that is not an object, raises
+    _DecodeError. With lenient, as in the Go verifier's projectScanSummaryV11,
+    such a member keeps the value decoded before it, the zero value when
+    there is none, and a scanSummary that is not an object leaves all six at
+    the zero value."""
+    if scan is None:
+        scan = {}
+    if not isinstance(scan, dict):
+        if not lenient:
+            raise _DecodeError(f"scanSummary {_value_repr(scan)} is not a JSON object")
+        scan = {}
+    return _decode_members(_SCAN_SUMMARY_TYPES, scan, "scanSummary.", lenient=lenient)
+
+
 def _decode_credential(atx: Any) -> dict[str, Any]:
     """The credential as the Go reference verifier's atx struct holds it, or
     raise _DecodeError. Each member in _MEMBER_TYPES is type-checked against
@@ -1089,6 +1144,32 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
     # Step 5: signature verification.
     # Spec mandate: every declared signature MUST verify.
     if version == SUPPORTED_ATC_VERSION_V11:
+        # scanSummary enters the TBS as six typed members (atx-spec §1.3a.2
+        # rule 2). A member outside its type, or a scanSummary that is not an
+        # object, has no value there, so no signature covers the credential:
+        # the projection would leave it at its zero value, and a signature
+        # over that zero value would verify a credential carrying another.
+        # The Go reference verifier rejects it here too, before the checks
+        # below.
+        try:
+            _decode_scan_summary(atx.get("scanSummary"))
+        except _DecodeError:
+            return VerifyResult(reject_category="SIGNATURE_INVALID", reason=_SCAN_SUMMARY_UNSIGNED)
+        surrogate = _first_unpaired_surrogate(atx.get("declaredPurpose"))
+        if surrogate is not None:
+            # declaredPurpose enters the TBS as written, and RFC 8785
+            # §3.2.2.2 refuses a string holding a lone surrogate. The Go
+            # reference verifier refuses the escape before it canonicalizes
+            # the TBS, and so does this one: a number beside it that this
+            # serializer cannot write (1.5) would otherwise leave no payload,
+            # and the credential would reject as SIGNATURE_INVALID. The
+            # reason is the Go verifier's, which repeats the escape as
+            # written; this one writes its hex digits in lower case.
+            return VerifyResult(
+                reject_category="VERIFIER_CONFIG_ERROR",
+                reason="v1.1 canonicalization failed: declaredPurpose holds an unpaired "
+                f"UTF-16 surrogate escape (\\u{ord(surrogate):04x})",
+            )
         if _holds_number_outside_float64(atx.get("declaredPurpose")):
             # declaredPurpose enters the TBS as written, so no typed decode
             # refuses the number first. The Go reference verifier's JCS
@@ -1117,8 +1198,9 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
         except UnicodeEncodeError as exc:
             # Every decoded member holds U+FFFD where an unpaired surrogate
             # was escaped, so this is declaredPurpose, which enters the TBS as
-            # written. The Go reference verifier's JCS library refuses the
-            # escape and the verifier reports the category below.
+            # written. The Go reference verifier refuses an unpaired surrogate
+            # escape in it, alone or followed by another \u escape, before its
+            # JCS library reads it, and reports the category below.
             return VerifyResult(
                 reject_category="VERIFIER_CONFIG_ERROR",
                 reason=f"v1.1 canonicalization failed: declaredPurpose holds an unpaired UTF-16 surrogate ({exc})",

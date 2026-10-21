@@ -154,6 +154,22 @@ they should not.
   sidecar and exits 3. `docs/demo/atx-verify.narration.json` holds the words
   each hold is sized for. The MP4 a render writes goes to `docs/demo/out/`,
   which is not committed. No fixture changes.
+- `fixtures/v1_1-scan-summary-member-outside-type.json`, a MUST-REJECT
+  fixture (#173): the v1.1 baseline, which signs
+  `scanSummary.criticalFindings` 0, with that member written as the string
+  `"3"` after signing. It expects `REJECT[SIGNATURE_INVALID]` with
+  `reasonContains` "signature"; both reference verifiers reported ACCEPT
+  on it before the change to them below. The 26 existing fixtures and their
+  `MANIFEST.sha256` lines are byte-identical; the manifest gains one line.
+  `conformance.json` and the capture under `docs/captures/` are
+  regenerated, the fixture counts in README.md, COSIGNERS.md,
+  CONTRIBUTING.md, `docs/continuous-verification.md` and
+  `docs/sibling-repositories.md` go from 26 to 27 (the sibling row's v1.1
+  count from 16 to 17), and `docs/scope.md` counts 20 of 27 fixtures that
+  reach signature verification, where it counted 19 of 26.
+  `docs/fixtures.md` and `docs/scope.md` list the fixture, and
+  `scripts/schema_validation.py` holds it to one schema error, the `type`
+  of `scanSummary.criticalFindings`.
 
 ### Changed
 
@@ -208,6 +224,29 @@ they should not.
   fixture's bytes, its `MANIFEST.sha256` line and `conformance.json` do, and
   `docs/captures/go-verifier.json` records the new tree of `fixtures/`. The
   Go verifier's output, `docs/captures/go-verifier.txt`, is unchanged.
+- Both reference verifiers reject a v1.1 credential whose `scanSummary`
+  holds a member outside its type, or is not an object, as
+  `SIGNATURE_INVALID` with a reason naming `scanSummary` (#173). The signed
+  payload holds each of its six members typed (core.md §1.3a.2 rule 2), so
+  no signature covers such a value. Both verifiers left the member at its
+  zero value: the v1.1 baseline, which signs `criticalFindings` 0, verified
+  carrying `criticalFindings` `"3"` or `3.5`, and a credential signed with a
+  zero `scanSummary` verified carrying a `scanSummary` of `7`. An absent or
+  null `scanSummary`, or member, is still the zero value, and the check does
+  not run under `atcVersion` 1.0, which signs no `scanSummary`.
+  `TestScanSummaryOutsideItsType` and the Python verifier's
+  `GoScanSummaryOutsideItsType` class pin it.
+- The Go verifier rejects a v1.1 `declaredPurpose` holding an unpaired
+  UTF-16 surrogate escape as `VERIFIER_CONFIG_ERROR`, naming the escape,
+  where the Python verifier rejects it too (#173). Its JCS library read
+  such an escape followed directly by a `\u` escape that does not complete
+  the pair, `\ud800\ud800` for one, as a single U+FFFD: the Go verifier
+  reported `SIGNATURE_INVALID` on the v1.1 baseline with one, and a
+  credential signed with U+FFFD in `declaredPurpose` verified with such a
+  pair written in its place. RFC 8785 §3.2.2.2 requires a canonicalizer to
+  refuse a lone surrogate. A lone escape, `\ud800`, was refused already; its
+  reason names the escape, where it read `Missing surrogate`.
+  `TestDeclaredPurposeUnpairedSurrogateEscape` pins it. No fixture changes.
 - The argument table of `scripts/parity/parity.py` runs twelve argument
   shapes that the "Arguments" section of `docs/running-the-verifiers.md`
   describes, whose closing sentence says the parity gate runs both
@@ -832,6 +871,35 @@ they should not.
 
 ### Fixed
 
+- The Python verifier rejects a v1.1 credential whose `declaredPurpose`
+  holds an unpaired UTF-16 surrogate escape as `VERIFIER_CONFIG_ERROR` when
+  it also holds a number its JCS serializer cannot write, `1.5` for one, as
+  the Go verifier does (#173). It refused an escape in a string only as it
+  encoded the payload, after the number had stopped it and left no
+  payload, so it reported `SIGNATURE_INVALID`: on
+  `{"a": 1.5, "b": "\ud800"}`, and on
+  `{"a": 1.5, "b": "\ud800\ud800"}` once the Go verifier refused that
+  escape too (above). It now refuses the escape before it canonicalizes the
+  payload, so an escape beside a number outside the float64 range is named
+  in place of the number, as in the Go verifier. Its reason, which quoted
+  the encoder's error, is the one the Go verifier writes, naming the first
+  unpaired escape, with its hex digits in lower case.
+  `GO_SURROGATE_VERDICTS_V11` and
+  `test_declared_purpose_escape_is_refused_before_a_number` in
+  `verifiers/python/test_verify.py` pin it. No fixture changes.
+- The `aip-conformance` row in `docs/sibling-repositories.md` names AIP
+  v1.0.0-draft, the `spec.id` and `spec.version` that
+  `opena2a-standards/aip-conformance` declares in its `conformance.json`,
+  where it named AIP v1.2.0-draft (#261). Run against the sibling
+  repositories, `scripts/check_sibling_rows.py` exits 0, where it reported
+  that the row's Spec cell names AIP v1.2.0-draft and exited 1. Its
+  self-test keeps the row that named AIP v1.2.0-draft among the retracted
+  rows the check must still fail on, checked against sibling data built
+  from the published rows: put in place of this commit's row, it fails
+  with `aip-conformance row's Spec cell names AIP v1.2.0-draft, but`, and
+  on the page of the previous commit, which publishes that row, the case
+  is red and the self-test exits 1. The self-test runs 18 cases, from 17.
+  No fixture changes.
 - Both reference verifiers refuse a timestamp whose time zone offset has an
   hour above 24 or a minute above 60 (`+25:00`, `+23:61`), and the Go
   verifier's verdict on one no longer depends on the Go release that built it
