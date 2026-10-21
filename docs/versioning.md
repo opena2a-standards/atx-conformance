@@ -13,9 +13,19 @@ new name. The versions it is pinned to are in
   [`schemas/fixture-v1.schema.json`](../schemas/fixture-v1.schema.json), and
   `conformance.json` by
   [`schemas/conformance-profile-v1.schema.json`](../schemas/conformance-profile-v1.schema.json).
-  The `$schema` URI a document carries is that file's `$id`, an identifier:
-  the host it names does not serve the file, so read the schema from this
-  repository at the commit you pin.
+  The `$schema` URI a document carries is that file's `$id`, the address
+  GitHub serves the file from on this repository's `main` branch:
+  `https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/`
+  followed by the file's path.
+  [`scripts/schema_validation.py`](../scripts/schema_validation.py) fails
+  when a schema's `$id` is any other address. The address returns the copy
+  on `main`; to read the schema of the commit you pin, read the file from
+  this repository at that commit. Until #154 the two `$schema` URIs named
+  hosts that did not serve the files,
+  `https://atx.opena2a.org/schemas/fixture-v1.json` and
+  `https://specs.opena2a.org/schemas/conformance-profile-v1.json`. The
+  formats kept their members, and every rule but the `$schema` value, when
+  the URIs moved, so both stay v1.
 - The set of fixtures may grow. New fixtures are additive and do not
   invalidate prior `MANIFEST.sha256` entries; each new fixture appears as
   a new line in the manifest.

@@ -89,5 +89,9 @@ sentence below:
    every fixture and `conformance.json` must name in `$schema` the `$id` of a
    schema under `schemas/` and validate against it in full
    (`schemas/fixture-v1.schema.json`,
-   `schemas/conformance-profile-v1.schema.json`); a self-test first proves the
-   check fails on altered copies of each.
+   `schemas/conformance-profile-v1.schema.json`), and each schema's `$id` must
+   be the address GitHub serves that file from on `main`
+   (`https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/`
+   followed by its path); a self-test first proves the check fails on altered
+   copies of each document and on copies of each schema that name another
+   address.

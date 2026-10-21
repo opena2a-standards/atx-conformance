@@ -119,10 +119,54 @@ type crlEntry struct {
 // way up to Go 1.26; built with Go 1.27, it unescapes the string first and
 // decodes the escaped form too. Every timestamp this verifier decodes from a
 // fixture is one of these, so the Go release does not change which ones
-// decode (the Python verifier follows the same rule).
+// decode (the Python verifier follows the same rule). It also refuses a time
+// zone offset hour above 24 or minute above 60 (checkOffset).
 type timestamp struct{ time.Time }
 
-func (t *timestamp) UnmarshalJSON(b []byte) error { return t.Time.UnmarshalJSON(b) }
+func (t *timestamp) UnmarshalJSON(b []byte) error {
+	if err := t.Time.UnmarshalJSON(b); err != nil {
+		return err
+	}
+	if s := string(b); s != "null" {
+		return checkOffset(s[1 : len(s)-1])
+	}
+	return nil
+}
+
+// parseRFC3339 is time.Parse(time.RFC3339, s) with checkOffset applied.
+func parseRFC3339(s string) (time.Time, error) {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return t, err
+	}
+	return t, checkOffset(s)
+}
+
+// checkOffset refuses a timestamp that time.Parse(time.RFC3339, s) has
+// decoded when its time zone offset has an hour above 24 or a minute above
+// 60, with the error Go 1.23 and later return for it. Go 1.22 decodes such an
+// offset (+25:00, +23:61) and Go 1.23 and later refuse it, so without this
+// check the verdict on it depended on the Go release the verifier was built
+// with. An offset of +24:00 or +23:60 decodes under every release.
+func checkOffset(s string) error {
+	if len(s) < len("+00:00") || s[len(s)-1] == 'Z' {
+		return nil
+	}
+	off := s[len(s)-len("+00:00"):]
+	hr := int(off[1]-'0')*10 + int(off[2]-'0')
+	mm := int(off[4]-'0')*10 + int(off[5]-'0')
+	field := ""
+	if hr > 24 {
+		field = "hour"
+	}
+	if mm > 60 {
+		field = "minute"
+	}
+	if field == "" {
+		return nil
+	}
+	return &time.ParseError{Layout: time.RFC3339, Value: s, Message: ": time zone offset " + field + " out of range"}
+}
 
 type expectedOutcome struct {
 	VerifyResult   string `json:"verifyResult"`
@@ -500,7 +544,7 @@ func verify(f fixture) result {
 		return result{RejectCategory: "PARSE_ERROR", Reason: err.Error()}
 	}
 
-	now, err := time.Parse(time.RFC3339, f.VerifierState.ClockRFC3339)
+	now, err := parseRFC3339(f.VerifierState.ClockRFC3339)
 	if err != nil {
 		return result{RejectCategory: "VERIFIER_CONFIG_ERROR", Reason: "bad clockRfc3339: " + err.Error()}
 	}

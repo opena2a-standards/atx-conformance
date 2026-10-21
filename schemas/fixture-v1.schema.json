@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://atx.opena2a.org/schemas/fixture-v1.json",
+  "$id": "https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/fixture-v1.schema.json",
   "title": "ATX conformance fixture, format v1",
-  "description": "One conformance fixture: the ATX credential under test, the state a verifier applies before running, and the outcome it must report. The `$id` is the identifier every fixture names in its `$schema` member; this file is its definition. The credential in `atx` is checked against the atx-spec credential schema separately (scripts/schema_validation.py), because several fixtures carry a schema-invalid credential by design.",
+  "description": "One conformance fixture: the ATX credential under test, the state a verifier applies before running, and the outcome it must report. The `$id` is the identifier every fixture names in its `$schema` member, and the address GitHub serves this file from on the main branch of opena2a-standards/atx-conformance; this file is its definition. The credential in `atx` is checked against the atx-spec credential schema separately (scripts/schema_validation.py), because several fixtures carry a schema-invalid credential by design.",
   "type": "object",
   "required": [
     "$schema",
@@ -19,7 +19,7 @@
   "properties": {
     "$schema": {
       "description": "The identifier of this format. Equal to this schema's `$id`.",
-      "const": "https://atx.opena2a.org/schemas/fixture-v1.json"
+      "const": "https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/fixture-v1.schema.json"
     },
     "name": {
       "description": "Stable fixture name. Matched by name, not by path, when an existing fixture is compared with an earlier commit.",

@@ -1210,7 +1210,7 @@ func wrap(name, description string, refs []KeypairRef, vs VerifierState, expecte
 	}
 	fixtureRequirementsUsed[name] = true
 	return Fixture{
-		Schema:        "https://atx.opena2a.org/schemas/fixture-v1.json",
+		Schema:        "https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/fixture-v1.schema.json",
 		Name:          name,
 		Description:   description,
 		Requirement:   requirement,

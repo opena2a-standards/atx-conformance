@@ -1,5 +1,5 @@
 {
-  "$schema": "https://atx.opena2a.org/schemas/fixture-v1.json",
+  "$schema": "https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/fixture-v1.schema.json",
   "name": "atx-v1/revoked-crl-only",
   "description": "An ATX v1.0 credential whose own revoked flag is false and whose AgentID appears in the verifier's CRL. It is the accepted baseline in every other respect: a trusted issuer, unexpired, one Ed25519 signature that verifies. CRL membership is the only thing that revokes it, so a verifier that reads the credential's revoked flag and never consults the CRL wrongly accepts. The flag is outside the signed bytes of both signing forms, so it can be cleared on a revoked credential without breaking the signature; the CRL entry cannot. Verifier MUST REJECT with a revocation reason that names the CRL.",
   "requirement": "§1.3 step 6: an agentId listed on the verifier's CRL is rejected although the credential's own revoked flag is false",

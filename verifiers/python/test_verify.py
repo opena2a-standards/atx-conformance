@@ -542,27 +542,47 @@ GO_REJECTED_TIMESTAMPS = (
     "+999-12-31T23:59:59Z",
 )
 
-# Offsets past +24:00 or +23:60. Go 1.22, which CI builds the Go reference
-# verifier with, decodes them, and Go 1.23 and later reject them, so
-# TestTimestampDecode pins neither outcome; this verifier follows Go 1.22.
-# Recorded from Go 1.22.12.
-GO122_OFFSET_TIMESTAMPS = (
-    ("2099-12-31T23:59:59+25:00", "2099-12-30T22:59:59Z", 4102354799, 0),
-    ("2099-12-31T23:59:59+23:61", "2099-12-30T23:58:59Z", 4102358339, 0),
-    ("2099-12-31T23:59:59-99:99", "2100-01-05T04:38:59Z", 4102807139, 0),
-    ("2026-05-23T00:00:00+00:61", "2026-05-22T22:59:00Z", 1779490740, 0),
+# Offsets with an hour above 24 or a minute above 60, and the error the Go
+# reference verifier refuses each with: Go 1.23 and later's time.Parse error,
+# which the Go verifier's checkOffset gives under Go 1.22 too. The offsets
+# table in TestTimestampDecode carries the same rows but the last; it is
+# recorded from time.Parse(time.RFC3339) with Go 1.23.0 and Go 1.26.3, which
+# check the offset before the day.
+GO_OFFSET_OUT_OF_RANGE = (
+    ("2099-12-31T23:59:59+25:00", "time zone offset hour out of range"),
+    ("2099-12-31T23:59:59-25:00", "time zone offset hour out of range"),
+    ("2099-12-31T23:59:59.5+25:00", "time zone offset hour out of range"),
+    ("2099-12-31T23:59:59+23:61", "time zone offset minute out of range"),
+    ("2026-05-23T00:00:00+00:61", "time zone offset minute out of range"),
+    ("2099-12-31T23:59:59+25:61", "time zone offset minute out of range"),
+    ("2099-12-31T23:59:59-99:99", "time zone offset minute out of range"),
+    ("2099-02-30T23:59:59+25:00", "time zone offset hour out of range"),
 )
 
-# The verdict `go run .` in ../go reaches with Go 1.22.12 on the v1.0 and v1.1
-# baselines when atx[member] holds one of those offsets: the timestamp decodes,
-# it no longer matches the signed value, and the signature rejects. Built with
-# Go 1.23 or later, the Go verifier reaches PARSE_ERROR instead.
-GO122_OFFSET_VERDICTS = (
-    ("expiresAt", '"2099-12-31T23:59:59+25:00"', "SIGNATURE_INVALID"),
-    ("expiresAt", '"2099-12-31T23:59:59+00:61"', "SIGNATURE_INVALID"),
-    ("expiresAt", '"2099-12-31T23:59:59-99:99"', "SIGNATURE_INVALID"),
-    ("issuedAt", '"2026-05-23T00:00:00+00:61"', "SIGNATURE_INVALID"),
-    ("issuedAt", '"2026-05-23T00:00:00+25:00"', "SIGNATURE_INVALID"),
+# The verdict `go run .` in ../go reaches on the v1.0 and v1.1 baselines when
+# atx[member] holds one of those offsets, built with Go 1.22.12 and with Go
+# 1.26.3, which agree on each. Built with Go 1.22 before checkOffset, it
+# reached SIGNATURE_INVALID on each.
+GO_OFFSET_VERDICTS = (
+    ("expiresAt", '"2099-12-31T23:59:59+25:00"', "time zone offset hour out of range"),
+    ("expiresAt", '"2099-12-31T23:59:59+00:61"', "time zone offset minute out of range"),
+    ("expiresAt", '"2099-12-31T23:59:59-99:99"', "time zone offset minute out of range"),
+    ("issuedAt", '"2026-05-23T00:00:00+00:61"', "time zone offset minute out of range"),
+    ("issuedAt", '"2026-05-23T00:00:00+25:00"', "time zone offset hour out of range"),
+)
+
+# A CRL timestamp with such an offset, on the CRL baseline: the file fails to
+# load in the Go verifier built with Go 1.22.12 and with Go 1.26.3. (path from
+# the fixture object, raw literal, the member this verifier's load error
+# names).
+GO_UNLOADABLE_OFFSETS = (
+    (("verifierState", "crl", "issuedAt"), '"2026-05-23T00:00:00+25:00"', "verifierState.crl.issuedAt"),
+    (("verifierState", "crl", "nextUpdate"), '"2026-05-23T00:00:00+23:61"', "verifierState.crl.nextUpdate"),
+    (
+        ("verifierState", "crl", "entries", 0, "revokedAt"),
+        '"2026-05-23T12:00:00+00:61"',
+        "verifierState.crl.entries[0].revokedAt",
+    ),
 )
 
 # The verdict the Go reference verifier reaches when atx[member] holds the raw
@@ -624,6 +644,8 @@ GO_GENERATED_AT_VERDICTS = (
     ('"2026-05-19T01:00:00+01:00"', "ACCEPT"),
     ('"2026-05-19T00:00:00.5Z"', "ACCEPT"),
     ('"2026-05-19T00:00:00\\u005a"', "SIGNATURE_INVALID"),
+    ('"2026-05-19T00:00:00+25:00"', "SIGNATURE_INVALID"),
+    ('"2026-05-19T00:00:00+00:61"', "SIGNATURE_INVALID"),
 )
 
 # The tables below were recorded from the Go reference verifier in ../go, from
@@ -1184,12 +1206,12 @@ class GoTimestampGrammar(unittest.TestCase):
             with self.subTest(timestamp=text), self.assertRaises(ValueError):
                 verify._parse_rfc3339(text)
 
-    def test_offsets_past_24_hours_decode_as_go_1_22_does(self):
-        for text, utc, seconds, nanos in GO122_OFFSET_TIMESTAMPS:
+    def test_offsets_out_of_range_raise_as_go_does(self):
+        for text, message in GO_OFFSET_OUT_OF_RANGE:
             with self.subTest(timestamp=text):
-                instant = verify._parse_rfc3339(text)
-                self.assertEqual(instant, verify._Instant(seconds, nanos))
-                self.assertEqual(verify._format_rfc3339(instant), utc)
+                with self.assertRaises(ValueError) as raised:
+                    verify._parse_rfc3339(text)
+                self.assertEqual(str(raised.exception), message)
 
     def test_zero_time_is_go_zero_time(self):
         self.assertEqual(verify._GO_ZERO_TIME, verify._Instant(-62135596800, 0))
@@ -1214,12 +1236,31 @@ class GoDecodedVerdict(unittest.TestCase):
                     self.assertEqual(_outcome(got), outcome, got.reason)
                     self.assertIn(fragment, got.reason)
 
-    def test_offset_past_24_hours_reaches_the_go_1_22_verdict(self):
+    def test_offset_out_of_range_is_a_parse_error(self):
         for baseline in (BASELINE_V10, BASELINE_V11):
-            for member, literal, outcome in GO122_OFFSET_VERDICTS:
+            for member, literal, message in GO_OFFSET_VERDICTS:
                 with self.subTest(baseline=baseline.name, member=member, value=literal):
                     got = _member_verdict(baseline, member, literal)
-                    self.assertEqual(_outcome(got), outcome, got.reason)
+                    self.assertEqual(_outcome(got), "PARSE_ERROR", got.reason)
+                    self.assertIn(message, got.reason)
+
+    def test_clock_offset_out_of_range_is_a_config_error(self):
+        for baseline in (BASELINE_V10, BASELINE_V11):
+            with self.subTest(baseline=baseline.name):
+                fixture = json.loads(baseline.read_text())
+                fixture["verifierState"]["clockRfc3339"] = "2026-06-01T00:00:00+23:61"
+                got = verify.verify_fixture(fixture)
+                self.assertEqual(got.reject_category, "VERIFIER_CONFIG_ERROR", got.reason)
+                self.assertIn("time zone offset minute out of range", got.reason)
+
+    def test_crl_offset_out_of_range_is_a_load_error(self):
+        for path, literal, member in GO_UNLOADABLE_OFFSETS:
+            with self.subTest(path=path, value=literal), tempfile.TemporaryDirectory() as tmp:
+                written = _write_fixture_at(Path(tmp), "w.json", BASELINE_CRL, path, literal)
+                with self.assertRaises(ValueError) as raised:
+                    verify._expected_outcome(verify.load_fixture(written))
+                self.assertTrue(str(raised.exception).startswith(member + " "), raised.exception)
+                self.assertIn("time zone offset", str(raised.exception))
 
     def test_directory_run_reaches_the_summary_line(self):
         # Each of these used to end the run with a traceback, or reach a

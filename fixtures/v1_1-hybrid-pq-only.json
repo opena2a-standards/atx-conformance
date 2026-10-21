@@ -1,5 +1,5 @@
 {
-  "$schema": "https://atx.opena2a.org/schemas/fixture-v1.json",
+  "$schema": "https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/fixture-v1.schema.json",
   "name": "atx-v1_1/hybrid-pq-only",
   "description": "An ATX v1.1 credential carrying a single ML-DSA-65 signature that verifies over JCS(TBS), and no Ed25519 signature. The spec requires a credential that declares an ML-DSA-65 entry to also carry a verifying Ed25519 entry, so a post-quantum signature alone cannot verify a credential. Verifier MUST REJECT with a signature-validation reason. A verifier that checks only that every declared signature verifies wrongly ACCEPTs.",
   "requirement": "§13, Cryptographic agility: a credential that declares an ML-DSA-65 signature must also carry a verifying Ed25519 signature, so an ML-DSA-65 signature alone is a signature failure",

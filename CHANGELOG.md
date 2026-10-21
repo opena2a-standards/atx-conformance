@@ -149,6 +149,39 @@ they should not.
 
 ### Changed
 
+- The `$schema` member of the 26 fixtures and of `conformance.json` names
+  the address GitHub serves the schema of its format from on `main`,
+  `https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/fixture-v1.schema.json`
+  and
+  `https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/conformance-profile-v1.schema.json`,
+  and so do the `$id` and `$schema` const of each schema (#154). They
+  named `https://atx.opena2a.org/schemas/fixture-v1.json`, whose host did
+  not resolve, and
+  `https://specs.opena2a.org/schemas/conformance-profile-v1.json`, which
+  answered 404. When the change was made, each new address answered 200
+  with the bytes of that schema file on `main`.
+  `scripts/schema_validation.py` reports a format schema whose `$id` is not
+  that prefix followed by the schema's path, and does not use it. Its
+  self-test adds six cases (47 cases green, from 41): each tracked schema
+  names its own address, and copies of the fixture schema identified on
+  `atx.opena2a.org`, by the profile schema's address and by
+  `schemas/fixture-v1.json`, a path no file has, and a copy of the profile
+  schema identified on `specs.opena2a.org`, are each reported. Run over the
+  schemas and documents of the commit before, the script exits 1, seven of
+  its 49 self-test cases red. The generator writes the new URI, so each
+  fixture changes in its `$schema` line alone and each of the 26
+  `MANIFEST.sha256` lines changes; `scripts/check_fixture_immutability.py`
+  passes, as the `atx`, `verifierState` and `expected` members are
+  unchanged, and both verifiers report `26 pass, 0 fail`.
+  `docs/captures/go-verifier.txt` is unchanged byte for byte; its sidecar
+  records the new tree id of `fixtures`, so
+  `scripts/capture_go_verifier.py --check` passes. A consumer that
+  matches a `$schema` value must match the new one; the formats keep their
+  members, and every rule but the `$schema` value, so both stay v1. The
+  eight JCS vectors under
+  `jcs-vectors/vectors/` still name
+  `https://atx.opena2a.org/schemas/jcs-vector-v1.json`, a format no file
+  under `schemas/` defines.
 - The argument table of `scripts/parity/parity.py` runs twelve argument
   shapes that the "Arguments" section of `docs/running-the-verifiers.md`
   describes, whose closing sentence says the parity gate runs both
@@ -773,6 +806,26 @@ they should not.
 
 ### Fixed
 
+- Both reference verifiers refuse a timestamp whose time zone offset has an
+  hour above 24 or a minute above 60 (`+25:00`, `+23:61`), and the Go
+  verifier's verdict on one no longer depends on the Go release that built it
+  (#167). Built with Go 1.22.12, the Go verifier reached `SIGNATURE_INVALID`
+  on a baseline whose `expiresAt` was `2099-12-31T23:59:59+25:00` and
+  `ACCEPT` on one whose `clockRfc3339` was `2026-06-01T00:00:00+23:61`, as
+  the Python verifier did; built with Go 1.23.0 or Go 1.26.0, it reached
+  `PARSE_ERROR` and `VERIFIER_CONFIG_ERROR`. The Go verifier checks the
+  offset after Go's time package decodes a timestamp (`checkOffset`) and
+  refuses it with the error Go 1.23 and later give, and the Python verifier
+  refuses it with a reason that names the same error text. Measured with Go 1.22.12 and Go 1.26.3: a
+  credential `issuedAt` or `expiresAt` with such an offset is a
+  `PARSE_ERROR`, a `clockRfc3339` a `VERIFIER_CONFIG_ERROR`, a CRL
+  `issuedAt`, `nextUpdate` or entry `revokedAt` fails to load the fixture,
+  and a `behavioralProfile.generatedAt` projects the profile as null, so
+  the signature rejects. An offset of `+24:00` or `+23:60` still decodes.
+  `TestOffsetOutOfRangeVerdict` and the offsets table in
+  `TestTimestampDecode` in `verifiers/go`, and `GO_OFFSET_OUT_OF_RANGE`,
+  `GO_OFFSET_VERDICTS` and `GO_UNLOADABLE_OFFSETS` in
+  `verifiers/python/test_verify.py`, pin it. No fixture changes.
 - README.md and this file's opening paragraph describe the repository as
   carrying no tag, where both described a `v0.1.0` tag it does not carry
   (#255). README.md said `@latest` resolves to the highest release tag of
@@ -800,6 +853,27 @@ they should not.
   `fetch-depth`, whose default fetches one commit, so in CI the self-test's
   cases are what hold the check. The self-test adds sixteen cases (261
   altered sites, from 245). No fixture changes.
+- `docs/captures/go-verifier.json` lists no file in `inputsUncommitted`, and
+  `scripts/capture_go_verifier.py --check` fails on a sidecar that lists one
+  (#208). The sidecar is the provenance README.md's excerpt is published
+  with, and it listed `fixtures/v1_1-declared-purpose-number-injected.json`,
+  a file the #130 change, which last rewrote it, also added: it named as
+  uncommitted a file committed beside it, and `--check` passed on it.
+  Before the #130 change it listed `verifiers/go/verifier/verify.go` and
+  `verifiers/go/verifier/verify_test.go`, two files the #231 change, which
+  rewrote it then, also changed. A capture is taken once the inputs it
+  reads are committed. `--check` names the files a sidecar lists in
+  `inputsUncommitted` and says to commit the changes and run the script,
+  and the script, after writing a sidecar that lists one, names the files
+  on a line saying `--check` fails on it. The `$schema` change (#154,
+  under Changed) re-took the sidecar, and the time zone offset change
+  (#167) re-took it again, each recording `inputsUncommitted` as `[]`;
+  this change does not rewrite the sidecar, and
+  `docs/captures/go-verifier.txt` is unchanged byte for byte. The
+  self-test adds three cases: a sidecar listing an input file fails, a run
+  with a change to an input uncommitted names the file on its last line,
+  and a capture taken that way and committed with the change fails on
+  `inputsUncommitted` alone (71 cases green, from 68). No fixture changes.
 - `scripts/parity/parity.py` skips the six argument cases that need a path
   of mode 000 (`locked`, `lockedroot`, `noread/x.json`, `./noread//x.json`,
   `noread` and `noread/{xff}.json`) where that mode does not deny the gate

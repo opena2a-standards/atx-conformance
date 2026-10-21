@@ -1,5 +1,5 @@
 {
-  "$schema": "https://atx.opena2a.org/schemas/fixture-v1.json",
+  "$schema": "https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/fixture-v1.schema.json",
   "name": "atx-v1/baseline-valid",
   "description": "A baseline ATX v1.0 credential issued by a single trusted authority with one Ed25519 signature. Verifier MUST ACCEPT.",
   "requirement": "§1.3 step 8: a v1.0 credential whose one Ed25519 signature, made with its issuer's key, verifies over the legacy canonical bytes passes every step and is accepted",
