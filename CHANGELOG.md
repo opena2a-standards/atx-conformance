@@ -856,20 +856,23 @@ they should not.
 - `docs/captures/go-verifier.json` lists no file in `inputsUncommitted`, and
   `scripts/capture_go_verifier.py --check` fails on a sidecar that lists one
   (#208). The sidecar is the provenance README.md's excerpt is published
-  with, and it listed `verifiers/go/verifier/verify.go` and
+  with, and it listed `fixtures/v1_1-declared-purpose-number-injected.json`,
+  a file the #130 change, which last rewrote it, also added: it named as
+  uncommitted a file committed beside it, and `--check` passed on it.
+  Before the #130 change it listed `verifiers/go/verifier/verify.go` and
   `verifiers/go/verifier/verify_test.go`, two files the #231 change, which
-  last rewrote it, also changed: it named as uncommitted two files committed
-  beside it, and `--check` passed on it. A capture is taken once the inputs
-  it reads are committed. `--check` names the files a sidecar lists in
+  rewrote it then, also changed. A capture is taken once the inputs it
+  reads are committed. `--check` names the files a sidecar lists in
   `inputsUncommitted` and says to commit the changes and run the script,
   and the script, after writing a sidecar that lists one, names the files
-  on a line saying `--check` fails on it. The sidecar was rewritten from
-  this tree, its inputs committed: `inputsUncommitted` is `[]`, `ranAtUtc`
-  is the new run's time, its other members are unchanged, and
-  `docs/captures/go-verifier.txt` is unchanged byte for byte. The self-test
-  adds three cases: a sidecar listing an input file fails, a run with a
-  change to an input uncommitted names the file on its last line, and a
-  capture taken that way and committed with the change fails on
+  on a line saying `--check` fails on it. The `$schema` change (#154,
+  under Changed) re-took the sidecar, and the time zone offset change
+  (#167) re-took it again, each recording `inputsUncommitted` as `[]`;
+  this change does not rewrite the sidecar, and
+  `docs/captures/go-verifier.txt` is unchanged byte for byte. The
+  self-test adds three cases: a sidecar listing an input file fails, a run
+  with a change to an input uncommitted names the file on its last line,
+  and a capture taken that way and committed with the change fails on
   `inputsUncommitted` alone (71 cases green, from 68). No fixture changes.
 - `scripts/parity/parity.py` skips the six argument cases that need a path
   of mode 000 (`locked`, `lockedroot`, `noread/x.json`, `./noread//x.json`,
