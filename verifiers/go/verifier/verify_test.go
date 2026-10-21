@@ -2,6 +2,8 @@ package verifier
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -1295,4 +1297,237 @@ func TestEscapedTimestampFailsToDecode(t *testing.T) {
 	if p := projectBehavioralProfileV11(json.RawMessage(`{"generatedAt":"2026-05-23T00:00:00Z"}`)); string(p) == "null" {
 		t.Error("unescaped behavioralProfile.generatedAt projected as null")
 	}
+}
+
+// v11Baseline is fixtures/v1_1-baseline-valid.json as the verifier loads it.
+func v11Baseline(t *testing.T) fixture {
+	t.Helper()
+	f, err := loadFixture(repoRoot + "/fixtures/v1_1-baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// withMembers returns f with each named top-level member of its credential
+// set to the JSON text given for it, written as given; an empty text removes
+// the member.
+func withMembers(t *testing.T, f fixture, members map[string]string) fixture {
+	t.Helper()
+	var credential map[string]json.RawMessage
+	if err := json.Unmarshal(f.ATX, &credential); err != nil {
+		t.Fatal(err)
+	}
+	for name, raw := range members {
+		if raw == "" {
+			delete(credential, name)
+			continue
+		}
+		credential[name] = json.RawMessage(raw)
+	}
+	b, err := json.Marshal(credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.ATX = b
+	return f
+}
+
+// signedByPrimary returns f with its v1.1 credential carrying one Ed25519
+// signature over the credential's own JCS(TBS), made with the primary
+// issuer's key: the RFC 8032 test vector in vectors/issuer-primary.json.
+func signedByPrimary(t *testing.T, f fixture) fixture {
+	t.Helper()
+	raw, err := os.ReadFile(repoRoot + "/vectors/issuer-primary.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var key struct {
+		SeedHex string `json:"seedHex"`
+		KeyID   string `json:"keyId"`
+	}
+	if err := json.Unmarshal(raw, &key); err != nil {
+		t.Fatal(err)
+	}
+	seed, err := hex.DecodeString(key.SeedHex)
+	if err != nil || len(seed) != ed25519.SeedSize {
+		t.Fatalf("vectors/issuer-primary.json seedHex is not a %d-byte hex seed (%v)", ed25519.SeedSize, err)
+	}
+	var a atx
+	if err := json.Unmarshal(f.ATX, &a); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := canonicalPayloadV11(&a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sigs, err := json.Marshal([]signature{{
+		KeyID:     key.KeyID,
+		Algorithm: "Ed25519",
+		Value:     base64.StdEncoding.EncodeToString(ed25519.Sign(ed25519.NewKeyFromSeed(seed), payload)),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return withMembers(t, f, map[string]string{"signatures": string(sigs)})
+}
+
+// TestDeclaredPurposeUnpairedSurrogateEscape pins the verdict on a v1.1
+// credential whose declaredPurpose writes one half of a UTF-16 surrogate pair
+// as a \u escape without the other half. declaredPurpose enters the TBS as
+// written, and RFC 8785 §3.2.2.2 requires a canonicalizer to refuse such a
+// string, so each rejects as VERIFIER_CONFIG_ERROR naming the escape: the
+// category the Python reference verifier reaches (GO_SURROGATE_VERDICTS_V11
+// in verifiers/python/test_verify.py). The JCS library refuses the escape
+// only where the next six bytes are not another \u escape; it reads one
+// followed directly by a \u escape that does not complete the pair as a
+// single U+FFFD, the second escape included. Without the verifier's own
+// check, such a credential was a signature failure, and a declaredPurpose
+// signed holding U+FFFD verified with that pair of escapes written in its
+// place. atx-conformance#173.
+func TestDeclaredPurposeUnpairedSurrogateEscape(t *testing.T) {
+	// u writes each UTF-16 code unit given in hex as a \u escape.
+	u := func(units ...string) string { return `\u` + strings.Join(units, `\u`) }
+	base := v11Baseline(t)
+	for _, tc := range []struct{ purpose, want, unpaired string }{
+		{`"` + u("d800") + `"`, "VERIFIER_CONFIG_ERROR", u("d800")},
+		{`"` + u("dc00") + `"`, "VERIFIER_CONFIG_ERROR", u("dc00")},
+		{`"` + u("d800") + `\n"`, "VERIFIER_CONFIG_ERROR", u("d800")},
+		{`"` + u("d800", "0041") + `"`, "VERIFIER_CONFIG_ERROR", u("d800")},
+		{`"` + u("d800", "d800") + `"`, "VERIFIER_CONFIG_ERROR", u("d800")},
+		{`"` + u("dc00", "0041") + `"`, "VERIFIER_CONFIG_ERROR", u("dc00")},
+		{`"` + u("dc00", "d800") + `"`, "VERIFIER_CONFIG_ERROR", u("dc00")},
+		{`"` + u("DBFF", "E000") + `"`, "VERIFIER_CONFIG_ERROR", u("DBFF")},
+		{`"` + u("d800", "d800", "dc00") + `"`, "VERIFIER_CONFIG_ERROR", u("d800")},
+		{`"` + u("d800", "dc00", "dc00") + `"`, "VERIFIER_CONFIG_ERROR", u("dc00")},
+		{`{"statement": "x` + u("d800", "0041") + `"}`, "VERIFIER_CONFIG_ERROR", u("d800")},
+		{`{"x` + u("d800", "0041") + `": 1}`, "VERIFIER_CONFIG_ERROR", u("d800")},
+		{`["a", "` + u("dfff", "d800") + `"]`, "VERIFIER_CONFIG_ERROR", u("dfff")},
+		// No unpaired surrogate: a pair, with either case of hex digit, the
+		// text \ud800 after an escaped backslash, and a pair after one. The
+		// baseline signs no declaredPurpose, so each is a signature failure.
+		{`"` + u("d800", "dc00") + `"`, "SIGNATURE_INVALID", ""},
+		{`"` + u("D83D", "DE00") + `"`, "SIGNATURE_INVALID", ""},
+		{`"\\ud800"`, "SIGNATURE_INVALID", ""},
+		{`"\\` + u("d800", "dc00") + `"`, "SIGNATURE_INVALID", ""},
+	} {
+		got := verify(withMembers(t, base, map[string]string{"declaredPurpose": tc.purpose}))
+		if got.RejectCategory != tc.want {
+			t.Errorf("declaredPurpose %s: %s, want REJECT[%s]", tc.purpose, got, tc.want)
+		} else if tc.unpaired != "" && !strings.Contains(got.Reason, "unpaired UTF-16 surrogate escape ("+tc.unpaired+")") {
+			t.Errorf("declaredPurpose %s: %s, want the reason to name the unpaired surrogate escape %s", tc.purpose, got, tc.unpaired)
+		}
+	}
+
+	// A declaredPurpose signed holding U+FFFD verifies; with the character
+	// written as an unpaired surrogate escape and the \u escape after it, the
+	// credential is refused, not verified against that signature.
+	signed := signedByPrimary(t, withMembers(t, base, map[string]string{"declaredPurpose": `"` + u("fffd") + `"`}))
+	if got := verify(signed); !got.Accepted {
+		t.Fatalf("declaredPurpose signed holding U+FFFD: %s, want ACCEPT", got)
+	}
+	for _, units := range [][]string{{"d800", "0041"}, {"d800", "d800"}, {"dc00", "fffd"}} {
+		purpose := `"` + u(units...) + `"`
+		got := verify(withMembers(t, signed, map[string]string{"declaredPurpose": purpose}))
+		if got.RejectCategory != "VERIFIER_CONFIG_ERROR" {
+			t.Errorf("declaredPurpose %s in place of the signed U+FFFD: %s, want REJECT[VERIFIER_CONFIG_ERROR]", purpose, got)
+		}
+	}
+}
+
+// TestScanSummaryOutsideItsType pins the verdict on a v1.1 credential whose
+// scanSummary holds a member outside the type the TBS gives it (atx-spec
+// §1.3a.2 rule 2: criticalFindings and highFindings are integers, the other
+// four strings), or is not an object. The TBS has no value for either, so no
+// signature covers the credential and it rejects as SIGNATURE_INVALID with a
+// reason naming scanSummary. The projection leaves such a member at its zero
+// value, so without the check the v1.1 baseline, which signs
+// criticalFindings 0, verified carrying criticalFindings "3" or 3.5
+// (fixtures/v1_1-scan-summary-member-outside-type.json), and a credential
+// signed with a zero scanSummary verified carrying a scanSummary of 7. An
+// absent or null scanSummary or member is the zero value, and under
+// atcVersion 1.0 scanSummary is unsigned (§1.3a.1); neither is refused.
+// atx-conformance#173.
+func TestScanSummaryOutsideItsType(t *testing.T) {
+	base := v11Baseline(t)
+	var credential struct {
+		ScanSummary map[string]json.RawMessage `json:"scanSummary"`
+	}
+	if err := json.Unmarshal(base.ATX, &credential); err != nil {
+		t.Fatal(err)
+	}
+	// scanWith is the baseline's signed scanSummary with member written as raw.
+	scanWith := func(member, raw string) string {
+		scan := map[string]json.RawMessage{}
+		for name, value := range credential.ScanSummary {
+			scan[name] = value
+		}
+		scan[member] = json.RawMessage(raw)
+		b, err := json.Marshal(scan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	check := func(label string, f fixture, want string) {
+		t.Helper()
+		got := verify(f)
+		switch {
+		case want == "ACCEPT":
+			if !got.Accepted {
+				t.Errorf("%s: %s, want ACCEPT", label, got)
+			}
+		case got.RejectCategory != want || !strings.Contains(got.Reason, "scanSummary") || !strings.Contains(got.Reason, "signature"):
+			t.Errorf("%s: %s, want REJECT[%s] with a reason naming scanSummary and the signature", label, got, want)
+		}
+	}
+
+	for _, tc := range []struct{ member, raw, want string }{
+		{"criticalFindings", `"3"`, "SIGNATURE_INVALID"},
+		{"criticalFindings", `3.5`, "SIGNATURE_INVALID"},
+		{"criticalFindings", `3.0`, "SIGNATURE_INVALID"},
+		{"criticalFindings", `1e1`, "SIGNATURE_INVALID"},
+		{"criticalFindings", `true`, "SIGNATURE_INVALID"},
+		{"criticalFindings", `9223372036854775808`, "SIGNATURE_INVALID"},
+		{"highFindings", `"1"`, "SIGNATURE_INVALID"},
+		{"hma", `7`, "SIGNATURE_INVALID"},
+		{"oasbLevel", `["L1"]`, "SIGNATURE_INVALID"},
+		{"criticalFindings", `null`, "ACCEPT"},
+		{"criticalFindings", `-0`, "ACCEPT"},
+		{"hma", `null`, "SIGNATURE_INVALID"},
+	} {
+		label := fmt.Sprintf("scanSummary.%s %s on the v1.1 baseline", tc.member, tc.raw)
+		f := withMembers(t, base, map[string]string{"scanSummary": scanWith(tc.member, tc.raw)})
+		if tc.member == "hma" && tc.raw == "null" {
+			// Control: hma null is the zero value "", which the baseline does
+			// not sign, so the signature fails without the scanSummary check.
+			if got := verify(f); got.Accepted || got.RejectCategory != "SIGNATURE_INVALID" || strings.Contains(got.Reason, "scanSummary") {
+				t.Errorf("%s: %s, want REJECT[SIGNATURE_INVALID] from the signature itself", label, got)
+			}
+			continue
+		}
+		check(label, f, tc.want)
+	}
+
+	zero := signedByPrimary(t, withMembers(t, base, map[string]string{"scanSummary": "null"}))
+	check("credential signed with a zero scanSummary", zero, "ACCEPT")
+	for _, raw := range []string{`7`, `"x"`, `[1.5]`, `true`, `{"criticalFindings": "3"}`, `{"hma": 0}`} {
+		check("scanSummary "+raw+" on a credential signed with a zero scanSummary",
+			withMembers(t, zero, map[string]string{"scanSummary": raw}), "SIGNATURE_INVALID")
+	}
+	for _, raw := range []string{`{}`, `{"criticalFindings": null, "hma": null}`, ""} {
+		label := "scanSummary " + raw
+		if raw == "" {
+			label = "no scanSummary"
+		}
+		check(label+" on a credential signed with a zero scanSummary",
+			withMembers(t, zero, map[string]string{"scanSummary": raw}), "ACCEPT")
+	}
+
+	v10, err := loadFixture(repoRoot + "/fixtures/baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(`scanSummary {"criticalFindings": "3"} on the v1.0 baseline, which signs no scanSummary`,
+		withMembers(t, v10, map[string]string{"scanSummary": `{"criticalFindings": "3"}`}), "ACCEPT")
 }

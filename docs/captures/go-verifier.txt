@@ -80,6 +80,9 @@ PASS  fixtures/v1_1-no-transparency-log-index.json
        observed: ACCEPT
        signatures: 1/1 valid (ed25519=true mldsa65=false)
        trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+PASS  fixtures/v1_1-scan-summary-member-outside-type.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: no signature covers scanSummary, which holds a member outside its type or is not an object]
 PASS  fixtures/v1_1-tampered-capabilities.json
        expected: REJECT [SIGNATURE_INVALID]
        observed: REJECT[SIGNATURE_INVALID: Ed25519 signature did:opena2a:authority:opena2a.org#key-1 did not verify against any configured public key]
@@ -93,4 +96,4 @@ PASS  fixtures/wrong-issuer.json
        expected: REJECT [UNTRUSTED_ISSUER]
        observed: REJECT[UNTRUSTED_ISSUER: issuer DID did:opena2a:authority:attacker.example is not in the verifier's trusted set (untrusted issuer)]
 
-summary: 26 pass, 0 fail (26 fixtures)
+summary: 27 pass, 0 fail (27 fixtures)

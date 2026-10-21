@@ -1013,6 +1013,52 @@
       "description": "An ATX v1.1 credential that omits the optional transparencyLogIndex. The field is assigned by the log after signing and is outside JCS(TBS), so its absence changes no canonical bytes and no signature; this credential's JCS(TBS) is byte-identical to the v1.1 baseline's. Verifier MUST ACCEPT. A verifier that requires the field, or that reads its presence as evidence of transparency-log inclusion, wrongly REJECTs."
     },
     {
+      "fixture": "fixtures/v1_1-scan-summary-member-outside-type.json",
+      "name": "atx-v1_1/scan-summary-member-outside-type",
+      "requirement": "§1.3a.2 rule 2: each scanSummary member enters the TBS with its type, so a member written outside that type after signing, criticalFindings as the string \"3\", has no value the signature covers and is a signature failure",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.4 Authorization on signed fields requires v1.1"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "An ATX v1.1 credential signed with scanSummary.criticalFindings 0, carrying the JSON string \"3\" in that member, written AFTER signing. v1.1 signs JCS(TBS), which holds each scanSummary member with its type, criticalFindings as an integer (atx-spec §1.3a.2 rule 2), so no signature covers a string there. The verifier MUST REJECT with a signature-validation reason. A verifier that leaves a member it cannot decode at its zero value projects the signed 0 and wrongly ACCEPTs a credential carrying a count its signature does not cover."
+    },
+    {
       "fixture": "fixtures/v1_1-tampered-capabilities.json",
       "name": "atx-v1_1/tampered-capabilities",
       "requirement": "§1.3a.4: capabilities are under the v1.1 signature, so capabilities changed after signing are a signature failure",

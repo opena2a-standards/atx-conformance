@@ -736,6 +736,25 @@ func main() {
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
 				atx)
 		}},
+		{"fixtures/v1_1-scan-summary-member-outside-type.json", func() Fixture {
+			// A SCANSUMMARY MEMBER OUTSIDE ITS TYPE. Sign the baseline, whose
+			// scanSummary.criticalFindings is 0, then write that member as the
+			// JSON string "3" AFTER signing (postWrite, below: ATCScanSummary
+			// holds the count as an int, so the string is written at the byte
+			// level). The TBS holds criticalFindings as an integer (§1.3a.2
+			// rule 2), so no signature covers the string. A verifier that
+			// leaves a member it cannot decode at its zero value projects the
+			// signed 0 and wrongly ACCEPTs a credential carrying a count its
+			// signature does not cover.
+			atx := newBaselineV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/scan-summary-member-outside-type",
+				"An ATX v1.1 credential signed with scanSummary.criticalFindings 0, carrying the JSON string \"3\" in that member, written AFTER signing. v1.1 signs JCS(TBS), which holds each scanSummary member with its type, criticalFindings as an integer (atx-spec §1.3a.2 rule 2), so no signature covers a string there. The verifier MUST REJECT with a signature-validation reason. A verifier that leaves a member it cannot decode at its zero value projects the signed 0 and wrongly ACCEPTs a credential carrying a count its signature does not cover.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
 		{"fixtures/v1_1-declared-purpose-valid.json", func() Fixture {
 			// PRESENT-CASE: a credential that actually CARRIES a declaredPurpose
 			// (atx-spec §1.5). The purpose object is part of JCS(TBS), so the single
@@ -1002,6 +1021,21 @@ func main() {
 			//nolint:gosec // G703: build-time tool rewriting the fixture it just wrote under outDir
 			must(os.WriteFile(path, replaced, 0o644))
 		}
+		if fs.writePath == "fixtures/v1_1-scan-summary-member-outside-type.json" {
+			// Write the signed criticalFindings 0 as the JSON string "3".
+			// ATCScanSummary holds the count as an int, so the string is
+			// written at the byte level after signing; every other byte is
+			// the credential the signature covers.
+			b, err := os.ReadFile(path) //nolint:gosec // G304: file just written above
+			must(err)
+			target := []byte(`"criticalFindings": 0,`)
+			if n := bytes.Count(b, target); n != 1 {
+				panic(fmt.Sprintf("scan-summary-member-outside-type fixture: %d criticalFindings substitution targets, want 1", n))
+			}
+			replaced := bytes.Replace(b, target, []byte(`"criticalFindings": "3",`), 1)
+			//nolint:gosec // G703: build-time tool rewriting the fixture it just wrote under outDir
+			must(os.WriteFile(path, replaced, 0o644))
+		}
 		sha := sha256FileHex(path)
 		manifest = append(manifest, manifestEntry{path: fs.writePath, sha: sha})
 		fmt.Printf("wrote %s (sha256=%s)\n", fs.writePath, sha)
@@ -1154,6 +1188,7 @@ var fixtureSections = map[string][]string{
 	"atx-v1/wrong-issuer":                        {secSecurity},
 	"atx-v1_1/hybrid-pq-only":                    {secSecurity},
 	"atx-v1_1/tampered-capabilities":             {secSignedFields},
+	"atx-v1_1/scan-summary-member-outside-type":  {secSignedFields},
 	"atx-v1_1/declared-purpose-valid":            {secDeclaredPurpose},
 	"atx-v1_1/tampered-declared-purpose":         {secDeclaredPurpose},
 	"atx-v1_1/declared-purpose-empty-whitespace": {secDeclaredPurpose},
@@ -1189,6 +1224,7 @@ var fixtureRequirements = map[string]string{
 	"atx-v1_1/hybrid-mldsa-tampered":             "§1.3 step 5: a declared ML-DSA-65 signature that does not verify is a signature failure, although the Ed25519 signature verifies",
 	"atx-v1_1/hybrid-pq-only":                    "§13, Cryptographic agility: a credential that declares an ML-DSA-65 signature must also carry a verifying Ed25519 signature, so an ML-DSA-65 signature alone is a signature failure",
 	"atx-v1_1/tampered-capabilities":             "§1.3a.4: capabilities are under the v1.1 signature, so capabilities changed after signing are a signature failure",
+	"atx-v1_1/scan-summary-member-outside-type":  "§1.3a.2 rule 2: each scanSummary member enters the TBS with its type, so a member written outside that type after signing, criticalFindings as the string \"3\", has no value the signature covers and is a signature failure",
 	"atx-v1_1/declared-purpose-valid":            "§1.5: a present declaredPurpose object is signed as part of JCS(TBS) (§1.3a.2 rule 5), and a credential carrying one is accepted",
 	"atx-v1_1/tampered-declared-purpose":         "§1.5: declaredPurpose is under the v1.1 signature, so a declaredPurpose changed after signing is a signature failure",
 	"atx-v1_1/declared-purpose-empty-whitespace": "§1.3a.2 rule 5: an empty declaredPurpose object, whatever whitespace it is written with, is treated as absent and left out of the TBS",

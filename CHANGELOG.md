@@ -154,6 +154,22 @@ they should not.
   sidecar and exits 3. `docs/demo/atx-verify.narration.json` holds the words
   each hold is sized for. The MP4 a render writes goes to `docs/demo/out/`,
   which is not committed. No fixture changes.
+- `fixtures/v1_1-scan-summary-member-outside-type.json`, a MUST-REJECT
+  fixture (#173): the v1.1 baseline, which signs
+  `scanSummary.criticalFindings` 0, with that member written as the string
+  `"3"` after signing. It expects `REJECT[SIGNATURE_INVALID]` with
+  `reasonContains` "signature"; both reference verifiers reported ACCEPT
+  on it before the change to them below. The 26 existing fixtures and their
+  `MANIFEST.sha256` lines are byte-identical; the manifest gains one line.
+  `conformance.json` and the capture under `docs/captures/` are
+  regenerated, the fixture counts in README.md, COSIGNERS.md,
+  CONTRIBUTING.md, `docs/continuous-verification.md` and
+  `docs/sibling-repositories.md` go from 26 to 27 (the sibling row's v1.1
+  count from 16 to 17), and `docs/scope.md` counts 20 of 27 fixtures that
+  reach signature verification, where it counted 19 of 26.
+  `docs/fixtures.md` and `docs/scope.md` list the fixture, and
+  `scripts/schema_validation.py` holds it to one schema error, the `type`
+  of `scanSummary.criticalFindings`.
 
 ### Changed
 
@@ -208,6 +224,29 @@ they should not.
   fixture's bytes, its `MANIFEST.sha256` line and `conformance.json` do, and
   `docs/captures/go-verifier.json` records the new tree of `fixtures/`. The
   Go verifier's output, `docs/captures/go-verifier.txt`, is unchanged.
+- Both reference verifiers reject a v1.1 credential whose `scanSummary`
+  holds a member outside its type, or is not an object, as
+  `SIGNATURE_INVALID` with a reason naming `scanSummary` (#173). The signed
+  payload holds each of its six members typed (core.md §1.3a.2 rule 2), so
+  no signature covers such a value. Both verifiers left the member at its
+  zero value: the v1.1 baseline, which signs `criticalFindings` 0, verified
+  carrying `criticalFindings` `"3"` or `3.5`, and a credential signed with a
+  zero `scanSummary` verified carrying a `scanSummary` of `7`. An absent or
+  null `scanSummary`, or member, is still the zero value, and the check does
+  not run under `atcVersion` 1.0, which signs no `scanSummary`.
+  `TestScanSummaryOutsideItsType` and the Python verifier's
+  `GoScanSummaryOutsideItsType` class pin it.
+- The Go verifier rejects a v1.1 `declaredPurpose` holding an unpaired
+  UTF-16 surrogate escape as `VERIFIER_CONFIG_ERROR`, naming the escape,
+  where the Python verifier rejects it too (#173). Its JCS library read
+  such an escape followed directly by a `\u` escape that does not complete
+  the pair, `\ud800\ud800` for one, as a single U+FFFD: the Go verifier
+  reported `SIGNATURE_INVALID` on the v1.1 baseline with one, and a
+  credential signed with U+FFFD in `declaredPurpose` verified with such a
+  pair written in its place. RFC 8785 §3.2.2.2 requires a canonicalizer to
+  refuse a lone surrogate. A lone escape, `\ud800`, was refused already; its
+  reason names the escape, where it read `Missing surrogate`.
+  `TestDeclaredPurposeUnpairedSurrogateEscape` pins it. No fixture changes.
 - The argument table of `scripts/parity/parity.py` runs twelve argument
   shapes that the "Arguments" section of `docs/running-the-verifiers.md`
   describes, whose closing sentence says the parity gate runs both
