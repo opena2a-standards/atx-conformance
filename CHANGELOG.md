@@ -923,6 +923,32 @@ they should not.
 
 ### Fixed
 
+- The Go verifier names the time zone offset, as Go 1.23 and later do, when
+  a timestamp outside the RFC 3339 layout has an offset hour above 24 or
+  minute above 60 and text follows the offset or the offset's sign or
+  minute is malformed (#266). Built with Go 1.22.12, it rejected a
+  credential whose `issuedAt` was `2099-12-31T23:59:59+25:00x` with
+  `PARSE_ERROR: parsing time "2099-12-31T23:59:59+25:00x": extra text:
+  "x"`, and one whose `issuedAt` was `2026-02-30T00:00:00+25:0a` for an
+  offset it could not parse (`cannot parse "+25:0a" as "Z07:00"`); built
+  with Go 1.26.3 it named `time zone offset hour out of range` in each. The
+  Python verifier rejects both as a `PARSE_ERROR`, as not in the RFC 3339
+  layout, so the verdict category did not differ. Go 1.23 and later check
+  the offset's range before the text after it, its sign and its minute's
+  digits; the verifier now gives their error under Go 1.22 too
+  (`offsetFirst`, which replaces `offsetBeforeDay` and still names the
+  offset before a day out of range). `TestTimestampDecode` adds nine such
+  timestamps and eight controls whose error does not change, and
+  `TestOffsetOutsideLayoutVerdict` pins the two values above as an
+  `issuedAt` on the v1.0 and v1.1 baselines, as a clock and as a CRL
+  `issuedAt`. Built with Go 1.22.0 and Go 1.22.12, both tests fail without
+  the change; with it they pass built with each of Go 1.22.0, 1.22.12,
+  1.23.0, 1.24.0, 1.25.0, 1.25.3, 1.25.7, 1.26.0, 1.26.3, 1.26.5, 1.26.7,
+  1.26.8, 1.27.2 and 1.27.3. `docs/running-the-verifiers.md` states the
+  case, and the sidecar `docs/captures/go-verifier.json`, re-taken with
+  `scripts/capture_go_verifier.py`, records the new tree of
+  `verifiers/go/verifier`; `docs/captures/go-verifier.txt` is unchanged
+  byte for byte. No fixture changes.
 - The Go verifier names the time zone offset, as Go 1.23 and later and the
   Python verifier do, when a timestamp's day is out of range and its offset
   has an hour above 24 or a minute above 60 (#259). Built with Go 1.22.12,

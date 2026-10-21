@@ -578,7 +578,7 @@ GO_REJECTED_TIMESTAMPS = (
 # reference verifier refuses each with: the error time.Parse gives in Go 1.23
 # and later, which check the offset before the day. Built with Go 1.22, the Go
 # verifier gives the same error: checkOffset for the first seven, which Go
-# 1.22 decodes, and offsetBeforeDay for the last two, which Go 1.22 refuses
+# 1.22 decodes, and offsetFirst for the last two, which Go 1.22 refuses
 # for the day. The offsets table in TestTimestampDecode carries the same rows.
 GO_OFFSET_OUT_OF_RANGE = (
     ("2099-12-31T23:59:59+25:00", "time zone offset hour out of range"),
@@ -596,7 +596,7 @@ GO_OFFSET_OUT_OF_RANGE = (
 # atx[member] holds one of those offsets, built with Go 1.22.12 and with Go
 # 1.26.3, which agree on each. Built with Go 1.22 before checkOffset, it
 # reached SIGNATURE_INVALID on each but the last, whose day is out of range:
-# built with Go 1.22.12, it named the day in that one until offsetBeforeDay.
+# built with Go 1.22.12, it named the day in that one until offsetFirst.
 GO_OFFSET_VERDICTS = (
     ("expiresAt", '"2099-12-31T23:59:59+25:00"', "time zone offset hour out of range"),
     ("expiresAt", '"2099-12-31T23:59:59+00:61"', "time zone offset minute out of range"),
