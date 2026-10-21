@@ -232,6 +232,19 @@ tag the repository carries; while it carries none, a sentence saying what
 sentence may say the repository has no tag. A shallow clone, or a tree with
 no repository, is not held to it, and the closing line says so.
 
+It also holds what CHANGELOG.md's top section says the Go release still
+changes to the Go verifier's tests. Its #259 entry said that outside the RFC
+3339 layout the Go verifier's error can still differ by release, built with
+Go 1.22.12 naming the extra text in an issuedAt of
+2099-12-31T23:59:59+25:00x, while its #266 entry said the verifier gives the
+offset's error there under Go 1.22 too. A sentence of the top section that
+says a result can still differ by release, or still differs between Go
+releases, may quote as a code span no timestamp that
+verifiers/go/verifier/verify_test.go writes as a string literal outside its
+comments: what those tests expect of a timestamp does not depend on the Go
+release that runs them. A sentence saying the result differed until a later
+change is not held, and a missing verify_test.go fails the check.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
 declares, each signature-verification Scope row that claims a set of fixtures
@@ -250,7 +263,9 @@ history can be read), each `go run` command the top `## ` section of
 CHANGELOG.md names as README.md's first command is the one README.md opens
 with, each README and CHANGELOG.md opening-paragraph sentence on this
 repository's tags matches the version tags it carries (where they can be
-read), no Python dependency site calls the Python verifier
+read), no sentence of CHANGELOG.md's top section saying a result can still
+differ by release quotes a timestamp verify_test.go writes, no Python
+dependency site calls the Python verifier
 zero-dependency while requirements.txt names a package, each jcs-vectors
 file describing canonicalize cites RFC 8785 Appendix G, none calls an RFC
 8785 library a reference implementation or port, neither description of what
@@ -1070,6 +1085,85 @@ def release_tag_failures(readme, changelog, tags):
             failures.append(
                 f"{TAG_SITE} says the repository has no tag, but it carries "
                 f"{carried}: {sentence!r}")
+    return failures
+
+
+# CHANGELOG.md's #259 entry said that outside the RFC 3339 layout the Go
+# verifier's error "can still differ by release", built with Go 1.22.12 naming
+# the extra text in an issuedAt of 2099-12-31T23:59:59+25:00x, while its #266
+# entry said the verifier gives the offset's error there under Go 1.22 too and
+# verify_test.go expected that error of the timestamp. A sentence of the top
+# section that says a result can still differ by release, or still differs
+# between Go releases (RELEASE_DIFFERENCE_CLAIM), may quote, as a code span, no
+# timestamp verify_test.go writes as a string literal: what those tests expect
+# of a timestamp does not depend on the Go release that runs them, so a release
+# under which the result on one differs fails `go test`. A sentence saying the
+# result differed until a later change is not such a sentence.
+VERIFY_GO_TEST = ROOT / "verifiers" / "go" / "verifier" / "verify_test.go"
+VERIFY_GO_TEST_NAME = "verifiers/go/verifier/verify_test.go"
+RELEASE_DIFFERENCE_CLAIM = re.compile(
+    r"\b(?:(?:can|may)\s+(?:still\s+)?differ|still\s+differs?)\s+(?:by|between|across)\s+"
+    r"(?:the\s+)?(?:Go\s+)?releases?\b", re.IGNORECASE)
+# One Go token that can hold a quote: an interpreted string literal, a raw one,
+# a rune literal, or a comment. Matched in one pass, so a quote inside a
+# comment or a `//` inside a string is read as part of that token.
+GO_QUOTED = re.compile(
+    r'"(?P<interpreted>(?:[^"\\\n]|\\.)*)"|`(?P<raw>[^`]*)`'
+    r"|'(?:[^'\\\n]|\\.)+'|//[^\n]*|/\*.*?\*/", re.S)
+# A string literal that is a timestamp whole: a date, a T and no blank.
+TIMESTAMP_LITERAL = re.compile(r"[+-]?\d{4,}-\d{2}-\d{2}[Tt]\S*")
+RELEASE_DIFFERENCE_SITE = f"{CHANGELOG_NAME} top-section sentence on the Go release"
+# The sentence the check was written for, as it was wrapped, and the timestamp
+# it quotes.
+RETRACTED_RELEASE_DIFFERENCE = (
+    "Outside the RFC 3339 layout the\n"
+    "  error can still differ by release: built with Go 1.22.12 the verifier\n"
+    "  names the extra text in an `issuedAt` of `2099-12-31T23:59:59+25:00x`,\n"
+    "  and built with Go 1.23.0 or Go 1.26.3 the offset.")
+RETRACTED_DIFFERENCE_TIMESTAMP = "2099-12-31T23:59:59+25:00x"
+
+
+def go_test_timestamps(source):
+    """The timestamps `source`, Go source text, writes as a whole string
+    literal, interpreted or raw, outside comments; an empty set when it is
+    None."""
+    found = set()
+    for token in GO_QUOTED.finditer(source or ""):
+        text = token.group("interpreted")
+        if text is None:
+            text = token.group("raw")
+        if text is not None and TIMESTAMP_LITERAL.fullmatch(text):
+            found.add(text)
+    return found
+
+
+def release_difference_failures(changelog, verify_go_test):
+    """Each sentence of CHANGELOG.md's top section (top_section()) that says
+    a result can still differ by release (RELEASE_DIFFERENCE_CLAIM) must
+    quote, as a code span, no timestamp go_test_timestamps() reads from
+    verify_test.go. `verify_go_test` is None when that file is missing, which
+    is a failure. A CHANGELOG.md that is missing or has no `## ` heading has
+    no top section to hold here; the first-command check reports it."""
+    if verify_go_test is None:
+        return [f"{VERIFY_GO_TEST_NAME} is missing; a {CHANGELOG_NAME} top-section "
+                f"sentence saying a result can still differ by release cannot be held "
+                f"to the timestamps its tests write"]
+    top = top_section(changelog) if changelog is not None else None
+    if top is None:
+        return []
+    held = go_test_timestamps(verify_go_test)
+    failures = []
+    for sentence in top[1]:
+        if not RELEASE_DIFFERENCE_CLAIM.search(sentence):
+            continue
+        for span in dict.fromkeys(CODE_SPAN.findall(sentence)):
+            if span in held:
+                failures.append(
+                    f"{RELEASE_DIFFERENCE_SITE} says the result on `{span}` can still "
+                    f"differ by release, but {VERIFY_GO_TEST_NAME} writes that "
+                    f"timestamp, and what its tests expect of it does not depend on "
+                    f"the Go release; say which change made the result the same: "
+                    f"{sentence!r}")
     return failures
 
 
@@ -2668,7 +2762,7 @@ Tree = collections.namedtuple("Tree", (
     "key_vectors used_key_ids versions go_mod verify_go py_requirements "
     "py_dependency_texts jcs_sites tbs_sites tbs_canonical jcs_readme "
     "gate_sites gate_libraries profile outcomes suites scripts front_page "
-    "module_start nested_modules changelog release_tags"))
+    "module_start nested_modules changelog release_tags verify_go_test"))
 
 # One check tree_failures() runs: its name, the call (`run(tree)` returns
 # failures) and the alteration the self-test makes to prove the call is still
@@ -3447,6 +3541,86 @@ def _version_tags_cases():
         ]
 
 
+# A timestamp the published verify_test.go does not write. The wiring case
+# writes it there and quotes it, so the failure it adds is new over a
+# CHANGELOG.md that still carries the retracted sentence.
+INVENTED_DIFFERENCE_TIMESTAMP = "1999-01-01T00:00:00+25:00x"
+# The retracted sentence as it was amended: the difference is one a later
+# change closed.
+AMENDED_RELEASE_DIFFERENCE = (
+    "Outside the RFC 3339 layout the\n"
+    "  error still differed by release: built with Go 1.22.12 the verifier\n"
+    "  named the extra text in an `issuedAt` of `2099-12-31T23:59:59+25:00x`,\n"
+    "  and built with Go 1.23.0 or Go 1.26.3 the offset; the #266 entry above\n"
+    "  makes it name the offset built with Go 1.22.12 too.")
+
+
+def _release_difference_cases(tree):
+    """Sentences added to the top section of the published CHANGELOG.md, its
+    first `## ` section, held to the published verify_test.go. The retracted
+    sentence adds a failure naming `2099-12-31T23:59:59+25:00x`, as does one
+    saying the verdict on it still differs between Go releases; the sentence
+    as amended, saying the error still differed until a later change, adds
+    none, nor does one saying the error on it cannot differ by release, nor
+    the retracted sentence in a section below the top one. With each string
+    literal of verify_test.go that is the timestamp emptied, the retracted
+    sentence adds none, nor with the timestamp then written there in a
+    comment; written there as a raw string literal, it adds a failure. A
+    missing verify_test.go is reported. Each case counts only the failures
+    the text it adds brings over the published CHANGELOG.md held to the same
+    verify_test.go."""
+    changelog, go_test = tree.changelog or "", tree.verify_go_test
+    if top_heading_at(changelog.split("\n")) is None:
+        # As in the first-command cases: with a top section added, a sentence
+        # placed below that section stays below.
+        changelog = f"{SECTION_HEADING}Unreleased\n\n{changelog}"
+    stamp = RETRACTED_DIFFERENCE_TIMESTAMP
+    if stamp not in go_test_timestamps(go_test):
+        return [(False, f"{RELEASE_DIFFERENCE_SITE} cases",
+                 f"{VERIFY_GO_TEST_NAME} writes no `{stamp}` as a string literal")]
+    cases = []
+
+    def case(label, text, want, source=go_test):
+        before = collections.Counter(release_difference_failures(changelog, source))
+        after = collections.Counter(release_difference_failures(text, source))
+        new = list((after - before).elements())
+        if want is None:
+            cases.append((not new, label, f"it adds {new}"))
+        else:
+            want = f"result on `{want}` can still differ by release"
+            cases.append((any(f.startswith(RELEASE_DIFFERENCE_SITE) and want in f
+                              for f in new),
+                          label, f"expected a {RELEASE_DIFFERENCE_SITE} failure saying the "
+                                 f"{want}, got {new}"))
+
+    def opening(sentence):
+        return _top_section_with(changelog, sentence)
+
+    retracted = opening(RETRACTED_RELEASE_DIFFERENCE)
+    case(f"CHANGELOG.md restoring the retracted sentence on `{stamp}`", retracted, stamp)
+    case(f"CHANGELOG.md saying the verdict on `{stamp}` still differs between Go releases",
+         opening(f"The verdict on `{stamp}` still differs between Go releases."), stamp)
+    case("CHANGELOG.md stating the retracted sentence as amended, a difference a later "
+         "change closed", opening(AMENDED_RELEASE_DIFFERENCE), None)
+    case(f"CHANGELOG.md saying the error on `{stamp}` cannot differ by release",
+         opening(f"The error on `{stamp}` cannot differ by release."), None)
+    case("the retracted sentence in a CHANGELOG.md section below the top one",
+         f"{changelog}\n## 0000000: a past commit\n\n{RETRACTED_RELEASE_DIFFERENCE}\n", None)
+    emptied = go_test.replace(f'"{stamp}"', '""').replace(f"`{stamp}`", "``")
+    case(f"the retracted sentence with each string literal `{stamp}` of "
+         f"{VERIFY_GO_TEST_NAME} emptied", retracted, None, source=emptied)
+    case(f"the retracted sentence with `{stamp}` then written in a comment of "
+         f"{VERIFY_GO_TEST_NAME}", retracted, None,
+         source=f'{emptied}\n// "{stamp}" and `{stamp}`\n')
+    case(f"the retracted sentence with `{stamp}` then written as a raw string literal "
+         f"of {VERIFY_GO_TEST_NAME}", retracted, stamp,
+         source=f"{emptied}\nvar _ = `{stamp}`\n")
+    missing = release_difference_failures(changelog, None)
+    cases.append((any(f"{VERIFY_GO_TEST_NAME} is missing" in f for f in missing),
+                  f"{VERIFY_GO_TEST_NAME} missing", f"got {missing}"))
+    return cases
+
+
 # The two forms the zero-dependency claim was published in, with their
 # original line wraps: the jcs-vectors README row and the serializer docstring.
 RETRACTED_PY_CLAIMS = (
@@ -4078,6 +4252,14 @@ def _wire_release_tag(tree):
             {"readme": tree.readme + "\n\n" + RETRACTED_LATEST + "\n", "release_tags": []})
 
 
+def _wire_release_difference(tree):
+    stamp = INVENTED_DIFFERENCE_TIMESTAMP
+    return (f"result on `{stamp}` can still differ by release",
+            {"changelog": _top_section_with(
+                tree.changelog or "", f"The error on `{stamp}` can still differ by release."),
+             "verify_go_test": (tree.verify_go_test or "") + f'\nvar _ = "{stamp}"\n'})
+
+
 def _wire_python_dependency(tree):
     site = PY_DEPENDENCY_SITES[0]
     if tree.py_dependency_texts.get(site) is None:
@@ -4180,6 +4362,9 @@ CHECKS = (
     Check("release tag",
           lambda t: release_tag_failures(t.readme, t.changelog, t.release_tags),
           _wire_release_tag),
+    Check("Go release difference",
+          lambda t: release_difference_failures(t.changelog, t.verify_go_test),
+          _wire_release_difference),
     Check("Python dependency",
           lambda t: python_dependency_failures(t.py_requirements, t.py_dependency_texts),
           _wire_python_dependency),
@@ -4423,6 +4608,7 @@ def self_test(tree, verbose):
     cases.extend(_failing_latest_run_cases(tree))
     cases.extend(_changelog_first_command_cases(tree))
     cases.extend(_release_tag_cases(tree))
+    cases.extend(_release_difference_cases(tree))
     cases.extend(_python_dependency_cases(tree.py_requirements, tree.py_dependency_texts))
     cases.extend(_jcs_library_cases(tree.jcs_sites))
     cases.extend(_outside_code_cases(tree.gate_sites, tree.gate_libraries))
@@ -4642,6 +4828,8 @@ def main():
         nested_modules=nested_module_dirs(ROOT),
         changelog=CHANGELOG.read_text(encoding="utf-8") if CHANGELOG.exists() else None,
         release_tags=version_tags(ROOT),
+        verify_go_test=(VERIFY_GO_TEST.read_text(encoding="utf-8")
+                        if VERIFY_GO_TEST.exists() else None),
     )
 
     failed, total = self_test(tree, only_self_test)
@@ -4704,7 +4892,9 @@ def main():
              if tree.release_tags is not None else
              f"sentences on this repository's tags not held to them: none could be "
              f"read in this checkout; ")
-          + f"no jcs-vectors README or RFC 8785 serializer docstring calls the "
+          + f"no {CHANGELOG_NAME} top-section sentence saying a result can still "
+          f"differ by release quotes a timestamp {VERIFY_GO_TEST_NAME} writes; "
+          f"no jcs-vectors README or RFC 8785 serializer docstring calls the "
           f"Python verifier zero-dependency; "
           f"each jcs-vectors file describing canonicalize cites "
           f"{JCS_APPENDIX_G} and none calls an RFC 8785 library a reference "
