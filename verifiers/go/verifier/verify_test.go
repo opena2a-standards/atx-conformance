@@ -926,6 +926,281 @@ func TestMLDSA65RequiresEd25519Companion(t *testing.T) {
 	}
 }
 
+// withSignatures returns f with its credential's signatures replaced by the
+// entries at the given indexes of the ones it carries, in that order, an
+// index named twice carried twice.
+func withSignatures(t *testing.T, f fixture, indexes ...int) fixture {
+	t.Helper()
+	var atx map[string]any
+	if err := json.Unmarshal(f.ATX, &atx); err != nil {
+		t.Fatal(err)
+	}
+	carried := atx["signatures"].([]any)
+	kept := []any{}
+	for _, i := range indexes {
+		kept = append(kept, carried[i])
+	}
+	atx["signatures"] = kept
+	var err error
+	if f.ATX, err = json.Marshal(atx); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// thresholdReason is the reason verifySignatures writes when the declared
+// Ed25519 signatures verify under fewer distinct keys than requiredSignatures.
+func thresholdReason(required, distinct int) string {
+	return fmt.Sprintf("signature threshold not met: requiredSignatures is %d, distinct Ed25519 keys that verified a declared signature: %d", required, distinct)
+}
+
+// TestRequiredSignaturesThreshold pins the k-of-n threshold of core.md
+// section 3.1 step 8 (cosignatures from 2 of 3 key holders), which the
+// verifier state sets as requiredSignatures: the declared Ed25519 signatures
+// must verify under at least that many distinct keys. Each case cuts the
+// credential of fixtures/threshold-2of3-cosignature.json, whose three
+// signatures verify under the primary's and the two cosigners' keys, to the
+// signatures it names. With requiredSignatures 2, its first signature alone is
+// fixtures/threshold-1of3-cosignature.json. atx-conformance#132.
+func TestRequiredSignaturesThreshold(t *testing.T) {
+	base, err := loadFixture(repoRoot + "/fixtures/threshold-2of3-cosignature.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.VerifierState.RequiredSignatures != nil {
+		t.Fatal("threshold-2of3-cosignature sets requiredSignatures; the cases below assume it sets none")
+	}
+	one, two, three := 1, 2, 3
+	cases := []struct {
+		name       string
+		required   *int
+		signatures []int
+		distinct   int // keys the signatures verify under, for the reason of a REJECT
+		accept     bool
+	}{
+		{"no threshold, the primary's signature alone", nil, []int{0}, 1, true},
+		{"1 required, the primary's signature alone", &one, []int{0}, 1, true},
+		{"2 required, the primary's signature alone", &two, []int{0}, 1, false},
+		{"2 required, a cosigner's signature alone", &two, []int{2}, 1, false},
+		{"2 required, the primary's signature carried twice", &two, []int{0, 0}, 1, false},
+		{"2 required, the primary and a cosigner", &two, []int{0, 1}, 2, true},
+		{"2 required, the two cosigners", &two, []int{1, 2}, 2, true},
+		{"2 required, all three", &two, []int{0, 1, 2}, 3, true},
+		{"3 required, two of the three", &three, []int{0, 2}, 2, false},
+		{"3 required, all three", &three, []int{0, 1, 2}, 3, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := withSignatures(t, base, c.signatures...)
+			f.VerifierState.RequiredSignatures = c.required
+			got := verify(f)
+			if c.accept {
+				if !got.Accepted || got.SigsValid != len(c.signatures) {
+					t.Errorf("got %s with %d/%d valid, want ACCEPT with every signature valid", got, got.SigsValid, got.SigsExpected)
+				}
+				return
+			}
+			if want := thresholdReason(*c.required, c.distinct); got.Accepted || got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != want {
+				t.Errorf("got %s, want REJECT[SIGNATURE_INVALID: %s]", got, want)
+			}
+		})
+	}
+}
+
+// TestRequiredSignaturesCountsKeysNotKeyIDs pins that a key counts once
+// however many signatures verify under it, whatever keyId they carry (the
+// rule core.md section 1.3 step 7 states for its count). The verifier state
+// lists the primary's key a second time under another keyId of the issuer,
+// and the credential carries the primary's signature twice, once under each
+// keyId: both verify, under one key.
+func TestRequiredSignaturesCountsKeysNotKeyIDs(t *testing.T) {
+	f, err := loadFixture(repoRoot + "/fixtures/threshold-1of3-cosignature.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := verify(f); got.Accepted || got.Reason != thresholdReason(2, 1) {
+		t.Fatalf("threshold-1of3-cosignature: got %s, want REJECT[SIGNATURE_INVALID: %s]", got, thresholdReason(2, 1))
+	}
+	const alias = "did:opena2a:authority:opena2a.org#key-1-alias"
+	primary := f.VerifierState.PublicKeys[0]
+	if primary.Role != "issuer-primary" {
+		t.Fatalf("first verifier key is %s, want issuer-primary", primary.Role)
+	}
+	aliased := primary
+	aliased.KeyID = alias
+	f.VerifierState.PublicKeys = append(append([]keypairRef{}, f.VerifierState.PublicKeys...), aliased)
+
+	var atx map[string]any
+	if err := json.Unmarshal(f.ATX, &atx); err != nil {
+		t.Fatal(err)
+	}
+	sig := atx["signatures"].([]any)[0].(map[string]any)
+	second := map[string]any{"keyId": alias, "algorithm": sig["algorithm"], "value": sig["value"]}
+	atx["signatures"] = []any{sig, second}
+	if f.ATX, err = json.Marshal(atx); err != nil {
+		t.Fatal(err)
+	}
+
+	got := verify(f)
+	if got.Accepted || got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != thresholdReason(2, 1) {
+		t.Errorf("two signatures under one key named by two keyIds: got %s, want REJECT[SIGNATURE_INVALID: %s]", got, thresholdReason(2, 1))
+	}
+	f.VerifierState.RequiredSignatures = nil
+	if got := verify(f); !got.Accepted || got.SigsValid != 2 {
+		t.Errorf("the same credential with no threshold: got %s with %d/%d valid, want ACCEPT with both valid", got, got.SigsValid, got.SigsExpected)
+	}
+}
+
+// TestRequiredSignaturesCountsEd25519Only pins that an ML-DSA-65 signature
+// does not count toward requiredSignatures: core.md section 1.3a.2 names the
+// Ed25519 signatures the threshold signatures and the ML-DSA-65 one the
+// hybrid signature. The hybrid baselines carry one Ed25519 and one ML-DSA-65
+// signature, both by the primary, and both verify.
+func TestRequiredSignaturesCountsEd25519Only(t *testing.T) {
+	for _, name := range []string{"baseline-valid-hybrid.json", "v1_1-baseline-valid-hybrid.json"} {
+		t.Run(name, func(t *testing.T) {
+			f, err := loadFixture(repoRoot + "/fixtures/" + name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			one, two := 1, 2
+			f.VerifierState.RequiredSignatures = &one
+			if got := verify(f); !got.Accepted || !got.Ed25519Valid || !got.MLDSA65Valid {
+				t.Errorf("requiredSignatures 1: got %s, want ACCEPT with both suites valid", got)
+			}
+			f.VerifierState.RequiredSignatures = &two
+			if got := verify(f); got.Accepted || got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != thresholdReason(2, 1) {
+				t.Errorf("requiredSignatures 2: got %s, want REJECT[SIGNATURE_INVALID: %s]", got, thresholdReason(2, 1))
+			}
+		})
+	}
+}
+
+// TestRequiredSignaturesBelowOneIsAConfigError pins that a requiredSignatures
+// the fixture format does not allow (an integer below 1) is a verifier
+// configuration error, reported before any step reads the credential, as a
+// bad clock is: on fixtures/expired.json it is reported in place of EXPIRED.
+func TestRequiredSignaturesBelowOneIsAConfigError(t *testing.T) {
+	for _, name := range []string{"threshold-2of3-cosignature.json", "expired.json"} {
+		for _, n := range []int{0, -1} {
+			t.Run(fmt.Sprintf("%s/%d", name, n), func(t *testing.T) {
+				f, err := loadFixture(repoRoot + "/fixtures/" + name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.VerifierState.RequiredSignatures = &n
+				want := fmt.Sprintf("bad requiredSignatures: %d is not a positive integer", n)
+				if got := verify(f); got.Accepted || got.RejectCategory != "VERIFIER_CONFIG_ERROR" || got.Reason != want {
+					t.Errorf("got %s, want REJECT[VERIFIER_CONFIG_ERROR: %s]", got, want)
+				}
+			})
+		}
+	}
+}
+
+// TestRequiredSignaturesDecode pins how a fixture file's requiredSignatures
+// member decodes: a JSON integer in int range is the threshold, null or an
+// absent member sets none, a name in another case names the same member, and
+// a value of any other JSON type, a number written with a fraction or an
+// exponent among them, fails to load. Each case rewrites the member of
+// fixtures/threshold-1of3-cosignature.json, `"requiredSignatures": 2`.
+func TestRequiredSignaturesDecode(t *testing.T) {
+	raw, err := os.ReadFile(repoRoot + "/fixtures/threshold-1of3-cosignature.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const member = `"requiredSignatures": 2`
+	if bytes.Count(raw, []byte(member)) != 1 {
+		t.Fatalf("threshold-1of3-cosignature does not carry %s once", member)
+	}
+	cases := []struct {
+		member string
+		load   bool
+		want   string // the observed result, for a file that loads
+	}{
+		{`"requiredSignatures": 2`, true, "REJECT[SIGNATURE_INVALID: " + thresholdReason(2, 1) + "]"},
+		{`"RequiredSignatures": 2`, true, "REJECT[SIGNATURE_INVALID: " + thresholdReason(2, 1) + "]"},
+		{`"requiredSignatures": 1`, true, "ACCEPT"},
+		{`"requiredSignatures": null`, true, "ACCEPT"},
+		{`"requiredSignatures": null, "requiredSignatures": 2`, true, "REJECT[SIGNATURE_INVALID: " + thresholdReason(2, 1) + "]"},
+		{`"requiredSignatures": 2, "RequiredSignatures": null`, true, "ACCEPT"},
+		{`"requiredSignatures": -0`, true, "REJECT[VERIFIER_CONFIG_ERROR: bad requiredSignatures: 0 is not a positive integer]"},
+		{`"requiredSignatures": "2"`, false, ""},
+		{`"requiredSignatures": 2.0`, false, ""},
+		{`"requiredSignatures": 1e0`, false, ""},
+		{`"requiredSignatures": true`, false, ""},
+		{`"requiredSignatures": [2]`, false, ""},
+		{`"requiredSignatures": 9223372036854775808`, false, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.member, func(t *testing.T) {
+			f, err := parseFixture(bytes.Replace(raw, []byte(member), []byte(c.member), 1))
+			if !c.load {
+				if err == nil || !strings.Contains(err.Error(), "requiredSignatures") {
+					t.Errorf("loaded (err %v), want a load error naming requiredSignatures", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("load error: %v", err)
+			}
+			if got := verify(f).String(); got != c.want {
+				t.Errorf("got %s, want %s", got, c.want)
+			}
+		})
+	}
+	// An absent member sets no threshold.
+	without := bytes.Replace(raw, []byte(",\n    "+member), nil, 1)
+	if bytes.Equal(without, raw) {
+		t.Fatal("cannot remove the requiredSignatures member")
+	}
+	f, err := parseFixture(without)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := verify(f); !got.Accepted {
+		t.Errorf("with no requiredSignatures member: got %s, want ACCEPT", got)
+	}
+}
+
+// TestSuiteCatchesThresholdBlindVerifier pins that the shipped fixture set
+// holds a verifier to requiredSignatures: run with the member dropped from
+// every fixture's verifier state, which is what a verifier that reads no
+// threshold sees, the reference verifier must miss at least one fixture's
+// pinned outcome. Without one, a verifier that checks only that every
+// declared signature verifies passes the suite, as it did before
+// fixtures/threshold-1of3-cosignature.json.
+func TestSuiteCatchesThresholdBlindVerifier(t *testing.T) {
+	paths, err := expandFixturePaths([]string{repoRoot + "/fixtures"})
+	if err != nil {
+		t.Fatalf("cannot list the shipped fixtures: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("no shipped fixtures found; refusing to pass vacuously")
+	}
+
+	var caughtBy []string
+	for _, p := range paths {
+		f, err := loadFixture(p)
+		if err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+		if got := verify(f); !matchesExpected(f.Expected, got) {
+			t.Errorf("%s: reference verifier observed %s, not the pinned outcome", p, got)
+			continue
+		}
+		blind := f
+		blind.VerifierState.RequiredSignatures = nil
+		if !matchesExpected(f.Expected, verify(blind)) {
+			caughtBy = append(caughtBy, f.Name)
+		}
+	}
+	if len(caughtBy) == 0 {
+		t.Fatalf("a verifier that reads no requiredSignatures matches all %d fixtures: no fixture's verdict depends on the threshold", len(paths))
+	}
+	t.Logf("a threshold-blind verifier misses the pinned outcome of: %s", strings.Join(caughtBy, ", "))
+}
+
 // TestStrictParseDepthGuard is the regression for the unbounded-recursion DoS.
 // A credential nested past encoding/json's own depth limit (10000) must be
 // rejected without crashing. The strict-parse scan aborts at maxScanDepth and
@@ -1118,9 +1393,11 @@ func mustHexDecode(t *testing.T, s string) []byte {
 // verifiers/python/verify.py) and test_verify.py carries the same table, so a Go
 // release that changes how the decoder treats one of these inputs, for example
 // by enabling the strict RFC 3339 checks the standard library has disabled
-// (golang/go#54580), fails here before the two verifiers drift apart. An
-// offset hour above 24 or an offset minute above 60 is refused with the error
-// Go 1.23 and later give it, under every release (checkOffset).
+// (golang/go#54580), fails here before the two verifiers drift apart. A
+// timestamp in the RFC 3339 layout whose offset has an hour above 24 or a
+// minute above 60 is refused with the error Go 1.23 and later give it, under
+// every release, whether its day is in range or not (checkOffset,
+// offsetBeforeDay).
 func TestTimestampDecode(t *testing.T) {
 	accepted := []struct {
 		in, utc     string
@@ -1173,8 +1450,10 @@ func TestTimestampDecode(t *testing.T) {
 			t.Errorf("%q decoded to %s, want a decode error", in, got.UTC().Format(time.RFC3339))
 		}
 	}
-	// Go 1.22 decodes each of these and Go 1.23 and later refuse them, with
-	// these errors.
+	// Go 1.23 and later refuse each of these with these errors. Go 1.22
+	// decodes the first seven, and refuses the last two, whose day is out of
+	// range, for the day; the decoder and parseRFC3339 give these errors
+	// under every release.
 	offsets := []struct{ in, msg string }{
 		{"2099-12-31T23:59:59+25:00", "time zone offset hour out of range"},
 		{"2099-12-31T23:59:59-25:00", "time zone offset hour out of range"},
@@ -1183,8 +1462,16 @@ func TestTimestampDecode(t *testing.T) {
 		{"2026-05-23T00:00:00+00:61", "time zone offset minute out of range"},
 		{"2099-12-31T23:59:59+25:61", "time zone offset minute out of range"},
 		{"2099-12-31T23:59:59-99:99", "time zone offset minute out of range"},
+		{"2099-02-30T23:59:59+25:00", "time zone offset hour out of range"},
+		{"1900-02-29T00:00:00+23:61", "time zone offset minute out of range"},
 	}
-	for _, c := range offsets {
+	// Controls: with the offset in range, every release names the day.
+	days := []struct{ in, msg string }{
+		{"2099-02-30T23:59:59+24:00", "day out of range"},
+		{"1900-02-29T00:00:00+23:60", "day out of range"},
+		{"2099-02-30T23:59:59Z", "day out of range"},
+	}
+	for _, c := range append(offsets, days...) {
 		want := `parsing time "` + c.in + `": ` + c.msg
 		raw, _ := json.Marshal(c.in)
 		var got timestamp
@@ -1214,9 +1501,12 @@ func TestTimestampDecode(t *testing.T) {
 
 // TestOffsetOutOfRangeVerdict pins the verdict on a time zone offset with an
 // hour above 24 or a minute above 60 wherever this verifier decodes a
-// timestamp. Go 1.22's time package decodes such a timestamp, so before
-// checkOffset a Go 1.22 build reached SIGNATURE_INVALID on such an expiresAt
-// and ACCEPT on such a clock; Go 1.23 and later reach the verdicts below, and
+// timestamp. Go 1.22's time package decodes such a timestamp when its day is
+// in range, so before checkOffset a Go 1.22 build reached SIGNATURE_INVALID on
+// such an expiresAt and ACCEPT on such a clock. It refuses
+// 2026-02-30T00:00:00+25:00 for the day, so before offsetBeforeDay a Go 1.22
+// build named the day in an issuedAt, a clock or a CRL issuedAt, where Go 1.23
+// and later name the offset. Go 1.23 and later reach the verdicts below, and
 // the Python verifier's GO_OFFSET_VERDICTS and GO_UNLOADABLE_OFFSETS hold the
 // same.
 func TestOffsetOutOfRangeVerdict(t *testing.T) {
@@ -1227,6 +1517,7 @@ func TestOffsetOutOfRangeVerdict(t *testing.T) {
 			{"expiresAt", "2099-12-31T23:59:59-99:99", "time zone offset minute out of range"},
 			{"issuedAt", "2026-05-23T00:00:00+25:00", "time zone offset hour out of range"},
 			{"issuedAt", "2026-05-23T00:00:00+00:61", "time zone offset minute out of range"},
+			{"issuedAt", "2026-02-30T00:00:00+25:00", "time zone offset hour out of range"},
 		} {
 			f, err := loadFixture(path)
 			if err != nil {
@@ -1242,20 +1533,29 @@ func TestOffsetOutOfRangeVerdict(t *testing.T) {
 				t.Errorf("%s with %s %q: got %s, want REJECT[PARSE_ERROR] naming %s", path, c.member, c.value, got, c.msg)
 			}
 		}
-		f, err := loadFixture(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		f.VerifierState.ClockRFC3339 = "2026-06-01T00:00:00+23:61"
-		if got := verify(f); got.RejectCategory != "VERIFIER_CONFIG_ERROR" || !strings.Contains(got.Reason, "time zone offset minute out of range") {
-			t.Errorf("%s with clockRfc3339 +23:61: got %s, want REJECT[VERIFIER_CONFIG_ERROR]", path, got)
+		for _, c := range []struct{ clock, msg string }{
+			{"2026-06-01T00:00:00+23:61", "time zone offset minute out of range"},
+			{"2026-02-30T00:00:00+25:00", "time zone offset hour out of range"},
+		} {
+			f, err := loadFixture(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.VerifierState.ClockRFC3339 = c.clock
+			if got := verify(f); got.RejectCategory != "VERIFIER_CONFIG_ERROR" || !strings.Contains(got.Reason, c.msg) {
+				t.Errorf("%s with clockRfc3339 %q: got %s, want REJECT[VERIFIER_CONFIG_ERROR] naming %s", path, c.clock, got, c.msg)
+			}
 		}
 	}
-	for _, member := range []string{"issuedAt", "nextUpdate"} {
+	for _, c := range []struct{ member, value, msg string }{
+		{"issuedAt", "2026-05-23T00:00:00+25:00", "time zone offset hour out of range"},
+		{"nextUpdate", "2026-05-23T00:00:00+25:00", "time zone offset hour out of range"},
+		{"issuedAt", "2026-02-30T00:00:00+25:00", "time zone offset hour out of range"},
+	} {
 		var f fixture
-		crl := `{"verifierState":{"crl":{"` + member + `":"2026-05-23T00:00:00+25:00"}}}`
-		if err := json.Unmarshal([]byte(crl), &f); err == nil {
-			t.Errorf("CRL %s +25:00: the fixture loaded, want a load error", member)
+		crl := `{"verifierState":{"crl":{"` + c.member + `":"` + c.value + `"}}}`
+		if err := json.Unmarshal([]byte(crl), &f); err == nil || !strings.Contains(err.Error(), c.msg) {
+			t.Errorf("CRL %s %q: load error %v, want one naming %s", c.member, c.value, err, c.msg)
 		}
 	}
 	var f fixture

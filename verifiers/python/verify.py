@@ -17,9 +17,12 @@ Spec coverage:
     §"Canonicalization: v1.0 signs 11 fields; v1.1 signs JCS(TBS)".
   - Ed25519 and ML-DSA-65 (FIPS 204) hybrid signature verification over the
     same canonical payload (every declared signature must verify and at
-    least one must be present; no k-of-n threshold is read; an ML-DSA-65
-    signature needs a verifying Ed25519 companion), expiry, revocation
-    (the credential's revoked flag and the verifier's CRL), issuer-trust.
+    least one must be present; an ML-DSA-65 signature needs a verifying
+    Ed25519 companion; with requiredSignatures set in the verifier state,
+    the Ed25519 signatures must verify under at least that many distinct
+    keys, the k-of-n threshold of core.md section 3.1 step 8), expiry,
+    revocation (the credential's revoked flag and the verifier's CRL),
+    issuer-trust.
 
 Not performed: the distinct signer-authority count for trust level 3+
 (core.md section 1.3 step 7). The asserted trustLevel is reported, never
@@ -741,6 +744,7 @@ _VERIFIER_STATE_TYPES = {
     "clockRfc3339": "string",
     "trustedIssuers": "[]string",
     "publicKeys": "[]keypairRef",
+    "requiredSignatures": "*int64",
     "crl": "*crl",
 }
 _KEYPAIR_REF_TYPES = {
@@ -1105,6 +1109,17 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
     except ValueError as exc:
         return VerifyResult(reject_category="VERIFIER_CONFIG_ERROR", reason=f"bad clockRfc3339: {exc}")
 
+    # A threshold is verifier configuration, as the clock is: one the fixture
+    # format does not allow (schemas/fixture-v1.schema.json: an integer of at
+    # least 1) is reported before any step reads the credential. None, the
+    # member absent or null, sets no threshold.
+    required = vs["requiredSignatures"]
+    if required is not None and required < 1:
+        return VerifyResult(
+            reject_category="VERIFIER_CONFIG_ERROR",
+            reason=f"bad requiredSignatures: {required} is not a positive integer",
+        )
+
     # Step 1: schema version. Dispatch on atcVersion: "1.0" verifies the legacy
     # pipe form, "1.1" verifies JCS(TBS) (atx-spec §1.3a).
     version = atx.get("atcVersion")
@@ -1212,6 +1227,9 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
         # No key verifies a signature over bytes the serializer cannot write.
         eds, pqs = [], []
     result = VerifyResult(sigs_expected=len(atx["signatures"]))
+    # The raw bytes of each Ed25519 key a declared signature verified under,
+    # for the requiredSignatures count below.
+    ed_signers: set[bytes] = set()
 
     for sig in atx["signatures"]:
         try:
@@ -1228,6 +1246,7 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
                 try:
                     pk.verify(sig_bytes, payload)
                     verified = True
+                    ed_signers.add(pk.public_bytes_raw())
                     break
                 except InvalidSignature:
                     continue
@@ -1268,6 +1287,20 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
         return VerifyResult(
             reject_category="SIGNATURE_INVALID",
             reason="ML-DSA-65 signature declared without a verifying Ed25519 signature (an ML-DSA-65 entry requires an Ed25519 companion)",
+        )
+
+    # Signature threshold (core.md section 3.1 step 8, cosignatures from 2 of
+    # 3 key holders): with requiredSignatures set, the declared Ed25519
+    # signatures must have verified under at least that many distinct keys.
+    # A key counts once however many signatures verify under it, whatever
+    # keyId they carry, the rule section 1.3 step 7 states for its count.
+    # Section 1.3a.2 names the Ed25519 signatures the threshold signatures and
+    # the ML-DSA-65 one the hybrid signature, so an ML-DSA-65 signature does
+    # not count (fixtures/threshold-1of3-cosignature.json).
+    if required is not None and len(ed_signers) < required:
+        return VerifyResult(
+            reject_category="SIGNATURE_INVALID",
+            reason=f"signature threshold not met: requiredSignatures is {required}, distinct Ed25519 keys that verified a declared signature: {len(ed_signers)}",
         )
 
     # Step 7 (distinct signer-authority count for trust level 3+) is NOT

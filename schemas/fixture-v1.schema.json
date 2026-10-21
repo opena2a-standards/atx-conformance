@@ -118,6 +118,11 @@
           "type": "array",
           "items": { "$ref": "#/$defs/keypairRef" }
         },
+        "requiredSignatures": {
+          "description": "The k of a k-of-n signature threshold (core.md §3.1 step 8): the least number of distinct Ed25519 public keys under which the credential's declared signatures must verify. A key counts once however many signatures verify under it; an ML-DSA-65 signature does not count. Absent means no threshold.",
+          "type": "integer",
+          "minimum": 1
+        },
         "crl": { "$ref": "#/$defs/crl" }
       }
     },

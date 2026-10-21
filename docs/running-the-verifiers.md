@@ -137,14 +137,17 @@ Depends on:
 
 - Go 1.22 or later. A timestamp whose time zone offset has an hour above 24
   or a minute above 60 (`+25:00`, `+23:61`) is refused under every release;
-  no fixture carries one. Go 1.22's time package decodes such a timestamp and
-  Go 1.23 and later refuse it, so the verifier checks the offset itself
-  (`checkOffset`) and gives Go 1.23's error under Go 1.22 too; the Python
-  verifier refuses it the same way. In a CRL's `issuedAt` or `nextUpdate` or
-  a CRL entry's `revokedAt` the fixture fails to load, in the credential's
-  `issuedAt` or `expiresAt` the rejection is a `PARSE_ERROR`, in the verifier
-  clock `clockRfc3339` it is a `VERIFIER_CONFIG_ERROR`, and in a v1.1
-  credential's `behavioralProfile.generatedAt` the signed payload carries
+  no fixture carries one. Go 1.22's time package decodes such a timestamp, or
+  refuses it for the day when its day is out of range
+  (`2026-02-30T00:00:00+25:00`), and Go 1.23 and later refuse it for the
+  offset, so the verifier checks the offset itself (`checkOffset`), also
+  before it reports a day out of range (`offsetBeforeDay`), and gives Go
+  1.23's error under Go 1.22 too; the Python verifier refuses it the same
+  way. In a CRL's `issuedAt` or `nextUpdate` or a CRL entry's `revokedAt`
+  the fixture fails to load, in the credential's `issuedAt` or `expiresAt`
+  the rejection is a `PARSE_ERROR`, in the verifier clock `clockRfc3339` it
+  is a `VERIFIER_CONFIG_ERROR`, and in a v1.1 credential's
+  `behavioralProfile.generatedAt` the signed payload carries
   `behavioralProfile` as null, so a signature made over the profile fails as
   `SIGNATURE_INVALID`. An offset of `+24:00` or `+23:60` decodes. Measured
   with Go 1.22.12 and Go 1.26.3; to build with the release CI uses, run

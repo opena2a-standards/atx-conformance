@@ -96,12 +96,12 @@ SUITE = {
             "reason": "no fixture carries verified signatures from more than one distinct authority, and the fixture format has no field for the required trust level that step 7's condition reads, so a verifier that omits step 7 entirely passes the suite; a length-of-issuerChain test is not step 7 (the spec says the chain length MUST NOT be counted) and implementations MUST self-attest this requirement until a fixture exists for it",
         },
         {
-            "item": "k-of-n threshold issuance (ATX core.md section 3.1 step 8: cosignatures from 2 of 3 key holders)",
-            "reason": "the fixture format has no field for the required signature count and neither reference verifier reads one: both require every declared signature to verify and at least one to be present, so the threshold fixture's credential cut to one of its three signatures is accepted, and a verifier that checks only the first signature passes the threshold fixture",
+            "item": "k-of-n threshold issuance, a threshold the credential meets (ATX core.md section 3.1 step 8: cosignatures from 2 of 3 key holders)",
+            "reason": "threshold-1of3-cosignature sets requiredSignatures 2 in its verifier state and pins the REJECT of a credential whose one signature verifies; no fixture sets a threshold that its credential meets, so a verifier that rejects every credential whose verifier state sets requiredSignatures passes the suite, and threshold-2of3-cosignature, whose three signatures verify, sets none",
         },
         {
             "item": "Cosignature requirements (ATX core.md section 7: federation cosigning, and the root cosignature at trust level 4)",
-            "reason": "the threshold fixture pins three signatures over the signing bytes, each of which must verify; no fixture asserts that a trust level 4 credential carries the root cosignature or that a federated issuance carries its peer's cosignature",
+            "reason": "threshold-2of3-cosignature pins three signatures over the signing bytes, each of which must verify; no fixture asserts that a trust level 4 credential carries the root cosignature or that a federated issuance carries its peer's cosignature",
         },
         {
             "item": "Revocation propagation timing (ATX core.md section 3.3)",

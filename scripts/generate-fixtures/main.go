@@ -329,7 +329,11 @@ type VerifierState struct {
 	ClockRFC3339   string       `json:"clockRfc3339"`
 	TrustedIssuers []string     `json:"trustedIssuers"`
 	PublicKeys     []KeypairRef `json:"publicKeys"`
-	CRL            *CRL         `json:"crl,omitempty"`
+	// RequiredSignatures is the k of a k-of-n signature threshold: the number
+	// of distinct Ed25519 keys whose signatures must verify. Zero is left out,
+	// so a fixture that sets no threshold carries no such member.
+	RequiredSignatures int  `json:"requiredSignatures,omitempty"`
+	CRL                *CRL `json:"crl,omitempty"`
 }
 
 // CRL is the same shape as opena2a-registry/pkg/atcverify CRL.
@@ -476,6 +480,13 @@ func main() {
 		defaultVerifierState.PublicKeys...),
 		keypairRefFor(untrusted, "vectors/issuer-untrusted.json"))
 
+	// Threshold verifier state: the default state, which holds the issuer's
+	// three Ed25519 keys (primary and two cosigners), requiring the signatures
+	// of two of them (core.md section 3.1 step 8: cosignatures from 2 of 3 key
+	// holders). Used by the threshold-1of3-cosignature fixture.
+	thresholdVerifierState := defaultVerifierState
+	thresholdVerifierState.RequiredSignatures = 2
+
 	// Revoking verifier state: the default state plus a CRL whose one entry
 	// names the test agent, issued before the pinned clock and not yet due for
 	// its next update. Used by both revocation fixtures.
@@ -575,6 +586,23 @@ func main() {
 				},
 				defaultVerifierState,
 				ExpectedOutcome{VerifyResult: "ACCEPT"},
+				atx)
+		}},
+		{"fixtures/threshold-1of3-cosignature.json", func() Fixture {
+			// The threshold-2of3-cosignature credential cut to the first of
+			// its three signatures, the primary's, under a verifier state that
+			// requires two of the three keys (atx-conformance#132). The one
+			// signature verifies, so a verifier that checks only that every
+			// declared signature verifies, and reads no threshold, accepts it.
+			atx := newBaselineATX()
+			atx.TrustLevel = 4
+			atx.IssuerChain = []string{primary.IssuerDID, "did:opena2a:authority:opena2a.org-root"}
+			atx.Signatures = []ATCSignature{signWithKey(primary, atx)}
+			return wrap("atx-v1/threshold-1of3-cosignature",
+				"The threshold-2of3-cosignature credential cut to one of its three signatures, the primary's, under a verifier state that holds the issuer's three Ed25519 keys and requires two of them (requiredSignatures: 2). The one signature verifies, so a verifier that checks only that every declared signature verifies, and reads no threshold, wrongly accepts. Verifier MUST REJECT with a threshold reason.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				thresholdVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "threshold"},
 				atx)
 		}},
 		{"fixtures/expired.json", func() Fixture {
@@ -1175,6 +1203,7 @@ const (
 	secJCSForm         = "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
 	secSignedFields    = "1.3a.4 Authorization on signed fields requires v1.1"
 	secDeclaredPurpose = "1.5 Declared purpose (optional)"
+	secIssuance        = "3.1 Issuance flow"
 	secRevocation      = "3.3 Revocation flow"
 	secSecurity        = "13. Security considerations"
 )
@@ -1185,6 +1214,7 @@ const (
 var fixtureSections = map[string][]string{
 	"atx-v1/revoked":                             {secRevocation},
 	"atx-v1/revoked-crl-only":                    {secRevocation},
+	"atx-v1/threshold-1of3-cosignature":          {secIssuance},
 	"atx-v1/wrong-issuer":                        {secSecurity},
 	"atx-v1_1/hybrid-pq-only":                    {secSecurity},
 	"atx-v1_1/tampered-capabilities":             {secSignedFields},
@@ -1213,6 +1243,7 @@ var fixtureRequirements = map[string]string{
 	"atx-v1/revoked":                             "§3.3 step 7: a credential its issuing node marked revoked is rejected; its revoked flag is set and its agentId is also on the verifier's CRL",
 	"atx-v1/revoked-crl-only":                    "§1.3 step 6: an agentId listed on the verifier's CRL is rejected although the credential's own revoked flag is false",
 	"atx-v1/threshold-2of3-cosignature":          "§1.3 step 5: every declared signature verifies, here three Ed25519 signatures by three keys, so the credential is accepted; the 2-of-3 threshold of §3.1 step 8 is not tested",
+	"atx-v1/threshold-1of3-cosignature":          "§3.1 step 8: under a verifier state that requires the signatures of 2 of the issuer's 3 Ed25519 keys, a credential whose one signature verifies is a signature failure",
 	"atx-v1/expired":                             "§1.3 step 2: a credential whose expiresAt is earlier than the verifier's clock is rejected",
 	"atx-v1/wrong-issuer":                        "§13, Key substitution at resolution: an issuer the verifier does not trust is rejected even when its own signature verifies",
 	"atx-v1/tampered-signature":                  "§1.3 step 4: an Ed25519 signature that does not verify over the legacy canonical bytes is a signature failure",

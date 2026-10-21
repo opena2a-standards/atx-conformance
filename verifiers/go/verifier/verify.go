@@ -20,6 +20,9 @@
 //     v1.1 signs JCS(TBS), the RFC 8785 form of the to-be-signed projection
 //     (core.md §1.3a.2). See docs/scope.md
 //     §"Canonicalization: v1.0 signs 11 fields; v1.1 signs JCS(TBS)".
+//   - Signature threshold (core.md §3.1 step 8, cosignatures from 2 of 3 key
+//     holders): when the verifier state sets requiredSignatures, the declared
+//     Ed25519 signatures must verify under at least that many distinct keys.
 //
 // Not performed: the distinct signer-authority count for trust level 3+
 // (core.md §1.3 step 7). The asserted trustLevel is reported, never checked;
@@ -96,7 +99,11 @@ type verifierState struct {
 	ClockRFC3339   string       `json:"clockRfc3339"`
 	TrustedIssuers []string     `json:"trustedIssuers"`
 	PublicKeys     []keypairRef `json:"publicKeys"`
-	CRL            *crl         `json:"crl,omitempty"`
+	// RequiredSignatures is the k of a k-of-n signature threshold: the number
+	// of distinct Ed25519 keys whose signatures must verify (verifySignatures).
+	// Nil, the member absent or null, sets no threshold.
+	RequiredSignatures *int `json:"requiredSignatures,omitempty"`
+	CRL                *crl `json:"crl,omitempty"`
 }
 
 type crl struct {
@@ -120,12 +127,14 @@ type crlEntry struct {
 // decodes the escaped form too. Every timestamp this verifier decodes from a
 // fixture is one of these, so the Go release does not change which ones
 // decode (the Python verifier follows the same rule). It also refuses a time
-// zone offset hour above 24 or minute above 60 (checkOffset).
+// zone offset hour above 24 or minute above 60 (checkOffset), and names the
+// offset rather than the day when the day is out of range too
+// (offsetBeforeDay).
 type timestamp struct{ time.Time }
 
 func (t *timestamp) UnmarshalJSON(b []byte) error {
 	if err := t.Time.UnmarshalJSON(b); err != nil {
-		return err
+		return offsetBeforeDay(err)
 	}
 	if s := string(b); s != "null" {
 		return checkOffset(s[1 : len(s)-1])
@@ -137,17 +146,36 @@ func (t *timestamp) UnmarshalJSON(b []byte) error {
 func parseRFC3339(s string) (time.Time, error) {
 	t, err := time.Parse(time.RFC3339, s)
 	if err != nil {
-		return t, err
+		return t, offsetBeforeDay(err)
 	}
 	return t, checkOffset(s)
 }
 
+// offsetBeforeDay returns checkOffset's error in place of err, the error
+// time.Time's decoder or time.Parse(time.RFC3339) returned for a timestamp,
+// when err says the day is out of range and checkOffset refuses the
+// timestamp's offset. Go 1.23 and later check the offset before the day and
+// return that error themselves; Go 1.22, which does not check the offset's
+// range, returns the day's. The time package reports a day out of range only
+// once the whole timestamp has matched the layout, so the timestamp ends in
+// Z or in an offset where checkOffset reads it.
+func offsetBeforeDay(err error) error {
+	var pe *time.ParseError
+	if errors.As(err, &pe) && pe.Message == ": day out of range" {
+		if offsetErr := checkOffset(pe.Value); offsetErr != nil {
+			return offsetErr
+		}
+	}
+	return err
+}
+
 // checkOffset refuses a timestamp that time.Parse(time.RFC3339, s) has
-// decoded when its time zone offset has an hour above 24 or a minute above
-// 60, with the error Go 1.23 and later return for it. Go 1.22 decodes such an
-// offset (+25:00, +23:61) and Go 1.23 and later refuse it, so without this
-// check the verdict on it depended on the Go release the verifier was built
-// with. An offset of +24:00 or +23:60 decodes under every release.
+// decoded, or has refused for its day (offsetBeforeDay), when its time zone
+// offset has an hour above 24 or a minute above 60, with the error Go 1.23
+// and later return for it. Go 1.22 decodes such an offset (+25:00, +23:61)
+// and Go 1.23 and later refuse it, so without this check the verdict on it
+// depended on the Go release the verifier was built with. An offset of
+// +24:00 or +23:60 decodes under every release.
 func checkOffset(s string) error {
 	if len(s) < len("+00:00") || s[len(s)-1] == 'Z' {
 		return nil
@@ -623,6 +651,16 @@ func verify(f fixture) result {
 	}
 	now = now.UTC()
 
+	// A threshold is verifier configuration, as the clock is: one the fixture
+	// format does not allow (schemas/fixture-v1.schema.json: an integer of at
+	// least 1) is reported before any step reads the credential.
+	if n := f.VerifierState.RequiredSignatures; n != nil && *n < 1 {
+		return result{
+			RejectCategory: "VERIFIER_CONFIG_ERROR",
+			Reason:         fmt.Sprintf("bad requiredSignatures: %d is not a positive integer", *n),
+		}
+	}
+
 	// Step 1: schema version. Dispatch on atcVersion: "1.0" verifies the legacy
 	// pipe form, "1.1" verifies JCS(TBS) (atx-spec §1.3a).
 	if a.ATCVersion != "1.0" && a.ATCVersion != "1.1" {
@@ -707,6 +745,10 @@ func verifySignatures(a *atx, state verifierState) result {
 	// credential, so one trusted authority cannot impersonate another.
 	edKeys, pqKeys := indexPublicKeys(state.PublicKeys, authoritySetFor(a, state.TrustedIssuers))
 
+	// edSigners holds, by its bytes, each Ed25519 key a declared signature
+	// verified under, for the requiredSignatures count below.
+	edSigners := map[string]bool{}
+
 	for _, sig := range a.Signatures {
 		sigBytes, err := base64.StdEncoding.DecodeString(sig.Value)
 		if err != nil {
@@ -721,6 +763,7 @@ func verifySignatures(a *atx, state verifierState) result {
 			for _, pk := range edKeys {
 				if ed25519.Verify(pk, payload, sigBytes) {
 					ok = true
+					edSigners[string(pk)] = true
 					break
 				}
 			}
@@ -768,6 +811,21 @@ func verifySignatures(a *atx, state verifierState) result {
 		return result{
 			RejectCategory: "SIGNATURE_INVALID",
 			Reason:         "ML-DSA-65 signature declared without a verifying Ed25519 signature (an ML-DSA-65 entry requires an Ed25519 companion)",
+		}
+	}
+
+	// Signature threshold (core.md section 3.1 step 8, cosignatures from 2 of
+	// 3 key holders): with requiredSignatures set, the declared Ed25519
+	// signatures must have verified under at least that many distinct keys.
+	// A key counts once however many signatures verify under it, whatever
+	// keyId they carry, the rule section 1.3 step 7 states for its count.
+	// Section 1.3a.2 names the Ed25519 signatures the threshold signatures and
+	// the ML-DSA-65 one the hybrid signature, so an ML-DSA-65 signature does
+	// not count (fixtures/threshold-1of3-cosignature.json).
+	if n := state.RequiredSignatures; n != nil && len(edSigners) < *n {
+		return result{
+			RejectCategory: "SIGNATURE_INVALID",
+			Reason:         fmt.Sprintf("signature threshold not met: requiredSignatures is %d, distinct Ed25519 keys that verified a declared signature: %d", *n, len(edSigners)),
 		}
 	}
 

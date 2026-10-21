@@ -12,7 +12,7 @@ claims the README and its pages under `docs/` make about them -- not every
 sentence below:
 
 1. Both reference verifiers run against `fixtures/` and must report
-   `27 pass, 0 fail`. `go test ./...` in `verifiers/go` runs the Go verifier in
+   `28 pass, 0 fail`. `go test ./...` in `verifiers/go` runs the Go verifier in
    the directory and with the arguments of the command the capture's
    sidecar records it ran (`ranAs`) and requires its standard output to
    equal [`docs/captures/go-verifier.txt`](captures/go-verifier.txt), the

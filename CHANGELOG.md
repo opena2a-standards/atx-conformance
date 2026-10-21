@@ -13,6 +13,58 @@ they should not.
 
 ### Added
 
+- A verifier state can set a k-of-n signature threshold, and a MUST-REJECT
+  fixture built by the generator, `fixtures/threshold-1of3-cosignature.json`,
+  holds both reference verifiers to it (#132). The fixture is the
+  credential of `fixtures/threshold-2of3-cosignature.json` cut to its first
+  signature, the primary's, under the same verifier state with
+  `"requiredSignatures": 2`, and expects `REJECT [SIGNATURE_INVALID]` with a
+  reason containing `threshold`. `schemas/fixture-v1.schema.json` gives the
+  verifier state an optional `requiredSignatures` member, an integer of at
+  least 1: the least number of distinct Ed25519 keys under which the
+  credential's declared signatures must verify (core.md §3.1 step 8,
+  cosignatures from 2 of 3 key holders). A key counts once however many
+  signatures verify under it, whatever `keyId` they carry, and an ML-DSA-65
+  signature does not count, as core.md §1.3a.2 names the Ed25519 signatures
+  the threshold signatures and the ML-DSA-65 one the hybrid signature. Both
+  verifiers write `signature threshold not met: requiredSignatures is 2,
+  distinct Ed25519 keys that verified a declared signature: 1` on the
+  fixture, and report a `requiredSignatures` below 1 as
+  `VERIFIER_CONFIG_ERROR` (`bad requiredSignatures: 0 is not a positive
+  integer`) before step 1, as they report a bad clock. With the member
+  absent or null no threshold applies, and none of the 27 fixtures before
+  it sets one. The verifiers of `ba3fc6c` read no threshold: on the
+  fixture each reports `observed: ACCEPT`, a FAIL line. The fixture cites
+  AIP-SPEC.md at the commit `docs/version-pinning.md` pins as the other
+  Ed25519-only fixtures do, §3.1 "Cryptographic Identity" (Ed25519
+  signing) and then §6.1 "Multi-Factor Algorithm", so 24 fixtures carry
+  the Ed25519 signing citation. In the Go
+  verifier, `TestRequiredSignaturesThreshold`,
+  `TestRequiredSignaturesCountsKeysNotKeyIDs`,
+  `TestRequiredSignaturesCountsEd25519Only`,
+  `TestRequiredSignaturesBelowOneIsAConfigError`,
+  `TestRequiredSignaturesDecode` and `TestSuiteCatchesThresholdBlindVerifier`
+  pin it; in the Python verifier, the `RequiredSignaturesThreshold` class,
+  whose decode tables were recorded from the Go verifier. The parity gate
+  reports `go=PASS:REJECT[SIGNATURE_INVALID]
+  python=PASS:REJECT[SIGNATURE_INVALID]` on the fixture. The 27 existing
+  fixtures and their `MANIFEST.sha256` lines are byte-identical; the
+  manifest gains one line. `conformance.json` and the capture under
+  `docs/captures/` are regenerated; the capture gains the fixture's three
+  lines, and its summary line counts 28. The `notCovered` entry for k-of-n
+  threshold issuance now names what no fixture covers: a threshold the
+  credential meets, so a verifier that rejects every credential whose
+  verifier state sets `requiredSignatures` passes the suite. The fixture
+  counts in
+  README.md, COSIGNERS.md, CONTRIBUTING.md,
+  `docs/continuous-verification.md` and `docs/sibling-repositories.md` go
+  from 27 to 28 (the sibling row's v1.0 count from 10 to 11), and
+  `docs/scope.md` counts 21 of 28 fixtures that reach signature
+  verification, where it counted 20 of 27, and lists the threshold as
+  covered by the fixture, where it listed it as not covered.
+  `docs/fixtures.md` lists the fixture, and says the 2-of-3 fixture's
+  verifier state sets no `requiredSignatures`, where it said no verifier
+  reads a threshold.
 - `scripts/check_sibling_rows.py` holds the Spec cell of each sibling row
   in `docs/sibling-repositories.md` to the `spec.id` and `spec.version` that
   repository's `conformance.json` declares, where it left that cell
@@ -871,6 +923,38 @@ they should not.
 
 ### Fixed
 
+- The Go verifier names the time zone offset, as Go 1.23 and later and the
+  Python verifier do, when a timestamp's day is out of range and its offset
+  has an hour above 24 or a minute above 60 (#259). Built with Go 1.22.12,
+  it rejected a credential whose `issuedAt` was `2026-02-30T00:00:00+25:00`
+  with `PARSE_ERROR: parsing time "2026-02-30T00:00:00+25:00": day out of
+  range`, and named the day for that value in `clockRfc3339` and in a CRL's
+  `issuedAt` too; built with Go 1.23.0 or Go 1.26.3 it named `time zone
+  offset hour out of range` in each, as the Python verifier does. The
+  verdict category did not differ between them. Go 1.22's time package
+  refuses such a timestamp for the day, and `checkOffset` ran only on a
+  timestamp Go had decoded; the verifier now checks the offset before it
+  reports a day out of range (`offsetBeforeDay`), and built with Go 1.22.12
+  and with Go 1.26.3 it names the offset in each of the three. The offsets
+  table in `TestTimestampDecode` adds `2099-02-30T23:59:59+25:00` and
+  `1900-02-29T00:00:00+23:61`, with three controls whose offset is in range
+  and whose error names the day, and `TestOffsetOutOfRangeVerdict` adds
+  `2026-02-30T00:00:00+25:00` as an `issuedAt`, a clock and a CRL
+  `issuedAt`. Built with Go 1.22.12, both tests fail without the change;
+  with it they pass built with each of Go 1.22.0, 1.22.12, 1.23.0, 1.24.0,
+  1.25.0, 1.25.3, 1.25.7, 1.26.0, 1.26.3, 1.26.5, 1.26.7, 1.26.8, 1.27.2
+  and 1.27.3. `GO_OFFSET_OUT_OF_RANGE`, `GO_OFFSET_VERDICTS`,
+  `GO_UNLOADABLE_OFFSETS` and the clock test in
+  `verifiers/python/test_verify.py` carry the new rows, and
+  `docs/running-the-verifiers.md` says Go 1.22 refuses such a timestamp for
+  the day when its day is out of range. Outside the RFC 3339 layout the
+  error can still differ by release: built with Go 1.22.12 the verifier
+  names the extra text in an `issuedAt` of `2099-12-31T23:59:59+25:00x`,
+  and built with Go 1.23.0 or Go 1.26.3 the offset. The sidecar
+  `docs/captures/go-verifier.json`, re-taken with
+  `scripts/capture_go_verifier.py`, records the new tree of
+  `verifiers/go/verifier`; `docs/captures/go-verifier.txt` is unchanged
+  byte for byte. No fixture changes.
 - The Python verifier rejects a v1.1 credential whose `declaredPurpose`
   holds an unpaired UTF-16 surrogate escape as `VERIFIER_CONFIG_ERROR` when
   it also holds a number its JCS serializer cannot write, `1.5` for one, as
