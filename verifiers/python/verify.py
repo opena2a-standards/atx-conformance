@@ -55,7 +55,7 @@ lesson and scoped to the whole body because ATX signs it all):
     field is type-checked against that field: strings, integers in int64
     range, a finite trustScore, a boolean revoked, arrays of strings,
     signature objects, and issuedAt/expiresAt in the date-time grammar of Go
-    1.22's time.Parse(time.RFC3339). A value outside its type rejects as
+    1.23's time.Parse(time.RFC3339). A value outside its type rejects as
     PARSE_ERROR instead of raising; an absent or null member takes the Go zero
     value.
   - a member is read as Go's encoding/json reads it into that struct: a name
@@ -260,12 +260,13 @@ _GO_ZERO_TIME = _Instant(_days_from_civil(1, 1, 1) * 86400, 0)
 
 
 def _parse_rfc3339(value: Any) -> _Instant:
-    """Parse a timestamp as Go 1.22's time.Parse(time.RFC3339, value) does, or
-    raise ValueError. The ranges are Go's: year 0000-9999, hour 0-23, minute
-    and second 0-59, and any two-digit offset hour and minute; a fraction keeps
-    nine digits. Go 1.23 and later also reject an offset hour above 24 or an
-    offset minute above 60; CI builds the Go reference verifier with Go 1.22,
-    which does not (docs/running-the-verifiers.md says the same)."""
+    """Parse a timestamp as the Go reference verifier does, or raise
+    ValueError. The ranges are those of Go 1.23's time.Parse(time.RFC3339,
+    value): year 0000-9999, hour 0-23, minute and second 0-59, offset hour
+    0-24 and offset minute 0-60; a fraction keeps nine digits. Go 1.22 decodes
+    an offset hour above 24 or minute above 60, and the Go verifier refuses
+    them itself (checkOffset in verifiers/go/verifier/verify.go), so its
+    verdict does not depend on the Go release."""
     if not isinstance(value, str):
         raise ValueError("not a JSON string")
     m = _RFC3339.fullmatch(value)
@@ -283,6 +284,11 @@ def _parse_rfc3339(value: Any) -> _Instant:
         raise ValueError("second out of range")
     offset = 0
     if sign is not None:
+        # Go checks the offset before the day, and the minute's error wins.
+        if int(offset_minute) > 60:
+            raise ValueError("time zone offset minute out of range")
+        if int(offset_hour) > 24:
+            raise ValueError("time zone offset hour out of range")
         offset = (int(offset_hour) * 60 + int(offset_minute)) * 60
         if sign == "-":
             offset = -offset

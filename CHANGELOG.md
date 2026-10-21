@@ -806,6 +806,26 @@ they should not.
 
 ### Fixed
 
+- Both reference verifiers refuse a timestamp whose time zone offset has an
+  hour above 24 or a minute above 60 (`+25:00`, `+23:61`), and the Go
+  verifier's verdict on one no longer depends on the Go release that built it
+  (#167). Built with Go 1.22.12, the Go verifier reached `SIGNATURE_INVALID`
+  on a baseline whose `expiresAt` was `2099-12-31T23:59:59+25:00` and
+  `ACCEPT` on one whose `clockRfc3339` was `2026-06-01T00:00:00+23:61`, as
+  the Python verifier did; built with Go 1.23.0 or Go 1.26.0, it reached
+  `PARSE_ERROR` and `VERIFIER_CONFIG_ERROR`. The Go verifier checks the
+  offset after Go's time package decodes a timestamp (`checkOffset`) and
+  refuses it with the error Go 1.23 and later give, and the Python verifier
+  refuses it with a reason that names the same error text. Measured with Go 1.22.12 and Go 1.26.3: a
+  credential `issuedAt` or `expiresAt` with such an offset is a
+  `PARSE_ERROR`, a `clockRfc3339` a `VERIFIER_CONFIG_ERROR`, a CRL
+  `issuedAt`, `nextUpdate` or entry `revokedAt` fails to load the fixture,
+  and a `behavioralProfile.generatedAt` projects the profile as null, so
+  the signature rejects. An offset of `+24:00` or `+23:60` still decodes.
+  `TestOffsetOutOfRangeVerdict` and the offsets table in
+  `TestTimestampDecode` in `verifiers/go`, and `GO_OFFSET_OUT_OF_RANGE`,
+  `GO_OFFSET_VERDICTS` and `GO_UNLOADABLE_OFFSETS` in
+  `verifiers/python/test_verify.py`, pin it. No fixture changes.
 - README.md and this file's opening paragraph describe the repository as
   carrying no tag, where both described a `v0.1.0` tag it does not carry
   (#255). README.md said `@latest` resolves to the highest release tag of
