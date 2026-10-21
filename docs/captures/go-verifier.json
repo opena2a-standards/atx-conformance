@@ -19,12 +19,10 @@
     "go.mod": "667011a74ec65d88b16a2c7093b6e62bb4b97690",
     "go.sum": "436e141fa3870ee84f73fe087c3929df8948c07c",
     "fixtures.go": "6b2be479eaa48b5d81d87df1840e6bd0de4238c9",
-    "fixtures": "835480763ec2a328a005395c4ac9aba8e631e5dc"
+    "fixtures": "8113e6190b5b78f462c399c7262e7b5a8dc42f8a"
   },
-  "inputsUncommitted": [
-    "fixtures/v1_1-declared-purpose-number-injected.json"
-  ],
-  "ranAtUtc": "2026-10-21T07:04:55Z",
+  "inputsUncommitted": [],
+  "ranAtUtc": "2026-10-21T09:35:39Z",
   "exitCode": 0,
   "stderrLines": 0,
   "summary": "summary: 26 pass, 0 fail (26 fixtures)",

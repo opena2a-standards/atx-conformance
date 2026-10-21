@@ -1,5 +1,5 @@
 {
-  "$schema": "https://atx.opena2a.org/schemas/fixture-v1.json",
+  "$schema": "https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/fixture-v1.schema.json",
   "name": "atx-v1/wrong-issuer",
   "description": "A syntactically valid ATX signed by a real keypair, but issued under a DID that is NOT in the verifier's trusted set. The signature itself is valid; the issuer is not. Verifier MUST REJECT with an untrusted-issuer reason.",
   "requirement": "§13, Key substitution at resolution: an issuer the verifier does not trust is rejected even when its own signature verifies",

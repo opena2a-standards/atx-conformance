@@ -1,5 +1,5 @@
 {
-  "$schema": "https://atx.opena2a.org/schemas/fixture-v1.json",
+  "$schema": "https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/fixture-v1.schema.json",
   "name": "atx-v1/threshold-2of3-cosignature",
   "description": "An ATX cosigned by all three keys of a 2-of-3 threshold issuer (primary plus two cosigners). All three signatures are Ed25519 and cover the same canonical payload. Verifier MUST ACCEPT. A spec-conformant verifier additionally MUST validate at least two of the three signatures for trust level 4.",
   "requirement": "§1.3 step 5: every declared signature verifies, here three Ed25519 signatures by three keys, so the credential is accepted; the 2-of-3 threshold of §3.1 step 8 is not tested",

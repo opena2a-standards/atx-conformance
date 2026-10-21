@@ -1,5 +1,5 @@
 {
-  "$schema": "https://atx.opena2a.org/schemas/fixture-v1.json",
+  "$schema": "https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/fixture-v1.schema.json",
   "name": "atx-v1/malformed-schema",
   "description": "An ATX whose atcVersion claims a version (2.0) that is not the v1.0 supported by this conformance suite. Verifier MUST REJECT at step 1 (schema-version check) with an unsupported-version reason. NOTE: the signature is computed over v1.0 canonical bytes, whose eleventh field is the literal \"1.0\" independent of the credential's atcVersion field; the fixture is otherwise well formed so that a verifier can demonstrate it rejects on the schema-version check alone.",
   "requirement": "§1.3 step 1: a credential whose atcVersion (2.0) is not a supported schema version is rejected",

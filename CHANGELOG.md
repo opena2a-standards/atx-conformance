@@ -149,6 +149,39 @@ they should not.
 
 ### Changed
 
+- The `$schema` member of the 26 fixtures and of `conformance.json` names
+  the address GitHub serves the schema of its format from on `main`,
+  `https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/fixture-v1.schema.json`
+  and
+  `https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/conformance-profile-v1.schema.json`,
+  and so do the `$id` and `$schema` const of each schema (#154). They
+  named `https://atx.opena2a.org/schemas/fixture-v1.json`, whose host did
+  not resolve, and
+  `https://specs.opena2a.org/schemas/conformance-profile-v1.json`, which
+  answered 404. When the change was made, each new address answered 200
+  with the bytes of that schema file on `main`.
+  `scripts/schema_validation.py` reports a format schema whose `$id` is not
+  that prefix followed by the schema's path, and does not use it. Its
+  self-test adds six cases (47 cases green, from 41): each tracked schema
+  names its own address, and copies of the fixture schema identified on
+  `atx.opena2a.org`, by the profile schema's address and by
+  `schemas/fixture-v1.json`, a path no file has, and a copy of the profile
+  schema identified on `specs.opena2a.org`, are each reported. Run over the
+  schemas and documents of the commit before, the script exits 1, seven of
+  its 49 self-test cases red. The generator writes the new URI, so each
+  fixture changes in its `$schema` line alone and each of the 26
+  `MANIFEST.sha256` lines changes; `scripts/check_fixture_immutability.py`
+  passes, as the `atx`, `verifierState` and `expected` members are
+  unchanged, and both verifiers report `26 pass, 0 fail`.
+  `docs/captures/go-verifier.txt` is unchanged byte for byte; its sidecar
+  records the new tree id of `fixtures`, so
+  `scripts/capture_go_verifier.py --check` passes. A consumer that
+  matches a `$schema` value must match the new one; the formats keep their
+  members, and every rule but the `$schema` value, so both stay v1. The
+  eight JCS vectors under
+  `jcs-vectors/vectors/` still name
+  `https://atx.opena2a.org/schemas/jcs-vector-v1.json`, a format no file
+  under `schemas/` defines.
 - The argument table of `scripts/parity/parity.py` runs twelve argument
   shapes that the "Arguments" section of `docs/running-the-verifiers.md`
   describes, whose closing sentence says the parity gate runs both

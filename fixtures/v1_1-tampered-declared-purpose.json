@@ -1,5 +1,5 @@
 {
-  "$schema": "https://atx.opena2a.org/schemas/fixture-v1.json",
+  "$schema": "https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/fixture-v1.schema.json",
   "name": "atx-v1_1/tampered-declared-purpose",
   "description": "An ATX v1.1 credential whose declaredPurpose.category was rewritten from financial-operations to agent-orchestration AFTER signing. Because v1.1 signs JCS(TBS) and declaredPurpose is part of it, the verifier recomputes the canonical bytes, finds they no longer match the signature, and MUST REJECT. This is the integrity property that makes a declared purpose binding and non-repudiable (§1.5).",
   "requirement": "§1.5: declaredPurpose is under the v1.1 signature, so a declaredPurpose changed after signing is a signature failure",

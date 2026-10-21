@@ -57,7 +57,7 @@ import check_spec_refs  # noqa: E402
 
 # --- suite metadata (hand-maintained; everything under `requirements` is derived) ---
 SUITE = {
-    "$schema": "https://specs.opena2a.org/schemas/conformance-profile-v1.json",
+    "$schema": "https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/conformance-profile-v1.schema.json",
     "suite": "atx-conformance",
     "spec": {
         "id": "ATX",

@@ -1,5 +1,5 @@
 {
-  "$schema": "https://atx.opena2a.org/schemas/fixture-v1.json",
+  "$schema": "https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/fixture-v1.schema.json",
   "name": "atx-v1_1/duplicate-purpose-member",
   "description": "An ATX v1.1 credential whose declaredPurpose bytes contain the category member twice: a decoy (customer-support) followed by the signed value (financial-operations). The Ed25519 signature is REAL and covers the last-wins interpretation, so a lenient last-wins parser sees a verifying credential while a first-wins parser sees different content — the classic RFC 8259 §4 duplicate-member smuggling split. Because the entire ATX credential feeds the signed canonical form (JCS(TBS), §1.3a.2), verifiers MUST strict-parse the credential object and REJECT duplicate members at any depth with PARSE_ERROR, before interpreting any field. A verifier that parses last-wins without a duplicate check wrongly ACCEPTs; a first-wins verifier rejects with the wrong category (SIGNATURE_INVALID).",
   "requirement": "§1.3 step 1: parsing the credential rejects an object member repeated at any depth (RFC 8259 §4) as PARSE_ERROR before any field is read (§12)",

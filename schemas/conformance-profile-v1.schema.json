@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://specs.opena2a.org/schemas/conformance-profile-v1.json",
+  "$id": "https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/conformance-profile-v1.schema.json",
   "title": "Conformance profile, format v1",
-  "description": "The machine-readable profile of a conformance suite (conformance.json): the spec it tests, its verifiers and extra gates, what it does not cover, and one requirement per fixture. The `$id` is the identifier the profile names in its `$schema` member; this file is its definition.",
+  "description": "The machine-readable profile of a conformance suite (conformance.json): the spec it tests, its verifiers and extra gates, what it does not cover, and one requirement per fixture. The `$id` is the identifier the profile names in its `$schema` member, and the address GitHub serves this file from on the main branch of opena2a-standards/atx-conformance; this file is its definition.",
   "type": "object",
   "required": [
     "$schema",
@@ -18,7 +18,7 @@
   "properties": {
     "$schema": {
       "description": "The identifier of this format. Equal to this schema's `$id`.",
-      "const": "https://specs.opena2a.org/schemas/conformance-profile-v1.json"
+      "const": "https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/conformance-profile-v1.schema.json"
     },
     "suite": { "$ref": "#/$defs/nonEmptyString" },
     "spec": {

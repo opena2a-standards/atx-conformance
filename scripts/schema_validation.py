@@ -6,9 +6,11 @@ Two passes.
 FORMAT. Each fixture and conformance.json names its file format in a `$schema`
 member. That name MUST be the `$id` of a schema this repository ships under
 schemas/*.schema.json (fixture-v1.schema.json, conformance-profile-v1.schema.json),
-and the whole document MUST validate against it. The `$id` is an identifier;
-the host it names does not serve the file, so the tracked file is the
-definition. A `$schema` no tracked file defines fails, as does any document that
+and the whole document MUST validate against it. A schema's `$id` MUST be the
+address GitHub serves the file from on this repository's main branch,
+SERVED_FROM followed by the file's path, so following a `$schema` reaches the
+file that defines the format; a schema whose `$id` names any other address
+fails. A `$schema` no tracked file defines fails, as does any document that
 breaks its format.
 
 CREDENTIAL. The atx-spec schema is the machine-readable model published by
@@ -46,7 +48,9 @@ case-fold ambiguity seen from the schema side.
 Every run starts with a self-test: altered copies of a tracked fixture and of
 conformance.json must each fail the format pass, and the tracked documents
 must pass it. A case whose tracked document lacks the member it alters is
-reported red by that member's name, and the format pass still runs.
+reported red by that member's name, and the format pass still runs. Copies of
+the tracked format schemas whose `$id` names another address must each be
+reported, and the tracked schemas must not be.
 
 Usage:
     python3 scripts/schema_validation.py              # self-test, then both passes
@@ -71,6 +75,11 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCHEMA = ROOT / "schemas" / "vendor" / "atx-spec" / "atx-credential-v1.1.schema.json"
 FORMAT_GLOB = "schemas/*.schema.json"
 PROFILE = ROOT / "conformance.json"
+# The address GitHub serves this repository's main branch from. A format
+# schema's `$id` is this prefix followed by the schema's path.
+SERVED_FROM = "https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/"
+FIXTURE_FORMAT = "schemas/fixture-v1.schema.json"
+PROFILE_FORMAT = "schemas/conformance-profile-v1.schema.json"
 
 # The members every v1 fixture carries, as the generator writes them. Listed
 # here rather than read from the schema, so a schema that stops requiring one
@@ -81,19 +90,35 @@ FIXTURE_MEMBERS = (
 )
 
 
+def schema_problem(rel: pathlib.PurePath, schema: dict) -> str:
+    """What keeps the format schema at path `rel` from being used; empty when
+    nothing does. A schema whose `$schema` const differs from its `$id` would
+    hold documents to a format name it does not define. One whose `$id` is not
+    the address its file is served from would have documents name, in
+    `$schema`, an address other than the one this repository serves their
+    format from."""
+    sid = schema.get("$id")
+    const = schema.get("properties", {}).get("$schema", {}).get("const")
+    if not isinstance(sid, str) or const != sid:
+        return f"{rel}: `$schema` const {const!r} is not its `$id` {sid!r}"
+    served = SERVED_FROM + rel.as_posix()
+    if sid != served:
+        return f"{rel}: `$id` {sid!r} is not the address the file is served from, {served!r}"
+    return ""
+
+
 def load_formats(root: pathlib.Path = ROOT) -> tuple[dict, list[str]]:
     """Each tracked format schema keyed by its `$id`, and what is wrong with any
-    that cannot be used. A schema whose `$schema` const differs from its `$id`
-    would hold documents to a format name it does not define."""
+    that cannot be used (schema_problem)."""
     formats, problems = {}, []
     for path in sorted(root.glob(FORMAT_GLOB)):
         rel = path.relative_to(root)
         schema = json.loads(path.read_text(encoding="utf-8"))
         Draft202012Validator.check_schema(schema)
         sid = schema.get("$id")
-        const = schema.get("properties", {}).get("$schema", {}).get("const")
-        if not isinstance(sid, str) or const != sid:
-            problems.append(f"{rel}: `$schema` const {const!r} is not its `$id` {sid!r}")
+        problem = schema_problem(rel, schema)
+        if problem:
+            problems.append(problem)
         elif sid in formats:
             problems.append(f"{rel}: `$id` {sid} is already defined by another file")
         else:
@@ -292,6 +317,44 @@ def _summary_case(formats: dict) -> tuple[bool, str, str]:
     return ok, label, f"read {line!r} without it and {with_problem!r} with it"
 
 
+def _with_id(schema: dict, sid: str) -> dict:
+    """A copy of `schema` whose `$id` and `$schema` const are both `sid`, so the
+    address is the one thing schema_problem can find wrong with it."""
+    out = copy.deepcopy(schema)
+    out["$id"] = sid
+    out.setdefault("properties", {}).setdefault("$schema", {})["const"] = sid
+    return out
+
+
+def _address_cases() -> list[tuple[bool, str, str]]:
+    """(green, label, detail): each tracked format schema is identified by the
+    address its file is served from, and a copy identified by another address
+    is reported, the hosts that named the two formats before included."""
+    tracked = {path.relative_to(ROOT).as_posix(): json.loads(path.read_text(encoding="utf-8"))
+               for path in sorted(ROOT.glob(FORMAT_GLOB))}
+    results = []
+    for rel, schema in tracked.items():
+        problem = schema_problem(pathlib.PurePosixPath(rel), schema)
+        results.append((not problem, f"tracked {rel} is identified by the address it is served from",
+                        problem))
+    for label, rel, sid in (
+            ("fixture format identified on atx.opena2a.org",
+             FIXTURE_FORMAT, "https://atx.opena2a.org/schemas/fixture-v1.json"),
+            ("profile format identified on specs.opena2a.org",
+             PROFILE_FORMAT, "https://specs.opena2a.org/schemas/conformance-profile-v1.json"),
+            ("fixture format identified by the profile format's address",
+             FIXTURE_FORMAT, SERVED_FROM + PROFILE_FORMAT),
+            ("fixture format identified by a path under the served prefix that no file has",
+             FIXTURE_FORMAT, SERVED_FROM + "schemas/fixture-v1.json")):
+        if rel not in tracked:
+            results.append((False, label, f"no tracked {rel} to alter"))
+            continue
+        problem = schema_problem(pathlib.PurePosixPath(rel), _with_id(tracked[rel], sid))
+        ok = "is not the address the file is served from" in problem
+        results.append((ok, label, problem or "was taken for a usable schema"))
+    return results
+
+
 def self_test() -> tuple[int, int]:
     formats, problems = load_formats()
     results = [(False, f"format schema unusable: {problem}", "") for problem in problems]
@@ -306,6 +369,7 @@ def self_test() -> tuple[int, int]:
         "REJECT fixture with no 'expected' member is reported by name",
         "expected", cases, _altered(reject, lambda d: d.pop("expected", None)), accept, profile))
     results.append(_summary_case(formats))
+    results += _address_cases()
     failed = 0
     for ok, label, detail in results:
         print(f"  [{'GREEN' if ok else 'RED  '}] {label}")

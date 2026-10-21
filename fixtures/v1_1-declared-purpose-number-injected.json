@@ -1,5 +1,5 @@
 {
-  "$schema": "https://atx.opena2a.org/schemas/fixture-v1.json",
+  "$schema": "https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/fixture-v1.schema.json",
   "name": "atx-v1_1/declared-purpose-number-injected",
   "description": "An ATX v1.1 credential signed with no declaredPurpose, carrying an attacker-appended NUMBER declaredPurpose value, 1.5, which is not an integer. Non-object values are included in the TBS verbatim (atx-spec §1.3a.2 rule 5), so the recomputed canonical bytes no longer match the signature and the verifier MUST REJECT with a signature-validation reason. JCS writes a number that is not an integer with the number serialization of RFC 8785 §3.2.2.3; a verifier whose serializer does not implement it has no canonical bytes for a signature to verify over, and its expected outcome is the same REJECT.",
   "requirement": "§1.3a.2 rule 5: a present non-object declaredPurpose value enters the TBS verbatim, so a number that is not an integer, added after signing, is a signature failure",

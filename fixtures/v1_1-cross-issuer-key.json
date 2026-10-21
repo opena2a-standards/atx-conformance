@@ -1,5 +1,5 @@
 {
-  "$schema": "https://atx.opena2a.org/schemas/fixture-v1.json",
+  "$schema": "https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/fixture-v1.schema.json",
   "name": "atx-v1_1/cross-issuer-key",
   "description": "An ATX v1.1 credential issued by the primary authority but signed by a different trusted authority's key (partner.example). The secondary authority is trusted and its key is configured, and the signature is valid over JCS(TBS), but the secondary is neither the issuer nor present in the signed issuerChain. A spec-conformant verifier binds each signature to a key controlled by the issuer, or by an authority that is both named in the signed issuerChain and in the verifier's trusted issuers, and MUST REJECT with a signature-validation reason.",
   "requirement": "§1.3 step 4, key eligibility: under atcVersion 1.1 a key is eligible only for the issuerDid or a trusted issuer the signed issuerChain names, so a signature made with a trusted authority's key outside both is a signature failure",

@@ -1,5 +1,5 @@
 {
-  "$schema": "https://atx.opena2a.org/schemas/fixture-v1.json",
+  "$schema": "https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/fixture-v1.schema.json",
   "name": "atx-v1_1/declared-purpose-string-injected",
   "description": "An ATX v1.1 credential signed with no declaredPurpose, carrying an attacker-appended STRING declaredPurpose value. Non-object values are included in the TBS verbatim (atx-spec §1.3a.2 rule 5), so the recomputed canonical bytes no longer match the signature and the verifier MUST REJECT with a signature-validation reason.",
   "requirement": "§1.3a.2 rule 5: a present non-object declaredPurpose value enters the TBS verbatim, so a string added after signing is a signature failure",
