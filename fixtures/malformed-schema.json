@@ -16,8 +16,13 @@
     },
     {
       "id": "AIP",
-      "ref": "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md",
-      "section": "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"
+      "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+      "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+    },
+    {
+      "id": "AIP",
+      "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+      "section": "§6.1 Multi-Factor Algorithm"
     },
     {
       "id": "RFC 8032",

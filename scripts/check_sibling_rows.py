@@ -19,8 +19,10 @@ GitHub API and holds the row to it:
     files, or the verifiers/ directories, in that repository;
   - every verifier the row names as `A/B verifiers` is a verifiers/ directory
     there;
-  - every release version (`vX.Y`) in the row's Status cell is a tag there.
-    Spec versions belong in the Spec cell and are not checked.
+  - every release version (`vX.Y`) in the row's Status cell is a tag there;
+  - the row's Spec cell names the spec id and version the repository's
+    conformance.json declares in `spec.id` and `spec.version` ("AIP
+    v1.2.0-draft" for `"id": "AIP", "version": "1.2.0-draft"`).
 
 Every run starts with a self-test: each site is altered in memory, one at a
 time, and the check must fail on it. The rows as published before this check
@@ -43,6 +45,7 @@ repository, 1 otherwise (including when a repository cannot be read), 2 on an
 unknown argument.
 """
 
+import base64
 import json
 import os
 import pathlib
@@ -82,6 +85,9 @@ COUNT_SITES = (
 
 NAMED_VERIFIERS = re.compile(r"\b([A-Z]\w*)/([A-Z]\w*) verifiers\b")
 RELEASE = re.compile(r"\bv\d+(?:\.\d+)+\b")
+# The spec a row's Spec cell names: an upper-case id, then `v` and a version
+# with any pre-release suffix ("AIP v1.2.0-draft", "ATP v1.0.0-rc1").
+SPEC_VERSION = re.compile(r"\b([A-Z][A-Z0-9]+) v(\d+(?:\.\d+)+(?:-[0-9A-Za-z.]+)?)(?![\w.-])")
 
 # The rows README.md published before this check existed, each with the
 # failure it must still produce.
@@ -171,7 +177,25 @@ def load_sibling(repo):
         if len(batch) < 100:
             break
         page += 1
-    return {"fixtures": sorted(fixtures), "verifiers": sorted(verifiers), "tags": tags}
+    return {"fixtures": sorted(fixtures), "verifiers": sorted(verifiers), "tags": tags,
+            "spec": load_declared_spec(repo)}
+
+
+def load_declared_spec(repo):
+    """The (spec.id, spec.version) the repository's conformance.json declares."""
+    where = f"{ORG}/{repo} conformance.json"
+    found = fetch_json(f"repos/{ORG}/{repo}/contents/conformance.json")
+    if not isinstance(found, dict) or found.get("encoding") != "base64":
+        raise SiblingError(f"{where}: the contents response carries no base64 content")
+    try:
+        profile = json.loads(base64.b64decode(found.get("content", "")).decode("utf-8"))
+    except (ValueError, TypeError) as exc:
+        raise SiblingError(f"{where} is not JSON: {exc}") from exc
+    spec = profile.get("spec") if isinstance(profile, dict) else None
+    if not (isinstance(spec, dict) and isinstance(spec.get("id"), str)
+            and isinstance(spec.get("version"), str)):
+        raise SiblingError(f"{where} declares no spec.id and spec.version strings")
+    return spec["id"], spec["version"]
 
 
 def sibling_rows(readme):
@@ -186,6 +210,12 @@ def sibling_rows(readme):
     for match in SIBLING_ROW.finditer("\n".join(lines[start:end])):
         rows.setdefault(match.group(1), match.group(0))
     return rows
+
+
+def spec_cell(row):
+    """The second cell of a table row, the Spec cell; "" when it has none."""
+    cells = row.strip().strip("|").split("|")
+    return cells[1].strip() if len(cells) > 1 else ""
 
 
 def _version(name):
@@ -241,6 +271,19 @@ def check(readme, siblings):
                         f"{repo} row names a {name} verifier, but {ORG}/{repo} "
                         f"has no verifiers/{name.lower()}/"
                     )
+        named = SPEC_VERSION.findall(spec_cell(row))
+        declared = data.get("spec")
+        if not named:
+            failures.append(f"{repo} row's Spec cell names no spec version (`<ID> v<version>`)")
+        elif declared is None:
+            failures.append(f"{repo} declares no spec in its conformance.json; its Spec cell is unchecked")
+        else:
+            for spec_id, version in named:
+                if (spec_id, version) != tuple(declared):
+                    failures.append(
+                        f"{repo} row's Spec cell names {spec_id} v{version}, but "
+                        f"{ORG}/{repo} conformance.json declares {declared[0]} {declared[1]}"
+                    )
         status = row.rstrip().rstrip("|").rsplit("|", 1)[-1]
         tagged = {_version(t) for t in data["tags"]} - {None}
         for release in RELEASE.findall(status):
@@ -263,12 +306,15 @@ def check(readme, siblings):
 
 def offline_siblings(readme):
     """Sibling data, in load_sibling()'s form, under which each row of
-    `readme` holds: the counts COUNT_SITES reads on it, the verifiers it names
-    and the releases its Status cell names. Stand-in names fill the counts."""
+    `readme` holds: the counts COUNT_SITES reads on it, the verifiers it names,
+    the releases its Status cell names and the spec its Spec cell names.
+    Stand-in names fill the counts."""
     rows = sibling_rows(readme)
-    data = {repo: {"fixtures": [], "verifiers": [], "tags": []}
+    data = {repo: {"fixtures": [], "verifiers": [], "tags": [], "spec": None}
             for repo in set(rows) | {site[0] for site in COUNT_SITES}}
     for repo, row in rows.items():
+        named = SPEC_VERSION.search(spec_cell(row))
+        data[repo]["spec"] = named.groups() if named else None
         for names in NAMED_VERIFIERS.findall(row):
             data[repo]["verifiers"] += [n.lower() for n in names
                                         if n.lower() not in data[repo]["verifiers"]]
@@ -334,6 +380,34 @@ def self_test(readme, siblings, verbose):
         new = new_failures(altered)
         cases.append((any("release v99.0" in f for f in new), case,
                        f"naming release v99.0 still passes: {new}"))
+
+    for repo, row in sorted(rows.items()):
+        cell = spec_cell(row)
+        match = SPEC_VERSION.search(cell)
+        case = f"{repo} Spec cell version"
+        if match is None:
+            cases.append((False, case, f"no `<ID> v<version>` in the {repo} Spec cell"))
+            continue
+        bad = "9.9.9-probe"
+        altered = _replace_row(readme, repo, row.replace(
+            cell, cell[:match.start(2)] + bad + cell[match.end(2):], 1))
+        new = new_failures(altered)
+        cases.append((any(f"Spec cell names {match.group(1)} v{bad}," in f for f in new), case,
+                      f"naming {match.group(1)} v{bad} instead of v{match.group(2)} still passes: {new}"))
+
+        case = f"{repo} Spec cell spec id"
+        altered = _replace_row(readme, repo, row.replace(
+            cell, cell[:match.start(1)] + "XYZ" + cell[match.end(1):], 1))
+        new = new_failures(altered)
+        cases.append((any(f"Spec cell names XYZ v{match.group(2)}," in f for f in new), case,
+                      f"naming XYZ instead of {match.group(1)} still passes: {new}"))
+
+        case = f"{repo} Spec cell with no version"
+        altered = _replace_row(readme, repo, row.replace(
+            cell, cell[:match.start(2) - 2] + cell[match.end(2):], 1))
+        new = new_failures(altered)
+        cases.append((any("Spec cell names no spec version" in f for f in new), case,
+                      f"a Spec cell naming no version still passes: {new}"))
 
     for repo, (retracted, expected) in sorted(RETRACTED_ROWS.items()):
         case = f"{repo} row as published before this check"

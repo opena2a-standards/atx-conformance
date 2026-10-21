@@ -13,6 +13,14 @@ they should not.
 
 ### Added
 
+- `scripts/check_sibling_rows.py` holds the Spec cell of each sibling row
+  in `docs/sibling-repositories.md` to the `spec.id` and `spec.version` that
+  repository's `conformance.json` declares, where it left that cell
+  unchecked (#153). Its self-test alters the version and the id in each
+  row's Spec cell, and removes the version, and requires each to fail; it
+  runs 17 cases, from 11. Run against the sibling repositories, it reports
+  that the `aip-conformance` row names AIP v1.2.0-draft while
+  `opena2a-standards/aip-conformance` declares AIP 1.0.0-draft, and exits 1.
 - A MUST-REJECT fixture, `fixtures/v1_1-declared-purpose-number-injected.json`,
   built by the generator (#130): the v1.1 baseline signed with no
   `declaredPurpose`, carrying `"declaredPurpose": 1.5` added after signing.
@@ -182,6 +190,24 @@ they should not.
   `jcs-vectors/vectors/` still name
   `https://atx.opena2a.org/schemas/jcs-vector-v1.json`, a format no file
   under `schemas/` defines.
+- Every fixture cites AIP-SPEC.md at the commit `docs/version-pinning.md`
+  pins, `80db7b2304b2f37bddf1c82e788c27e1ab874b3d` of
+  `opena2a-standards/agent-identity-protocol` (1.2.0-draft), where all 26
+  cited `opena2a-org/agent-identity-protocol` on `main` with the section
+  "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring",
+  Ed25519-only fixtures included (#153). Each fixture now carries two AIP
+  citations: §3.1 "Cryptographic Identity" scoped to the signatures its
+  credential carries (Ed25519 signing in 22 fixtures, hybrid Ed25519 +
+  ML-DSA-65 signing in 3, an ML-DSA-65 signature with no Ed25519 signature
+  in `v1_1-hybrid-pq-only.json`), then §6.1 "Multi-Factor Algorithm".
+  `scripts/conformance_profile.py --check` fails, by fixture name, on a
+  fixture whose AIP citations are not those two at that commit, and when
+  `docs/version-pinning.md` does not link that commit; on the fixtures of
+  the previous commit it names all 26.
+- No fixture's `atx`, `verifierState` or `expected` member changes; every
+  fixture's bytes, its `MANIFEST.sha256` line and `conformance.json` do, and
+  `docs/captures/go-verifier.json` records the new tree of `fixtures/`. The
+  Go verifier's output, `docs/captures/go-verifier.txt`, is unchanged.
 - The argument table of `scripts/parity/parity.py` runs twelve argument
   shapes that the "Arguments" section of `docs/running-the-verifiers.md`
   describes, whose closing sentence says the parity gate runs both

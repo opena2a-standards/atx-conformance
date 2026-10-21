@@ -15,7 +15,12 @@ Each fixture names the requirement it tests in its `requirement` member: the
 § number of the core.md section the rule comes from, then the step or rule
 ("§1.3 step 2: ..."). The section must be one the fixture's `spec` list cites
 as ATX, and no two fixtures may name the same requirement. A fixture cites
-FIPS 204 exactly when its credential carries an ML-DSA-65 signature.
+FIPS 204 exactly when its credential carries an ML-DSA-65 signature. Its AIP
+citations are two, both AIP_REF, AIP-SPEC.md at the commit
+docs/version-pinning.md links: §3.1 scoped to the signature algorithms the
+credential carries (Ed25519 alone, hybrid Ed25519 + ML-DSA-65, or ML-DSA-65
+alone), then §6.1. `--check` also fails when docs/version-pinning.md does
+not link AIP_REF.
 
 A fixture that cannot be read into a requirement (not JSON, not an object, a
 required member missing, unreadable, or nested more than MAX_DEPTH levels
@@ -119,6 +124,19 @@ REQUIREMENT_SECTION = re.compile(r"§(\d+(?:\.\d+[a-z]?)*)(?=[ ,:])")
 # this algorithm.
 FIPS_204 = "FIPS 204"
 ML_DSA_65 = "ML-DSA-65"
+ED25519 = "Ed25519"
+
+# A fixture cites AIP-SPEC.md twice, both at the commit docs/version-pinning.md
+# pins (AIP_REF, aipSpecRef in the generator): §3.1 scoped to the signature
+# algorithms its credential carries, then §6.1 for its trustScore member.
+AIP = "AIP"
+AIP_REF = ("https://github.com/opena2a-standards/agent-identity-protocol/blob/"
+           "80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md")
+AIP_SIGNING_ED25519 = "§3.1 Cryptographic Identity (Ed25519 signing)"
+AIP_SIGNING_HYBRID = "§3.1 Cryptographic Identity (hybrid Ed25519 + ML-DSA-65 signing)"
+AIP_SIGNING_PQ_ONLY = "§3.1 Cryptographic Identity (an ML-DSA-65 signature with no Ed25519 signature)"
+AIP_TRUST_SCORING = "§6.1 Multi-Factor Algorithm"
+VERSION_PINNING = "docs/version-pinning.md"
 
 # The deepest a requirement may nest. A deeper one is refused before anything
 # is rendered: the text json.dumps(indent=2) writes grows with the square of
@@ -165,6 +183,36 @@ def _signs_with(atx: object, algorithm: str) -> bool:
     sigs = atx.get("signatures") if isinstance(atx, dict) else None
     return isinstance(sigs, list) and any(
         isinstance(s, dict) and s.get("algorithm") == algorithm for s in sigs)
+
+
+def aip_signing_section(atx: object) -> str:
+    """The AIP-SPEC §3.1 citation for the signature algorithms a credential
+    carries; one with neither algorithm is cited as Ed25519, as the generator
+    cites it."""
+    ed25519, mldsa = _signs_with(atx, ED25519), _signs_with(atx, ML_DSA_65)
+    if ed25519 and mldsa:
+        return AIP_SIGNING_HYBRID
+    return AIP_SIGNING_PQ_ONLY if mldsa else AIP_SIGNING_ED25519
+
+
+def _aip_citations(spec: object) -> list[tuple[object, object]]:
+    """The (ref, section) of each AIP citation in a spec list, in order."""
+    if not isinstance(spec, list):
+        return []
+    return [(r.get("ref"), r.get("section"))
+            for r in spec if isinstance(r, dict) and r.get("id") == AIP]
+
+
+def aip_pin_failure(root: Path) -> str | None:
+    """Why docs/version-pinning.md does not pin AIP-SPEC.md at AIP_REF, or None."""
+    try:
+        text = (root / VERSION_PINNING).read_text(encoding="utf-8")
+    except (OSError, ValueError) as exc:
+        return f"{VERSION_PINNING}: cannot be read ({exc})"
+    if f"({AIP_REF})" not in text:
+        return (f"{VERSION_PINNING}: does not link {AIP_REF}, the AIP-SPEC.md commit "
+                "the fixtures cite; move AIP_REF and the generator's aipSpecRef with it")
+    return None
 
 
 def _requirement_key(text: str) -> str:
@@ -218,6 +266,13 @@ def requirement(path: Path, failures: list[str]) -> dict | None:
         return None
     if signs_mldsa and not cites_fips:
         failures.append(f"{where}: its credential carries an {ML_DSA_65} signature but it does not cite {FIPS_204}")
+        return None
+    signing = aip_signing_section(fx.get("atx"))
+    if _aip_citations(fx["spec"]) != [(AIP_REF, signing), (AIP_REF, AIP_TRUST_SCORING)]:
+        failures.append(
+            f"{where}: its {AIP} citations are not AIP-SPEC.md at the pinned commit "
+            f"({AIP_REF}) citing {signing!r}, then {AIP_TRUST_SCORING!r}"
+        )
         return None
     expected = fx["expected"]
     if not isinstance(expected, dict) or "verifyResult" not in expected:
@@ -359,7 +414,10 @@ def _nested(depth: int) -> str:
     nested two levels less, so its requirement nests as deep as it does."""
     n = depth - 2
     return ('{"name": "p", "description": "d", "requirement": "§1.1: p", "spec": ['
-            + json.dumps(_cite("1.1 ATX schema")) + ", " + "[" * n + "]" * n
+            + json.dumps(_cite("1.1 ATX schema")) + ", "
+            + json.dumps({"id": AIP, "ref": AIP_REF, "section": AIP_SIGNING_ED25519}) + ", "
+            + json.dumps({"id": AIP, "ref": AIP_REF, "section": AIP_TRUST_SCORING}) + ", "
+            + "[" * n + "]" * n
             + '], "expected": {"verifyResult": "ACCEPT"}}')
 
 
@@ -395,13 +453,44 @@ def _main_on(make: object, argv: list[str]) -> tuple[int, str, str, bool]:
     return rc, out.getvalue(), err.getvalue(), unchanged
 
 
+def _aip(section: str, ref: str = AIP_REF) -> dict:
+    """An AIP citation of AIP-SPEC.md."""
+    return {"id": AIP, "ref": ref, "section": section}
+
+
+def _signed(*algorithms: str) -> dict:
+    """An atx member carrying one signature per algorithm."""
+    return {"signatures": [{"algorithm": a} for a in algorithms]}
+
+
+def _pin_failure_with(text: str | None) -> str | None:
+    """aip_pin_failure() on a tree whose docs/version-pinning.md holds text,
+    or has none when text is None."""
+    tmp = Path(tempfile.mkdtemp(prefix="conformance-profile-"))
+    try:
+        if text is not None:
+            (tmp / VERSION_PINNING).parent.mkdir(parents=True)
+            (tmp / VERSION_PINNING).write_text(text, encoding="utf-8")
+        return aip_pin_failure(tmp)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def self_test() -> int:
+    atx_cites = [_cite("1.1 ATX schema"), _cite("1.3 Local verification algorithm")]
+    aip_ed25519 = [_aip(AIP_SIGNING_ED25519), _aip(AIP_TRUST_SCORING)]
+    aip_hybrid = [_aip(AIP_SIGNING_HYBRID), _aip(AIP_TRUST_SCORING)]
     good = {"name": "probe", "description": "d", "requirement": "§1.3 step 2: probe",
-            "spec": [_cite("1.1 ATX schema"), _cite("1.3 Local verification algorithm")],
+            "spec": [*atx_cites, *aip_ed25519],
             "expected": {"verifyResult": "ACCEPT"}}
     fips = {"id": "FIPS 204", "ref": "https://csrc.nist.gov/pubs/fips/204/final", "section": "ML-DSA-65"}
-    hybrid = {**good, "spec": [*good["spec"], fips],
-              "atx": {"signatures": [{"algorithm": "Ed25519"}, {"algorithm": "ML-DSA-65"}]}}
+    hybrid = {**good, "spec": [*atx_cites, *aip_hybrid, fips], "atx": _signed(ED25519, ML_DSA_65)}
+    pq_only = {**good, "spec": [*atx_cites, _aip(AIP_SIGNING_PQ_ONLY), _aip(AIP_TRUST_SCORING), fips],
+               "atx": _signed(ML_DSA_65)}
+    # The AIP citation every fixture carried before it was pinned and scoped.
+    unpinned = {"id": AIP, "ref": "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md",
+                "section": "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"}
+    pin_row = f"| AIP spec | v1.2.0-draft | [`AIP-SPEC.md`]({AIP_REF}) |\n"
     with _fixtures(good) as root:
         profile, failures = build(root)
     write_rc, _, _, write_unchanged = _main_on(good, [])
@@ -431,10 +520,10 @@ def self_test() -> int:
                          "spec": [{"id": "AIP", "ref": "x", "section": "3 Signing"}]})),
         ("reads §13 from the heading '13. Security considerations'",
          _builds({**good, "requirement": "§13, Cryptographic agility: probe",
-                  "spec": [_cite("13. Security considerations")]})),
+                  "spec": [_cite("13. Security considerations"), *aip_ed25519]})),
         ("reads §1.3a.2 from the heading '1.3a.2 JCS form ...'",
          _builds({**good, "requirement": "§1.3a.2 rule 5: probe",
-                  "spec": [_cite('1.3a.2 JCS form (`atcVersion` = "1.1")')]})),
+                  "spec": [_cite('1.3a.2 JCS form (`atcVersion` = "1.1")'), *aip_ed25519]})),
         ("reports a requirement naming §1.3a.2 where the fixture cites only §1.3 by name",
          _fails_by_name({**good, "requirement": "§1.3a.2 rule 5: probe"})),
         ("reports a second fixture repeating another's requirement by name",
@@ -451,6 +540,31 @@ def self_test() -> int:
          _fails_by_name({k: v for k, v in hybrid.items() if k != "atx"})),
         ("reports a fixture carrying an ML-DSA-65 signature that does not cite FIPS 204 by name",
          _fails_by_name({**hybrid, "spec": good["spec"]})),
+        ("builds an Ed25519-signed fixture citing AIP-SPEC §3.1 for Ed25519 signing",
+         _builds({**good, "atx": _signed(ED25519, ED25519)})),
+        ("builds a fixture carrying an ML-DSA-65 signature alone citing §3.1 for that case",
+         _builds(pq_only)),
+        ("reports a fixture citing AIP-SPEC on main with the hybrid section, as published before, by name",
+         _fails_by_name({**good, "spec": [*atx_cites, unpinned], "atx": _signed(ED25519)})),
+        ("reports an Ed25519-signed fixture citing the hybrid §3.1 section by name",
+         _fails_by_name({**good, "spec": [*atx_cites, *aip_hybrid], "atx": _signed(ED25519)})),
+        ("reports a hybrid-signed fixture citing the Ed25519 §3.1 section by name",
+         _fails_by_name({**hybrid, "spec": [*atx_cites, *aip_ed25519, fips]})),
+        ("reports a fixture carrying an ML-DSA-65 signature alone citing the hybrid section by name",
+         _fails_by_name({**pq_only, "spec": [*atx_cites, *aip_hybrid, fips]})),
+        ("reports a fixture citing AIP-SPEC.md on main by name",
+         _fails_by_name({**good, "spec": [*atx_cites, *(
+             _aip(c["section"], unpinned["ref"]) for c in aip_ed25519)]})),
+        ("reports a fixture with no AIP citation by name", _fails_by_name({**good, "spec": atx_cites})),
+        ("reports a fixture with no AIP §6.1 citation by name",
+         _fails_by_name({**good, "spec": [*atx_cites, _aip(AIP_SIGNING_ED25519)]})),
+        ("reports a fixture with its AIP citations in the other order by name",
+         _fails_by_name({**good, "spec": [*atx_cites, *reversed(aip_ed25519)]})),
+        ("accepts a version-pinning page that links AIP_REF", _pin_failure_with(pin_row) is None),
+        ("reports a version-pinning page that links AIP-SPEC.md at another commit",
+         (_pin_failure_with(pin_row.replace("80db7b2", "0000000")) or "").startswith(VERSION_PINNING)),
+        ("reports a missing version-pinning page",
+         (_pin_failure_with(None) or "").startswith(VERSION_PINNING)),
         ("reports a fixture that is not JSON by name", _fails_by_name("{")),
         ("reports a fixture that is a JSON array by name", _fails_by_name([good])),
         ("reports a fixture that is a JSON number by name", _fails_by_name("5")),
@@ -528,6 +642,10 @@ def main(argv: list[str], root: Path = REPO_ROOT) -> int:
             print("conformance.json is stale; run scripts/conformance_profile.py")
             return 1
         print("conformance.json is current")
+        pin = aip_pin_failure(root)
+        if pin:
+            print(f"FAIL {pin}")
+            return 1
         # Every ATX citation must name a heading of the pinned core.md. The
         # self-test runs first so the check is proven able to fail.
         if check_spec_refs.self_test() or check_spec_refs.report(root):
