@@ -1,0 +1,17 @@
+{
+  "schema": "demo-narration/1",
+  "tool": "atx-verify",
+  "version": "v0.0.0-20261020031110-014aa2e7700c",
+  "language": "en",
+  "wordsPerMinute": 150,
+  "steps": [
+    {
+      "id": "s1",
+      "text": "With no argument, the verifier checks every fixture built into the module and prints PASS for each verdict that matches the expected outcome."
+    },
+    {
+      "id": "s2",
+      "text": "Exit code zero means every result matched; any mismatch exits one."
+    }
+  ]
+}
