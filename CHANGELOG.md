@@ -13,6 +13,58 @@ they should not.
 
 ### Added
 
+- A verifier state can set a k-of-n signature threshold, and a MUST-REJECT
+  fixture built by the generator, `fixtures/threshold-1of3-cosignature.json`,
+  holds both reference verifiers to it (#132). The fixture is the
+  credential of `fixtures/threshold-2of3-cosignature.json` cut to its first
+  signature, the primary's, under the same verifier state with
+  `"requiredSignatures": 2`, and expects `REJECT [SIGNATURE_INVALID]` with a
+  reason containing `threshold`. `schemas/fixture-v1.schema.json` gives the
+  verifier state an optional `requiredSignatures` member, an integer of at
+  least 1: the least number of distinct Ed25519 keys under which the
+  credential's declared signatures must verify (core.md §3.1 step 8,
+  cosignatures from 2 of 3 key holders). A key counts once however many
+  signatures verify under it, whatever `keyId` they carry, and an ML-DSA-65
+  signature does not count, as core.md §1.3a.2 names the Ed25519 signatures
+  the threshold signatures and the ML-DSA-65 one the hybrid signature. Both
+  verifiers write `signature threshold not met: requiredSignatures is 2,
+  distinct Ed25519 keys that verified a declared signature: 1` on the
+  fixture, and report a `requiredSignatures` below 1 as
+  `VERIFIER_CONFIG_ERROR` (`bad requiredSignatures: 0 is not a positive
+  integer`) before step 1, as they report a bad clock. With the member
+  absent or null no threshold applies, and none of the 27 fixtures before
+  it sets one. The verifiers of `ba3fc6c` read no threshold: on the
+  fixture each reports `observed: ACCEPT`, a FAIL line. The fixture cites
+  AIP-SPEC.md at the commit `docs/version-pinning.md` pins as the other
+  Ed25519-only fixtures do, §3.1 "Cryptographic Identity" (Ed25519
+  signing) and then §6.1 "Multi-Factor Algorithm", so 24 fixtures carry
+  the Ed25519 signing citation. In the Go
+  verifier, `TestRequiredSignaturesThreshold`,
+  `TestRequiredSignaturesCountsKeysNotKeyIDs`,
+  `TestRequiredSignaturesCountsEd25519Only`,
+  `TestRequiredSignaturesBelowOneIsAConfigError`,
+  `TestRequiredSignaturesDecode` and `TestSuiteCatchesThresholdBlindVerifier`
+  pin it; in the Python verifier, the `RequiredSignaturesThreshold` class,
+  whose decode tables were recorded from the Go verifier. The parity gate
+  reports `go=PASS:REJECT[SIGNATURE_INVALID]
+  python=PASS:REJECT[SIGNATURE_INVALID]` on the fixture. The 27 existing
+  fixtures and their `MANIFEST.sha256` lines are byte-identical; the
+  manifest gains one line. `conformance.json` and the capture under
+  `docs/captures/` are regenerated; the capture gains the fixture's three
+  lines, and its summary line counts 28. The `notCovered` entry for k-of-n
+  threshold issuance now names what no fixture covers: a threshold the
+  credential meets, so a verifier that rejects every credential whose
+  verifier state sets `requiredSignatures` passes the suite. The fixture
+  counts in
+  README.md, COSIGNERS.md, CONTRIBUTING.md,
+  `docs/continuous-verification.md` and `docs/sibling-repositories.md` go
+  from 27 to 28 (the sibling row's v1.0 count from 10 to 11), and
+  `docs/scope.md` counts 21 of 28 fixtures that reach signature
+  verification, where it counted 20 of 27, and lists the threshold as
+  covered by the fixture, where it listed it as not covered.
+  `docs/fixtures.md` lists the fixture, and says the 2-of-3 fixture's
+  verifier state sets no `requiredSignatures`, where it said no verifier
+  reads a threshold.
 - `scripts/check_sibling_rows.py` holds the Spec cell of each sibling row
   in `docs/sibling-repositories.md` to the `spec.id` and `spec.version` that
   repository's `conformance.json` declares, where it left that cell

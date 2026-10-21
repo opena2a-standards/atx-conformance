@@ -24,9 +24,10 @@ What this suite verifies:
 | Revocation via the credential `revoked` flag | `fixtures/revoked.json` |
 | Revocation via CRL membership alone, the credential's own flag being false (§1.3 step 6, which both reference verifiers perform at their step 3, before any signature) | `fixtures/revoked-crl-only.json` |
 | Trusted-issuer DID set | `fixtures/wrong-issuer.json` |
-| Ed25519 signature verification over the canonical payload | every fixture that passes steps 0 to 4 of the reference verifiers (strict parse, schema version, expiry, revocation by the flag or the CRL, trusted issuer): 20 of 27. The others reject before step 5; `go test` in `verifiers/go` checks that their signatures verify once that gate is lifted. The count follows the reference verifiers' order, which checks the CRL (§1.3 step 6) before the signatures (§1.3 steps 4 and 5), so `fixtures/revoked-crl-only.json` is among the others. Both fixtures whose CRL lists their agent carry valid signatures, so in the spec's order they reject as `REVOKED` too |
+| Ed25519 signature verification over the canonical payload | every fixture that passes steps 0 to 4 of the reference verifiers (strict parse, schema version, expiry, revocation by the flag or the CRL, trusted issuer): 21 of 28. The others reject before step 5; `go test` in `verifiers/go` checks that their signatures verify once that gate is lifted. The count follows the reference verifiers' order, which checks the CRL (§1.3 step 6) before the signatures (§1.3 steps 4 and 5), so `fixtures/revoked-crl-only.json` is among the others. Both fixtures whose CRL lists their agent carry valid signatures, so in the spec's order they reject as `REVOKED` too |
 | Hybrid Ed25519 + ML-DSA-65 signature verification (FIPS 204) | `fixtures/baseline-valid-hybrid.json` |
 | Multi-signature: every declared signature must verify (three Ed25519 signatures from three distinct keys) | `fixtures/threshold-2of3-cosignature.json` |
+| k-of-n signature threshold, such as 2-of-3 (§3.1 step 8): with `requiredSignatures` set in the verifier state, a credential whose declared Ed25519 signatures verify under fewer distinct keys than it sets rejects | `fixtures/threshold-1of3-cosignature.json`; no fixture sets a threshold its credential meets, see conformance.json notCovered |
 | Tampered-signature rejection | `fixtures/tampered-signature.json` |
 | Key-to-issuer binding (a trusted authority cannot sign for another; a chain DID that is not a trusted issuer contributes no eligible key) | `fixtures/cross-issuer-key.json`, `fixtures/v1_1-cross-issuer-key.json`, `fixtures/v1_1-untrusted-chain-authority.json` |
 | ATX v1.1 JCS(TBS) signing, signed-field integrity | `fixtures/v1_1-baseline-valid.json`, `fixtures/v1_1-tampered-capabilities.json` |
@@ -36,7 +37,6 @@ What this suite verifies:
 | Strict credential parse: duplicate object members reject at any depth (RFC 8259 §4 parser-divergence smuggling) | `fixtures/v1_1-duplicate-purpose-member.json` |
 | Fold-aware strict parse: case-variant members that `encoding/json` collapses last-wins (e.g. `TRUSTLEVEL`/`trustLevel`) reject as PARSE_ERROR | `fixtures/v1_1-case-variant-member.json` |
 | Distinct signer-authority count for trust level 3 and above (§1.3 step 7) | not covered; see conformance.json notCovered |
-| k-of-n threshold issuance, such as 2-of-3 (§3.1 step 8): a credential with fewer valid signatures than the threshold rejects | not covered; see conformance.json notCovered |
 
 What this suite does NOT verify:
 
@@ -109,7 +109,12 @@ single-suite Ed25519 credentials, and 6 of its 8 ACCEPT fixtures
 (`baseline-valid.json` among them) carry Ed25519 signatures only. What it
 requires is that every declared signature verifies, and that a credential
 which declares an ML-DSA-65 entry also carries a verifying Ed25519 entry
-(core.md §13, Cryptographic agility).
+(core.md §13, Cryptographic agility). Where a fixture's verifier state sets
+`requiredSignatures`, the declared Ed25519 signatures must also verify under
+at least that many distinct keys, each key counted once however many
+signatures verify under it. An ML-DSA-65 signature does not count toward
+it: core.md §1.3a.2 names the Ed25519 signatures the threshold signatures
+and the ML-DSA-65 one the hybrid signature.
 `baseline-valid-hybrid.json` and `v1_1-baseline-valid-hybrid.json` each
 carry an Ed25519 signature and an ML-DSA-65 signature over the same signed
 payload. In both, the ML-DSA-65 `value` is the base64 of a raw FIPS 204

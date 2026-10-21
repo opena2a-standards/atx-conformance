@@ -33,6 +33,11 @@ which is read and named where the link leads, an argument that is not
 UTF-8, which a line on stderr writes as its bytes, and a fixture path that
 is not UTF-8, which the report line naming it, and the load error of such a
 file that cannot be read, write as its bytes.
+They pin the requiredSignatures threshold of the verifier state: the
+distinct Ed25519 keys a credential's signatures verify under, each counted
+once whatever keyId names it and no ML-DSA-65 signature counted, against
+the count it sets, a count below 1 reported as a configuration error, and
+the member decoded as the Go reference verifier decodes it.
 They hold the report to the Go reference verifier's text: a boolean, a
 string a reason quotes, and the whole report over fixtures/, which must be
 docs/captures/go-verifier.txt byte for byte. Two tests
@@ -80,6 +85,10 @@ BASELINE_V11 = ROOT / "fixtures" / "v1_1-baseline-valid.json"
 BASELINE_V10 = ROOT / "fixtures" / "baseline-valid.json"
 # The fixture whose verifier state carries a CRL.
 BASELINE_CRL = ROOT / "fixtures" / "revoked-crl-only.json"
+# The fixture whose verifier state sets requiredSignatures (2), and the
+# fixture whose credential it carries cut to the first of three signatures.
+THRESHOLD_1OF3 = ROOT / "fixtures" / "threshold-1of3-cosignature.json"
+THRESHOLD_2OF3 = ROOT / "fixtures" / "threshold-2of3-cosignature.json"
 JCS_VECTORS = ROOT / "jcs-vectors" / "vectors"
 
 # The outcome the Go reference verifier reaches on a malformed typed member.
@@ -2034,6 +2043,227 @@ class FixtureWrapper(unittest.TestCase):
         self.assertIn("a-name.json  (load error: name {'a': 1} is not a JSON string)", text)
         self.assertEqual(text.count("observed: ACCEPT"), 2, text)
         self.assertEqual(text.splitlines()[-1], "summary: 2 pass, 1 fail (3 fixtures)")
+
+
+def _threshold_observed(required: int, distinct: int) -> str:
+    """The result the Go reference verifier writes when the declared Ed25519
+    signatures verify under `distinct` keys, fewer than `required`."""
+    return (
+        "REJECT[SIGNATURE_INVALID: signature threshold not met: requiredSignatures is "
+        f"{required}, distinct Ed25519 keys that verified a declared signature: {distinct}]"
+    )
+
+
+def _threshold_verdict(baseline: Path, required, signatures=None, edit=None) -> verify.VerifyResult:
+    """The verdict on `baseline` with its verifier state's requiredSignatures
+    set to `required` (None writes null; KEEP leaves the member as the
+    baseline has it), its credential carrying, with `signatures`, the
+    signatures at those indexes of the ones it carries, in that order, and
+    `edit` applied last to the fixture object."""
+    fixture = json.loads(baseline.read_text())
+    if required is not KEEP:
+        fixture["verifierState"]["requiredSignatures"] = required
+    if signatures is not None:
+        carried = fixture["atx"]["signatures"]
+        fixture["atx"]["signatures"] = [carried[i] for i in signatures]
+    if edit is not None:
+        edit(fixture)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "threshold.json"
+        path.write_text(json.dumps(fixture))
+        return verify.verify_fixture(verify.load_fixture(path))
+
+
+# Each case cuts the credential of the 2-of-3 fixture, whose three signatures
+# verify under the primary's and the two cosigners' keys, to the signatures at
+# the given indexes, under a verifier state whose requiredSignatures is the
+# value given (None: no threshold). The Go reference verifier's
+# TestRequiredSignaturesThreshold runs the same cases. (required, signature
+# indexes, the result the verifier writes).
+THRESHOLD_CASES = (
+    (None, (0,), "ACCEPT"),
+    (1, (0,), "ACCEPT"),
+    (2, (0,), _threshold_observed(2, 1)),
+    (2, (2,), _threshold_observed(2, 1)),
+    (2, (0, 0), _threshold_observed(2, 1)),
+    (2, (0, 1), "ACCEPT"),
+    (2, (1, 2), "ACCEPT"),
+    (2, (0, 1, 2), "ACCEPT"),
+    (3, (0, 2), _threshold_observed(3, 2)),
+    (3, (0, 1, 2), "ACCEPT"),
+)
+
+# The three tables below were recorded from `go run .` in ../go, built with
+# Go 1.26.3, on files _write_fixture_at and _write_repeated write with the
+# member at REQUIRED_SIGNATURES.
+REQUIRED_SIGNATURES = ("verifierState", "requiredSignatures")
+
+# A requiredSignatures value outside the Go verifier's int field, written in
+# place of the 1-of-3 fixture's: the file fails to load. (raw literal).
+GO_UNLOADABLE_THRESHOLDS = (
+    '"2"',
+    "2.5",
+    "2.0",
+    "1e0",
+    "true",
+    "[2]",
+    '{"k": 2}',
+    "9223372036854775808",
+    "-9223372036854775809",
+)
+
+# The result when requiredSignatures is renamed to another case (rename),
+# holds the raw literal, or is absent (None). Go matches the member name in
+# any case and leaves a null or absent member nil, which sets no threshold.
+# (baseline, raw literal, rename, the result the Go verifier wrote).
+GO_THRESHOLD_VERDICTS = (
+    (THRESHOLD_1OF3, KEEP, "RequiredSignatures", _threshold_observed(2, 1)),
+    (THRESHOLD_1OF3, KEEP, "REQUIREDSIGNATURES", _threshold_observed(2, 1)),
+    (THRESHOLD_1OF3, "null", None, "ACCEPT"),
+    (THRESHOLD_1OF3, None, None, "ACCEPT"),
+    (THRESHOLD_1OF3, "0", None, "REJECT[VERIFIER_CONFIG_ERROR: bad requiredSignatures: 0 is not a positive integer]"),
+    (THRESHOLD_1OF3, "-1", None, "REJECT[VERIFIER_CONFIG_ERROR: bad requiredSignatures: -1 is not a positive integer]"),
+    (THRESHOLD_1OF3, "-0", None, "REJECT[VERIFIER_CONFIG_ERROR: bad requiredSignatures: 0 is not a positive integer]"),
+    (
+        THRESHOLD_1OF3,
+        "-9223372036854775808",
+        None,
+        "REJECT[VERIFIER_CONFIG_ERROR: bad requiredSignatures: -9223372036854775808 is not a positive integer]",
+    ),
+    (THRESHOLD_1OF3, "1", None, "ACCEPT"),
+    (THRESHOLD_1OF3, "3", None, _threshold_observed(3, 1)),
+    (THRESHOLD_1OF3, "9223372036854775807", None, _threshold_observed(9223372036854775807, 1)),
+    (THRESHOLD_2OF3, "1", None, "ACCEPT"),
+    (THRESHOLD_2OF3, "2", None, "ACCEPT"),
+    (THRESHOLD_2OF3, "3", None, "ACCEPT"),
+    (THRESHOLD_2OF3, "4", None, _threshold_observed(4, 3)),
+)
+
+# The 1-of-3 fixture's requiredSignatures written twice: first under the name
+# given (its own when None) holding the raw literal, then as the fixture
+# writes it, 2. Go decodes both into the one field, keeps the last, and fails
+# to load the file when the first is outside the field's type. (first name,
+# raw literal, the result the Go verifier wrote, None for a load error).
+GO_THRESHOLD_REPEATS = (
+    (None, '"x"', None),
+    ("RequiredSignatures", "2.5", None),
+    (None, "null", _threshold_observed(2, 1)),
+    (None, "5", _threshold_observed(2, 1)),
+    ("RequiredSignatures", "0", _threshold_observed(2, 1)),
+)
+
+
+class RequiredSignaturesThreshold(unittest.TestCase):
+    """The k-of-n threshold of core.md section 3.1 step 8 (cosignatures from
+    2 of 3 key holders), which the verifier state sets as requiredSignatures:
+    the declared Ed25519 signatures must verify under at least that many
+    distinct keys. A key counts once however many signatures verify under it,
+    whatever keyId they carry, and an ML-DSA-65 signature does not count.
+    atx-conformance#132."""
+
+    def test_threshold_counts_the_keys_the_signatures_verify_under(self):
+        for required, signatures, observed in THRESHOLD_CASES:
+            with self.subTest(required=required, signatures=signatures):
+                got = _threshold_verdict(THRESHOLD_2OF3, required, signatures)
+                self.assertEqual(str(got), observed)
+                if got.accepted:
+                    self.assertEqual(got.sigs_valid, len(signatures))
+
+    def test_shipped_fixture_rejects_and_a_threshold_blind_run_accepts(self):
+        # The 1-of-3 fixture is the 2-of-3 credential cut to its first
+        # signature: with its requiredSignatures dropped, which is what a
+        # verifier that reads no threshold sees, it is accepted.
+        fixture = verify.load_fixture(THRESHOLD_1OF3)
+        self.assertEqual(fixture["verifierState"]["requiredSignatures"], 2)
+        got = verify.verify_fixture(fixture)
+        self.assertEqual(str(got), _threshold_observed(2, 1))
+        self.assertEqual(verify._expected_outcome(fixture)["reasonContains"], "threshold")
+        blind = _threshold_verdict(THRESHOLD_1OF3, KEEP, edit=lambda f: f["verifierState"].pop("requiredSignatures"))
+        self.assertTrue(blind.accepted, blind.reason)
+
+    def test_a_key_counts_once_whatever_key_id_it_is_listed_under(self):
+        # The verifier state lists the primary's key a second time under
+        # another keyId of the issuer, and the credential carries the
+        # primary's signature twice, once under each keyId: both verify,
+        # under one key.
+        alias = "did:opena2a:authority:opena2a.org#key-1-alias"
+
+        def aliased(fixture):
+            keys = fixture["verifierState"]["publicKeys"]
+            self.assertEqual(keys[0]["role"], "issuer-primary")
+            keys.append(dict(keys[0], keyId=alias))
+            signature = fixture["atx"]["signatures"][0]
+            fixture["atx"]["signatures"] = [signature, dict(signature, keyId=alias)]
+
+        got = _threshold_verdict(THRESHOLD_1OF3, KEEP, edit=aliased)
+        self.assertEqual(str(got), _threshold_observed(2, 1))
+        without = _threshold_verdict(THRESHOLD_1OF3, None, edit=aliased)
+        self.assertTrue(without.accepted, without.reason)
+        self.assertEqual(without.sigs_valid, 2)
+
+    def test_an_ml_dsa_65_signature_does_not_count(self):
+        # The hybrid baselines carry one Ed25519 and one ML-DSA-65 signature,
+        # both by the primary, and both verify.
+        for name in ("baseline-valid-hybrid.json", "v1_1-baseline-valid-hybrid.json"):
+            with self.subTest(fixture=name):
+                baseline = ROOT / "fixtures" / name
+                got = _threshold_verdict(baseline, 1)
+                self.assertTrue(got.accepted and got.ed25519_valid and got.mldsa65_valid, got.reason)
+                self.assertEqual(str(_threshold_verdict(baseline, 2)), _threshold_observed(2, 1))
+
+    def test_below_one_is_a_config_error_before_any_step(self):
+        # Reported before any step reads the credential, as a bad clock is:
+        # on the expired fixture it is reported in place of EXPIRED.
+        for name in ("threshold-2of3-cosignature.json", "expired.json"):
+            for required in (0, -1):
+                with self.subTest(fixture=name, required=required):
+                    got = _threshold_verdict(ROOT / "fixtures" / name, required)
+                    self.assertEqual(
+                        str(got),
+                        f"REJECT[VERIFIER_CONFIG_ERROR: bad requiredSignatures: {required} is not a positive integer]",
+                    )
+
+    def test_member_outside_its_go_type_is_a_load_error(self):
+        for literal in GO_UNLOADABLE_THRESHOLDS:
+            with self.subTest(value=literal), tempfile.TemporaryDirectory() as tmp:
+                written = _write_fixture_at(Path(tmp), "t.json", THRESHOLD_1OF3, REQUIRED_SIGNATURES, literal)
+                with self.assertRaises(ValueError) as raised:
+                    verify._expected_outcome(verify.load_fixture(written))
+                self.assertTrue(
+                    str(raised.exception).startswith("verifierState.requiredSignatures "), raised.exception
+                )
+
+    def test_member_reaches_the_go_verdict(self):
+        for baseline, literal, rename, observed in GO_THRESHOLD_VERDICTS:
+            with self.subTest(baseline=baseline.name, value=literal, name=rename):
+                got = _fixture_verdict(baseline, REQUIRED_SIGNATURES, literal, rename)
+                self.assertEqual(str(got), observed)
+
+    def test_repeated_member_reaches_the_go_verdict(self):
+        for first_name, literal, observed in GO_THRESHOLD_REPEATS:
+            with self.subTest(name=first_name, value=literal), tempfile.TemporaryDirectory() as tmp:
+                written = _write_repeated(Path(tmp), "r.json", THRESHOLD_1OF3, REQUIRED_SIGNATURES, first_name, literal)
+                fixture = verify.load_fixture(written)
+                if observed is None:
+                    with self.assertRaises(ValueError) as raised:
+                        verify._expected_outcome(fixture)
+                    self.assertTrue(
+                        str(raised.exception).startswith("verifierState.requiredSignatures "), raised.exception
+                    )
+                    continue
+                self.assertEqual(str(verify.verify_fixture(fixture)), observed)
+
+    def test_a_later_null_under_another_case_sets_no_threshold(self):
+        # Go keeps the last of the names that fold together, here a null,
+        # which leaves the field nil.
+        with tempfile.TemporaryDirectory() as tmp:
+            text = THRESHOLD_1OF3.read_text().replace(
+                '"requiredSignatures": 2', '"requiredSignatures": 2, "RequiredSignatures": null', 1
+            )
+            path = Path(tmp) / "null-last.json"
+            path.write_text(text)
+            got = verify.verify_fixture(verify.load_fixture(path))
+        self.assertTrue(got.accepted, got.reason)
 
 
 class PublicKeyHex(unittest.TestCase):

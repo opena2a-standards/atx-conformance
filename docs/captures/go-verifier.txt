@@ -26,6 +26,9 @@ PASS  fixtures/revoked.json
 PASS  fixtures/tampered-signature.json
        expected: REJECT [SIGNATURE_INVALID]
        observed: REJECT[SIGNATURE_INVALID: Ed25519 signature did:opena2a:authority:opena2a.org#key-1 did not verify against any configured public key]
+PASS  fixtures/threshold-1of3-cosignature.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: signature threshold not met: requiredSignatures is 2, distinct Ed25519 keys that verified a declared signature: 1]
 PASS  fixtures/threshold-2of3-cosignature.json
        expected: ACCEPT
        observed: ACCEPT
@@ -96,4 +99,4 @@ PASS  fixtures/wrong-issuer.json
        expected: REJECT [UNTRUSTED_ISSUER]
        observed: REJECT[UNTRUSTED_ISSUER: issuer DID did:opena2a:authority:attacker.example is not in the verifier's trusted set (untrusted issuer)]
 
-summary: 27 pass, 0 fail (27 fixtures)
+summary: 28 pass, 0 fail (28 fixtures)
