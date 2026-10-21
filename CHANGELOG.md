@@ -923,6 +923,22 @@ they should not.
 
 ### Fixed
 
+- The #259 entry below says that outside the RFC 3339 layout the Go
+  verifier's error still differed by release, and that the #266 entry above
+  it makes the Go 1.22.12 build name the offset too, where it said the error
+  can still differ (#268). Built with Go 1.22.0, 1.22.12, 1.23.0 or 1.26.3,
+  the Go verifier rejects `fixtures/baseline-valid.json` with an `issuedAt`
+  of `2099-12-31T23:59:59+25:00x` as `PARSE_ERROR: parsing time
+  "2099-12-31T23:59:59+25:00x": time zone offset hour out of range`; on the
+  commit before #266, built with Go 1.22.12, it named the extra text
+  (`extra text: "x"`). `scripts/check_readme_counts.py` fails when a
+  sentence of this file's top section says a result can still differ by
+  release, or still differs between Go releases, and quotes as a code span
+  a timestamp that `verifiers/go/verifier/verify_test.go` writes as a
+  string literal: what those tests expect of a timestamp does not depend on
+  the Go release that runs them. On this file as the previous commit left
+  it, the check names the #259 sentence and exits 1. The self-test adds
+  eleven cases (272 altered sites, from 261). No fixture changes.
 - The Go verifier names the time zone offset, as Go 1.23 and later do, when
   a timestamp outside the RFC 3339 layout has an offset hour above 24 or
   minute above 60 and text follows the offset or the offset's sign or
@@ -974,9 +990,10 @@ they should not.
   `verifiers/python/test_verify.py` carry the new rows, and
   `docs/running-the-verifiers.md` says Go 1.22 refuses such a timestamp for
   the day when its day is out of range. Outside the RFC 3339 layout the
-  error can still differ by release: built with Go 1.22.12 the verifier
-  names the extra text in an `issuedAt` of `2099-12-31T23:59:59+25:00x`,
-  and built with Go 1.23.0 or Go 1.26.3 the offset. The sidecar
+  error still differed by release: built with Go 1.22.12 the verifier
+  named the extra text in an `issuedAt` of `2099-12-31T23:59:59+25:00x`,
+  and built with Go 1.23.0 or Go 1.26.3 the offset; the #266 entry above
+  makes it name the offset built with Go 1.22.12 too. The sidecar
   `docs/captures/go-verifier.json`, re-taken with
   `scripts/capture_go_verifier.py`, records the new tree of
   `verifiers/go/verifier`; `docs/captures/go-verifier.txt` is unchanged
