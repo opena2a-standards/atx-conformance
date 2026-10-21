@@ -78,9 +78,11 @@ lesson and scoped to the whole body because ATX signs it all):
     followed directly by another \\u escape, cannot be canonicalized (RFC 8785
     section 3.2.2.2) and rejects as VERIFIER_CONFIG_ERROR, as it does in the
     Go reference verifier, which refuses it before its JCS library reads the
-    escape. A number in it outside the float64 range (1e400, or an integer of
-    401 digits) rejects as VERIFIER_CONFIG_ERROR too: that library parses
-    every number as a float64.
+    escape. This verifier refuses it before it canonicalizes the payload too,
+    so a number beside it that the serializer cannot write (1.5) does not
+    make the credential a signature failure. A number in it outside the
+    float64 range (1e400, or an integer of 401 digits) rejects as
+    VERIFIER_CONFIG_ERROR too: that library parses every number as a float64.
   - NaN, Infinity and -Infinity are not JSON, so a file carrying one fails to
     load, as it does in the Go reference verifier.
   - the file is read as UTF-8 the way Go's encoding/json reads it: each byte
@@ -646,6 +648,33 @@ def _holds_number_outside_float64(value: Any) -> bool:
     return False
 
 
+def _first_unpaired_surrogate(value: Any) -> str | None:
+    """The first unpaired UTF-16 surrogate in a string or member name of the
+    raw JSON value, in the order the text writes them, or None. json.loads
+    joins a high surrogate escape and the low one directly after it into one
+    character and keeps every other surrogate escape as that surrogate, so
+    each one found is an escape the Go reference verifier's
+    unpairedSurrogateEscape finds; a byte of the file outside UTF-8 loads as
+    U+FFFD (_go_replace), never as a surrogate. Walked with a stack, not by
+    recursion, as _holds_number_outside_float64 is."""
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            found = _UNPAIRED_SURROGATE.search(item)
+            if found is not None:
+                return found.group()
+        elif isinstance(item, dict):
+            # Pushed last to first, so each name is read before its value and
+            # the members in the order the text writes them.
+            for name, member in reversed(list(item.items())):
+                stack.append(member)
+                stack.append(name)
+        elif isinstance(item, list):
+            stack.extend(reversed(item))
+    return None
+
+
 # The Go type of each credential member the Go reference verifier's atx struct
 # declares. Members it holds as raw JSON (declaredPurpose, behavioralProfile,
 # scanSummary) or does not declare (createdAt) are not decoded.
@@ -1126,6 +1155,21 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
             _decode_scan_summary(atx.get("scanSummary"))
         except _DecodeError:
             return VerifyResult(reject_category="SIGNATURE_INVALID", reason=_SCAN_SUMMARY_UNSIGNED)
+        surrogate = _first_unpaired_surrogate(atx.get("declaredPurpose"))
+        if surrogate is not None:
+            # declaredPurpose enters the TBS as written, and RFC 8785
+            # §3.2.2.2 refuses a string holding a lone surrogate. The Go
+            # reference verifier refuses the escape before it canonicalizes
+            # the TBS, and so does this one: a number beside it that this
+            # serializer cannot write (1.5) would otherwise leave no payload,
+            # and the credential would reject as SIGNATURE_INVALID. The
+            # reason is the Go verifier's, which repeats the escape as
+            # written; this one writes its hex digits in lower case.
+            return VerifyResult(
+                reject_category="VERIFIER_CONFIG_ERROR",
+                reason="v1.1 canonicalization failed: declaredPurpose holds an unpaired "
+                f"UTF-16 surrogate escape (\\u{ord(surrogate):04x})",
+            )
         if _holds_number_outside_float64(atx.get("declaredPurpose")):
             # declaredPurpose enters the TBS as written, so no typed decode
             # refuses the number first. The Go reference verifier's JCS

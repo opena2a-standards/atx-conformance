@@ -783,7 +783,8 @@ GO_SURROGATE_VERDICTS = (
 # declaredPurpose enters that payload undecoded, and the Go verifier refuses
 # an unpaired surrogate escape in it before its JCS library reads it, one
 # followed by another \u escape included, which that library reads as a
-# single U+FFFD.
+# single U+FFFD, and one beside a number the Python verifier's JCS serializer
+# cannot write, 1.5.
 GO_SURROGATE_VERDICTS_V11 = (
     (("publisher",), '"\\ud800"', "SIGNATURE_INVALID"),
     (("capabilities",), '["\\ud800"]', "SIGNATURE_INVALID"),
@@ -803,8 +804,15 @@ GO_SURROGATE_VERDICTS_V11 = (
     (("declaredPurpose",), '"\\ud800\\udc00\\udc00"', "VERIFIER_CONFIG_ERROR"),
     (("declaredPurpose",), '{"k": "x\\ud800\\u0041"}', "VERIFIER_CONFIG_ERROR"),
     (("declaredPurpose",), '{"x\\ud800\\u0041": 1}', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '{"a": 1.5, "b": "\\ud800\\u0041"}', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '{"a": 1.5, "b": "\\ud800"}', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '{"b": "\\ud800\\u0041", "c": 1.5}', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '["\\ud800\\u0041", 1.5]', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '{"a": 1.5, "\\udc00x": 1}', "VERIFIER_CONFIG_ERROR"),
     (("declaredPurpose",), '"\\ud83d\\ude00"', "SIGNATURE_INVALID"),
     (("declaredPurpose",), '"\\\\ud800"', "SIGNATURE_INVALID"),
+    (("declaredPurpose",), '{"a": 1.5, "b": "\\ud83d\\ude00"}', "SIGNATURE_INVALID"),
+    (("declaredPurpose",), '["\\\\ud800", 1.5]', "SIGNATURE_INVALID"),
 )
 
 # trustScore as Go formats it with %.6f into both signed payloads: the float64
@@ -1452,6 +1460,28 @@ class GoUnpairedSurrogate(unittest.TestCase):
             with self.subTest(path=path, value=literal):
                 got = _at_verdict(BASELINE_V11, path, literal)
                 self.assertEqual(_outcome(got), outcome, got.reason)
+
+    def test_declared_purpose_escape_is_refused_before_a_number(self):
+        # The JCS serializer cannot write 1.5, which left no payload to
+        # verify, so a declaredPurpose holding one beside an unpaired
+        # surrogate escape was a signature failure here. The Go verifier
+        # refuses the escape before it canonicalizes, naming the first one
+        # the text writes, and so does this one, before the 1e400 it would
+        # otherwise name.
+        for literal, escape in (
+            ('{"a": 1.5, "b": "\\ud800\\u0041"}', "\\ud800"),
+            ('{"a": 1.5, "b": "\\ud800"}', "\\ud800"),
+            ('["\\ud800\\udc00\\udc00", 2.5]', "\\udc00"),
+            ('{"a": 1e400, "b": "\\ud800"}', "\\ud800"),
+        ):
+            with self.subTest(value=literal):
+                got = _at_verdict(BASELINE_V11, ("declaredPurpose",), literal)
+                self.assertEqual(got.reject_category, "VERIFIER_CONFIG_ERROR", got.reason)
+                self.assertEqual(
+                    got.reason,
+                    "v1.1 canonicalization failed: declaredPurpose holds an unpaired "
+                    f"UTF-16 surrogate escape ({escape})",
+                )
 
     def test_declared_purpose_signed_with_the_replacement_character(self):
         # The Go verifier's JCS library reads an unpaired surrogate escape

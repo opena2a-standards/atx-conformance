@@ -871,6 +871,22 @@ they should not.
 
 ### Fixed
 
+- The Python verifier rejects a v1.1 credential whose `declaredPurpose`
+  holds an unpaired UTF-16 surrogate escape as `VERIFIER_CONFIG_ERROR` when
+  it also holds a number its JCS serializer cannot write, `1.5` for one, as
+  the Go verifier does (#173). It refused an escape in a string only as it
+  encoded the payload, after the number had stopped it and left no
+  payload, so it reported `SIGNATURE_INVALID`: on
+  `{"a": 1.5, "b": "\ud800"}`, and on
+  `{"a": 1.5, "b": "\ud800\ud800"}` once the Go verifier refused that
+  escape too (above). It now refuses the escape before it canonicalizes the
+  payload, so an escape beside a number outside the float64 range is named
+  in place of the number, as in the Go verifier. Its reason, which quoted
+  the encoder's error, is the one the Go verifier writes, naming the first
+  unpaired escape, with its hex digits in lower case.
+  `GO_SURROGATE_VERDICTS_V11` and
+  `test_declared_purpose_escape_is_refused_before_a_number` in
+  `verifiers/python/test_verify.py` pin it. No fixture changes.
 - The `aip-conformance` row in `docs/sibling-repositories.md` names AIP
   v1.0.0-draft, the `spec.id` and `spec.version` that
   `opena2a-standards/aip-conformance` declares in its `conformance.json`,
