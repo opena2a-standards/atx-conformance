@@ -18,7 +18,9 @@ and the git tree id of each as the run read it, the uncommitted files under
 those paths, the time, the exit code, the number of lines written to
 standard error (not captured), the summary line, and the capture's SHA-256
 and byte and line counts. A run that exits non-zero, prints no `summary:`
-line last, or prints bytes that are not UTF-8 writes nothing.
+line last, or prints bytes that are not UTF-8 writes nothing. A run whose
+sidecar lists a file in `inputsUncommitted` names the files on its last
+line and says `--check` fails on that sidecar.
 
 The sidecar records tree ids, not a commit id. A capture is committed on
 a branch that is squash-merged, so the commit a run sees is left off the
@@ -27,12 +29,19 @@ files under the path, so once the branch is merged `git rev-parse
 HEAD:<path>` on the default branch gives the recorded id until the path
 changes.
 
+A capture is taken once the inputs it reads are committed.
+`inputsUncommitted` lists the files under those paths that differ from
+HEAD, or are untracked and not ignored, when the capture is taken;
+committed in the same commit as the changes to those files, the sidecar
+would name as uncommitted changes that commit holds, so `--check` fails on
+a sidecar whose list is not empty.
+
 `--check` runs no Go command and needs no Go toolchain; it runs git. It
 fails when the sidecar is missing, is not a JSON object, lacks a member or
 holds one of the wrong type, names another command, working directory,
 capture or list of input paths than README.md or another `ranAs` than the
-command runs as, records tree ids other than
-those the input paths hold in the working tree, records a non-zero exit
+command runs as, records tree ids other than those the input paths hold in
+the working tree, lists a file in `inputsUncommitted`, records a non-zero exit
 code, or does not describe the committed capture's bytes and last line;
 and when README.md's excerpt is not the capture's lines, in order, with a
 line holding only `...` standing for the lines left out. It runs the
@@ -314,6 +323,11 @@ def sidecar_failures(root: Path, start: Start, data: bytes) -> list[str]:
                             f"the paths the command reads in this tree are {json.dumps(trees)}; "
                             "the capture was taken on other inputs: run "
                             "scripts/capture_go_verifier.py")
+    if doc["inputsUncommitted"]:
+        failures.append(f"{start.sidecar}: `inputsUncommitted` is "
+                        f"{json.dumps(doc['inputsUncommitted'])}; the capture was taken with "
+                        "a change to each file it lists uncommitted: commit the changes, "
+                        "then run scripts/capture_go_verifier.py")
     if not UTC.fullmatch(doc["ranAtUtc"]):
         failures.append(f"{start.sidecar}: `ranAtUtc` is not a UTC time "
                         "(YYYY-MM-DDTHH:MM:SSZ)")
@@ -517,6 +531,10 @@ def write(root: Path, runner: Runner = run_command, describer: Describer = descr
     (root / start.sidecar).write_text(json.dumps(sidecar, indent=2, ensure_ascii=False) + "\n",
                                       encoding="utf-8")
     print(f"wrote {start.capture} ({len(lines)} lines) and {start.sidecar}: {lines[-1]}")
+    if sidecar["inputsUncommitted"]:
+        print(f"{start.sidecar} lists {', '.join(sidecar['inputsUncommitted'])} in "
+              "`inputsUncommitted`, and --check fails on it: commit the changes to the "
+              "inputs, then run scripts/capture_go_verifier.py again")
     return 0
 
 
@@ -730,6 +748,22 @@ def _after_squash() -> tuple[list[str], list[str], list[str]]:
         return check(clone), ids, unresolved
 
 
+def _capture_before_commit() -> tuple[str, list[str], list[str]]:
+    """Take a capture with a change to an input not yet committed, then commit
+    the change, the capture and the sidecar together. Returns what write()
+    printed, the `inputsUncommitted` it recorded, and check() on that commit."""
+    with _tree() as (root, start):
+        data = (root / start.capture).read_bytes()
+        changed = root / _package_dir(start) / INPUT
+        changed.write_text(changed.read_text(encoding="utf-8") + "changed\n", encoding="utf-8")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            write(root, lambda argv, cwd: Run(data, b"", 0), _fake_describe)
+        recorded = json.loads((root / start.sidecar).read_text(encoding="utf-8"))
+        _commit_all(root, "an input change and a capture taken before it was committed")
+        return out.getvalue(), recorded["inputsUncommitted"], check(root)
+
+
 def _files(root: Path) -> dict[str, bytes]:
     return {p.relative_to(root).as_posix(): p.read_bytes()
             for p in sorted(root.rglob("*")) if p.is_file()}
@@ -846,6 +880,24 @@ def _cases(start: Start) -> list[Case]:
     def written() -> dict:
         return published()[1]
 
+    # The placeholder file under the package directory, and the failure
+    # check() names for a sidecar listing it in `inputsUncommitted`.
+    changed_input = f"{_package_dir(start)}/{INPUT}"
+    lists_uncommitted = f"`inputsUncommitted` is {json.dumps([changed_input])}"
+
+    @functools.cache
+    def before_commit() -> tuple[str, list[str], list[str]]:
+        return _capture_before_commit()
+
+    def write_names_uncommitted() -> bool:
+        out, recorded, _ = before_commit()
+        last = out.splitlines()[-1] if out else ""
+        return recorded == [changed_input] and changed_input in last and "--check fails" in last
+
+    def committed_with_change_fails() -> bool:
+        failures = before_commit()[2]
+        return bool(failures) and all(lists_uncommitted in f for f in failures)
+
     def check_tree_names_missing_sidecar() -> bool:
         rc, out = _check_tree_on(lambda root, s: (root / s.sidecar).unlink())
         return rc == 1 and f"FAIL {start.sidecar} missing" in out
@@ -953,6 +1005,14 @@ def _cases(start: Start) -> list[Case]:
          lambda: _fails(lambda root, s: (root / "go.mod").write_text(
              (root / "go.mod").read_text(encoding="utf-8") + "\n// changed\n",
              encoding="utf-8"), "`inputTrees`")),
+        ("fails when `inputsUncommitted` lists an input file",
+         lambda: _fails(_set("inputsUncommitted", [changed_input]), lists_uncommitted)),
+        ("write() run with a change to an input uncommitted lists that file in "
+         "`inputsUncommitted`, and its last line names the file and says --check fails",
+         write_names_uncommitted),
+        ("a capture taken with a change to an input uncommitted, then committed with that "
+         "change, fails on `inputsUncommitted` and on no other member",
+         committed_with_change_fails),
         ("fails when the tree is not a git work tree",
          lambda: _fails(lambda root, s: shutil.rmtree(root / ".git"),
                         "cannot read the git tree ids")),
