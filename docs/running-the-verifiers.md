@@ -141,7 +141,7 @@ Depends on:
   refuses it for the day when its day is out of range
   (`2026-02-30T00:00:00+25:00`), and Go 1.23 and later refuse it for the
   offset, so the verifier checks the offset itself (`checkOffset`), also
-  before it reports a day out of range (`offsetBeforeDay`), and gives Go
+  before it reports a day out of range (`offsetFirst`), and gives Go
   1.23's error under Go 1.22 too; the Python verifier refuses it the same
   way. In a CRL's `issuedAt` or `nextUpdate` or a CRL entry's `revokedAt`
   the fixture fails to load, in the credential's `issuedAt` or `expiresAt`
@@ -149,9 +149,16 @@ Depends on:
   is a `VERIFIER_CONFIG_ERROR`, and in a v1.1 credential's
   `behavioralProfile.generatedAt` the signed payload carries
   `behavioralProfile` as null, so a signature made over the profile fails as
-  `SIGNATURE_INVALID`. An offset of `+24:00` or `+23:60` decodes. Measured
-  with Go 1.22.12 and Go 1.26.3; to build with the release CI uses, run
-  `GOTOOLCHAIN=go1.22.12 go run . ../../fixtures`.
+  `SIGNATURE_INVALID`. An offset of `+24:00` or `+23:60` decodes. Outside
+  the RFC 3339 layout, with text after such an offset
+  (`2099-12-31T23:59:59+25:00x`) or a minute that is not two digits after
+  an hour above 24 (`2026-02-30T00:00:00+25:0a`), Go 1.22 refuses the
+  timestamp for the extra text or as an offset it cannot parse, and Go 1.23
+  and later for the offset; the verifier gives Go 1.23's error there too
+  (`offsetFirst`). The Python verifier refuses such a timestamp as not in
+  the RFC 3339 layout; in a credential's `issuedAt` both verifiers reject
+  it as a `PARSE_ERROR`. Measured with Go 1.22.12 and Go 1.26.3; to build
+  with the release CI uses, run `GOTOOLCHAIN=go1.22.12 go run . ../../fixtures`.
 
   A timestamp written with a JSON escape (the `Z` written as a `\u` escape,
   for example) fails to decode under every release, as it does in the Python

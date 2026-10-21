@@ -1394,10 +1394,10 @@ func mustHexDecode(t *testing.T, s string) []byte {
 // release that changes how the decoder treats one of these inputs, for example
 // by enabling the strict RFC 3339 checks the standard library has disabled
 // (golang/go#54580), fails here before the two verifiers drift apart. A
-// timestamp in the RFC 3339 layout whose offset has an hour above 24 or a
-// minute above 60 is refused with the error Go 1.23 and later give it, under
-// every release, whether its day is in range or not (checkOffset,
-// offsetBeforeDay).
+// timestamp whose offset has an hour above 24 or a minute above 60 is refused
+// with the error Go 1.23 and later give it, under every release, whether its
+// day is in range or not, and whether text follows the offset or its sign or
+// minute is malformed (checkOffset, offsetFirst).
 func TestTimestampDecode(t *testing.T) {
 	accepted := []struct {
 		in, utc     string
@@ -1482,6 +1482,49 @@ func TestTimestampDecode(t *testing.T) {
 			t.Errorf("%q: parseRFC3339 error %v, want %s", c.in, err, want)
 		}
 	}
+	// Outside the RFC 3339 layout. Go 1.23 and later refuse the first nine for
+	// the offset, which they check before the text after it, its sign and its
+	// minute's digits; Go 1.22 refuses the first five for the extra text and
+	// the last four as an offset it cannot parse. The decoder and
+	// parseRFC3339 give Go 1.23's error under every release.
+	const cannotParse = ` as "2006-01-02T15:04:05Z07:00": cannot parse `
+	outside := []struct{ in, msg string }{
+		{"2099-12-31T23:59:59+25:00x", ": time zone offset hour out of range"},
+		{"2099-12-31T23:59:59+23:61x", ": time zone offset minute out of range"},
+		{"2099-12-31T23:59:59.5+25:61x", ": time zone offset minute out of range"},
+		{"2099-02-30T23:59:59+25:00x", ": time zone offset hour out of range"},
+		{"2099-12-31T23:59:59+25:00Z", ": time zone offset hour out of range"},
+		{"2026-02-30T00:00:00+25:0a", ": time zone offset hour out of range"},
+		{"2099-12-31T23:59:59+25:6a", ": time zone offset hour out of range"},
+		{"2099-12-31T23:59:59x25:00", ": time zone offset hour out of range"},
+		{"2099-12-31T23:59:59x23:61", ": time zone offset minute out of range"},
+	}
+	// Controls: Go 1.23 and later do not refuse these for the offset's range,
+	// whose offset is in range, follows a Z, is not six bytes with a colon
+	// fourth, or has an hour that is not two digits (so its minute is not
+	// read), or that has an hour out of range before the offset; every
+	// release gives the same error.
+	outsideControls := []struct{ in, msg string }{
+		{"2099-12-31T23:59:59+24:00x", `: extra text: "x"`},
+		{"2099-12-31T23:59:59Z+25:00", `: extra text: "+25:00"`},
+		{"2099-12-31T23:59:59x24:00", cannotParse + `"x24:00" as "Z07:00"`},
+		{"2099-12-31T23:59:59+25-00", cannotParse + `"+25-00" as "Z07:00"`},
+		{"2099-12-31T23:59:59 +25:00", cannotParse + `" +25:00" as "Z07:00"`},
+		{"2099-12-31T23:59:59+25:0", cannotParse + `"+25:0" as "Z07:00"`},
+		{"2099-12-31T23:59:59+0a:61", cannotParse + `"+0a:61" as "Z07:00"`},
+		{"2099-12-31T24:00:00+25:00x", ": hour out of range"},
+	}
+	for _, c := range append(outside, outsideControls...) {
+		want := `parsing time "` + c.in + `"` + c.msg
+		raw, _ := json.Marshal(c.in)
+		var got timestamp
+		if err := json.Unmarshal(raw, &got); err == nil || err.Error() != want {
+			t.Errorf("%q: decode error %v, want %s", c.in, err, want)
+		}
+		if _, err := parseRFC3339(c.in); err == nil || err.Error() != want {
+			t.Errorf("%q: parseRFC3339 error %v, want %s", c.in, err, want)
+		}
+	}
 	// A timestamp written with a JSON escape, as raw JSON. Built with Go 1.27,
 	// encoding/json decodes these into a plain time.Time field; the timestamp
 	// decoder refuses them under every release, as the Python verifier does.
@@ -1504,7 +1547,7 @@ func TestTimestampDecode(t *testing.T) {
 // timestamp. Go 1.22's time package decodes such a timestamp when its day is
 // in range, so before checkOffset a Go 1.22 build reached SIGNATURE_INVALID on
 // such an expiresAt and ACCEPT on such a clock. It refuses
-// 2026-02-30T00:00:00+25:00 for the day, so before offsetBeforeDay a Go 1.22
+// 2026-02-30T00:00:00+25:00 for the day, so before offsetFirst a Go 1.22
 // build named the day in an issuedAt, a clock or a CRL issuedAt, where Go 1.23
 // and later name the offset. Go 1.23 and later reach the verdicts below, and
 // the Python verifier's GO_OFFSET_VERDICTS and GO_UNLOADABLE_OFFSETS hold the
@@ -1571,6 +1614,51 @@ func TestOffsetOutOfRangeVerdict(t *testing.T) {
 	}
 	if _, err := parseRFC3339("2026-06-01T00:00:00+23:60"); err != nil {
 		t.Errorf("clock +23:60: %v, want it to parse", err)
+	}
+}
+
+// TestOffsetOutsideLayoutVerdict pins the reason given for a timestamp outside
+// the RFC 3339 layout whose time zone offset has an hour above 24: text
+// follows the offset, or its minute is not two digits. Go 1.23 and later
+// name the offset; before offsetFirst a Go 1.22 build named the extra text
+// ("x") in the first and could not parse the offset ("+25:0a" as "Z07:00")
+// in the second. The verdict category was the same under each release. The
+// Python verifier refuses each issuedAt here as not in the RFC 3339 layout,
+// a PARSE_ERROR too.
+func TestOffsetOutsideLayoutVerdict(t *testing.T) {
+	values := []string{"2099-12-31T23:59:59+25:00x", "2026-02-30T00:00:00+25:0a"}
+	const msg = `": time zone offset hour out of range`
+	for _, path := range []string{repoRoot + "/fixtures/baseline-valid.json", repoRoot + "/fixtures/v1_1-baseline-valid.json"} {
+		for _, value := range values {
+			f, err := loadFixture(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var members map[string]json.RawMessage
+			if err := json.Unmarshal(f.ATX, &members); err != nil {
+				t.Fatal(err)
+			}
+			members["issuedAt"], _ = json.Marshal(value)
+			f.ATX, _ = json.Marshal(members)
+			if got := verify(f); got.RejectCategory != "PARSE_ERROR" || !strings.Contains(got.Reason, `"`+value+msg) {
+				t.Errorf("%s with issuedAt %q: got %s, want REJECT[PARSE_ERROR] naming the offset hour", path, value, got)
+			}
+
+			if f, err = loadFixture(path); err != nil {
+				t.Fatal(err)
+			}
+			f.VerifierState.ClockRFC3339 = value
+			if got := verify(f); got.RejectCategory != "VERIFIER_CONFIG_ERROR" || !strings.Contains(got.Reason, `"`+value+msg) {
+				t.Errorf("%s with clockRfc3339 %q: got %s, want REJECT[VERIFIER_CONFIG_ERROR] naming the offset hour", path, value, got)
+			}
+		}
+	}
+	for _, value := range values {
+		var f fixture
+		crl := `{"verifierState":{"crl":{"issuedAt":"` + value + `"}}}`
+		if err := json.Unmarshal([]byte(crl), &f); err == nil || !strings.Contains(err.Error(), `"`+value+msg) {
+			t.Errorf("CRL issuedAt %q: load error %v, want one naming the offset hour", value, err)
+		}
 	}
 }
 
