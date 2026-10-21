@@ -1095,19 +1095,19 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
             )
         try:
             payload = canonical_payload_v11(atx)
-        except NotImplementedError as exc:
+        except NotImplementedError:
             # The vendored JCS serializer refuses non-integer numbers
             # (rfc8785.py); a schema-valid v1.1 TBS carries none. One can still
             # arrive in content the signer never signed, e.g. a number
-            # injected into declaredPurpose, which enters the TBS verbatim.
-            # Without the canonical bytes no declared signature can verify, so
-            # reject in the category a verifier that does canonicalize the
-            # number reaches (the Go reference) instead of raising out of the
-            # run.
-            return VerifyResult(
-                reject_category="SIGNATURE_INVALID",
-                reason=f"no signature can be verified: the to-be-signed object cannot be canonicalized ({exc})",
-            )
+            # injected into declaredPurpose, which enters the TBS verbatim
+            # (fixtures/v1_1-declared-purpose-number-injected.json). Without
+            # the canonical bytes no declared signature can verify, so the
+            # loop below runs with no key to verify against, instead of
+            # raising out of the run. On content the signer never signed, each
+            # signature then fails with the reason the Go reference verifier
+            # writes: it canonicalizes the number, and the signature does not
+            # verify over those bytes.
+            payload = None
         except UnicodeEncodeError as exc:
             # Every decoded member holds U+FFFD where an unpaired surrogate
             # was escaped, so this is declaredPurpose, which enters the TBS as
@@ -1120,6 +1120,9 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
     else:
         payload = canonical_payload(atx)
     eds, pqs = index_public_keys(vs["publicKeys"], _authority_set_for(atx, vs["trustedIssuers"]))
+    if payload is None:
+        # No key verifies a signature over bytes the serializer cannot write.
+        eds, pqs = [], []
     result = VerifyResult(sigs_expected=len(atx["signatures"]))
 
     for sig in atx["signatures"]:

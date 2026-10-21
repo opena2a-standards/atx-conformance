@@ -13,6 +13,40 @@ they should not.
 
 ### Added
 
+- A MUST-REJECT fixture, `fixtures/v1_1-declared-purpose-number-injected.json`,
+  built by the generator (#130): the v1.1 baseline signed with no
+  `declaredPurpose`, carrying `"declaredPurpose": 1.5` added after signing.
+  §1.3a.2 rule 5 puts a present non-object value into the TBS verbatim, so
+  it expects `REJECT [SIGNATURE_INVALID]` with a reason containing
+  `signature`. The Go verifier canonicalizes the number and its Ed25519
+  signature does not verify. The Python verifier's serializer refuses a
+  number that is not an integer, so it has no bytes to verify a signature
+  over; it now runs its signature loop with no key to verify against and
+  writes the reason the Go verifier writes, `Ed25519 signature
+  did:opena2a:authority:opena2a.org#key-1 did not verify against any
+  configured public key`, where it wrote `no signature can be verified: the
+  to-be-signed object cannot be canonicalized (...)`. The category is
+  `SIGNATURE_INVALID` either way, and `test_verify.GoReportText` holds the
+  Python report over `fixtures/` to the Go capture byte for byte, so with
+  the old reason it failed on this fixture. `InjectedNumberPurpose` pins
+  the reason for `1.5`, `{"autonomy": 0.5}` and `["billing:inquiry", 0.25]`.
+  The Python verifier of `b0e094b`, the commit before its fix for #130,
+  ends with `TypeError: not enough arguments for format string` on this
+  fixture. None of the 25 fixtures before it carried a number that is not
+  an integer in `declaredPurpose`, so the parity gate ran no such input; it
+  now reports `go=PASS:REJECT[SIGNATURE_INVALID]
+  python=PASS:REJECT[SIGNATURE_INVALID]` on this fixture.
+  `scripts/schema_validation.py` holds it, with the array and string
+  injections, to schema errors under `declaredPurpose` only. The 25
+  existing fixtures and their `MANIFEST.sha256` lines are byte-identical;
+  the manifest gains one line. `conformance.json` and the capture under
+  `docs/captures/` are regenerated, the fixture counts in README.md,
+  COSIGNERS.md, CONTRIBUTING.md, `docs/continuous-verification.md` and
+  `docs/sibling-repositories.md` go from 25 to 26 (the sibling row's v1.1
+  count from 15 to 16, its declaredPurpose count from 6 to 7), and
+  `docs/scope.md` counts 19 of 26 fixtures that reach signature
+  verification, where it counted 18 of 25. `docs/fixtures.md` and
+  `docs/scope.md` list the fixture.
 - Both reference verifiers read the first `--` as the end of the options
   (#224): each argument after it is a path, one that starts with `-`
   included, and `--` itself names nothing. `atx-verify -- -h.json` and
