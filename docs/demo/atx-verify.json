@@ -1,0 +1,141 @@
+{
+  "schema": "demo-sidecar/2",
+  "surfaceClass": "terminal",
+  "tool": "atx-verify",
+  "version": "v0.0.0-20261020031110-014aa2e7700c",
+  "commit": "014aa2e7700c09d68d5666fa97d174ac01195298",
+  "prerelease": true,
+  "script": "docs/demo/atx-verify.tape",
+  "scriptSha256": "44f9f70f78575e0fe653928a83ea1767732fe6d9d4c2d01c33cd46fdf2ef6aea",
+  "recorder": {
+    "name": "vhs",
+    "version": "v0.12.0+render-context-patch",
+    "container": "docs/demo/docker/Dockerfile",
+    "patch": "docs/demo/docker/vhs-0.12.0-render-context.patch",
+    "image": "atx-conformance-vhs:9ab6bcd9ce45",
+    "imageId": "sha256:9d6a2c61e67ea676ae9be65261771ddfc527332c8321b627899fc113168c82d8"
+  },
+  "commands": [
+    "go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@latest",
+    "echo $?"
+  ],
+  "steps": [
+    {
+      "id": "s1",
+      "title": "Run the README's first command",
+      "anchorFrame": "docs/demo/atx-verify-s1.png",
+      "holdSeconds": 10,
+      "minHoldSeconds": 9.7,
+      "outputRows": 107,
+      "narrationWords": 23
+    },
+    {
+      "id": "s2",
+      "title": "Print the exit code",
+      "anchorFrame": "docs/demo/atx-verify-s2.png",
+      "holdSeconds": 5,
+      "minHoldSeconds": 4.9,
+      "outputRows": 1,
+      "narrationWords": 11
+    }
+  ],
+  "fixture": "fixtures/*.json built into github.com/opena2a-standards/atx-conformance@v0.0.0-20261020031110-014aa2e7700c, read by atx-verify run with no argument in an empty directory",
+  "fixtureSha": "2e2310d97790fbc939e231614d482e905f3c3669029c96766abe5a0cca349c97",
+  "fixtureUncommittedChanges": 0,
+  "ranAtUtc": "2026-10-21T03:08:29Z",
+  "durationSeconds": 27.84,
+  "outputs": {
+    "gif": {
+      "path": "docs/demo/atx-verify.gif",
+      "bytes": 262161,
+      "sha256": "919cb0bb9c5d33cb4c1157210fe4edab0494ebfef6a9433a767f7e0435e8b6dd",
+      "width": 1062,
+      "height": 564,
+      "frames": 86
+    },
+    "mp4": {
+      "path": "docs/demo/out/atx-verify.mp4",
+      "bytes": 341052,
+      "sha256": "fec8d75e888217be30038ab8706ac36fa32b346e1fa916dc5397fe98743e2d51",
+      "width": 1062,
+      "height": 564,
+      "frames": 696,
+      "durationSeconds": 27.84,
+      "codec": "h264",
+      "pixFmt": "yuv420p",
+      "frameRate": "25/1",
+      "faststart": true,
+      "committed": false
+    },
+    "frames": [
+      {
+        "path": "docs/demo/atx-verify-s1.png",
+        "bytes": 278231,
+        "sha256": "b6775ab459ef9181d42e65497d818e4c85689308be1ed95deefef2e7d6f8e174",
+        "width": 1062,
+        "height": 564
+      },
+      {
+        "path": "docs/demo/atx-verify-s2.png",
+        "bytes": 264593,
+        "sha256": "3b3e210fd2cad4c496fe7e604f582b499cc3c5bfca8bd3b8a7d761cc1941f791",
+        "width": 1062,
+        "height": 564
+      }
+    ]
+  },
+  "capture": "docs/demo/atx-verify-capture.txt",
+  "narration": "docs/demo/atx-verify.narration.json",
+  "pace": {
+    "typingSpeedMs": 120,
+    "preEnterHoldMs": 800,
+    "minHoldSeconds": 5,
+    "maxLineChars": 37,
+    "kind": "front-door"
+  },
+  "exitCodes": [
+    0,
+    0
+  ],
+  "meteredCostUsd": 0,
+  "typedLines": [
+    "go run github.com/opena2a-standards/\\",
+    "atx-conformance/cmd/atx-verify@latest",
+    "echo $?"
+  ],
+  "module": {
+    "path": "github.com/opena2a-standards/atx-conformance",
+    "query": "latest",
+    "version": "v0.0.0-20261020031110-014aa2e7700c",
+    "time": "2026-10-20T03:11:10Z",
+    "origin": {
+      "VCS": "git",
+      "URL": "https://github.com/opena2a-standards/atx-conformance",
+      "Hash": "014aa2e7700c09d68d5666fa97d174ac01195298"
+    },
+    "sum": "h1:KAevYIJSyX7V6DB+feaPSPli36vOsvP5fUquwJSkVBI=",
+    "versionLine": "atx-verify: github.com/opena2a-standards/atx-conformance v0.0.0-20261020031110-014aa2e7700c, built with go1.26.9"
+  },
+  "fixtureShaOf": "MANIFEST.sha256 of github.com/opena2a-standards/atx-conformance@v0.0.0-20261020031110-014aa2e7700c, from the Go module proxy",
+  "recordScript": "docs/demo/record-atx-verify.sh",
+  "recordScriptSha256": "7eb9b0043bdce46102a22a153569c23a967caf72855c469279e72f1893b226d6",
+  "fixturePath": "/work/front-door",
+  "homePath": "/work/demo-user",
+  "hostname": "laptop",
+  "columns": 110,
+  "rows": 28,
+  "framerate": 10,
+  "gifsicle": "-O3 --lossy=40 --batch",
+  "wallClockSeconds": 44.1,
+  "vhsPatchSha256": "080428a835be983b8a62229e11d5758398579c0f5eda7a1262220c4bf176129c",
+  "edits": [
+    "set-up not shown: the hidden set-up enters an empty directory and runs the command once, so the module is downloaded and built before the first frame"
+  ],
+  "environment": {
+    "os": "Debian GNU/Linux 13 (trixie)",
+    "go": "go version go1.26.9 linux/arm64",
+    "goproxy": "https://proxy.golang.org,direct",
+    "gosumdb": "sum.golang.org",
+    "gotoolchain": "local"
+  }
+}

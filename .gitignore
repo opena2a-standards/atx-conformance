@@ -9,6 +9,9 @@ verifiers/go/verify
 scripts/generate-fixtures/generate-fixtures
 scripts/generate-fixtures/main
 
+# The demo's MP4, written by docs/demo/record-atx-verify.sh; it is not committed here.
+docs/demo/out/
+
 # Python bytecode and venvs.
 __pycache__/
 *.py[cod]

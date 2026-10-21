@@ -94,6 +94,23 @@ they should not.
   streams and returns the exit code; its output and exit codes on the
   fixtures, on no argument, on a missing path and on a file that is not a
   fixture are unchanged. No fixture changes.
+- `docs/demo/atx-verify.tape` records README.md's first command,
+  `go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@latest`,
+  typed in an empty directory with nothing cloned, then `echo $?`.
+  `docs/demo/record-atx-verify.sh` builds the render image from
+  `docs/demo/docker/Dockerfile` (VHS 0.12.0 with its encoder patched, and a
+  Go toolchain), renders the tape with an empty home directory and writes
+  `docs/demo/atx-verify.gif`, one frame per step, the text version
+  `docs/demo/atx-verify-capture.txt` and the sidecar
+  `docs/demo/atx-verify.json` (schema `demo-sidecar/2`): the module version
+  `@latest` resolved to and its commit, the hashes of the script and the
+  outputs, the pace measured from the tape, and `prerelease: true` unless
+  HEAD carries the tag of that version. A render whose command does not exit
+  0 with a `summary:` line last, or whose typing speed, holds, length,
+  framing or size fall outside the limits the script names, writes no
+  sidecar and exits 3. `docs/demo/atx-verify.narration.json` holds the words
+  each hold is sized for. The MP4 a render writes goes to `docs/demo/out/`,
+  which is not committed. No fixture changes.
 
 ### Changed
 

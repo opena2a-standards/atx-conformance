@@ -1,0 +1,96 @@
+$ go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@latest
+PASS  fixtures/baseline-valid-hybrid.json
+       expected: ACCEPT
+       observed: ACCEPT
+       signatures: 2/2 valid (ed25519=true mldsa65=true)
+       trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+PASS  fixtures/baseline-valid.json
+       expected: ACCEPT
+       observed: ACCEPT
+       signatures: 1/1 valid (ed25519=true mldsa65=false)
+       trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+PASS  fixtures/cross-issuer-key.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: Ed25519 signature did:opena2a:authority:partner.example#key-1 did not verify against any configured public key]
+PASS  fixtures/expired.json
+       expected: REJECT [EXPIRED]
+       observed: REJECT[EXPIRED: expired at 2025-01-01T00:00:00Z, verifier clock is 2026-05-24T00:00:00Z]
+PASS  fixtures/malformed-schema.json
+       expected: REJECT [UNSUPPORTED_VERSION]
+       observed: REJECT[UNSUPPORTED_VERSION: unsupported atcVersion "2.0" (this verifier supports 1.0 and 1.1)]
+PASS  fixtures/revoked-crl-only.json
+       expected: REJECT [REVOKED]
+       observed: REJECT[REVOKED: agent appears on CRL: key compromise (test)]
+PASS  fixtures/revoked.json
+       expected: REJECT [REVOKED]
+       observed: REJECT[REVOKED: credential revoked field is true]
+PASS  fixtures/tampered-signature.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: Ed25519 signature did:opena2a:authority:opena2a.org#key-1 did not verify against any configured public key]
+PASS  fixtures/threshold-2of3-cosignature.json
+       expected: ACCEPT
+       observed: ACCEPT
+       signatures: 3/3 valid (ed25519=true mldsa65=false)
+       trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+PASS  fixtures/v1_1-baseline-valid-hybrid.json
+       expected: ACCEPT
+       observed: ACCEPT
+       signatures: 2/2 valid (ed25519=true mldsa65=true)
+       trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+PASS  fixtures/v1_1-baseline-valid.json
+       expected: ACCEPT
+       observed: ACCEPT
+       signatures: 1/1 valid (ed25519=true mldsa65=false)
+       trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+PASS  fixtures/v1_1-case-variant-member.json
+       expected: REJECT [PARSE_ERROR]
+       observed: REJECT[PARSE_ERROR: credential contains duplicate member "trustLevel" (strict parse: the whole ATX credential is a signed body; RFC 8259 §4 duplicate names are parser-divergent)]
+PASS  fixtures/v1_1-cross-issuer-key.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: Ed25519 signature did:opena2a:authority:partner.example#key-1 did not verify against any configured public key]
+PASS  fixtures/v1_1-declared-purpose-array-injected.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: Ed25519 signature did:opena2a:authority:opena2a.org#key-1 did not verify against any configured public key]
+PASS  fixtures/v1_1-declared-purpose-empty-whitespace.json
+       expected: ACCEPT
+       observed: ACCEPT
+       signatures: 1/1 valid (ed25519=true mldsa65=false)
+       trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+PASS  fixtures/v1_1-declared-purpose-string-injected.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: Ed25519 signature did:opena2a:authority:opena2a.org#key-1 did not verify against any configured public key]
+PASS  fixtures/v1_1-declared-purpose-valid.json
+       expected: ACCEPT
+       observed: ACCEPT
+       signatures: 1/1 valid (ed25519=true mldsa65=false)
+       trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+PASS  fixtures/v1_1-duplicate-purpose-member.json
+       expected: REJECT [PARSE_ERROR]
+       observed: REJECT[PARSE_ERROR: credential contains duplicate member "category" (strict parse: the whole ATX credential is a signed body; RFC 8259 §4 duplicate names are parser-divergent)]
+PASS  fixtures/v1_1-hybrid-mldsa-tampered.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: ML-DSA-65 signature did:opena2a:authority:opena2a.org#key-1-pqc did not verify against any configured public key]
+PASS  fixtures/v1_1-hybrid-pq-only.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: ML-DSA-65 signature declared without a verifying Ed25519 signature (an ML-DSA-65 entry requires an Ed25519 companion)]
+PASS  fixtures/v1_1-no-transparency-log-index.json
+       expected: ACCEPT
+       observed: ACCEPT
+       signatures: 1/1 valid (ed25519=true mldsa65=false)
+       trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+PASS  fixtures/v1_1-tampered-capabilities.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: Ed25519 signature did:opena2a:authority:opena2a.org#key-1 did not verify against any configured public key]
+PASS  fixtures/v1_1-tampered-declared-purpose.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: Ed25519 signature did:opena2a:authority:opena2a.org#key-1 did not verify against any configured public key]
+PASS  fixtures/v1_1-untrusted-chain-authority.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: Ed25519 signature did:opena2a:authority:attacker.example#key-1 did not verify against any configured public key]
+PASS  fixtures/wrong-issuer.json
+       expected: REJECT [UNTRUSTED_ISSUER]
+       observed: REJECT[UNTRUSTED_ISSUER: issuer DID did:opena2a:authority:attacker.example is not in the verifier's trusted set (untrusted issuer)]
+
+summary: 25 pass, 0 fail (25 fixtures)
+$ echo $?
+0
