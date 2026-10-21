@@ -871,6 +871,19 @@ they should not.
 
 ### Fixed
 
+- The `aip-conformance` row in `docs/sibling-repositories.md` names AIP
+  v1.0.0-draft, the `spec.id` and `spec.version` that
+  `opena2a-standards/aip-conformance` declares in its `conformance.json`,
+  where it named AIP v1.2.0-draft (#261). Run against the sibling
+  repositories, `scripts/check_sibling_rows.py` exits 0, where it reported
+  that the row's Spec cell names AIP v1.2.0-draft and exited 1. Its
+  self-test keeps the row that named AIP v1.2.0-draft among the retracted
+  rows the check must still fail on, checked against sibling data built
+  from the published rows: put in place of this commit's row, it fails
+  with `aip-conformance row's Spec cell names AIP v1.2.0-draft, but`, and
+  on the page of the previous commit, which publishes that row, the case
+  is red and the self-test exits 1. The self-test runs 18 cases, from 17.
+  No fixture changes.
 - Both reference verifiers refuse a timestamp whose time zone offset has an
   hour above 24 or a minute above 60 (`+25:00`, `+23:61`), and the Go
   verifier's verdict on one no longer depends on the Go release that built it

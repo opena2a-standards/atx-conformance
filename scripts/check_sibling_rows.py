@@ -22,13 +22,15 @@ GitHub API and holds the row to it:
   - every release version (`vX.Y`) in the row's Status cell is a tag there;
   - the row's Spec cell names the spec id and version the repository's
     conformance.json declares in `spec.id` and `spec.version` ("AIP
-    v1.2.0-draft" for `"id": "AIP", "version": "1.2.0-draft"`).
+    v1.0.0-draft" for `"id": "AIP", "version": "1.0.0-draft"`).
 
 Every run starts with a self-test: each site is altered in memory, one at a
 time, and the check must fail on it. The rows as published before this check
-existed must fail too, so the check keeps firing on the text it was written
-for. The self-test checks the altered rows against sibling data built from
-the rows themselves (offline_siblings), so it reads no repository.
+existed must fail too, and so must the aip-conformance row as published
+before its Spec cell was checked, which named AIP v1.2.0-draft while that
+repository declared AIP 1.0.0-draft, so the check keeps firing on the text it
+was written for. The self-test checks the altered rows against sibling data
+built from the rows themselves (offline_siblings), so it reads no repository.
 
 The check needs network access. It reads through `gh api` when the GitHub CLI
 is installed, so the CLI's login applies; otherwise it reads anonymously, or
@@ -86,28 +88,36 @@ COUNT_SITES = (
 NAMED_VERIFIERS = re.compile(r"\b([A-Z]\w*)/([A-Z]\w*) verifiers\b")
 RELEASE = re.compile(r"\bv\d+(?:\.\d+)+\b")
 # The spec a row's Spec cell names: an upper-case id, then `v` and a version
-# with any pre-release suffix ("AIP v1.2.0-draft", "ATP v1.0.0-rc1").
+# with any pre-release suffix ("AIP v1.0.0-draft", "ATP v1.0.0-rc1").
 SPEC_VERSION = re.compile(r"\b([A-Z][A-Z0-9]+) v(\d+(?:\.\d+)+(?:-[0-9A-Za-z.]+)?)(?![\w.-])")
 
-# The rows README.md published before this check existed, each with the
-# failure it must still produce.
-RETRACTED_ROWS = {
-    "atp-conformance": (
-        "| [`atp-conformance`](https://github.com/opena2a-standards/atp-conformance) "
-        "| ATP v1.0.0-rc1 protocol | 4 fixtures (discovery, trust-proof baseline, "
-        "trust-proof hybrid, Signed Tree Head), same 2-verifier pair, "
-        "`MANIFEST.sha256` pinned |",
-        "atp-conformance row states 4 as its fixture count",
-    ),
-    "aip-conformance": (
-        "| [`aip-conformance`](https://github.com/opena2a-standards/aip-conformance) "
-        "| AIP v1.0.0-draft identity protocol | §6.4 (VC `AgentTrustCredential`) "
-        "covered by cross-linking this repo's fixtures; §5.1 challenge-response "
-        "covered by 4 dedicated fixtures + Go/Python verifiers shipped at v0.2 "
-        "(2026-05-28, Decision 3-C) |",
-        "aip-conformance row names release v0.2",
-    ),
-}
+# Rows published before a part of this check existed, each with that part and
+# the failure it must still produce: the rows README.md published before this
+# check, and the aip-conformance row this page published before the Spec cell
+# was checked, which named AIP v1.2.0-draft while that repository declared AIP
+# 1.0.0-draft.
+RETRACTED_ROWS = (
+    ("atp-conformance", "this check",
+     "| [`atp-conformance`](https://github.com/opena2a-standards/atp-conformance) "
+     "| ATP v1.0.0-rc1 protocol | 4 fixtures (discovery, trust-proof baseline, "
+     "trust-proof hybrid, Signed Tree Head), same 2-verifier pair, "
+     "`MANIFEST.sha256` pinned |",
+     "atp-conformance row states 4 as its fixture count"),
+    ("aip-conformance", "this check",
+     "| [`aip-conformance`](https://github.com/opena2a-standards/aip-conformance) "
+     "| AIP v1.0.0-draft identity protocol | §6.4 (VC `AgentTrustCredential`) "
+     "covered by cross-linking this repo's fixtures; §5.1 challenge-response "
+     "covered by 4 dedicated fixtures + Go/Python verifiers shipped at v0.2 "
+     "(2026-05-28, Decision 3-C) |",
+     "aip-conformance row names release v0.2"),
+    ("aip-conformance", "the Spec cell check",
+     "| [`aip-conformance`](https://github.com/opena2a-standards/aip-conformance) "
+     "| AIP v1.2.0-draft identity protocol | §6.4 (VC `AgentTrustCredential`) "
+     "covered by cross-linking this repo's fixtures; §5.1 challenge-response "
+     "covered by 4 dedicated fixtures + Go/Python verifiers; §6.1 trust-score "
+     "composition covered by 3 fixtures |",
+     "aip-conformance row's Spec cell names AIP v1.2.0-draft, but"),
+)
 
 
 class SiblingError(Exception):
@@ -409,8 +419,8 @@ def self_test(readme, siblings, verbose):
         cases.append((any("Spec cell names no spec version" in f for f in new), case,
                       f"a Spec cell naming no version still passes: {new}"))
 
-    for repo, (retracted, expected) in sorted(RETRACTED_ROWS.items()):
-        case = f"{repo} row as published before this check"
+    for repo, before, retracted, expected in sorted(RETRACTED_ROWS):
+        case = f"{repo} row as published before {before}"
         if repo not in rows:
             cases.append((False, case, f"no {repo} row to replace"))
             continue
