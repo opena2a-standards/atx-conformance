@@ -20,9 +20,11 @@ structurally comparable to A2A-IDF's
 [`aim-did-rfc9421/*`](https://github.com/opena2a-standards/a2a-idf-conformance/tree/main/fixtures/composition/aim-did-rfc9421)
 set.
 
-The fixture and verifier counts in the two sibling rows, and any release
-version a sibling row names, are measurements of those repositories, not of
-this one. [`scripts/check_sibling_rows.py`](../scripts/check_sibling_rows.py)
+The fixture and verifier counts in the two sibling rows, any release
+version a sibling row names, and the spec version its Spec cell names, are
+measurements of those repositories, not of this one; the Spec cell is held
+to the `spec.id` and `spec.version` the repository's `conformance.json`
+declares. [`scripts/check_sibling_rows.py`](../scripts/check_sibling_rows.py)
 reads both repositories through the GitHub API and fails when a row no
 longer matches them. It needs network access and is run by hand, not by the
 [continuous-verification gates](continuous-verification.md).

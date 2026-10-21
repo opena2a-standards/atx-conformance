@@ -1095,6 +1095,44 @@ func signWithKey(v keyVector, a ATX) ATCSignature {
 // opens the text it was checked against after core.md changes on main.
 const atxCoreRef = "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md"
 
+// aipSpecRef is AIP-SPEC.md at the commit docs/version-pinning.md pins
+// (AIP_REF in scripts/conformance_profile.py), so the AIP citation opens the
+// 1.2.0-draft text it names after AIP-SPEC.md changes on main.
+const aipSpecRef = "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md"
+
+// AIP-SPEC citations: §3.1 scoped to the signature algorithms a credential
+// carries (aipSigningSection), and §6.1 for the trustScore member every
+// credential carries. scripts/conformance_profile.py --check holds each
+// fixture to the same text.
+const (
+	aipSigningEd25519 = "§3.1 Cryptographic Identity (Ed25519 signing)"
+	aipSigningHybrid  = "§3.1 Cryptographic Identity (hybrid Ed25519 + ML-DSA-65 signing)"
+	aipSigningPQOnly  = "§3.1 Cryptographic Identity (an ML-DSA-65 signature with no Ed25519 signature)"
+	aipTrustScoring   = "§6.1 Multi-Factor Algorithm"
+)
+
+// aipSigningSection is the AIP-SPEC §3.1 citation for the signature
+// algorithms a credential carries.
+func aipSigningSection(sigs []ATCSignature) string {
+	var ed25519, mldsa bool
+	for _, sig := range sigs {
+		switch sig.Algorithm {
+		case "Ed25519":
+			ed25519 = true
+		case "ML-DSA-65":
+			mldsa = true
+		}
+	}
+	switch {
+	case ed25519 && mldsa:
+		return aipSigningHybrid
+	case mldsa:
+		return aipSigningPQOnly
+	default:
+		return aipSigningEd25519
+	}
+}
+
 // core.md heading text, verbatim (scripts/check_spec_refs.py).
 const (
 	secSchema          = "1.1 ATX schema"
@@ -1193,7 +1231,8 @@ func wrap(name, description string, refs []KeypairRef, vs VerifierState, expecte
 		spec = append(spec, SpecRef{ID: "ATX", Ref: atxCoreRef, Section: section})
 	}
 	spec = append(spec,
-		SpecRef{ID: "AIP", Ref: "https://github.com/opena2a-org/agent-identity-protocol/blob/main/AIP-SPEC.md", Section: "§3 Hybrid Ed25519 + ML-DSA-65 signing, §6.1 9-factor trust scoring"},
+		SpecRef{ID: "AIP", Ref: aipSpecRef, Section: aipSigningSection(atx.Signatures)},
+		SpecRef{ID: "AIP", Ref: aipSpecRef, Section: aipTrustScoring},
 		SpecRef{ID: "RFC 8032", Ref: "https://datatracker.ietf.org/doc/html/rfc8032", Section: "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"},
 	)
 	// FIPS 204 is cited only by a credential that carries an ML-DSA-65
