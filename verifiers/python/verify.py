@@ -361,21 +361,22 @@ def _fold_key(s: str) -> str:
     """Fold a JSON member name the way Go's encoding/json folds struct field
     names, matching the Go reference verifier's foldKey (verifiers/go/verifier/verify.go):
     ASCII uppercase lowercased, Kelvin sign U+212A -> k, long s U+017F -> s, any
-    other rune via str.lower(). Two names with the same fold key collapse to one
+    other rune kept unchanged. Two names with the same fold key collapse to one
     struct field under a Go last-wins unmarshaler, so treating them as duplicates
     here keeps this verifier category-consistent (PARSE_ERROR) with the Go
     reference on case-variant members — a deliberate ecosystem rule, since a
     fold-colliding member is ambiguous across conforming parsers. This verifier's
-    own json.loads is case-sensitive and would not otherwise collapse them. This
-    matches the Go foldKey for ASCII names and the two special runes — the domain
-    that matters, since ATX member names are ASCII. For other non-ASCII runes
-    str.lower() can diverge from Go's simple unicode.ToLower, but no honest
-    credential has non-ASCII member names (they are already schema-invalid). See
-    atx-conformance#16. Both use the Unicode tables of their release, so a pair
-    of names whose case mapping a later Unicode version added folds together
-    under one release and not under another: U+1C89 and U+1C8A (Unicode 16.0)
-    are a duplicate under Python 3.14 and Go 1.27, and not under Python 3.12 or
-    Go 1.22 (docs/running-the-verifiers.md).
+    own json.loads is case-sensitive and would not otherwise collapse them. ATX
+    member names are ASCII, and the Kelvin sign and the long s are the only
+    non-ASCII runes whose simple case fold reaches an ASCII letter, so any other
+    non-ASCII rune collapses onto no struct field; RFC 8259 §8.3 compares names
+    code unit by code unit, so two such names are one member only when they
+    decode to the same name. See atx-conformance#16. The table is fixed, the
+    same as the Go foldKey's, and reads no Unicode table, so no Python release
+    changes it (docs/running-the-verifiers.md). A fallback to str.lower(), which
+    reads the tables of the release, made U+1C89 and U+1C8A (a case pair from
+    Unicode 16.0) a duplicate under Python 3.14 and not under Python 3.12, and
+    folded U+0130 to i followed by U+0307 (atx-conformance#173).
     """
     out: list[str] = []
     for ch in s:
@@ -386,7 +387,7 @@ def _fold_key(s: str) -> str:
         elif ch == "ſ":  # latin small letter long s -> s
             out.append("s")
         else:
-            out.append(ch.lower())
+            out.append(ch)
     return "".join(out)
 
 

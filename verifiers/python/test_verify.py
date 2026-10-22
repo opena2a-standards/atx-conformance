@@ -1397,14 +1397,28 @@ class GoMemberNameFolding(unittest.TestCase):
                 got = _at_verdict(BASELINE_V11, path, literal, rename=name)
                 self.assertEqual(_outcome(got), outcome, got.reason)
 
-    def test_non_ascii_names_fold_through_lowercase(self):
-        # Beyond ASCII and the two letters Go folds onto ASCII, a name folds
-        # through its lowercase form, as Go's unicode.ToLower folds it, so
-        # two such names in the credential are a duplicate there as here.
-        self.assertEqual(verify._fold_key("Éclair"), "éclair")
-        got = _at_verdict(BASELINE_V11, ("extra",), '{"É": 1, "é": 2}')
+    def test_non_ascii_names_fold_only_through_the_fixed_table(self):
+        # The fold is ASCII A-Z, the Kelvin sign and the long s, the letters
+        # Go folds onto an ASCII field name, and every other character
+        # unchanged, so no Python release's Unicode tables decide it: other
+        # names are one member only when they decode to the same name, as in
+        # the Go verifier. str.lower() made U+1C89 and U+1C8A, a case pair
+        # from Unicode 16.0, a duplicate under Python 3.14 and not 3.12, and
+        # folded U+0130 to i followed by U+0307.
+        self.assertEqual(verify._fold_key("Éclair"), "Éclair")
+        self.assertEqual(verify._fold_key("\u0130d"), "\u0130d")
+        for literal in (
+            '{"É": 1, "é": 2}',
+            '{"\\u1c89x": 1, "\\u1c8ax": 2}',
+            '{"\\u0130d": 1, "id": 2}',
+            '{"\\u0130x": 1, "i\\u0307x": 2}',
+        ):
+            with self.subTest(value=literal):
+                got = _at_verdict(BASELINE_V11, ("extra",), literal)
+                self.assertTrue(got.accepted, got.reason)
+        got = _at_verdict(BASELINE_V11, ("extra",), '{"É": 1, "É": 2}')
         self.assertEqual(got.reject_category, "PARSE_ERROR", got.reason)
-        self.assertIn("duplicate member", got.reason)
+        self.assertIn('duplicate member "É"', got.reason)
 
     def test_another_name_is_not_the_member(self):
         # Control: folding joins case variants only. "revoked_" is no member

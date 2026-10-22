@@ -982,6 +982,36 @@ they should not.
 
 ### Fixed
 
+- Both verifiers fold a credential member name by a fixed table, ASCII
+  `A-Z` to `a-z`, U+212A (Kelvin sign) to `k` and U+017F (long s) to `s`,
+  and leave every other character unchanged, where they lowercased every
+  other character by the Unicode tables of the release they ran under
+  (`unicode.ToLower` in `verify.go`, `str.lower()` in `verify.py`), so
+  which names were a duplicate member depended on the Go and Python release
+  (#173). The credential of `fixtures/v1_1-baseline-valid.json` with two
+  unsigned members added, named U+1C89 followed by `x` and U+1C8A followed
+  by `x` (a case pair from Unicode 16.0), was ACCEPT built with Go 1.26.3
+  and under Python 3.13.12 and a `PARSE_ERROR` built with Go 1.27.2 and
+  under Python 3.14.3; it is ACCEPT under all four. Members named `É`
+  and `é` are two members, ACCEPT on both, where both reported
+  `PARSE_ERROR`; `É` written twice stays a `PARSE_ERROR`, as do
+  `TRUSTLEVEL` beside `trustLevel`, the Kelvin sign beside `k` and the long
+  s beside `s`. With Go 1.26.3 and Python 3.14.3 the two verifiers also
+  split on U+0130, which `unicode.ToLower` maps to `i` and `str.lower()` to
+  `i` followed by U+0307: a member named U+0130 followed by `d` beside the
+  credential's `id` was a `PARSE_ERROR` in the Go verifier and ACCEPT in
+  the Python one, and members named U+0130 followed by `x` and `i`, U+0307,
+  `x` the reverse; each is ACCEPT on both. Go's `encoding/json` matches a
+  name to an ASCII struct field through no non-ASCII letter but the Kelvin
+  sign and the long s, and RFC 8259 §8.3 compares names code unit by code
+  unit, so neither reference verifier's decoder joins the names the fold no
+  longer joins.
+  `docs/running-the-verifiers.md` says the fold is fixed where it said each
+  release set its Unicode version. `TestFoldKey` and
+  `TestRawDuplicateMember` hold the table in the Go verifier, and
+  `GoMemberNameFolding.test_non_ascii_names_fold_only_through_the_fixed_table`,
+  which replaces `test_non_ascii_names_fold_through_lowercase`, holds it in
+  the Python one. No fixture changes.
 - Both reference verifiers reject a v1.1 credential whose signed payload
   holds an integer of magnitude above 2^53-1, outside the I-JSON exact
   range (RFC 7493 §2.2), as `SIGNATURE_INVALID`, with one reason naming the
