@@ -25,7 +25,8 @@ exits non-zero before reporting any fixture (a missing dependency, a bad
 argument) is reported by that exit and stderr alone, not as a fixture set
 mismatch naming every fixture it never reached, and has one line above the
 per-fixture table in place of a MISSING cell on every row. The --json report
-names it in `unreported`.
+names it in `unreported`. A verifier that cannot start, its program not on
+PATH for one, is reported the same way, as exiting 127.
 
 After the fixture table the gate runs the argument table, ARGUMENT_CASES:
 argument lists no fixture can carry (an empty argument, -h and --help at
@@ -92,15 +93,29 @@ ENOSPC, that EILSEQ or EINVAL raised reading the fixture copied to each
 scratch file so named is raised, not taken for a refusal, that --json is
 refused
 with --self-test by a usage message the self-test holds word for word, so
-rewording that message turns the self-test red, and that an unknown
-argument is named on the line above the usage.
+rewording that message turns the self-test red, that an unknown
+argument is named on the line above the usage, that a --json path that is
+a directory or whose directory does not exist is refused, that a verifier
+that cannot start fails the gate as exiting 127, as does the argument
+table's go build with no go on PATH, as a build error, and that the Report keys
+block below names the keys of the --json report.
 
 Usage:
     python3 scripts/parity/parity.py [--json parity-report.json]
     python3 scripts/parity/parity.py --self-test
 
 --self-test writes no parity report, so it is refused with --json rather than
-leaving the report path unwritten.
+leaving the report path unwritten. A --json path that is a directory, or
+whose directory does not exist, is a usage error, refused before any
+verifier runs.
+
+Report keys:
+    fixtures     per fixture, each verifier's gate, verdict and category
+    arguments    the argument table, one row per case; empty if not run
+    exitCodes    each verifier's exit code over the fixture set
+    unreported   each verifier that exited before reporting any fixture
+    divergences  each divergence and verifier error; empty on PASS
+    agree        true when divergences is empty
 
 Exit codes:
     0  all implementations agree; with --self-test, every case is green
@@ -134,6 +149,18 @@ Exit codes:
     1  a divergence or verifier error, a red self-test case (every run
        starts with the self-test), or no *.json in fixtures/
     2  usage error
+"""
+# The keys of the --json report, one per line. The self-test holds the
+# docstring's Report keys block equal to this text, and its names equal to
+# the keys build_report returns.
+REPORT_KEYS = """\
+Report keys:
+    fixtures     per fixture, each verifier's gate, verdict and category
+    arguments    the argument table, one row per case; empty if not run
+    exitCodes    each verifier's exit code over the fixture set
+    unreported   each verifier that exited before reporting any fixture
+    divergences  each divergence and verifier error; empty on PASS
+    agree        true when divergences is empty
 """
 # The failure for a fixtures directory holding no *.json, in main and in the
 # self-test.
@@ -259,10 +286,19 @@ SHOWN_VERDICT_LINES = 5
 
 
 def run_verifier(name: str, spec: dict) -> tuple[int, dict[str, dict], str]:
-    """Run one verifier; return (exit_code, {fixture_basename: record}, stderr)."""
-    proc = subprocess.run(
-        spec["cmd"], cwd=spec["cwd"], capture_output=True, text=True
-    )
+    """Run one verifier; return (exit_code, {fixture_basename: record}, stderr).
+
+    A verifier that cannot start, its program not on PATH for one, returns
+    exit 127, no records and the line naming why as its stderr.
+    """
+    try:
+        proc = subprocess.run(
+            spec["cmd"], cwd=spec["cwd"], capture_output=True, text=True
+        )
+    except OSError as exc:
+        reason = f"[parity] {name} verifier could not start: {exc.strerror or exc}"
+        sys.stderr.write(reason + "\n")
+        return 127, {}, reason
     records: dict[str, dict] = {}
     current: str | None = None
     for line in proc.stdout.splitlines():
@@ -410,10 +446,13 @@ def argument_verifiers(bin_dir: Path) -> dict[str, dict]:
     """
     bin_dir.mkdir(parents=True, exist_ok=True)
     binary = bin_dir / "atx-verify"
-    build = subprocess.run(
-        ["go", "build", "-o", str(binary), "."],
-        cwd=VERIFIERS["go"]["cwd"], capture_output=True, text=True,
-    )
+    try:
+        build = subprocess.run(
+            ["go", "build", "-o", str(binary), "."],
+            cwd=VERIFIERS["go"]["cwd"], capture_output=True, text=True,
+        )
+    except OSError as exc:
+        raise BuildError(f"go build could not start: {exc.strerror or exc}") from exc
     if build.returncode != 0:
         raise BuildError(f"go build exited {build.returncode}: {build.stderr.strip()[-2000:]}")
     return {
@@ -875,6 +914,27 @@ def _gate_with_arguments(
         return code, out.getvalue(), json.loads(report.read_text())
 
 
+def _gate_not_starting(programs: Callable[[Path], dict[str, dict]]) -> tuple[int, str, dict] | str:
+    """(exit code, stdout, --json report) of the gate over one fixture, with
+    verifier "two" naming a program that does not exist, or the exception it
+    raises instead."""
+    out = io.StringIO()
+    with tempfile.TemporaryDirectory() as d:
+        fixtures, report = Path(d) / "fixtures", Path(d) / "report.json"
+        fixtures.mkdir()
+        (fixtures / ARGUMENT_FIXTURE).write_text("{}\n")
+        verifiers = {
+            "one": _stand_in(_block(ARGUMENT_FIXTURE, "ACCEPT")),
+            "two": {"cwd": REPO_ROOT, "cmd": [str(Path(d) / "missing" / "verify")]},
+        }
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                code = gate(fixtures, verifiers, str(report), programs, "", "")
+        except Exception as exc:
+            return repr(exc)
+        return code, out.getvalue(), json.loads(report.read_text())
+
+
 def _not_built(bin_dir: Path) -> dict[str, dict]:
     raise BuildError("go build exited 1: boom")
 
@@ -991,8 +1051,25 @@ def self_test() -> int:
         "one": _stand_in("", MISSING_DEP + "\n", 2),
         "two": _stand_in("", "", 1),
     })
-    no_fixtures = _gate_without_fixtures({"one": _stand_in(both), "two": _stand_in(both)})
+    # Stand-ins that exit 1, so a gate that ran either one leaves its exit on
+    # stderr; the control shows that it does, run over a fixture.
+    ran = {"one": _stand_in("", "ran\n", 1), "two": _stand_in("", "ran\n", 1)}
+    no_fixtures = _gate_without_fixtures(ran)
+    ran_err = io.StringIO()
+    with contextlib.redirect_stderr(ran_err):
+        compare(["a.json"], ran)
     unknown = _refusal(["--bogus"])
+    with tempfile.TemporaryDirectory() as d:
+        no_dir = str(Path(d) / "missing" / "parity-report.json")
+        not_dir = str(Path(d) / "file" / "parity-report.json")
+        (Path(d) / "file").write_text("not a directory\n")
+        json_refusals = [_refusal(["--json", p]) for p in (no_dir, d, not_dir)]
+        json_expected = [
+            (2, f"parity.py: error: --json {no_dir}: no such directory: {d}/missing\n"),
+            (2, f"parity.py: error: --json {d}: is a directory\n"),
+            (2, f"parity.py: error: --json {not_dir}: not a directory: {d}/file\n"),
+        ]
+    report_keys = [line.split()[0] for line in REPORT_KEYS.splitlines()[1:]]
 
     # Argument-table stand-ins: "one", which embeds a fixture set, writes kept
     # for twenty-nine cases and for no argument and -- alone its report of
@@ -1279,6 +1356,16 @@ def self_test() -> int:
     gate_passes = _gate_with_arguments(lambda bin_dir: changed({}))
     gate_skips = _gate_with_arguments(lambda bin_dir: changed({}), refused)
     gate_not_built = _gate_with_arguments(_not_built)
+    gate_not_started = _gate_not_starting(lambda bin_dir: changed({}))
+    # The argument table's go build with no go on PATH: an empty directory.
+    with tempfile.TemporaryDirectory() as d:
+        try:
+            with mock.patch.dict(os.environ, {"PATH": d}):
+                build_not_started = repr(argument_verifiers(Path(d) / "bin"))
+        except BuildError as exc:
+            build_not_started = str(exc)
+        except Exception as exc:
+            build_not_started = repr(exc)
     # Writing xff/{xff}.json raising an OSError with each errno: EILSEQ and
     # EINVAL are the file system refusing the name, and the others are
     # raised, by the gate too, which reads the file system's own answer.
@@ -1365,8 +1452,19 @@ def self_test() -> int:
         ("a fixtures directory holding no *.json exits 1 and says so, before "
          "any verifier runs",
          no_fixtures == (1, "", NO_FIXTURES)),
+        ("the stand-ins of the no-fixtures case, run over a fixture, each leave "
+         "their exit on stderr",
+         "[parity] one verifier exited 1\n" in ran_err.getvalue()
+         and "[parity] two verifier exited 1\n" in ran_err.getvalue()),
+        ("a --json path whose directory does not exist, that is a directory, or "
+         "whose directory is a file is a usage error naming the path",
+         json_refusals == json_expected),
         ("the docstring's Exit codes block is EXIT_CODES",
          __doc__ is None or __doc__.endswith(EXIT_CODES)),
+        ("the docstring's Report keys block is REPORT_KEYS",
+         __doc__ is None or REPORT_KEYS in __doc__),
+        ("REPORT_KEYS names the keys of the --json report",
+         sorted(report_keys) == sorted(no_dep_report)),
         ("the --json report names a verifier that exits before reporting any "
          "fixture, as the table does",
          no_dep_report.get("unreported") == ["two"]
@@ -1729,6 +1827,17 @@ def self_test() -> int:
          and gate_not_built[2]["divergences"] == [
              "argument table not run: go build exited 1: boom"]
          and gate_not_built[2].get("arguments") == []),
+        ("a verifier that cannot start fails the gate, which names it as exiting 127 "
+         "before reporting any fixture",
+         isinstance(gate_not_started, tuple)
+         and gate_not_started[0] == 1
+         and gate_not_started[2]["unreported"] == ["two"]
+         and gate_not_started[2]["exitCodes"] == {"one": 0, "two": 127}
+         and gate_not_started[2]["divergences"] == [
+             "two verifier exited 127 (expected 0) before reporting any fixture: "
+             f"[parity] two verifier could not start: {os.strerror(errno.ENOENT)}"]),
+        ("a go build that cannot start, no go on PATH, is a build error naming why",
+         build_not_started == f"go build could not start: {os.strerror(errno.ENOENT)}"),
     ]
     failed = 0
     for label, ok in cases:
@@ -1757,6 +1866,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ap.exit(2)
     if args.self_test and args.json is not None:
         ap.error(SELF_TEST_JSON_ERROR)
+    if args.json is not None:
+        # The report is written after every verifier ran; a path that is a
+        # directory, or whose directory is missing or not a directory, is
+        # refused here, before any of them runs.
+        report, parent = Path(args.json), Path(args.json).parent
+        reason = None
+        if report.is_dir():
+            reason = "is a directory"
+        elif not parent.exists():
+            reason = f"no such directory: {parent}"
+        elif not parent.is_dir():
+            reason = f"not a directory: {parent}"
+        if reason:
+            ap.exit(2, f"{ap.prog}: error: --json {args.json}: {reason}\n")
     return args
 
 

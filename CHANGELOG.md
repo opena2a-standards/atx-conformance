@@ -923,6 +923,24 @@ they should not.
 
 ### Fixed
 
+- `scripts/parity/parity.py` ends with an exit code, not a traceback, on two
+  paths, and documents its `--json` report's keys (#126). A `--json` path
+  that is a directory or whose directory does not exist is a usage error:
+  exit 2 and one line naming the path, before any verifier runs, where the
+  gate ran both verifiers and the argument table and then raised an
+  `OSError` writing the report. A verifier that cannot start is reported as
+  `[parity] <name> verifier could not start: <reason>`, exiting 127 before
+  reporting any fixture and named in `unreported`, and the argument table's
+  `go build` that cannot start is a build error; run with no `go` on PATH,
+  the gate ends `PARITY: FAIL` naming both and exits 1, where it raised
+  `FileNotFoundError`. The module docstring lists the six keys of the
+  report under `Report keys:`, held equal to `REPORT_KEYS`, whose names the
+  self-test holds equal to the keys `build_report` returns. The self-test's
+  no-fixtures case now runs stand-ins that exit 1, so a gate that ran a
+  verifier before finding no fixture would leave that exit on stderr and
+  turn the case red; a control shows the same stand-ins leave it when run
+  over a fixture. The self-test adds six cases (74, from 68). No fixture
+  changes.
 - The #259 entry below says that outside the RFC 3339 layout the Go
   verifier's error still differed by release, and that the #266 entry above
   it makes the Go 1.22.12 build name the offset too, where it said the error
