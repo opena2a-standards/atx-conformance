@@ -10,7 +10,12 @@ Exit code is 0 if every fixture's observed result matches the expected
 result and the rejection category matches (when declared). A file that is
 not a fixture, one with no `expected.verifyResult` of `ACCEPT` or `REJECT`,
 is a load error: both verifiers print `FAIL  <file>  (load error: <reason>)`
-for it, count it as a fail and exit 1. A file that is not JSON, one whose
+for it, count it as a fail and exit 1. So is a file that writes a member
+more than once outside its `atx` member, under one name or under two that
+Go's `encoding/json` reads as one, such as `expected` and `EXPECTED`: both
+print `FAIL  <file>  (load error: the fixture repeats the member "<member>")`,
+naming the member as written the second time, while a member written twice
+inside `atx` still rejects as `PARSE_ERROR`. A file that is not JSON, one whose
 value is not a JSON object and one whose arrays and objects nest deeper
 than 10000 levels are load errors too, with the same reason in both
 verifiers: `fixture is not valid JSON`, `fixture is not a JSON object` and

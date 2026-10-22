@@ -52,7 +52,8 @@
 //
 // Exit 0 iff every fixture's observed result matches expected.verifyResult.
 // A file that is not a fixture, one with no expected.verifyResult of ACCEPT
-// or REJECT, fails to load and counts as a fail, so the run exits 1.
+// or REJECT or one that writes a member more than once outside its atx
+// member, fails to load and counts as a fail, so the run exits 1.
 package verifier
 
 import (
@@ -642,10 +643,11 @@ const maxScanDepth = 10000
 // case-insensitively last-wins, so a case-variant pair like
 // {"trustLevel":9,"TRUSTLEVEL":1} collapses to one field — a case-sensitive
 // check would miss that collapse and leave the exact divergence this guard
-// closes. Strictness applies to the credential object only; the fixture wrapper
-// is harness metadata and parses leniently. (Same rule in verifiers/python; ported
-// from the aap-conformance protected-header lesson, scoped to the whole body
-// because ATX signs it all.)
+// closes. A duplicate in the credential is a verdict, PARSE_ERROR; a member
+// the fixture file writes more than once outside the credential makes the
+// file no fixture, and it fails to load (repeatedFixtureMember). (Same rule in
+// verifiers/python; ported from the aap-conformance protected-header lesson,
+// scoped to the whole body because ATX signs it all.)
 func rawDuplicateMember(raw []byte) (string, bool) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	// UseNumber keeps Token() from converting each number to float64. Without
@@ -657,6 +659,54 @@ func rawDuplicateMember(raw []byte) (string, bool) {
 	dec.UseNumber()
 	name, dup, _ := scanValueForDuplicates(dec, 0)
 	return name, dup
+}
+
+// repeatedFixtureMember scans the fixture file b for a member it writes more
+// than once outside its atx member's subtree, under one name or under two
+// names that fold together (foldKey), and returns the first in document
+// order, named as written the second time. encoding/json decodes each repeat
+// into the one fixture struct field, so a member a later object omits keeps
+// the earlier object's value: a later expected object without the earlier
+// one's rejectCategory still carried it here, while the Python verifier,
+// which read the later object alone, reached the opposite verdict on the
+// same file. A repeat inside the credential is the strict parse's
+// (rawDuplicateMember), a verdict of PARSE_ERROR, so the atx member's value
+// is not scanned. Its name is, and so is each other member, name and value,
+// those the fixture struct does not declare included. A file whose
+// top-level value is not an object has no member to repeat, and a scan that
+// aborts reports none: json.Unmarshal in parseFixture then says why the file
+// is not a fixture.
+func repeatedFixtureMember(b []byte) (string, bool) {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	// As in rawDuplicateMember: a number outside the float64 range is JSON.
+	dec.UseNumber()
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return "", false
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return "", false
+		}
+		key, _ := keyTok.(string)
+		fk := foldKey(key)
+		if seen[fk] {
+			return key, true
+		}
+		seen[fk] = true
+		if fk == "atx" {
+			var credential json.RawMessage
+			if err := dec.Decode(&credential); err != nil {
+				return "", false
+			}
+			continue
+		}
+		if name, dup, abort := scanValueForDuplicates(dec, 1); dup || abort {
+			return name, dup
+		}
+	}
+	return "", false
 }
 
 // scanValueForDuplicates consumes exactly one JSON value from dec and reports
@@ -1329,16 +1379,25 @@ func loadFixture(path string) (fixture, error) {
 	return fileSource(path).load()
 }
 
-// parseFixture decodes a fixture file. A file with no expected outcome the
-// fixture format allows (schemas/fixture-v1.schema.json) is not a fixture and
-// fails to load: its expected member or expected.verifyResult is absent or
-// null, or its verifyResult is a string other than ACCEPT or REJECT, "accept"
-// among them. Read as "expect REJECT", such a file passed whenever its
-// credential rejected, and {} or a package.json rejects at parse. The check
-// reads the last expected member and the last verifyResult in it, as the
-// Python verifier reads them; when it passes, f.Expected.VerifyResult holds
-// that verifyResult.
+// parseFixture decodes a fixture file. A file that writes a member more than
+// once outside its atx member's subtree (repeatedFixtureMember) is not a
+// fixture and fails to load, before any member is decoded. A file with no
+// expected outcome the fixture format allows (schemas/fixture-v1.schema.json)
+// is not a fixture either and fails to load: its expected member or
+// expected.verifyResult is absent or null, or its verifyResult is a string
+// other than ACCEPT or REJECT, "accept" among them. Read as "expect REJECT",
+// such a file passed whenever its credential rejected, and {} or a
+// package.json rejects at parse. When the check passes,
+// f.Expected.VerifyResult holds that verifyResult.
 func parseFixture(b []byte) (fixture, error) {
+	// A file that is not JSON is left to json.Unmarshal, whose error names
+	// why: a scan of it could report a member repeated before the point
+	// where it stops being JSON.
+	if json.Valid(b) {
+		if name, dup := repeatedFixtureMember(b); dup {
+			return fixture{}, fmt.Errorf("the fixture repeats the member %q", name)
+		}
+	}
 	var f fixture
 	if err := json.Unmarshal(b, &f); err != nil {
 		return fixture{}, fixtureShapeError(err)
