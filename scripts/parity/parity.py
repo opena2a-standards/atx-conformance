@@ -95,25 +95,33 @@ refused
 with --self-test by a usage message the self-test holds word for word, so
 rewording that message turns the self-test red, that an unknown
 argument is named on the line above the usage, that a --json path that is
-a directory or whose directory does not exist is refused, that a verifier
+a directory or whose directory does not exist is refused, as is one the
+report cannot be written to for another reason, each named by why, a path
+under a directory that cannot be searched as permission denied, while one
+in a directory that can be written is accepted, that a verifier
 that cannot start fails the gate as exiting 127, as does the argument
 table's go build with no go on PATH, as a build error, and that the Report keys
-block below names the keys of the --json report.
+block below names the keys of the --json report, a key line appended to it
+turning that case red.
 
 Usage:
     python3 scripts/parity/parity.py [--json parity-report.json]
     python3 scripts/parity/parity.py --self-test
 
 --self-test writes no parity report, so it is refused with --json rather than
-leaving the report path unwritten. A --json path that is a directory, or
-whose directory does not exist, is a usage error, refused before any
-verifier runs.
+leaving the report path unwritten. A --json path the report cannot be
+written to is a usage error, refused before any verifier runs by one line
+naming the path and why: a directory, a file that cannot be written, a
+path whose directory does not exist, is not a directory or cannot be
+written, and a path os.stat raises another error for, permission denied
+or a name too long among them, named by that error. A symbolic link is
+checked at the path its chain of links ends at.
 
 Report keys:
     fixtures     per fixture, each verifier's gate, verdict and category
     arguments    the argument table, one row per case; empty if not run
     exitCodes    each verifier's exit code over the fixture set
-    unreported   each verifier that exited before reporting any fixture
+    unreported   each verifier that exited non-zero before reporting any fixture
     divergences  each divergence and verifier error; empty on PASS
     agree        true when divergences is empty
 
@@ -133,6 +141,7 @@ import json
 import os
 import re
 import shlex
+import stat
 import subprocess
 import sys
 import tempfile
@@ -158,7 +167,7 @@ Report keys:
     fixtures     per fixture, each verifier's gate, verdict and category
     arguments    the argument table, one row per case; empty if not run
     exitCodes    each verifier's exit code over the fixture set
-    unreported   each verifier that exited before reporting any fixture
+    unreported   each verifier that exited non-zero before reporting any fixture
     divergences  each divergence and verifier error; empty on PASS
     agree        true when divergences is empty
 """
@@ -378,9 +387,10 @@ def render_table(
 ) -> list[str]:
     """Return the lines of the per-fixture table.
 
-    A verifier that exited before reporting any fixture has no column: one
-    line names its exit instead of a MISSING cell on every row, since its
-    exit code and stderr are already in the summary below the table.
+    A verifier that exited non-zero before reporting any fixture has no
+    column: one line names its exit instead of a MISSING cell on every row,
+    since its exit code and stderr are already in the summary below the
+    table.
     """
     shown = [n for n in names if n not in unreported]
     lines = [f"parity: {len(table)} fixtures x {len(names)} verifiers"]
@@ -412,9 +422,11 @@ def build_report(
 ) -> dict:
     """Return the --json parity report.
 
-    `unreported` names each verifier that exited before reporting any
-    fixture, as the line above the table does, so a consumer need not infer
-    it from a non-zero exit code and a null cell on every fixture.
+    `unreported` names each verifier that exited non-zero before reporting
+    any fixture, as the line above the table does, so a consumer need not
+    infer it from a non-zero exit code and a null cell on every fixture. A
+    verifier that exits 0 without reporting any fixture is not in it: it is
+    a fixture set mismatch.
     `arguments` is the argument table, one row per case in ARGUMENT_CASES
     order, empty when it did not run; a row's `skipped` names why the case
     was not run, null when it ran.
@@ -789,15 +801,49 @@ def _refuses_self_test_with_json() -> bool:
     The refusal is held to its message written out here, not built from
     SELF_TEST_JSON_ERROR: built from the constant parse_args() prints, it
     would match whatever the constant says, so no change to the wording could
-    turn the case red.
+    turn the case red. --json alone names a report in a scratch directory, as
+    one in a working directory that cannot be written is refused.
     """
-    return (
-        _usage_error(["--self-test", "--json", "out.json"])
-        == (2, "parity.py: error: --json cannot be used with --self-test: "
-               "--self-test writes no parity report")
-        and _usage_error(["--self-test"]) is None
-        and _usage_error(["--json", "out.json"]) is None
-    )
+    with tempfile.TemporaryDirectory() as d:
+        return (
+            _usage_error(["--self-test", "--json", "out.json"])
+            == (2, "parity.py: error: --json cannot be used with --self-test: "
+                   "--self-test writes no parity report")
+            and _usage_error(["--self-test"]) is None
+            and _usage_error(["--json", str(Path(d) / "out.json")]) is None
+        )
+
+
+def _denied(
+    unsearchable: Path, unwritable: tuple[Path, ...], run: Callable[[], object],
+) -> object:
+    """What run returns while os.stat raises PermissionError for each path
+    under unsearchable, as for a path under a directory of mode 000, and
+    os.access denies writing each of unwritable, as for a path of mode 555,
+    whatever user this process runs as."""
+    real_stat, real_access = os.stat, os.access
+
+    def stat_denied(path, *args, **kwargs):
+        if isinstance(path, (str, os.PathLike)) and os.fspath(path).startswith(
+                f"{unsearchable}{os.sep}"):
+            raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), os.fspath(path))
+        return real_stat(path, *args, **kwargs)
+
+    def access_denied(path, mode, *args, **kwargs):
+        if mode & os.W_OK and isinstance(path, (str, os.PathLike)) and Path(path) in unwritable:
+            return False
+        return real_access(path, mode, *args, **kwargs)
+
+    with mock.patch.object(os, "stat", stat_denied), \
+            mock.patch.object(os, "access", access_denied):
+        return run()
+
+
+def _documents_report_keys(doc: str) -> bool:
+    """Whether doc holds REPORT_KEYS as a block: on lines of its own and
+    followed by a blank line, so a key line added after the block's last
+    entry, as after any other, leaves doc without it."""
+    return f"\n{REPORT_KEYS}\n" in doc
 
 
 def _reworded(message: str) -> tuple[tuple[int, str] | None, bool]:
@@ -1046,7 +1092,7 @@ def self_test() -> int:
         "one": _stand_in(both),
         "two": _stand_in(_block("a.json", "ACCEPT"), "Traceback: boom\n", 1),
     })
-    silent = _divergences(fx, {"one": _stand_in(both), "two": _stand_in("")})
+    silent, _, silent_report = _run(fx, {"one": _stand_in(both), "two": _stand_in("")})
     _, none_ran, none_ran_report = _run(fx, {
         "one": _stand_in("", MISSING_DEP + "\n", 2),
         "two": _stand_in("", "", 1),
@@ -1069,6 +1115,36 @@ def self_test() -> int:
             (2, f"parity.py: error: --json {d}: is a directory\n"),
             (2, f"parity.py: error: --json {not_dir}: not a directory: {d}/file\n"),
         ]
+        # A symbolic link into a missing directory, one into d, a missing
+        # directory with a name of 300 bytes, and paths under locked/,
+        # which cannot be searched, under ro/, which cannot be written, and
+        # ro.json, a file that cannot be written.
+        dangling, linked = Path(d) / "dangling", Path(d) / "linked"
+        dangling.symlink_to(Path("missing") / "parity-report.json")
+        linked.symlink_to("parity-report.json")
+        too_long = str(Path(d) / ("d" * 300) / "parity-report.json")
+        locked, ro, ro_file = Path(d) / "locked", Path(d) / "ro", Path(d) / "ro.json"
+        (locked / "sub").mkdir(parents=True)
+        ro.mkdir()
+        ro_file.write_text("{}\n")
+        unusable = [str(dangling), too_long, str(locked / "parity-report.json"),
+                    str(locked / "sub"), str(locked / "sub" / "parity-report.json"),
+                    str(ro / "parity-report.json"), str(ro_file)]
+        unusable_refusals = _denied(locked, (ro, ro_file), lambda: [
+            _refusal(["--json", p]) for p in unusable])
+        denied = os.strerror(errno.EACCES)
+        unusable_expected = [
+            (2, f"parity.py: error: --json {dangling}: no such directory: {d}/missing\n"),
+            (2, f"parity.py: error: --json {too_long}: "
+                f"{os.strerror(errno.ENAMETOOLONG)}\n"),
+            *[(2, f"parity.py: error: --json {p}: {denied}\n") for p in unusable[2:5]],
+            (2, f"parity.py: error: --json {unusable[5]}: directory not writable: {ro}\n"),
+            (2, f"parity.py: error: --json {ro_file}: not writable\n"),
+        ]
+        # Outside _denied, ro/ and ro.json can be written.
+        usable = [_refusal(["--json", str(p)]) for p in (
+            Path(d) / "parity-report.json", linked, ro / "parity-report.json", ro_file)]
+    extra_key = "    extraKey     a key the report does not have\n"
     report_keys = [line.split()[0] for line in REPORT_KEYS.splitlines()[1:]]
 
     # Argument-table stand-ins: "one", which embeds a fixture set, writes kept
@@ -1459,10 +1535,23 @@ def self_test() -> int:
         ("a --json path whose directory does not exist, that is a directory, or "
          "whose directory is a file is a usage error naming the path",
          json_refusals == json_expected),
+        ("a --json path the report cannot be written to is a usage error naming the "
+         "path and why: a symbolic link into a missing directory, a name too long, a "
+         "path under a directory that cannot be searched, named permission denied and "
+         "not a missing directory, a directory that cannot be written and a file that "
+         "cannot be",
+         unusable_refusals == unusable_expected),
+        ("a --json path in a directory that can be written, a symbolic link to one, and "
+         "a file that can be written are accepted",
+         usable == [None] * 4),
         ("the docstring's Exit codes block is EXIT_CODES",
          __doc__ is None or __doc__.endswith(EXIT_CODES)),
         ("the docstring's Report keys block is REPORT_KEYS",
-         __doc__ is None or REPORT_KEYS in __doc__),
+         __doc__ is None or _documents_report_keys(__doc__)),
+        ("a key line appended to the Report keys block turns the case holding the "
+         "block red, and the block followed by a blank line does not",
+         _documents_report_keys(f"Usage:\n\n{REPORT_KEYS}\n{EXIT_CODES}")
+         and not _documents_report_keys(f"Usage:\n\n{REPORT_KEYS}{extra_key}\n{EXIT_CODES}")),
         ("REPORT_KEYS names the keys of the --json report",
          sorted(report_keys) == sorted(no_dep_report)),
         ("the --json report names a verifier that exits before reporting any "
@@ -1473,6 +1562,10 @@ def self_test() -> int:
         ("the --json report does not name a verifier that fails partway as "
          "unreported",
          crashed_report.get("unreported") == []),
+        ("the --json report does not name a verifier that exits 0 without reporting "
+         "any fixture as unreported",
+         silent_report.get("unreported") == []
+         and silent_report["exitCodes"] == {"one": 0, "two": 0}),
         ("the --json report names every verifier when none reports any fixture",
          none_ran_report.get("unreported") == ["one", "two"]),
         ("an argument case on which a verifier exits with another code is a "
@@ -1867,20 +1960,48 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.self_test and args.json is not None:
         ap.error(SELF_TEST_JSON_ERROR)
     if args.json is not None:
-        # The report is written after every verifier ran; a path that is a
-        # directory, or whose directory is missing or not a directory, is
-        # refused here, before any of them runs.
-        report, parent = Path(args.json), Path(args.json).parent
-        reason = None
-        if report.is_dir():
-            reason = "is a directory"
-        elif not parent.exists():
-            reason = f"no such directory: {parent}"
-        elif not parent.is_dir():
-            reason = f"not a directory: {parent}"
+        reason = json_refusal(args.json)
         if reason:
             ap.exit(2, f"{ap.prog}: error: --json {args.json}: {reason}\n")
     return args
+
+
+def json_refusal(path: str) -> str | None:
+    """Why the --json report cannot be written to path, or None if it can.
+
+    The report is written after every verifier ran, so parse_args refuses a
+    path it cannot be written to before any of them runs. Each path is read
+    with os.stat, which raises its error, where Path.is_dir and Path.exists
+    return False for a permission error on Python 3.14 and raise it on
+    3.12. An error other than a missing path or a file named as a directory
+    is the reason, by its strerror. A path that does not exist yet is
+    created in the directory of the path its chain of symbolic links ends
+    at, so that directory is the one checked.
+    """
+    report = Path(path)
+    try:
+        mode = os.stat(report).st_mode
+    except (FileNotFoundError, NotADirectoryError):
+        pass
+    except OSError as exc:
+        return os.strerror(exc.errno)
+    else:
+        if stat.S_ISDIR(mode):
+            return "is a directory"
+        return None if os.access(report, os.W_OK) else "not writable"
+    # os.stat raised no ELOOP, so this chain of links ends.
+    while os.path.islink(report):
+        report = report.parent / os.readlink(report)
+    parent = report.parent
+    try:
+        mode = os.stat(parent).st_mode
+    except (FileNotFoundError, NotADirectoryError):
+        return f"no such directory: {parent}"
+    except OSError as exc:
+        return f"{parent}: {os.strerror(exc.errno)}"
+    if not stat.S_ISDIR(mode):
+        return f"not a directory: {parent}"
+    return None if os.access(parent, os.W_OK) else f"directory not writable: {parent}"
 
 
 def gate(
