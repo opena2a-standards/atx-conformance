@@ -2001,13 +2001,14 @@ class VerifyError(unittest.TestCase):
 class NonStandardConstant(unittest.TestCase):
     def test_constant_fails_to_load(self):
         # RFC 8259 §6 has no NaN or Infinity; the Go reference verifier fails
-        # to load a file carrying one, and so must this verifier.
+        # to load a file carrying one as a file that is not JSON, and so must
+        # this verifier, with the same reason.
         for literal in ("NaN", "Infinity", "-Infinity"):
             with self.subTest(literal=literal), tempfile.TemporaryDirectory() as tmp:
                 path = _write_member(Path(tmp), "c.json", BASELINE_V11, "declaredPurpose", literal)
                 with self.assertRaises(ValueError) as raised:
                     verify.load_fixture(path)
-                self.assertIn(literal, str(raised.exception))
+                self.assertEqual(str(raised.exception), "fixture is not valid JSON")
 
     def test_directory_run_reports_a_load_error(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2016,7 +2017,7 @@ class NonStandardConstant(unittest.TestCase):
             (directory / "b-baseline-valid.json").write_text(BASELINE_V11.read_text())
             code, text, _ = _run_main(str(directory))
         self.assertEqual(code, 1, text)
-        self.assertIn("a-nan.json  (load error: NaN is not a JSON value", text)
+        self.assertIn("a-nan.json  (load error: fixture is not valid JSON)\n", text)
         self.assertEqual(text.splitlines()[-1], "summary: 1 pass, 1 fail (2 fixtures)")
 
 
@@ -3569,6 +3570,10 @@ class ReportWording(unittest.TestCase):
             ("not json at all", "fixture is not valid JSON"),
             ("", "fixture is not valid JSON"),
             ('{"expected": {"verifyResult": "ACCEPT"}} trailing', "fixture is not valid JSON"),
+            ('{"name": NaN}', "fixture is not valid JSON"),
+            ('{"name": Infinity}', "fixture is not valid JSON"),
+            ('{"name": -Infinity}', "fixture is not valid JSON"),
+            ("[NaN]", "fixture is not valid JSON"),
             ("[1,2,3]", "fixture is not a JSON object"),
             ('"text"', "fixture is not a JSON object"),
             ("7", "fixture is not a JSON object"),
