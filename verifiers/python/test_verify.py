@@ -2305,6 +2305,20 @@ class RepeatedFixtureMember(unittest.TestCase):
         )
         self.assertEqual(text, want + f"\nsummary: 0 pass, {len(cases)} fail ({len(cases)} fixtures)\n")
 
+    def test_load_fixture_alone_refuses_a_repeat_of_or_in_the_verifier_state(self):
+        # verify_fixture(load_fixture(path)) never calls _expected_outcome, so
+        # the refusal must be load_fixture's own; past it, this verifier would
+        # read the later verifierState alone, with no CRL or
+        # requiredSignatures that copy omits.
+        with tempfile.TemporaryDirectory() as tmp:
+            written = {path.name: (path, member) for path, member in self._write_repeats(Path(tmp))}
+            for name in ("d-verifier-state-twice.json", "h-clock-twice.json"):
+                path, member = written[name]
+                with self.subTest(fixture=name):
+                    with self.assertRaises(ValueError) as raised:
+                        verify.load_fixture(path)
+                    self.assertEqual(str(raised.exception), f'the fixture repeats the member "{member}"')
+
     def test_repeat_inside_the_credential_is_still_a_verdict(self):
         with tempfile.TemporaryDirectory() as tmp:
             atx = json.dumps(json.loads(BASELINE_V11.read_text())["atx"])

@@ -52,9 +52,10 @@ sentence below:
    a `..` after a symbolic link and outside the working directory, a
    fixture that writes `expected` twice, under one name, under two that
    differ in case and with a member the second omits, one that writes
-   `verifierState` twice and one that writes `verifyResult` twice in
-   `expected`, each of which both must fail to load, and a credential that
-   writes a member twice) the two must exit with the same code and write
+   `verifierState` twice, one that writes `verifyResult` twice in
+   `expected` and one that writes `clockRfc3339` twice in `verifierState`,
+   each of which both must fail to load, and a credential that writes a
+   member twice) the two must exit with the same code and write
    the same first stderr line and verdict lines, the load error a FAIL line
    names included. Where
    the file system refuses a file name that is not UTF-8, as APFS does, the

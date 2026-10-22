@@ -1139,7 +1139,9 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
     # The Go reference verifier decodes the verifier state into typed fields,
     # so its strings are read the way the credential's are: the CRL's agentId
     # and the trusted issuers are compared with decoded credential members.
-    # Raises ValueError for a fixture that verifier fails to load.
+    # Raises ValueError for a fixture that verifier fails to load. fixture is
+    # what load_fixture returns, not a plain json.load result, which has
+    # already dropped the earlier copy of a member written twice.
     wrapper = _decode_fixture(fixture)
     vs = wrapper["verifierState"]
     atx = wrapper["atx"]

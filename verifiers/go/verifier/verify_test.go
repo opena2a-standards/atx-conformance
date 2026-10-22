@@ -695,8 +695,11 @@ func TestNonFixtureIsALoadError(t *testing.T) {
 // fixtures/wrong-issuer.json with an expected of REJECT [SIGNATURE_INVALID]
 // and a second expected of REJECT, Run wrote FAIL and the Python verifier
 // PASS. A second verifierState holding only clockRfc3339 split them the other
-// way. A repeat inside the credential is still a verdict, REJECT[PARSE_ERROR]
-// (rawDuplicateMember), as the two shipped fixtures that carry one pin.
+// way. A member written twice inside the one verifierState, which holds the
+// CRL and requiredSignatures, fails to load as well: both verifiers accepted
+// clockRfc3339 written there twice with one value. A repeat inside the
+// credential is still a verdict, REJECT[PARSE_ERROR] (rawDuplicateMember), as
+// the two shipped fixtures that carry one pin.
 func TestRepeatedFixtureMemberIsALoadError(t *testing.T) {
 	read := func(name string) []byte {
 		t.Helper()
@@ -740,6 +743,10 @@ func TestRepeatedFixtureMemberIsALoadError(t *testing.T) {
 		t.Fatalf("v1_1-baseline-valid.json holds no clockRfc3339 (%v)", err)
 	}
 	clock := `"verifierState": {"clockRfc3339": "` + state.VerifierState.ClockRFC3339 + `"}`
+	// v1_1-baseline-valid.json with clockRfc3339 written again, with the same
+	// value, after the last member of its one verifierState.
+	nested := with(v11, "verifierState", string(appended(raw(v11, "verifierState"),
+		`"clockRfc3339": "`+state.VerifierState.ClockRFC3339+`"`)))
 
 	cases := []struct {
 		file    string
@@ -753,6 +760,7 @@ func TestRepeatedFixtureMemberIsALoadError(t *testing.T) {
 		{"e-verify-result-twice.json", with(v11, "expected", `{"verifyResult": "ACCEPT", "verifyResult": "ACCEPT"}`), "verifyResult"},
 		{"f-atx-twice.json", appended(v11, `"ATX": `+string(raw(v11, "atx"))), "ATX"},
 		{"g-undeclared-member.json", appended(v11, `"notes": {"by": "a", "BY": "b"}`), "BY"},
+		{"h-clock-twice.json", nested, "clockRfc3339"},
 	}
 	dir := t.TempDir()
 	var want strings.Builder

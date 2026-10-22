@@ -998,7 +998,11 @@ they should not.
   `EXPECTED` and with a first `expected` whose `reasonContains` the reason
   does not hold, and `fixtures/v1_1-baseline-valid.json` with a second
   `verifierState` holding only its `clockRfc3339` passed in the Go verifier
-  and failed in the Python verifier as `UNTRUSTED_ISSUER`. The repeat is
+  and failed in the Python verifier as `UNTRUSTED_ISSUER`. So before this
+  change a fixture that wrote a member twice outside `atx` could reach a
+  different verdict in each verifier, and for a repeated `verifierState`
+  that difference decided whether its CRL and its signature threshold
+  (`requiredSignatures`) were applied. The repeat is
   checked once the file parses as JSON and before any member is decoded,
   so it is named in place of a type error in the member repeated, and every
   member outside `atx` is checked, those the fixture format does not
@@ -1015,15 +1019,16 @@ they should not.
   `GO_REPEATS_INSIDE_THEIR_TYPE`, `GO_THRESHOLD_REPEATS`) and the two
   repeated members of `TestRequiredSignaturesDecode` now expect the load
   error, which the Go verifier built with Go 1.26.3 writes on each. The
-  argument table of `scripts/parity/parity.py` adds six cases (52, from
+  argument table of `scripts/parity/parity.py` adds seven cases (53, from
   46) on files under `repeat/` in its scratch directory, written at run
-  time from `fixtures/baseline-valid.json` and `fixtures/wrong-issuer.json`:
-  `expected` twice, `expected` and `EXPECTED`, a second `EXPECTED` that
-  omits a member, `verifierState` twice and `verifyResult` twice, each a
-  load error both verifiers must word alike, and a credential that writes
-  a member twice, a verdict on both. Its self-test adds one case (80, from
-  79): a verifier that verifies the first of those files where the other
-  fails to load it. No fixture changes.
+  time from `fixtures/baseline-valid.json`, `fixtures/wrong-issuer.json`
+  and `fixtures/v1_1-baseline-valid.json`: `expected` twice, `expected` and
+  `EXPECTED`, a second `EXPECTED` that omits a member, `verifierState`
+  twice, `verifyResult` twice and `clockRfc3339` twice inside the one
+  `verifierState`, each a load error both verifiers must word alike, and a
+  credential that writes a member twice, a verdict on both. Its self-test
+  adds one case (80, from 79): a verifier that verifies the first of those
+  files where the other fails to load it. No fixture changes.
 - Both verifiers fold a credential member name by a fixed table, ASCII
   `A-Z` to `a-z`, U+212A (Kelvin sign) to `k` and U+017F (long s) to `s`,
   and leave every other character unchanged, where they lowercased every

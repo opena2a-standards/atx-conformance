@@ -49,9 +49,10 @@ after `--`, an absolute path through a
 symbolic link to the working directory, through its target, with a ..
 after a symbolic link and outside it, a fixture that writes expected twice,
 under one name, under two that differ in case and with a member the second
-omits, one that writes verifierState twice and one that writes verifyResult
-twice in expected, each of which both must fail to load, and a credential
-that writes a member twice), each run on both
+omits, one that writes verifierState twice, one that writes verifyResult
+twice in expected and one that writes clockRfc3339 twice in verifierState,
+each of which both must fail to load, and a credential that writes a
+member twice), each run on both
 verifiers from a symbolic link to a scratch directory holding the paths it
 names, with PWD naming the link, as a shell names a directory it changed
 into through one. Both must exit with the same code and write the same
@@ -279,6 +280,7 @@ ARGUMENT_CASES: list[tuple[str, list[str]]] = [
     ("a fixture whose second expected omits a member", ["repeat/expected-omits.json"]),
     ("a fixture that writes verifierState twice", ["repeat/state-twice.json"]),
     ("a fixture that writes verifyResult twice", ["repeat/nested-twice.json"]),
+    ("a fixture that writes clockRfc3339 twice in verifierState", ["repeat/clock-twice.json"]),
     ("a credential that writes a member twice", ["repeat/credential-twice.json"]),
 ]
 # The argument lists that name no path: no argument, and -- alone, which ends
@@ -297,6 +299,12 @@ ARGUMENT_FIXTURE = "baseline-valid.json"
 # one omits, as Go's encoding/json keeps it, and one that reads the later
 # member alone give such a file two verdicts, where both must fail to load it.
 REPEAT_FIXTURE = "wrong-issuer.json"
+# The shipped fixture beside ARGUMENT_FIXTURE that repeat/clock-twice.json is
+# written from, with clockRfc3339 written twice, with one value, inside its
+# one verifierState, which holds the CRL and requiredSignatures. A verifier
+# whose scan reads the objects nested in expected and not those in
+# verifierState reads that file where the other fails to load it.
+NESTED_REPEAT_FIXTURE = "v1_1-baseline-valid.json"
 # The placeholder _with_raw writes a member's value as, then replaces.
 RAW_PLACEHOLDER = "@@RAW@@"
 # The argument {xff} stands for: the byte 0xff, which is not UTF-8, as
@@ -526,21 +534,24 @@ def _with_raw(fixture: dict, member: str, raw: str) -> str:
     return text.replace(json.dumps(RAW_PLACEHOLDER), raw, 1) + "\n"
 
 
-def _repeat_files(argument: bytes, reject: bytes) -> dict[str, str]:
+def _repeat_files(argument: bytes, reject: bytes, nested: bytes) -> dict[str, str]:
     """The files repeat/ holds, by name, written from argument, the text of
-    ARGUMENT_FIXTURE, and reject, that of REPEAT_FIXTURE: reject with its
-    expected member REJECT [SIGNATURE_INVALID] and a later expected of
-    REJECT, as expected-twice.json; with that later member named EXPECTED,
-    as expected-variant.json; with an expected that names a reasonContains
-    the reason does not hold and a later EXPECTED without it, as
+    ARGUMENT_FIXTURE, reject, that of REPEAT_FIXTURE, and nested, that of
+    NESTED_REPEAT_FIXTURE: reject with its expected member REJECT
+    [SIGNATURE_INVALID] and a later expected of REJECT, as
+    expected-twice.json; with that later member named EXPECTED, as
+    expected-variant.json; with an expected that names a reasonContains the
+    reason does not hold and a later EXPECTED without it, as
     expected-omits.json; argument with a later verifierState holding only
     its clockRfc3339, as state-twice.json; with verifyResult written twice
-    in its expected member, as nested-twice.json; and with revoked written
-    twice in its credential, as credential-twice.json. Each but the last
-    fails to load in each verifier, which names the member written the
+    in its expected member, as nested-twice.json; nested with its
+    clockRfc3339 written again, with the same value, after the last member
+    of its one verifierState, as clock-twice.json; and argument with revoked
+    written twice in its credential, as credential-twice.json. Each but the
+    last fails to load in each verifier, which names the member written the
     second time; the last is a verdict, REJECT[PARSE_ERROR] against an
     expected ACCEPT."""
-    arg, rej = json.loads(argument), json.loads(reject)
+    arg, rej, nest = json.loads(argument), json.loads(reject), json.loads(nested)
     later = '{"verifyResult": "REJECT"}'
     category = {**rej, "expected": {"verifyResult": "REJECT",
                                     "rejectCategory": "SIGNATURE_INVALID"}}
@@ -549,6 +560,8 @@ def _repeat_files(argument: bytes, reject: bytes) -> dict[str, str]:
     clock = json.dumps({"clockRfc3339": state.get("clockRfc3339")})
     credential = json.dumps({RAW_PLACEHOLDER: None, **(arg.get("atx") or {})}).replace(
         json.dumps(RAW_PLACEHOLDER) + ": null", '"revoked": false, "revoked": false', 1)
+    nested_state = {"clockRfc3339": None, **(nest.get("verifierState") or {})}
+    clock_again = f'"clockRfc3339": {json.dumps(nested_state["clockRfc3339"])}'
     return {
         "expected-twice.json": _appended(category, f'"expected": {later}'),
         "expected-variant.json": _appended(category, f'"EXPECTED": {later}'),
@@ -557,6 +570,8 @@ def _repeat_files(argument: bytes, reject: bytes) -> dict[str, str]:
             arg, "verifierState", f'{json.dumps(state)}, "verifierState": {clock}'),
         "nested-twice.json": _with_raw(
             arg, "expected", '{"verifyResult": "ACCEPT", "verifyResult": "ACCEPT"}'),
+        "clock-twice.json": _with_raw(
+            nest, "verifierState", _appended(nested_state, clock_again).rstrip()),
         "credential-twice.json": _with_raw(arg, "atx", credential),
     }
 
@@ -567,9 +582,10 @@ def _argument_scratch(scratch: Path, fixture: Path) -> tuple[Path, str]:
     reason the file system refused xff/{xff}.json or noread/{xff}.json, ""
     when it took both. An error writing either file with an errno outside
     NOT_UTF8_NAME_REFUSALS is no refusal, and is raised. The files of
-    repeat/ are written from fixture and from REPEAT_FIXTURE beside it, or
-    from fixture alone where there is none, as in the self-test's scratch,
-    whose stand-ins read no file."""
+    repeat/ are written from fixture and from REPEAT_FIXTURE and
+    NESTED_REPEAT_FIXTURE beside it, from fixture in place of each that is
+    not there, as in the self-test's scratch, whose stand-ins read no
+    file."""
     root = scratch / "dir"
     (root / "fixfile").mkdir(parents=True)
     (root / "fixfile" / "fixtures").write_text("a file, not a directory\n")
@@ -605,8 +621,11 @@ def _argument_scratch(scratch: Path, fixture: Path) -> tuple[Path, str]:
     (root / "shapes" / "deep.json").write_text("[" * 10001 + "]" * 10001 + "\n")
     reject = fixture.with_name(REPEAT_FIXTURE)
     reject = reject if reject.exists() else fixture
+    nested = fixture.with_name(NESTED_REPEAT_FIXTURE)
+    nested = nested if nested.exists() else fixture
     (root / "repeat").mkdir()
-    for name, text in _repeat_files(fixture.read_bytes(), reject.read_bytes()).items():
+    texts = _repeat_files(fixture.read_bytes(), reject.read_bytes(), nested.read_bytes())
+    for name, text in texts.items():
         (root / "repeat" / name).write_text(text)
     (root / "xff").mkdir()
     refusal = ""
@@ -1258,7 +1277,7 @@ def self_test() -> int:
     report_keys = [line.split()[0] for line in REPORT_KEYS.splitlines()[1:]]
 
     # Argument-table stand-ins: "one", which embeds a fixture set, writes kept
-    # for thirty-five cases and for no argument and -- alone its report of
+    # for thirty-six cases and for no argument and -- alone its report of
     # that set, the ARGUMENT_FIXTURE beside the table's fixture; "two", which
     # embeds none, writes kept and for no argument and -- alone its usage,
     # with one case's outcome changed. A case is run alone, by name, except
@@ -1298,6 +1317,7 @@ def self_test() -> int:
     state_twice_case, nested_twice_case, credential_twice_case = (
         "a fixture that writes verifierState twice", "a fixture that writes verifyResult twice",
         "a credential that writes a member twice")
+    clock_twice_case = "a fixture that writes clockRfc3339 twice in verifierState"
     argv_of = {case: tuple(args) for case, args in ARGUMENT_CASES}
     fixfile = (
         "PASS  fixfile/x.json\n       expected: ACCEPT\n       observed: ACCEPT\n"
@@ -1372,6 +1392,7 @@ def self_test() -> int:
         argv_of[expected_omits_case]: repeats("expected-omits.json", "EXPECTED"),
         argv_of[state_twice_case]: repeats("state-twice.json", "verifierState"),
         argv_of[nested_twice_case]: repeats("nested-twice.json", "verifyResult"),
+        argv_of[clock_twice_case]: repeats("clock-twice.json", "clockRfc3339"),
         argv_of[credential_twice_case]: (
             "FAIL  repeat/credential-twice.json\n       expected: ACCEPT\n"
             '       observed: REJECT[PARSE_ERROR: credential contains duplicate member "revoked"]\n'
