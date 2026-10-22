@@ -15,6 +15,14 @@ Spec coverage:
     v1.1 signs JCS(TBS), the RFC 8785 form of the to-be-signed projection
     (core.md section 1.3a.2). See docs/scope.md
     §"Canonicalization: v1.0 signs 11 fields; v1.1 signs JCS(TBS)".
+  - Integers in the v1.1 signed payload: once the checks that refuse a
+    payload the Go reference verifier cannot canonicalize pass, one whose
+    magnitude is above 2**53 - 1, outside the I-JSON exact range (RFC 7493
+    section 2.2), rejects as SIGNATURE_INVALID. The Go verifier's JCS library
+    reads each number as an IEEE 754 double, which does not hold every such
+    integer, and writes 9007199254740993 as 9007199254740992, so a signature
+    over those bytes does not tell the two apart
+    (_integer_outside_exact_range).
   - Ed25519 and ML-DSA-65 (FIPS 204) hybrid signature verification over the
     same canonical payload (every declared signature must verify and at
     least one must be present; an ML-DSA-65 signature needs a verifying
@@ -86,6 +94,8 @@ lesson and scoped to the whole body because ATX signs it all):
     make the credential a signature failure. A number in it outside the
     float64 range (1e400, or an integer of 401 digits) rejects as
     VERIFIER_CONFIG_ERROR too: that library parses every number as a float64.
+    An integer in it inside that range but outside the I-JSON exact range
+    rejects after these two checks, as SIGNATURE_INVALID (Spec coverage).
   - NaN, Infinity and -Infinity are not JSON, so a file carrying one fails to
     load, as it does in the Go reference verifier.
   - the file is read as UTF-8 the way Go's encoding/json reads it: each byte
@@ -505,6 +515,55 @@ def canonical_payload_v11(atx: dict[str, Any]) -> bytes:
     jcs-vectors suite, not by shared code. atx is the credential as
     _decode_credential returns it.
     """
+    return _jcs_canonicalize(_tbs_v11(atx))
+
+
+# 2**53 - 1, the largest magnitude of an integer in the I-JSON exact range
+# (RFC 7493 section 2.2), as the Go reference verifier's maxExactInteger.
+_MAX_EXACT_INTEGER = 2**53 - 1
+
+
+def _integer_outside_exact_range(tbs: dict[str, Any]) -> tuple[str, int] | None:
+    """The first integer of the v1.1 TBS (as _tbs_v11 projects it) whose
+    magnitude is above 2**53 - 1, with its member, as the Go reference
+    verifier's integerOutsideExactRangeV11 names it: the members
+    behavioralProfile.observationDays, declaredPurpose,
+    scanSummary.criticalFindings, scanSummary.highFindings and trustLevel, in
+    the order JCS writes them, and in declaredPurpose, which enters the TBS
+    as written, the first such integer the credential writes. None when the
+    TBS holds none. Walked with a stack, as _first_unpaired_surrogate is."""
+
+    def outside(n: Any) -> bool:
+        return (
+            isinstance(n, int)
+            and not isinstance(n, bool)
+            and not -_MAX_EXACT_INTEGER <= n <= _MAX_EXACT_INTEGER
+        )
+
+    profile = tbs["behavioralProfile"]
+    if profile is not None and outside(profile["observationDays"]):
+        return "behavioralProfile.observationDays", profile["observationDays"]
+    stack = [tbs.get("declaredPurpose")]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            stack.extend(reversed(list(item.values())))
+        elif isinstance(item, list):
+            stack.extend(reversed(item))
+        elif outside(item):
+            return "declaredPurpose", item
+    for name in ("criticalFindings", "highFindings"):
+        if outside(tbs["scanSummary"][name]):
+            return f"scanSummary.{name}", tbs["scanSummary"][name]
+    if outside(tbs["trustLevel"]):
+        return "trustLevel", tbs["trustLevel"]
+    return None
+
+
+def _tbs_v11(atx: dict[str, Any]) -> dict[str, Any]:
+    """The ATX v1.1 TBS object of the credential, which canonical_payload_v11
+    JCS-canonicalizes. atx is the credential as _decode_credential returns
+    it."""
     # The Go verifier's projectScanSummaryV11 ignores a decode error, which
     # leaves each member it could not decode at its zero value; a scanSummary
     # that is not an object leaves all six there. verify_fixture refuses such
@@ -560,7 +619,7 @@ def canonical_payload_v11(atx: dict[str, Any]) -> bytes:
     }
     if declared_purpose is not None:
         tbs["declaredPurpose"] = declared_purpose
-    return _jcs_canonicalize(tbs)
+    return tbs
 
 
 def _controller_did(key_id: str) -> str:
@@ -1084,11 +1143,15 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
     vs = wrapper["verifierState"]
     atx = wrapper["atx"]
     if atx is _ABSENT:
-        # Go's json.Unmarshal of no credential bytes at all.
-        return VerifyResult(
-            reject_category="PARSE_ERROR",
-            reason="the fixture has no atx member (unexpected end of JSON input)",
-        )
+        # A fixture with no atx member, such as one of another conformance
+        # suite, has no credential to parse. The reason quotes its $schema
+        # when that is a string, as the Go reference verifier's noATXReason
+        # does; the member is matched by folded name, the last one read.
+        reason = "the fixture has no atx member"
+        schema = _members_by_folded_name(fixture or {}).get(_fold_key("$schema"), [None])[-1]
+        if isinstance(schema, str):
+            reason += f" (its $schema is {_go_quote(schema)})"
+        return VerifyResult(reject_category="PARSE_ERROR", reason=reason)
 
     # Step 0: strict parse. A duplicate member at any depth of the CREDENTIAL
     # rejects before any field is interpreted (see module docstring). The
@@ -1195,8 +1258,23 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
                 reject_category="VERIFIER_CONFIG_ERROR",
                 reason="v1.1 canonicalization failed: declaredPurpose holds a number outside the float64 range",
             )
+        tbs = _tbs_v11(atx)
+        outside = _integer_outside_exact_range(tbs)
+        if outside is not None:
+            # The Go reference verifier's JCS library writes such an integer
+            # as the IEEE 754 double nearest it, which other integers can
+            # share (9007199254740993 and 9007199254740992 are written
+            # alike), so a signature over those bytes does not tell them
+            # apart; this serializer refuses it. The Go verifier refuses it
+            # once its canonicalization succeeds, which is after the two
+            # checks above, and the reason is its.
+            where, integer = outside
+            return VerifyResult(
+                reject_category="SIGNATURE_INVALID",
+                reason=f"no signature covers {where}: the integer {integer} is outside the I-JSON exact range, -(2^53-1) to 2^53-1",
+            )
         try:
-            payload = canonical_payload_v11(atx)
+            payload = _jcs_canonicalize(tbs)
         except NotImplementedError:
             # The vendored JCS serializer refuses non-integer numbers
             # (rfc8785.py); a schema-valid v1.1 TBS carries none. One can still
@@ -1451,12 +1529,17 @@ def load_fixture(path: str | os.PathLike[str]) -> dict[str, Any]:
     # The duplicate-marking hook preserves last-wins values (plain dict
     # semantics) while recording duplicates for the strict-parse check in
     # verify_fixture, which consults only the atx subtree.
-    fixture = _parse_json(
-        text,
-        object_pairs_hook=_dup_marking_pairs,
-        parse_constant=_reject_constant,
-        parse_int=_parse_int,
-    )
+    try:
+        fixture = _parse_json(
+            text,
+            object_pairs_hook=_dup_marking_pairs,
+            parse_constant=_reject_constant,
+            parse_int=_parse_int,
+        )
+    except json.JSONDecodeError:
+        # The Go reference verifier's wording for a syntax error; the
+        # decoders' own texts and positions differ.
+        raise ValueError("fixture is not valid JSON") from None
     # json.loads does not say which strings were written with an escape, and
     # the Go reference verifier's timestamp decoder refuses a timestamp that
     # was. A second parse, with each such string value replaced by null, has
@@ -1538,8 +1621,24 @@ def _json_names(directory: str) -> list[str]:
             if e.name.endswith(".json") and not e.is_dir(follow_symlinks=False)]
 
 
+# What the line for an argument that names no file adds when the argument is
+# a word an option spells, as the Go reference verifier adds it.
+_MISSING_PATH_HINTS = {
+    "help": " (--help prints the usage)",
+    "version": " (--version prints the version line)",
+}
+
+
 def expand_paths(args: list[str]) -> list[str]:
-    """The fixture files args name, spelled as the Go reference verifier's
+    """expand_fixture_dirs without the directories."""
+    return expand_fixture_dirs(args)[0]
+
+
+def expand_fixture_dirs(args: list[str]) -> tuple[list[str], list[str]]:
+    """The fixture files args name, and each directory listed for them in
+    argument order, as the Go reference verifier's expandFixtureDirs
+    returns them: a directory argument, or its fixtures directory. The
+    files are spelled as the Go reference verifier's
     expandFixturePaths spells them: a file as its argument spells it, ./ and
     // included, and a *.json file of a directory as _go_join writes the
     directory and the file's name, or, where the directory cleaned names
@@ -1547,11 +1646,13 @@ def expand_paths(args: list[str]) -> list[str]:
     path the file is read from. An argument is read as the string it is,
     not as a Path, which drops a ./ and a trailing / and collapses a //."""
     out: list[str] = []
+    dirs: list[str] = []
     for a in args:
         try:
             st = os.stat(a)
         except FileNotFoundError:
-            raise FileNotFoundError(f"{a}: no such file or directory") from None
+            hint = _MISSING_PATH_HINTS.get(a, "")
+            raise FileNotFoundError(f"{a}: no such file or directory{hint}") from None
         except OSError as exc:
             # Go's os.Stat error as the Go reference verifier writes it:
             # `stat d/x.json/: not a directory` for a file named with a
@@ -1565,12 +1666,13 @@ def expand_paths(args: list[str]) -> list[str]:
             fixtures_dir = join(a, "fixtures")
             target = fixtures_dir if os.path.isdir(fixtures_dir) else a
             out.extend(join(target, name) for name in _json_names(target))
+            dirs.append(target)
         else:
             out.append(a)
     # A path named twice is verified twice, as the Go reference verifier
     # verifies it, and the names sort byte by byte, as its sort.Strings sorts
     # them: ./d/x.json before d/./x.json before d//x.json.
-    return sorted(out, key=os.fsencode)
+    return sorted(out, key=os.fsencode), dirs
 
 
 def _rel_path(path: str) -> str:
@@ -1697,6 +1799,12 @@ def _version_line() -> str:
     return f"verify.py: commit {head.stdout.strip()}{changes}, {python}\n"
 
 
+def _fixture_count(n: int) -> str:
+    """n with the noun the summary line counts, as the Go reference
+    verifier's fixtureCount writes it: "1 fixture", "29 fixtures"."""
+    return "1 fixture" if n == 1 else f"{n} fixtures"
+
+
 def main(argv: list[str]) -> int:
     # The Go reference verifier reads its arguments the same way, except that
     # with no path it verifies the fixture set its module embeds, which this
@@ -1732,12 +1840,13 @@ def main(argv: list[str]) -> int:
         sys.stderr.write("error: an empty argument names no fixture file or directory\n")
         return 2
     try:
-        paths = expand_paths(args)
+        paths, dirs = expand_fixture_dirs(args)
     except OSError as exc:
         _say_err(f"error: {exc}\n")
         return 2
     if not paths:
-        sys.stderr.write("no fixture *.json files found\n")
+        # Every argument was a directory, each listed one level deep.
+        _say_err(f"no fixture *.json files found in {', '.join(dirs)} (subdirectories are not walked)\n")
         return 2
 
     _write_surrogate_escapes_as_bytes(sys.stdout)
@@ -1768,8 +1877,13 @@ def main(argv: list[str]) -> int:
         ok = (want_accept and got.accepted) or (not want_accept and not got.accepted)
         if ok and not want_accept and expected["rejectCategory"]:
             ok = got.reject_category == expected["rejectCategory"]
+        # A REJECT fixture that failed on its reasonContains alone: the
+        # expected and observed lines agree on the verdict and category, so
+        # the substring is named on a line of its own.
+        reason_missing = False
         if ok and not want_accept and expected["reasonContains"]:
             ok = expected["reasonContains"].lower() in got.reason.lower()
+            reason_missing = not ok
 
         status = "PASS" if ok else "FAIL"
         if ok:
@@ -1784,6 +1898,8 @@ def main(argv: list[str]) -> int:
         else:
             print()
         _say(f"       observed: {got}")
+        if reason_missing:
+            _say(f"       reason does not contain {_go_quote(expected['reasonContains'])}")
         if got.sigs_expected:
             # Each boolean as the Go reference verifier's %t writes it.
             print(
@@ -1796,7 +1912,7 @@ def main(argv: list[str]) -> int:
             )
 
     print()
-    print(f"summary: {total_pass} pass, {total_fail} fail ({total_pass + total_fail} fixtures)")
+    print(f"summary: {total_pass} pass, {total_fail} fail ({_fixture_count(total_pass + total_fail)})")
     return 0 if total_fail == 0 else 1
 
 

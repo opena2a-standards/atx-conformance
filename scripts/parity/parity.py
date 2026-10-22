@@ -31,7 +31,8 @@ PATH for one, is reported the same way, as exiting 127.
 After the fixture table the gate runs the argument table, ARGUMENT_CASES:
 argument lists no fixture can carry (an empty argument, -h and --help at
 several positions, --version and an unknown option after a path, an
-unknown option that is not UTF-8, - alone, a repository root, a directory
+unknown option that is not UTF-8, - alone, a bare help word and a bare
+version word, a repository root, a directory
 whose `fixtures` entry is a file, a path that does not exist, a path that
 is not UTF-8, a file whose name is not UTF-8 and a directory holding it, a
 directory with no *.json, a directory holding a subdirectory named *.json,
@@ -42,7 +43,9 @@ or not, spelled with ./ and // and found in a directory, a path named
 twice, a file spelled with ./ and // and one spelled with .., a directory
 spelled with ./ and // and one spelled with .., a directory spelled with a
 .. after a symbolic link, with a trailing / and without, a file named with
-a trailing /, a path and an option after `--`, an absolute path through a
+a trailing /, a file that is not a JSON object, one that is not JSON and
+one nested deeper than Go's encoding/json decodes, a path and an option
+after `--`, an absolute path through a
 symbolic link to the working directory, through its target, with a ..
 after a symbolic link and outside it), each run on both
 verifiers from a symbolic link to a scratch directory holding the paths it
@@ -211,9 +214,12 @@ OBSERVED_RE = re.compile(r"^\s*observed:\s+(ACCEPT|REJECT\[([A-Z_]+))")
 # and, where the file system takes that name, as {xff}.json, each of mode
 # 000, hop/link is a symbolic link to away/deep, away/ holding
 # ARGUMENT_FIXTURE as x.json, -h.json is ARGUMENT_FIXTURE, xff/ holds
-# ARGUMENT_FIXTURE as {xff}.json where the file system takes that name, and
-# nothing there is named missing or -. In an argument, {link} is the link's
-# absolute path, {target} the directory's, its symbolic links resolved,
+# ARGUMENT_FIXTURE as {xff}.json where the file system takes that name,
+# shapes/ holds array.json, a JSON array, text.json, text that is not JSON,
+# and deep.json, arrays nested one level past Go's encoding/json limit, and
+# nothing there is named missing, -, help or version. In an argument, {link}
+# is the link's absolute path, {target} the directory's, its symbolic links
+# resolved,
 # {fixture} the absolute path of the fixture the table copies, outside both,
 # and {xff} NOT_UTF8, which as a whole argument names nothing there either.
 ARGUMENT_CASES: list[tuple[str, list[str]]] = [
@@ -228,6 +234,8 @@ ARGUMENT_CASES: list[tuple[str, list[str]]] = [
     ("an unknown option after a path", ["fixfile", "--bogus"]),
     ("an unknown option that is not UTF-8", ["-{xff}"]),
     ("- alone", ["-"]),
+    ("a bare help word", ["help"]),
+    ("a bare version word", ["version"]),
     ("a repository root", ["root"]),
     ("a fixtures entry that is a file", ["fixfile"]),
     ("a path that does not exist", ["missing"]),
@@ -252,6 +260,9 @@ ARGUMENT_CASES: list[tuple[str, list[str]]] = [
     ("a .. after a symbolic link", ["hop/link/.."]),
     ("a .. after a symbolic link, with a trailing /", ["hop/link/../"]),
     ("a file named with a trailing /", ["fixfile/x.json/"]),
+    ("a file that is not a JSON object", ["shapes/array.json"]),
+    ("a file that is not JSON", ["shapes/text.json"]),
+    ("a file nested too deep", ["shapes/deep.json"]),
     ("a path after --", ["--", "-h.json"]),
     ("an option after --", ["--", "-h.json", "--help"]),
     ("an absolute path via the link", ["{link}/fixfile/x.json"]),
@@ -516,6 +527,10 @@ def _argument_scratch(scratch: Path, fixture: Path) -> tuple[Path, str]:
     (root / "hop").mkdir()
     (root / "hop" / "link").symlink_to("../away/deep", target_is_directory=True)
     (root / "-h.json").write_bytes(fixture.read_bytes())
+    (root / "shapes").mkdir()
+    (root / "shapes" / "array.json").write_text("[1,2,3]\n")
+    (root / "shapes" / "text.json").write_text("not json at all\n")
+    (root / "shapes" / "deep.json").write_text("[" * 10001 + "]" * 10001 + "\n")
     (root / "xff").mkdir()
     refusal = ""
     # Read once, outside the try, so an error reading the fixture is raised,
@@ -626,7 +641,7 @@ def _answers_no_argument(spec: dict, outcome: dict, fixtures: list[str]) -> bool
     return (
         outcome["exitCode"] == 0 and outcome["stderr"] == ""
         and [v for v in verdicts if BLOCK_RE.match(v)] == [f"PASS  fixtures/{f}" for f in fixtures]
-        and verdicts[-1:] == [f"summary: {n} pass, 0 fail ({n} fixtures)"]
+        and verdicts[-1:] == [f"summary: {n} pass, 0 fail ({n} fixture{'' if n == 1 else 's'})"]
     )
 
 
@@ -1204,7 +1219,7 @@ def self_test() -> int:
     fixfile = (
         "PASS  fixfile/x.json\n       expected: ACCEPT\n       observed: ACCEPT\n"
         "       signatures: 1/1 valid (ed25519=true mldsa65=false)\n"
-        "\nsummary: 1 pass, 0 fail (1 fixtures)\n", "", 0,
+        "\nsummary: 1 pass, 0 fail (1 fixture)\n", "", 0,
     )
 
     def passes(*names: str) -> tuple[str, str, int]:
@@ -1212,7 +1227,8 @@ def self_test() -> int:
         fixfile/x.json once under each of names, in that order."""
         block = fixfile[0][:fixfile[0].index("\n\n") + 1]
         report = "".join(block.replace("fixfile/x.json", name) for name in names)
-        return (report + f"\nsummary: {len(names)} pass, 0 fail ({len(names)} fixtures)\n",
+        n = len(names)
+        return (report + f"\nsummary: {n} pass, 0 fail ({n} fixture{'' if n == 1 else 's'})\n",
                 "", 0)
 
     def unreadable(name: str, reason: str = "") -> tuple[str, str, int]:
@@ -1220,7 +1236,7 @@ def self_test() -> int:
         name names: its FAIL line, naming reason as the load error, by
         default the Go verifier's error for a file of mode 000."""
         reason = reason or f"open {name}: permission denied"
-        return (f"FAIL  {name}  (load error: {reason})\n\nsummary: 0 pass, 1 fail (1 fixtures)\n",
+        return (f"FAIL  {name}  (load error: {reason})\n\nsummary: 0 pass, 1 fail (1 fixture)\n",
                 "", 1)
 
     missing = ("", "error: missing: no such file or directory\n", 2)
@@ -1235,8 +1251,8 @@ def self_test() -> int:
         argv_of[root_case]: (
             fixfile[0].replace("fixfile/x.json", "root/fixtures/x.json"), "", 0),
         argv_of[twice_case]: (
-            fixfile[0].replace("\nsummary: 1 pass, 0 fail (1 fixtures)\n", "")
-            + fixfile[0].replace("summary: 1 pass, 0 fail (1 fixtures)",
+            fixfile[0].replace("\nsummary: 1 pass, 0 fail (1 fixture)\n", "")
+            + fixfile[0].replace("summary: 1 pass, 0 fail (1 fixture)",
                                  "summary: 2 pass, 0 fail (2 fixtures)"), "", 0),
         argv_of[spelled_case]: passes("./fixfile/./x.json", "fixfile//x.json"),
         argv_of[file_dotdot_case]: passes("fixfile/../fixfile/x.json"),
@@ -1325,7 +1341,7 @@ def self_test() -> int:
         unknown_case)
     args_root = _argument_divergences(changed({argv_of[root_case]: (
         "FAIL  root/conformance.json  (load error: no expected member)\n"
-        "\nsummary: 0 pass, 1 fail (1 fixtures)\n", "", 1)}), root_case)
+        "\nsummary: 0 pass, 1 fail (1 fixture)\n", "", 1)}), root_case)
     args_twice = _argument_divergences(
         changed({argv_of[twice_case]: fixfile}), twice_case)
     args_spelled = _argument_divergences(changed(
@@ -1338,13 +1354,13 @@ def self_test() -> int:
     # exist.
     args_link_dotdot = _argument_divergences(changed({argv_of[link_dotdot_case]: (
         "FAIL  hop/x.json  (load error: open hop/x.json: no such file or directory)\n"
-        "\nsummary: 0 pass, 1 fail (1 fixtures)\n", "", 1)}), link_dotdot_case)
+        "\nsummary: 0 pass, 1 fail (1 fixture)\n", "", 1)}), link_dotdot_case)
     # "two" as a verifier that lists subdir/sub.json, a directory, with the
     # files of subdir, as Path.glob lists it, and reports it as a load error.
     args_subdir = _argument_divergences(changed({argv_of[subdir_case]: (
         "FAIL  subdir/sub.json  (load error: [Errno 21] Is a directory: 'subdir/sub.json')\n"
         + passes("subdir/x.json")[0].replace(
-            "summary: 1 pass, 0 fail (1 fixtures)", "summary: 1 pass, 1 fail (2 fixtures)"),
+            "summary: 1 pass, 0 fail (1 fixture)", "summary: 1 pass, 1 fail (2 fixtures)"),
         "", 1)}), subdir_case)
     # "two" as a verifier that gives no name for a directory it cannot list
     # and writes that it found no *.json.
@@ -1608,9 +1624,9 @@ def self_test() -> int:
          args_verdicts == [
              'argument case "a fixtures entry that is a file" (fixfile): '
              "one exit 0, verdict lines ['PASS  fixfile/x.json', 'observed: ACCEPT', "
-             "'summary: 1 pass, 0 fail (1 fixtures)']; "
+             "'summary: 1 pass, 0 fail (1 fixture)']; "
              "two exit 0, verdict lines ['PASS  fixfile/x.json', 'observed: REJECT[EXPIRED]', "
-             "'summary: 1 pass, 0 fail (1 fixtures)']"]),
+             "'summary: 1 pass, 0 fail (1 fixture)']"]),
         ("a later stderr line, and a report line that is not a verdict line, are "
          "each verifier's own wording and make no divergence",
          args_wording == []),
@@ -1636,9 +1652,9 @@ def self_test() -> int:
          args_root == [
              'argument case "a repository root" (root): '
              "one exit 0, verdict lines ['PASS  root/fixtures/x.json', 'observed: ACCEPT', "
-             "'summary: 1 pass, 0 fail (1 fixtures)']; "
+             "'summary: 1 pass, 0 fail (1 fixture)']; "
              "two exit 1, verdict lines ['FAIL  root/conformance.json  "
-             "(load error: no expected member)', 'summary: 0 pass, 1 fail (1 fixtures)']"]),
+             "(load error: no expected member)', 'summary: 0 pass, 1 fail (1 fixture)']"]),
         ("a path named twice, which one verifier verifies once, is a divergence",
          args_twice == [
              'argument case "a path named twice" (fixfile/x.json fixfile/x.json): '
@@ -1646,7 +1662,7 @@ def self_test() -> int:
              "'PASS  fixfile/x.json', 'observed: ACCEPT', "
              "'summary: 2 pass, 0 fail (2 fixtures)']; "
              "two exit 0, verdict lines ['PASS  fixfile/x.json', 'observed: ACCEPT', "
-             "'summary: 1 pass, 0 fail (1 fixtures)']"]),
+             "'summary: 1 pass, 0 fail (1 fixture)']"]),
         ("a file spelled with ./ and //, which one verifier names without them, is a "
          "divergence",
          args_spelled == [
@@ -1663,23 +1679,23 @@ def self_test() -> int:
          args_dotdot == [
              'argument case "a directory spelled with .." (fixfile/../fixfile): '
              "one exit 0, verdict lines ['PASS  fixfile/x.json', 'observed: ACCEPT', "
-             "'summary: 1 pass, 0 fail (1 fixtures)']; "
+             "'summary: 1 pass, 0 fail (1 fixture)']; "
              "two exit 0, verdict lines ['PASS  fixfile/../fixfile/x.json', "
-             "'observed: ACCEPT', 'summary: 1 pass, 0 fail (1 fixtures)']"]),
+             "'observed: ACCEPT', 'summary: 1 pass, 0 fail (1 fixture)']"]),
         ("a .. after a symbolic link, whose files one verifier names with the .. removed "
          "with the link, is a divergence",
          args_link_dotdot == [
              'argument case "a .. after a symbolic link" (hop/link/..): '
              "one exit 0, verdict lines ['PASS  hop/link/../x.json', 'observed: ACCEPT', "
-             "'summary: 1 pass, 0 fail (1 fixtures)']; "
+             "'summary: 1 pass, 0 fail (1 fixture)']; "
              "two exit 1, verdict lines ['FAIL  hop/x.json  (load error: open hop/x.json: "
-             "no such file or directory)', 'summary: 0 pass, 1 fail (1 fixtures)']"]),
+             "no such file or directory)', 'summary: 0 pass, 1 fail (1 fixture)']"]),
         ("a subdirectory named *.json, which one verifier reports as a fixture that fails "
          "to load, is a divergence",
          args_subdir == [
              'argument case "a subdirectory named *.json" (subdir): '
              "one exit 0, verdict lines ['PASS  subdir/x.json', 'observed: ACCEPT', "
-             "'summary: 1 pass, 0 fail (1 fixtures)']; "
+             "'summary: 1 pass, 0 fail (1 fixture)']; "
              "two exit 1, verdict lines [\"FAIL  subdir/sub.json  (load error: [Errno 21] "
              "Is a directory: 'subdir/sub.json')\", 'PASS  subdir/x.json', "
              "'observed: ACCEPT', 'summary: 1 pass, 1 fail (2 fixtures)']"]),
@@ -1694,7 +1710,7 @@ def self_test() -> int:
              'argument case "a file named with a trailing /" (fixfile/x.json/): '
              "one exit 2, stderr 'error: stat fixfile/x.json/: not a directory'; "
              "two exit 0, verdict lines ['PASS  fixfile/x.json', 'observed: ACCEPT', "
-             "'summary: 1 pass, 0 fail (1 fixtures)']"]),
+             "'summary: 1 pass, 0 fail (1 fixture)']"]),
         ("a path that is not UTF-8, which one verifier writes as a backslash escape "
          "rather than as its byte, is a divergence",
          args_xff == [
@@ -1706,37 +1722,37 @@ def self_test() -> int:
          args_xff_name == [
              f"argument case \"{case}\" ({spelled}): "
              r"one exit 0, verdict lines ['PASS  xff/\udcff.json', 'observed: ACCEPT', "
-             "'summary: 1 pass, 0 fail (1 fixtures)']; "
+             "'summary: 1 pass, 0 fail (1 fixture)']; "
              r"two exit 0, verdict lines ['PASS  xff/\\udcff.json', 'observed: ACCEPT', "
-             "'summary: 1 pass, 0 fail (1 fixtures)']"
+             "'summary: 1 pass, 0 fail (1 fixture)']"
              for case, spelled in ((xff_file_case, "'xff/{xff}.json'"), (xff_dir_case, "xff"))]),
         ("a file that cannot be read, whose load error one verifier writes as Python's "
          "OSError writes it, is a divergence, though both FAIL it under one name",
          args_unread == [
              'argument case "a file that cannot be read" (noread/x.json): '
              "one exit 1, verdict lines ['FAIL  noread/x.json  (load error: open "
-             "noread/x.json: permission denied)', 'summary: 0 pass, 1 fail (1 fixtures)']; "
+             "noread/x.json: permission denied)', 'summary: 0 pass, 1 fail (1 fixture)']; "
              "two exit 1, verdict lines [\"FAIL  noread/x.json  (load error: [Errno 13] "
-             "Permission denied: 'noread/x.json')\", 'summary: 0 pass, 1 fail (1 fixtures)']"]),
+             "Permission denied: 'noread/x.json')\", 'summary: 0 pass, 1 fail (1 fixture)']"]),
         ("a file that cannot be read whose name is not UTF-8, whose load error one verifier "
          "writes as Python's OSError writes it, is a divergence",
          args_unread_xff == [
              "argument case \"a file that cannot be read whose name is not UTF-8\" "
              "('noread/{xff}.json'): "
              r"one exit 1, verdict lines ['FAIL  noread/\udcff.json  (load error: open "
-             r"noread/\udcff.json: permission denied)', 'summary: 0 pass, 1 fail (1 fixtures)']; "
+             r"noread/\udcff.json: permission denied)', 'summary: 0 pass, 1 fail (1 fixture)']; "
              r"""two exit 1, verdict lines ["FAIL  noread/\udcff.json  (load error: [Errno 13] """
              r"""Permission denied: 'noread/\\udcff.json')", 'summary: 0 pass, 1 fail """
-             "(1 fixtures)']"]),
+             "(1 fixture)']"]),
         ("a load error that writes the byte 0xff of a path as the six characters \\udcff, "
          "where its FAIL line writes the byte, is a divergence",
          args_unread_escaped == [
              "argument case \"a file that cannot be read whose name is not UTF-8\" "
              "('noread/{xff}.json'): "
              r"one exit 1, verdict lines ['FAIL  noread/\udcff.json  (load error: open "
-             r"noread/\udcff.json: permission denied)', 'summary: 0 pass, 1 fail (1 fixtures)']; "
+             r"noread/\udcff.json: permission denied)', 'summary: 0 pass, 1 fail (1 fixture)']; "
              r"two exit 1, verdict lines ['FAIL  noread/\udcff.json  (load error: open "
-             r"noread/\\udcff.json: permission denied)', 'summary: 0 pass, 1 fail (1 fixtures)']"]),
+             r"noread/\\udcff.json: permission denied)', 'summary: 0 pass, 1 fail (1 fixture)']"]),
         ("where the file system refuses a name that is not UTF-8, the cases that need one "
          "are skipped whatever the verifiers would write, each row naming the refusal, "
          "and are no divergence",
@@ -1771,14 +1787,14 @@ def self_test() -> int:
          args_walks == [
              'argument case "no argument" (): '
              "one exit 0, verdict lines ['PASS  fixtures/baseline-valid.json', "
-             "'observed: ACCEPT', 'summary: 1 pass, 0 fail (1 fixtures)']; "
+             "'observed: ACCEPT', 'summary: 1 pass, 0 fail (1 fixture)']; "
              "two exit 0, verdict lines ['PASS  fixtures/baseline-valid.json', "
-             "'observed: ACCEPT', 'summary: 1 pass, 0 fail (1 fixtures)']"]),
+             "'observed: ACCEPT', 'summary: 1 pass, 0 fail (1 fixture)']"]),
         ("a path after --, which one verifier names an unknown option, is a divergence",
          args_dashdash == [
              'argument case "a path after --" (-- -h.json): '
              "one exit 0, verdict lines ['PASS  -h.json', 'observed: ACCEPT', "
-             "'summary: 1 pass, 0 fail (1 fixtures)']; "
+             "'summary: 1 pass, 0 fail (1 fixture)']; "
              "two exit 2, stderr 'unknown option: --'"]),
         ("the cases with an absolute path via the link and via its target run from a "
          "symbolic link with PWD naming it, so a verifier naming a path relative to PWD "
@@ -1810,14 +1826,14 @@ def self_test() -> int:
          args_filelink == [
              'argument case "a directory holding a link to a fixture" (filelink): '
              "one exit 0, verdict lines ['PASS  filelink/link.json', 'observed: ACCEPT', "
-             "'summary: 1 pass, 0 fail (1 fixtures)']; "
+             "'summary: 1 pass, 0 fail (1 fixture)']; "
              "two exit 2, stderr 'no fixture *.json files found'"]),
         ("a directory holding a symbolic link to a directory, which one verifier skips as "
          "a directory where the other fails to load it, is a divergence",
          args_dirlink == [
              'argument case "a directory holding a link to a directory" (dirlink): '
              "one exit 1, verdict lines ['FAIL  dirlink/link.json  (load error: read "
-             "dirlink/link.json: is a directory)', 'summary: 0 pass, 1 fail (1 fixtures)']; "
+             "dirlink/link.json: is a directory)', 'summary: 0 pass, 1 fail (1 fixture)']; "
              "two exit 2, stderr 'no fixture *.json files found'"]),
         ("a repository root whose fixtures directory cannot be listed, which one verifier "
          "names by the root, is a divergence",
@@ -1832,40 +1848,40 @@ def self_test() -> int:
              'argument case "a file that cannot be read spelled with ./ and //" '
              "(./noread//x.json): "
              "one exit 1, verdict lines ['FAIL  ./noread//x.json  (load error: open "
-             "./noread//x.json: permission denied)', 'summary: 0 pass, 1 fail (1 fixtures)']; "
+             "./noread//x.json: permission denied)', 'summary: 0 pass, 1 fail (1 fixture)']; "
              "two exit 1, verdict lines ['FAIL  ./noread//x.json  (load error: open "
-             "noread/x.json: permission denied)', 'summary: 0 pass, 1 fail (1 fixtures)']"]),
+             "noread/x.json: permission denied)', 'summary: 0 pass, 1 fail (1 fixture)']"]),
         ("a directory holding a file that cannot be read, which one verifier refuses "
          "rather than reporting a load error, is a divergence",
          args_unread_dir == [
              'argument case "a directory holding a file that cannot be read" (noread): '
              "one exit 1, verdict lines ['FAIL  noread/x.json  (load error: open "
-             "noread/x.json: permission denied)', 'summary: 0 pass, 1 fail (1 fixtures)']; "
+             "noread/x.json: permission denied)', 'summary: 0 pass, 1 fail (1 fixture)']; "
              "two exit 2, stderr 'error: open noread/x.json: permission denied'"]),
         ("a file spelled with .., which one verifier names with the .. removed, is a "
          "divergence",
          args_file_dotdot == [
              'argument case "a file spelled with .." (fixfile/../fixfile/x.json): '
              "one exit 0, verdict lines ['PASS  fixfile/../fixfile/x.json', "
-             "'observed: ACCEPT', 'summary: 1 pass, 0 fail (1 fixtures)']; "
+             "'observed: ACCEPT', 'summary: 1 pass, 0 fail (1 fixture)']; "
              "two exit 0, verdict lines ['PASS  fixfile/x.json', 'observed: ACCEPT', "
-             "'summary: 1 pass, 0 fail (1 fixtures)']"]),
+             "'summary: 1 pass, 0 fail (1 fixture)']"]),
         ("a directory spelled with ./ and //, whose files one verifier names with them, is "
          "a divergence",
          args_dir_spelled == [
              'argument case "a directory spelled with ./ and //" (.//fixfile): '
              "one exit 0, verdict lines ['PASS  fixfile/x.json', 'observed: ACCEPT', "
-             "'summary: 1 pass, 0 fail (1 fixtures)']; "
+             "'summary: 1 pass, 0 fail (1 fixture)']; "
              "two exit 0, verdict lines ['PASS  .//fixfile/x.json', 'observed: ACCEPT', "
-             "'summary: 1 pass, 0 fail (1 fixtures)']"]),
+             "'summary: 1 pass, 0 fail (1 fixture)']"]),
         ("a .. after a symbolic link with a trailing /, whose files one verifier names with "
          "a second /, is a divergence",
          args_link_dotdot_slash == [
              'argument case "a .. after a symbolic link, with a trailing /" (hop/link/../): '
              "one exit 0, verdict lines ['PASS  hop/link/../x.json', 'observed: ACCEPT', "
-             "'summary: 1 pass, 0 fail (1 fixtures)']; "
+             "'summary: 1 pass, 0 fail (1 fixture)']; "
              "two exit 0, verdict lines ['PASS  hop/link/..//x.json', 'observed: ACCEPT', "
-             "'summary: 1 pass, 0 fail (1 fixtures)']"]),
+             "'summary: 1 pass, 0 fail (1 fixture)']"]),
         ("an absolute path with a .. after a symbolic link, which one verifier names with "
          "the .. removed with the link, is a divergence",
          args_abs_dotdot == [

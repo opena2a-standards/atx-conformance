@@ -1678,6 +1678,158 @@ class GoScanSummaryOutsideItsType(unittest.TestCase):
         self.assertTrue(got.accepted, got.reason)
 
 
+def _write_with(directory: Path, name: str, baseline: Path, edits: dict, expected: dict | None = None) -> Path:
+    """_write_at for several members: `baseline` with each atx member at a
+    path of `edits` replaced by the raw JSON literal it maps to."""
+    fixture = json.loads(baseline.read_text())
+    fixture["expected"] = dict(expected or PARSE_ERROR_EXPECTED)
+    for i, path in enumerate(edits):
+        parent = fixture["atx"]
+        for step in path[:-1]:
+            parent = parent[step]
+        parent[path[-1]] = f"@@MEMBER{i}@@"
+    text = json.dumps(fixture)
+    for i, literal in enumerate(edits.values()):
+        text = text.replace(f'"@@MEMBER{i}@@"', literal)
+    out = directory / name
+    out.write_text(text)
+    return out
+
+
+def _with_verdict(baseline: Path, edits: dict) -> verify.VerifyResult:
+    with tempfile.TemporaryDirectory() as tmp:
+        written = _write_with(Path(tmp), "members.json", baseline, edits)
+        return verify.verify_fixture(verify.load_fixture(written))
+
+
+def _exact_range_reason(where: str, literal: str) -> str:
+    return f"no signature covers {where}: the integer {literal} is outside the I-JSON exact range, -(2^53-1) to 2^53-1"
+
+
+CRITICAL = ("scanSummary", "criticalFindings")
+HIGH = ("scanSummary", "highFindings")
+OBSERVATION_DAYS = ("behavioralProfile", "observationDays")
+TRUST_LEVEL = ("trustLevel",)
+PURPOSE = ("declaredPurpose",)
+INTEGER_OUTSIDE_EXACT_RANGE = ROOT / "fixtures" / "v1_1-integer-outside-exact-range.json"
+
+# Integers of the v1.1 signed payload outside the I-JSON exact range, written
+# on the v1.1 baseline, and the member and integer the Go reference verifier's
+# reason names for each: with several, the first in the order JCS writes the
+# members, and in declaredPurpose the first integer written.
+GO_INTEGER_OUTSIDE_EXACT_RANGE = (
+    ({CRITICAL: "9007199254740992"}, "scanSummary.criticalFindings", "9007199254740992"),
+    ({CRITICAL: "9007199254740993"}, "scanSummary.criticalFindings", "9007199254740993"),
+    ({CRITICAL: "-9007199254740992"}, "scanSummary.criticalFindings", "-9007199254740992"),
+    ({CRITICAL: "9223372036854775807"}, "scanSummary.criticalFindings", "9223372036854775807"),
+    ({HIGH: "9007199254740992"}, "scanSummary.highFindings", "9007199254740992"),
+    ({OBSERVATION_DAYS: "9007199254740992"}, "behavioralProfile.observationDays", "9007199254740992"),
+    ({TRUST_LEVEL: "9007199254740993"}, "trustLevel", "9007199254740993"),
+    ({TRUST_LEVEL: "-9007199254740993"}, "trustLevel", "-9007199254740993"),
+    ({PURPOSE: "9007199254740993"}, "declaredPurpose", "9007199254740993"),
+    ({PURPOSE: '{"limits": {"refund": 18014398509481985}}'}, "declaredPurpose", "18014398509481985"),
+    ({PURPOSE: '[1.5, "18014398509481985", 1e21, 9007199254740993, -9007199254740993]'}, "declaredPurpose", "9007199254740993"),
+    ({PURPOSE: "[100000000000000000000]"}, "declaredPurpose", "100000000000000000000"),
+    ({OBSERVATION_DAYS: "9007199254740992", TRUST_LEVEL: "9007199254740993"}, "behavioralProfile.observationDays", "9007199254740992"),
+    ({CRITICAL: "9007199254740993", PURPOSE: '{"a": -9007199254740992}'}, "declaredPurpose", "-9007199254740992"),
+    ({CRITICAL: "9007199254740994", HIGH: "9007199254740993"}, "scanSummary.criticalFindings", "9007199254740994"),
+    ({HIGH: "9007199254740995", TRUST_LEVEL: "9007199254740992"}, "scanSummary.highFindings", "9007199254740995"),
+)
+
+
+class GoIntegerOutsideExactRange(unittest.TestCase):
+    """An integer of the v1.1 signed payload whose magnitude is above
+    2**53 - 1, outside the I-JSON exact range (RFC 7493 section 2.2). The Go
+    reference verifier's JCS library writes 9007199254740993 as
+    9007199254740992, so it accepted a credential signed over those bytes
+    (fixtures/v1_1-integer-outside-exact-range.json) that this verifier,
+    writing the count's digits, rejected for a signature that did not
+    verify. Both now refuse each such integer as SIGNATURE_INVALID with one
+    reason. atx-conformance#278."""
+
+    def test_integer_outside_the_range_is_refused_with_the_go_reason(self):
+        for edits, where, literal in GO_INTEGER_OUTSIDE_EXACT_RANGE:
+            with self.subTest(edits=edits):
+                got = _with_verdict(BASELINE_V11, edits)
+                self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+                self.assertEqual(got.reason, _exact_range_reason(where, literal))
+
+    def test_inside_the_range_or_not_an_integer_is_not_refused(self):
+        # The baseline signs none of these, so the signature itself fails.
+        for edits in (
+            {CRITICAL: "9007199254740991"},
+            {CRITICAL: "-9007199254740991"},
+            {TRUST_LEVEL: "9007199254740991"},
+            {PURPOSE: "1e21"},
+            {PURPOSE: "9007199254740993.0"},
+        ):
+            with self.subTest(edits=edits):
+                got = _with_verdict(BASELINE_V11, edits)
+                self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+                self.assertNotIn("I-JSON", got.reason)
+        fixture = json.loads(BASELINE_V11.read_text())
+        with tempfile.TemporaryDirectory() as tmp:
+            for count in (2**53 - 1, -(2**53 - 1)):
+                with self.subTest(signed=count):
+                    fixture["atx"]["scanSummary"]["criticalFindings"] = count
+                    signed = _write_signed_v11(Path(tmp), "signed.json", fixture)
+                    got = verify.verify_fixture(verify.load_fixture(signed))
+                    self.assertTrue(got.accepted, got.reason)
+
+    def test_shipped_fixture_is_signed_over_the_bytes_go_writes(self):
+        # Its signature verifies over JCS(TBS) with criticalFindings
+        # 9007199254740992, the bytes the Go verifier writes for the
+        # 9007199254740993 it carries, so a verifier without the refusal
+        # accepts it.
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+        fixture = verify.load_fixture(INTEGER_OUTSIDE_EXACT_RANGE)
+        credential = verify._decode_credential(fixture["atx"])
+        self.assertEqual(credential["scanSummary"]["criticalFindings"], 2**53 + 1)
+        credential["scanSummary"] = dict(credential["scanSummary"], criticalFindings=0)
+        zero = verify.canonical_payload_v11(credential)
+        self.assertEqual(zero.count(b'"criticalFindings":0,'), 1)
+        payload = zero.replace(b'"criticalFindings":0,', b'"criticalFindings":9007199254740992,')
+        key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(fixture["verifierState"]["publicKeys"][0]["publicKeyHex"]))
+        (signature,) = fixture["atx"]["signatures"]
+        key.verify(base64.b64decode(signature["value"]), payload)
+
+        got = verify.verify_fixture(fixture)
+        self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+        self.assertEqual(got.reason, _exact_range_reason("scanSummary.criticalFindings", "9007199254740993"))
+        got = _at_verdict(INTEGER_OUTSIDE_EXACT_RANGE, CRITICAL, "9007199254740992")
+        self.assertEqual(got.reason, _exact_range_reason("scanSummary.criticalFindings", "9007199254740992"))
+
+    def test_checks_that_run_first_keep_their_verdicts(self):
+        for edits, category, held in (
+            ({PURPOSE: "[1e400, 9007199254740993]"}, "VERIFIER_CONFIG_ERROR", "v1.1 canonicalization failed"),
+            ({CRITICAL: "9007199254740993", PURPOSE: '"\\ud800"'}, "VERIFIER_CONFIG_ERROR", "unpaired UTF-16 surrogate"),
+            ({CRITICAL: "9007199254740993", ("scanSummary", "hma"): "7"}, "SIGNATURE_INVALID", "member outside its type"),
+        ):
+            with self.subTest(edits=edits):
+                got = _with_verdict(BASELINE_V11, edits)
+                self.assertEqual(got.reject_category, category, got.reason)
+                self.assertIn(held, got.reason)
+
+    def test_v1_0_trust_level_is_not_refused(self):
+        # The pipe form writes trustLevel as its digits; the v1.0 baseline
+        # signs trustLevel 4, so the signature itself fails.
+        got = _with_verdict(BASELINE_V10, {TRUST_LEVEL: "9007199254740993"})
+        self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+        self.assertNotIn("I-JSON", got.reason)
+
+    def test_directory_run_reaches_the_summary_line(self):
+        n = len(GO_INTEGER_OUTSIDE_EXACT_RANGE)
+        expected = {"verifyResult": "REJECT", "rejectCategory": "SIGNATURE_INVALID", "reasonContains": "signature"}
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            for i, (edits, _where, _literal) in enumerate(GO_INTEGER_OUTSIDE_EXACT_RANGE):
+                _write_with(directory, f"{i:02d}.json", BASELINE_V11, edits, expected=expected)
+            code, text, err = _run_main(str(directory))
+        self.assertEqual(code, 0, text + err)
+        self.assertEqual(text.splitlines()[-1], f"summary: {n} pass, 0 fail ({n} fixtures)")
+
+
 class GoNonObjectCredential(unittest.TestCase):
     def test_credential_reaches_the_go_verdict(self):
         for baseline in (BASELINE_V10, BASELINE_V11):
@@ -1930,6 +2082,32 @@ class SerializerRefusal(unittest.TestCase):
                 message = str(raised.exception)
                 self.assertIn("Got float 0.5.", message)
                 self.assertIn("string-encoded as %.6f", message)
+
+    def test_integer_outside_the_exact_range_is_refused(self):
+        # The Go and TypeScript legs write 9007199254740993 as
+        # 9007199254740992 and 10**21 as 1e+21; this serializer wrote their
+        # digits. It writes each integer in the I-JSON exact range, -(2**53 -
+        # 1) to 2**53 - 1, as its digits and refuses every other one, naming
+        # it, or its size where it has more digits than str() converts.
+        # atx-conformance#278.
+        for path in SERIALIZERS:
+            serializer = _load_serializer(path)
+            for n in (2**53 - 1, -(2**53 - 1), 0, -1):
+                with self.subTest(serializer=str(path.relative_to(ROOT)), n=n):
+                    self.assertEqual(serializer.canonicalize({"n": n}), b'{"n":%d}' % n)
+            for n, named in (
+                (2**53, "Got integer 9007199254740992."),
+                (2**53 + 1, "Got integer 9007199254740993."),
+                (-(2**53), "Got integer -9007199254740992."),
+                (2**60, "Got integer 1152921504606846976."),
+                (10**21, "Got integer 1000000000000000000000."),
+                (10**5000, "Got an integer of 16610 bits."),
+            ):
+                with self.subTest(serializer=str(path.relative_to(ROOT)), bits=n.bit_length(), negative=n < 0):
+                    with self.assertRaises(NotImplementedError) as raised:
+                        serializer.canonicalize({"declaredPurpose": [1, {"n": n}]})
+                    self.assertIn(named, str(raised.exception))
+                    self.assertIn("I-JSON exact range", str(raised.exception))
 
 
 class SerializerNesting(unittest.TestCase):
@@ -2765,7 +2943,7 @@ class ArgumentContract(unittest.TestCase):
         self.assertEqual((code, err), (0, ""), out)
         lines = out.splitlines()
         self.assertEqual(lines[0], f"PASS  {directory / 'x.json'}")
-        self.assertEqual(lines[-1], "summary: 1 pass, 0 fail (1 fixtures)")
+        self.assertEqual(lines[-1], "summary: 1 pass, 0 fail (1 fixture)")
 
     def test_a_subdirectory_named_json_is_skipped(self):
         # Path.glob("*.json") listed a subdirectory named sub.json with the
@@ -2784,9 +2962,9 @@ class ArgumentContract(unittest.TestCase):
             Path("l", "link.json").symlink_to("real", target_is_directory=True)
             for arg, code, want, summary in (
                 ("d", 0, ["PASS  d/x.json", "observed: ACCEPT"],
-                 "summary: 1 pass, 0 fail (1 fixtures)"),
+                 "summary: 1 pass, 0 fail (1 fixture)"),
                 ("r", 0, ["PASS  r/fixtures/x.json", "observed: ACCEPT"],
-                 "summary: 1 pass, 0 fail (1 fixtures)"),
+                 "summary: 1 pass, 0 fail (1 fixture)"),
                 ("l", 1, ["FAIL  l/link.json  (load error: read l/link.json: is a directory)",
                           "PASS  l/x.json", "observed: ACCEPT"],
                  "summary: 1 pass, 1 fail (2 fixtures)"),
@@ -2832,7 +3010,7 @@ class ArgumentContract(unittest.TestCase):
                 code, out, err = _run_main("--", "-h.json")
                 self.assertEqual((code, err), (0, ""), out)
                 self.assertTrue(out.startswith("PASS  -h.json\n"), out)
-                self.assertTrue(out.endswith("\nsummary: 1 pass, 0 fail (1 fixtures)\n"), out)
+                self.assertTrue(out.endswith("\nsummary: 1 pass, 0 fail (1 fixture)\n"), out)
                 for args, stderr in (
                     (("--", "-h.json", "--help"), "error: --help: no such file or directory\n"),
                     (("--", "--version"), "error: --version: no such file or directory\n"),
@@ -2964,7 +3142,7 @@ class UnreadableFixture(unittest.TestCase):
             ):
                 with self.subTest(arg=arg):
                     self.assertEqual(_run_main(arg), (
-                        1, f"{line}\n\nsummary: 0 pass, 1 fail (1 fixtures)\n", ""))
+                        1, f"{line}\n\nsummary: 0 pass, 1 fail (1 fixture)\n", ""))
 
     def test_a_failed_read_is_named_as_go_names_it(self):
         # os.ReadFile writes an error of the read after the file opened as
@@ -3231,6 +3409,91 @@ class HeaderDocs(unittest.TestCase):
         for doc, ref in refs:
             with self.subTest(doc=doc, ref=ref):
                 self.assertIn(ref, _readme_headings(doc))
+
+
+class ReportWording(unittest.TestCase):
+    """The lines the Go reference verifier's tests of the same names pin:
+    the summary's noun, a bare help or version word, the line for
+    directories with no *.json, the reason for a fixture with no atx
+    member, the load error of a file that is not a fixture object, and the
+    line naming a reasonContains substring the reason lacks."""
+
+    def test_summary_counts_one_fixture_in_the_singular(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            Path("x.json").write_text(BASELINE_V10.read_text())
+            for args, want in ((["x.json"], "\nsummary: 1 pass, 0 fail (1 fixture)\n"),
+                               (["x.json", "x.json"], "\nsummary: 2 pass, 0 fail (2 fixtures)\n")):
+                with self.subTest(args=args):
+                    code, out, err = _run_main(*args)
+                    self.assertEqual((code, err), (0, ""), out)
+                    self.assertTrue(out.endswith(want), out)
+
+    def test_bare_help_and_version_words_point_at_the_option(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            for arg, want in (
+                ("help", "error: help: no such file or directory (--help prints the usage)\n"),
+                ("version", "error: version: no such file or directory (--version prints the version line)\n"),
+                ("helps", "error: helps: no such file or directory\n"),
+            ):
+                with self.subTest(arg=arg):
+                    self.assertEqual(_run_main(arg), (2, "", want))
+
+    def test_no_fixtures_line_names_the_directories(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            for d in ("empty", "onlysub/sub", "root/fixtures"):
+                Path(d).mkdir(parents=True)
+            Path("onlysub/sub/x.json").write_text(BASELINE_V10.read_text())
+            for args, dirs in ((["empty"], "empty"), (["onlysub"], "onlysub"),
+                               (["empty", "root"], "empty, root/fixtures")):
+                with self.subTest(args=args):
+                    self.assertEqual(_run_main(*args), (
+                        2, "", f"no fixture *.json files found in {dirs} (subdirectories are not walked)\n"))
+
+    def test_fixture_with_no_atx_member_names_the_cause(self):
+        for doc, reason in (
+            ({"$schema": "https://atp.opena2a.org/schemas/fixture-v1.json", "expected": {"verifyResult": "ACCEPT"}},
+             'the fixture has no atx member (its $schema is "https://atp.opena2a.org/schemas/fixture-v1.json")'),
+            ({"expected": {"verifyResult": "ACCEPT"}}, "the fixture has no atx member"),
+            ({"$schema": 7, "expected": {"verifyResult": "ACCEPT"}}, "the fixture has no atx member"),
+        ):
+            with self.subTest(doc=doc), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "f.json"
+                path.write_text(json.dumps(doc))
+                got = verify.verify_fixture(verify.load_fixture(path))
+                self.assertEqual((got.accepted, got.reject_category, got.reason), (False, "PARSE_ERROR", reason))
+
+    def test_load_error_names_the_file_shape(self):
+        deep = "[" * 200000 + "]" * 200000
+        for text, reason in (
+            ("not json at all", "fixture is not valid JSON"),
+            ("", "fixture is not valid JSON"),
+            ('{"expected": {"verifyResult": "ACCEPT"}} trailing', "fixture is not valid JSON"),
+            ("[1,2,3]", "fixture is not a JSON object"),
+            ('"text"', "fixture is not a JSON object"),
+            ("7", "fixture is not a JSON object"),
+            (deep, "arrays and objects nested deeper than 10000 levels (the limit of Go's encoding/json)"),
+        ):
+            with self.subTest(text=text[:40]), tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+                Path("f.json").write_text(text)
+                self.assertEqual(_run_main("f.json"), (
+                    1, f"FAIL  f.json  (load error: {reason})\n\nsummary: 0 pass, 1 fail (1 fixture)\n", ""))
+
+    def test_reason_contains_mismatch_names_the_substring(self):
+        doc = json.loads((ROOT / "fixtures" / "wrong-issuer.json").read_text())
+        doc["expected"]["reasonContains"] = "zz-not-in-reason"
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            Path("r1.json").write_text(json.dumps(doc))
+            code, out, _ = _run_main("r1.json")
+        lines = out.splitlines()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(lines[0], "FAIL  r1.json", out)
+        self.assertTrue(lines[2].startswith("       observed: REJECT[UNTRUSTED_ISSUER: "), out)
+        self.assertEqual(lines[3], '       reason does not contain "zz-not-in-reason"', out)
+        # The shipped fixture, which passes, has no such line.
+        with contextlib.chdir(ROOT):
+            code, out, _ = _run_main("fixtures/wrong-issuer.json")
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("reason does not contain", out)
 
 
 if __name__ == "__main__":
