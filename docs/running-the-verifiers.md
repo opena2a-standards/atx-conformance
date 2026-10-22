@@ -20,6 +20,9 @@ value is not a JSON object and one whose arrays and objects nest deeper
 than 10000 levels are load errors too, with the same reason in both
 verifiers: `fixture is not valid JSON`, `fixture is not a JSON object` and
 `arrays and objects nested deeper than 10000 levels (the limit of Go's encoding/json)`.
+A file that writes a value as `NaN`, `Infinity` or `-Infinity`, inside its
+`atx` member or outside it, is a file that is not JSON: RFC 8259 §6 has
+none of them.
 A fixture with no `atx` member, such as one of another conformance suite,
 is reported as `observed: REJECT[PARSE_ERROR: the fixture has no atx member]`,
 with ` (its $schema is "<value>")` before the `]` when its `$schema` is a

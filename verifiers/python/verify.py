@@ -97,7 +97,9 @@ lesson and scoped to the whole body because ATX signs it all):
     An integer in it inside that range but outside the I-JSON exact range
     rejects after these two checks, as SIGNATURE_INVALID (Spec coverage).
   - NaN, Infinity and -Infinity are not JSON, so a file carrying one fails to
-    load, as it does in the Go reference verifier.
+    load with the reason the Go reference verifier gives a file that is not
+    JSON, fixture is not valid JSON, unless it also nests arrays and objects
+    deeper than the 10000 levels of the next item.
   - the file is read as UTF-8 the way Go's encoding/json reads it: each byte
     of an invalid sequence inside a string decodes to U+FFFD, and arrays and
     objects nested deeper than 10000 levels, the fixture object included,
@@ -1396,10 +1398,15 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
     return result
 
 
+class _NonJSONConstant(ValueError):
+    """NaN, Infinity or -Infinity, which _reject_constant refuses."""
+
+
 def _reject_constant(name: str) -> Any:
     # json.loads accepts NaN, Infinity and -Infinity by default; RFC 8259 §6
-    # has none of them, and the Go reference verifier fails to load them.
-    raise ValueError(f"{name} is not a JSON value (RFC 8259 §6)")
+    # has none of them, and the Go reference verifier fails to load them as
+    # it fails to load any other text that is not JSON (load_fixture).
+    raise _NonJSONConstant(name)
 
 
 def _parse_int(literal: str) -> int | _LongInteger:
@@ -1568,9 +1575,10 @@ def load_fixture(path: str | os.PathLike[str]) -> dict[str, Any]:
             parse_constant=_reject_constant,
             parse_int=_parse_int,
         )
-    except json.JSONDecodeError:
-        # The Go reference verifier's wording for a syntax error; the
-        # decoders' own texts and positions differ.
+    except (json.JSONDecodeError, _NonJSONConstant):
+        # The Go reference verifier's wording for a syntax error, a NaN,
+        # Infinity or -Infinity among them; the decoders' own texts and
+        # positions differ.
         raise ValueError("fixture is not valid JSON") from None
     # Checked once the file has parsed and before any member is decoded, as
     # the Go reference verifier checks it.

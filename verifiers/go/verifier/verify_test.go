@@ -2218,16 +2218,21 @@ func TestFixtureWithNoATXMemberNamesTheCause(t *testing.T) {
 }
 
 // TestLoadErrorNamesTheFileShape pins the load error of a file that is not
-// a fixture object: one reason each for a file that is not JSON, one whose
-// value is not an object and one nested past encoding/json's depth limit,
-// the reasons the Python verifier writes. They were json.Unmarshal's own
-// errors, one naming this package's fixture type.
+// a fixture object: one reason each for a file that is not JSON, one
+// holding NaN, Infinity or -Infinity among them, one whose value is not an
+// object and one nested past encoding/json's depth limit, the reasons the
+// Python verifier writes. They were json.Unmarshal's own errors, one naming
+// this package's fixture type.
 func TestLoadErrorNamesTheFileShape(t *testing.T) {
 	deep := strings.Repeat("[", 200000) + strings.Repeat("]", 200000)
 	for _, c := range []struct{ doc, reason string }{
 		{"not json at all", "fixture is not valid JSON"},
 		{"", "fixture is not valid JSON"},
 		{`{"expected": {"verifyResult": "ACCEPT"}} trailing`, "fixture is not valid JSON"},
+		{`{"name": NaN}`, "fixture is not valid JSON"},
+		{`{"name": Infinity}`, "fixture is not valid JSON"},
+		{`{"name": -Infinity}`, "fixture is not valid JSON"},
+		{"[NaN]", "fixture is not valid JSON"},
 		{"[1,2,3]", "fixture is not a JSON object"},
 		{`"text"`, "fixture is not a JSON object"},
 		{"7", "fixture is not a JSON object"},

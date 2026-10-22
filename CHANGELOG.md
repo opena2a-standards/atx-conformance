@@ -982,6 +982,31 @@ they should not.
 
 ### Fixed
 
+- The Python reference verifier fails to load a file that writes a value as
+  `NaN`, `Infinity` or `-Infinity`, its arrays and objects nested no deeper
+  than 10000 levels, with the reason the Go reference verifier gives,
+  `fixture is not valid JSON`, where it wrote `<literal> is not a JSON value
+  (RFC 8259 §6)`, as `NaN is not a JSON value (RFC 8259 §6)` (#282). On
+  `{"name": NaN}`, `{"name": Infinity}` and
+  `{"name": -Infinity}`, and on an `atx` member whose `trustLevel` is
+  written as each of the three, both verifiers print
+  `FAIL  <file>  (load error: fixture is not valid JSON)` and exit 1; the
+  Python verifier exited 1 on each of the six before this change too, so
+  only its reason changes. `docs/running-the-verifiers.md` says such a file
+  is a file that is not JSON. `TestLoadErrorNamesTheFileShape` in the Go
+  verifier and `test_load_error_names_the_file_shape` in the Python one add
+  four rows each, `{"name": NaN}`, `{"name": Infinity}`,
+  `{"name": -Infinity}` and `[NaN]`, which expect that reason, and the
+  Python verifier's `NonStandardConstant` tests expect it where they
+  expected the literal named. The Python verifier of the commit before this
+  change fails its four rows and both of those tests; `verify.go` does not
+  change, and passes its four rows. The argument table of
+  `scripts/parity/parity.py` adds two cases (55, from 53) on files under
+  `shapes/` in its scratch directory: a file holding NaN, Infinity or
+  -Infinity, the three objects above, and a credential holding NaN,
+  `fixtures/baseline-valid.json` with its credential's `trustLevel` written
+  as `NaN`. The verifiers of the commit before this change differ on both
+  cases, and agree on both after it. No fixture changes.
 - Both reference verifiers fail to load a fixture file that writes a member
   more than once outside its `atx` member, under one name or under two that
   Go's `encoding/json` reads as one, such as `expected` and `EXPECTED`. Each
