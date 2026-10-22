@@ -1004,7 +1004,8 @@ they should not.
   `x` the reverse; each is ACCEPT on both. Go's `encoding/json` matches a
   name to an ASCII struct field through no non-ASCII letter but the Kelvin
   sign and the long s, and RFC 8259 §8.3 compares names code unit by code
-  unit, so no decoder joins the names the fold no longer joins.
+  unit, so neither reference verifier's decoder joins the names the fold no
+  longer joins.
   `docs/running-the-verifiers.md` says the fold is fixed where it said each
   release set its Unicode version. `TestFoldKey` and
   `TestRawDuplicateMember` hold the table in the Go verifier, and
