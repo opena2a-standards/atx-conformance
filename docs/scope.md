@@ -24,7 +24,7 @@ What this suite verifies:
 | Revocation via the credential `revoked` flag | `fixtures/revoked.json` |
 | Revocation via CRL membership alone, the credential's own flag being false (§1.3 step 6, which both reference verifiers perform at their step 3, before any signature) | `fixtures/revoked-crl-only.json` |
 | Trusted-issuer DID set | `fixtures/wrong-issuer.json` |
-| Ed25519 signature verification over the canonical payload | every fixture that passes steps 0 to 4 of the reference verifiers (strict parse, schema version, expiry, revocation by the flag or the CRL, trusted issuer): 21 of 28. The others reject before step 5; `go test` in `verifiers/go` checks that their signatures verify once that gate is lifted. The count follows the reference verifiers' order, which checks the CRL (§1.3 step 6) before the signatures (§1.3 steps 4 and 5), so `fixtures/revoked-crl-only.json` is among the others. Both fixtures whose CRL lists their agent carry valid signatures, so in the spec's order they reject as `REVOKED` too |
+| Ed25519 signature verification over the canonical payload | every fixture that passes steps 0 to 4 of the reference verifiers (strict parse, schema version, expiry, revocation by the flag or the CRL, trusted issuer): 22 of 29. The others reject before step 5; `go test` in `verifiers/go` checks that their signatures verify once that gate is lifted. The count follows the reference verifiers' order, which checks the CRL (§1.3 step 6) before the signatures (§1.3 steps 4 and 5), so `fixtures/revoked-crl-only.json` is among the others. Both fixtures whose CRL lists their agent carry valid signatures, so in the spec's order they reject as `REVOKED` too |
 | Hybrid Ed25519 + ML-DSA-65 signature verification (FIPS 204) | `fixtures/baseline-valid-hybrid.json` |
 | Multi-signature: every declared signature must verify (three Ed25519 signatures from three distinct keys) | `fixtures/threshold-2of3-cosignature.json` |
 | k-of-n signature threshold, such as 2-of-3 (§3.1 step 8): with `requiredSignatures` set in the verifier state, a credential whose declared Ed25519 signatures verify under fewer distinct keys than it sets rejects | `fixtures/threshold-1of3-cosignature.json`; no fixture sets a threshold its credential meets, see conformance.json notCovered |
@@ -130,10 +130,12 @@ canonical payload the Ed25519 signature signs. The MUST-REJECT control
 `fixtures/v1_1-hybrid-mldsa-tampered.json`, the hybrid baseline with the
 Ed25519 entry intact and the ML-DSA-65 value flipped by one bit, pins that
 a forged post-quantum signature cannot ride an intact classical one. The
-MUST-REJECT control `fixtures/v1_1-hybrid-pq-only.json`, the hybrid
-baseline with the Ed25519 entry removed and one ML-DSA-65 signature left
-that verifies, pins that a post-quantum signature cannot verify a
-credential without its Ed25519 companion.
+MUST-REJECT controls `fixtures/hybrid-pq-only.json` and
+`fixtures/v1_1-hybrid-pq-only.json`, the v1.0 and v1.1 hybrid baselines
+with the Ed25519 entry removed and one ML-DSA-65 signature left that
+verifies, pin that a post-quantum signature cannot verify a credential
+without its Ed25519 companion under either `atcVersion`: the core.md §13
+rule names no version.
 
 ### Trusted-issuer DID method used by this suite
 

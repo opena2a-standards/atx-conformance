@@ -14,6 +14,9 @@ PASS  fixtures/cross-issuer-key.json
 PASS  fixtures/expired.json
        expected: REJECT [EXPIRED]
        observed: REJECT[EXPIRED: expired at 2025-01-01T00:00:00Z, verifier clock is 2026-05-24T00:00:00Z]
+PASS  fixtures/hybrid-pq-only.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: ML-DSA-65 signature declared without a verifying Ed25519 signature (an ML-DSA-65 entry requires an Ed25519 companion)]
 PASS  fixtures/malformed-schema.json
        expected: REJECT [UNSUPPORTED_VERSION]
        observed: REJECT[UNSUPPORTED_VERSION: unsupported atcVersion "2.0" (this verifier supports 1.0 and 1.1)]
@@ -99,4 +102,4 @@ PASS  fixtures/wrong-issuer.json
        expected: REJECT [UNTRUSTED_ISSUER]
        observed: REJECT[UNTRUSTED_ISSUER: issuer DID did:opena2a:authority:attacker.example is not in the verifier's trusted set (untrusted issuer)]
 
-summary: 28 pass, 0 fail (28 fixtures)
+summary: 29 pass, 0 fail (29 fixtures)

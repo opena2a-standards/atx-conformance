@@ -926,6 +926,54 @@ func TestMLDSA65RequiresEd25519Companion(t *testing.T) {
 	}
 }
 
+// TestSuitePinsEd25519CompanionUnderEachVersion pins that the shipped fixture
+// set holds the Ed25519 companion rule (core.md section 13, Cryptographic
+// agility) under each atcVersion this verifier accepts. For "1.0" and for
+// "1.1", a shipped fixture must be one this verifier rejects for the missing
+// companion, which it reports only once every declared signature has
+// verified and none of them is Ed25519, and that REJECT must be the fixture's
+// pinned outcome. The rule names no atcVersion. A verifier that applies it
+// under one atcVersion alone finds every declared signature of the other
+// one's fixture verifying, so without a fixture under each atcVersion such a
+// verifier passes the suite. atx-conformance#151.
+func TestSuitePinsEd25519CompanionUnderEachVersion(t *testing.T) {
+	paths, err := expandFixturePaths([]string{repoRoot + "/fixtures"})
+	if err != nil {
+		t.Fatalf("cannot list the shipped fixtures: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("no shipped fixtures found; refusing to pass vacuously")
+	}
+
+	pinnedBy := map[string][]string{}
+	for _, p := range paths {
+		f, err := loadFixture(p)
+		if err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+		got := verify(f)
+		if got.RejectCategory != "SIGNATURE_INVALID" || !strings.Contains(got.Reason, "without a verifying Ed25519 signature") {
+			continue
+		}
+		if !matchesExpected(f.Expected, got) {
+			t.Errorf("%s: reference verifier observed %s, not the pinned outcome", p, got)
+			continue
+		}
+		var a atx
+		if err := json.Unmarshal(f.ATX, &a); err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+		pinnedBy[a.ATCVersion] = append(pinnedBy[a.ATCVersion], f.Name)
+	}
+	for _, version := range []string{"1.0", "1.1"} {
+		if len(pinnedBy[version]) == 0 {
+			t.Errorf("no shipped fixture of atcVersion %s pins the REJECT of ML-DSA-65 signatures that verify with no Ed25519 companion: a verifier that applies the companion rule to the other atcVersion alone passes the suite", version)
+			continue
+		}
+		t.Logf("atcVersion %s: the Ed25519 companion rule is pinned by %s", version, strings.Join(pinnedBy[version], ", "))
+	}
+}
+
 // withSignatures returns f with its credential's signatures replaced by the
 // entries at the given indexes of the ones it carries, in that order, an
 // index named twice carried twice.
