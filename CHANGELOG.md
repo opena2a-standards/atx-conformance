@@ -982,6 +982,40 @@ they should not.
 
 ### Fixed
 
+- The Go reference verifier verifies no signature over a v1.1 credential
+  whose `declaredPurpose` writes a number with a fraction or an exponent
+  part, as the Python reference verifier verifies none (#283). Its JCS
+  library writes such a number as the IEEE 754 double nearest it, so built
+  with Go 1.26.3 it accepted the v1.1 baseline signed over `declaredPurpose`
+  `{"n": 1000}` and carrying `{"n": 1000.0}`, `{"n": 1e3}` or `{"n": 1E3}`,
+  and signed over the bytes the library writes for `{"n":
+  9007199254740993}` and carrying `{"n": 9007199254740993.0}` or `{"n":
+  9.007199254740993e15}`, which the exact-range check (#278) skips because
+  their text holds `.`, `e` or `E`. The Python verifier, whose serializer
+  writes no such number, rejected each: core.md §1.3a.2 rule 3 keeps RFC
+  8785 number serialization out of cross-language scope. The Go verifier
+  now checks each declared signature of such a credential against no key,
+  as the Python verifier does, so both reject it as `SIGNATURE_INVALID`, on
+  the v1.1 baseline with `Ed25519 signature
+  did:opena2a:authority:opena2a.org#key-1 did not verify against any
+  configured public key`. The exact-range refusal still runs first, so
+  `{"n": 9007199254740993}` keeps its reason, and an integer written as its
+  digits in the exact range, or a `.` or `e` inside a string or a member
+  name, is verified over the bytes JCS writes, as before.
+  `TestDeclaredPurposeNumberWithFractionOrExponent` in the Go verifier and
+  `GoPurposeNumberSpellings` in the Python verifier each sign 12 such
+  spellings over the bytes the library writes for them and expect that
+  rejection, and 5 controls written as signed, which they expect accepted.
+  The Go verifier of the commit before this change accepts each of the 12.
+  On the 21 files the Python tests' helpers write for the 12 spellings, the
+  5 controls, the exact-range control and the 3 numbers of
+  `InjectedNumberPurpose`, the two verifiers now print the same verdict,
+  reason and summary lines. The shipped fixtures' verdicts and reasons do
+  not change:
+  `fixtures/v1_1-declared-purpose-number-injected.json` rejects with the
+  reason above, as before, `docs/captures/go-verifier.txt` is unchanged and
+  the capture sidecar records the verifier's new tree id. No fixture
+  changes.
 - The Python reference verifier fails to load a file that writes a value as
   `NaN`, `Infinity` or `-Infinity`, its arrays and objects nested no deeper
   than 10000 levels, with the reason the Go reference verifier gives,
