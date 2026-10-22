@@ -1084,11 +1084,15 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
     vs = wrapper["verifierState"]
     atx = wrapper["atx"]
     if atx is _ABSENT:
-        # Go's json.Unmarshal of no credential bytes at all.
-        return VerifyResult(
-            reject_category="PARSE_ERROR",
-            reason="the fixture has no atx member (unexpected end of JSON input)",
-        )
+        # A fixture with no atx member, such as one of another conformance
+        # suite, has no credential to parse. The reason quotes its $schema
+        # when that is a string, as the Go reference verifier's noATXReason
+        # does; the member is matched by folded name, the last one read.
+        reason = "the fixture has no atx member"
+        schema = _members_by_folded_name(fixture or {}).get(_fold_key("$schema"), [None])[-1]
+        if isinstance(schema, str):
+            reason += f" (its $schema is {_go_quote(schema)})"
+        return VerifyResult(reject_category="PARSE_ERROR", reason=reason)
 
     # Step 0: strict parse. A duplicate member at any depth of the CREDENTIAL
     # rejects before any field is interpreted (see module docstring). The
@@ -1451,12 +1455,17 @@ def load_fixture(path: str | os.PathLike[str]) -> dict[str, Any]:
     # The duplicate-marking hook preserves last-wins values (plain dict
     # semantics) while recording duplicates for the strict-parse check in
     # verify_fixture, which consults only the atx subtree.
-    fixture = _parse_json(
-        text,
-        object_pairs_hook=_dup_marking_pairs,
-        parse_constant=_reject_constant,
-        parse_int=_parse_int,
-    )
+    try:
+        fixture = _parse_json(
+            text,
+            object_pairs_hook=_dup_marking_pairs,
+            parse_constant=_reject_constant,
+            parse_int=_parse_int,
+        )
+    except json.JSONDecodeError:
+        # The Go reference verifier's wording for a syntax error; the
+        # decoders' own texts and positions differ.
+        raise ValueError("fixture is not valid JSON") from None
     # json.loads does not say which strings were written with an escape, and
     # the Go reference verifier's timestamp decoder refuses a timestamp that
     # was. A second parse, with each such string value replaced by null, has
@@ -1538,8 +1547,24 @@ def _json_names(directory: str) -> list[str]:
             if e.name.endswith(".json") and not e.is_dir(follow_symlinks=False)]
 
 
+# What the line for an argument that names no file adds when the argument is
+# a word an option spells, as the Go reference verifier adds it.
+_MISSING_PATH_HINTS = {
+    "help": " (--help prints the usage)",
+    "version": " (--version prints the version line)",
+}
+
+
 def expand_paths(args: list[str]) -> list[str]:
-    """The fixture files args name, spelled as the Go reference verifier's
+    """expand_fixture_dirs without the directories."""
+    return expand_fixture_dirs(args)[0]
+
+
+def expand_fixture_dirs(args: list[str]) -> tuple[list[str], list[str]]:
+    """The fixture files args name, and each directory listed for them in
+    argument order, as the Go reference verifier's expandFixtureDirs
+    returns them: a directory argument, or its fixtures directory. The
+    files are spelled as the Go reference verifier's
     expandFixturePaths spells them: a file as its argument spells it, ./ and
     // included, and a *.json file of a directory as _go_join writes the
     directory and the file's name, or, where the directory cleaned names
@@ -1547,11 +1572,13 @@ def expand_paths(args: list[str]) -> list[str]:
     path the file is read from. An argument is read as the string it is,
     not as a Path, which drops a ./ and a trailing / and collapses a //."""
     out: list[str] = []
+    dirs: list[str] = []
     for a in args:
         try:
             st = os.stat(a)
         except FileNotFoundError:
-            raise FileNotFoundError(f"{a}: no such file or directory") from None
+            hint = _MISSING_PATH_HINTS.get(a, "")
+            raise FileNotFoundError(f"{a}: no such file or directory{hint}") from None
         except OSError as exc:
             # Go's os.Stat error as the Go reference verifier writes it:
             # `stat d/x.json/: not a directory` for a file named with a
@@ -1565,12 +1592,13 @@ def expand_paths(args: list[str]) -> list[str]:
             fixtures_dir = join(a, "fixtures")
             target = fixtures_dir if os.path.isdir(fixtures_dir) else a
             out.extend(join(target, name) for name in _json_names(target))
+            dirs.append(target)
         else:
             out.append(a)
     # A path named twice is verified twice, as the Go reference verifier
     # verifies it, and the names sort byte by byte, as its sort.Strings sorts
     # them: ./d/x.json before d/./x.json before d//x.json.
-    return sorted(out, key=os.fsencode)
+    return sorted(out, key=os.fsencode), dirs
 
 
 def _rel_path(path: str) -> str:
@@ -1697,6 +1725,12 @@ def _version_line() -> str:
     return f"verify.py: commit {head.stdout.strip()}{changes}, {python}\n"
 
 
+def _fixture_count(n: int) -> str:
+    """n with the noun the summary line counts, as the Go reference
+    verifier's fixtureCount writes it: "1 fixture", "29 fixtures"."""
+    return "1 fixture" if n == 1 else f"{n} fixtures"
+
+
 def main(argv: list[str]) -> int:
     # The Go reference verifier reads its arguments the same way, except that
     # with no path it verifies the fixture set its module embeds, which this
@@ -1732,12 +1766,13 @@ def main(argv: list[str]) -> int:
         sys.stderr.write("error: an empty argument names no fixture file or directory\n")
         return 2
     try:
-        paths = expand_paths(args)
+        paths, dirs = expand_fixture_dirs(args)
     except OSError as exc:
         _say_err(f"error: {exc}\n")
         return 2
     if not paths:
-        sys.stderr.write("no fixture *.json files found\n")
+        # Every argument was a directory, each listed one level deep.
+        _say_err(f"no fixture *.json files found in {', '.join(dirs)} (subdirectories are not walked)\n")
         return 2
 
     _write_surrogate_escapes_as_bytes(sys.stdout)
@@ -1768,8 +1803,13 @@ def main(argv: list[str]) -> int:
         ok = (want_accept and got.accepted) or (not want_accept and not got.accepted)
         if ok and not want_accept and expected["rejectCategory"]:
             ok = got.reject_category == expected["rejectCategory"]
+        # A REJECT fixture that failed on its reasonContains alone: the
+        # expected and observed lines agree on the verdict and category, so
+        # the substring is named on a line of its own.
+        reason_missing = False
         if ok and not want_accept and expected["reasonContains"]:
             ok = expected["reasonContains"].lower() in got.reason.lower()
+            reason_missing = not ok
 
         status = "PASS" if ok else "FAIL"
         if ok:
@@ -1784,6 +1824,8 @@ def main(argv: list[str]) -> int:
         else:
             print()
         _say(f"       observed: {got}")
+        if reason_missing:
+            _say(f"       reason does not contain {_go_quote(expected['reasonContains'])}")
         if got.sigs_expected:
             # Each boolean as the Go reference verifier's %t writes it.
             print(
@@ -1796,7 +1838,7 @@ def main(argv: list[str]) -> int:
             )
 
     print()
-    print(f"summary: {total_pass} pass, {total_fail} fail ({total_pass + total_fail} fixtures)")
+    print(f"summary: {total_pass} pass, {total_fail} fail ({_fixture_count(total_pass + total_fail)})")
     return 0 if total_fail == 0 else 1
 
 

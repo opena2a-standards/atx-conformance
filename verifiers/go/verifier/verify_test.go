@@ -589,7 +589,7 @@ func TestDoubleDashEndsOptions(t *testing.T) {
 
 	code, stdout, stderr := run("--", "-h.json")
 	if code != 0 || stderr != "" || !strings.HasPrefix(stdout, "PASS  -h.json\n") ||
-		!strings.HasSuffix(stdout, "\nsummary: 1 pass, 0 fail (1 fixtures)\n") {
+		!strings.HasSuffix(stdout, "\nsummary: 1 pass, 0 fail (1 fixture)\n") {
 		t.Errorf("Run(-- -h.json) exits %d with stdout %q and stderr %q; want -h.json verified, exit 0",
 			code, stdout, stderr)
 	}
@@ -732,7 +732,7 @@ func TestFixturesFileEntryWalksTheDirectory(t *testing.T) {
 		strings.SplitN(stdout.String(), "\n", 2)[0]; first != want {
 		t.Errorf("Run(%q) starts with %q, want %q", dir, first, want)
 	}
-	if !strings.HasSuffix(stdout.String(), "\nsummary: 1 pass, 0 fail (1 fixtures)\n") {
+	if !strings.HasSuffix(stdout.String(), "\nsummary: 1 pass, 0 fail (1 fixture)\n") {
 		t.Errorf("Run(%q) writes:\n%s\nwant one fixture, passing", dir, stdout.String())
 	}
 }
@@ -1966,4 +1966,188 @@ func TestScanSummaryOutsideItsType(t *testing.T) {
 	}
 	check(`scanSummary {"criticalFindings": "3"} on the v1.0 baseline, which signs no scanSummary`,
 		withMembers(t, v10, map[string]string{"scanSummary": `{"criticalFindings": "3"}`}), "ACCEPT")
+}
+
+// runIn runs Run on args from dir and returns its exit code, stdout and
+// stderr.
+func runIn(t *testing.T, dir string, args ...string) (int, string, string) {
+	t.Helper()
+	chdir(t, dir)
+	var stdout, stderr bytes.Buffer
+	code := Run(args, &stdout, &stderr)
+	return code, stdout.String(), stderr.String()
+}
+
+// TestSummaryCountsOneFixtureInTheSingular pins the summary line's noun:
+// "(1 fixture)" for one, "(2 fixtures)" for two. It read "(1 fixtures)".
+func TestSummaryCountsOneFixtureInTheSingular(t *testing.T) {
+	baseline, err := fs.ReadFile(atxconformance.Fixtures, "fixtures/baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "x.json"), baseline, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"x.json"}, "\nsummary: 1 pass, 0 fail (1 fixture)\n"},
+		{[]string{"x.json", "x.json"}, "\nsummary: 2 pass, 0 fail (2 fixtures)\n"},
+	} {
+		code, stdout, stderr := runIn(t, dir, c.args...)
+		if code != 0 || stderr != "" || !strings.HasSuffix(stdout, c.want) {
+			t.Errorf("Run(%q) exits %d with stdout %q and stderr %q, want a report ending %q",
+				c.args, code, stdout, stderr, c.want)
+		}
+	}
+}
+
+// TestBareHelpAndVersionWordsPointAtTheOption pins the error line for a
+// help or version argument that names no file: it adds the option that
+// does what the word asks, and another missing path gets no such addition.
+func TestBareHelpAndVersionWordsPointAtTheOption(t *testing.T) {
+	dir := t.TempDir()
+	for _, c := range []struct{ arg, want string }{
+		{"help", "error: help: no such file or directory (--help prints the usage)\n"},
+		{"version", "error: version: no such file or directory (--version prints the version line)\n"},
+		{"helps", "error: helps: no such file or directory\n"},
+	} {
+		code, stdout, stderr := runIn(t, dir, c.arg)
+		if code != 2 || stdout != "" || stderr != c.want {
+			t.Errorf("Run(%q) exits %d with stdout %q and stderr %q, want exit 2 and stderr %q",
+				c.arg, code, stdout, stderr, c.want)
+		}
+	}
+}
+
+// TestNoFixturesLineNamesTheDirectories pins the line for directories
+// holding no *.json at their top level: it names each directory listed, a
+// repository root's fixtures directory for a root, and says a walk does
+// not descend, so a directory whose one fixture is in a subdirectory is
+// not mistaken for an empty one.
+func TestNoFixturesLineNamesTheDirectories(t *testing.T) {
+	dir := t.TempDir()
+	for _, d := range []string{"empty", "onlysub/sub", "root/fixtures"} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	baseline, err := fs.ReadFile(atxconformance.Fixtures, "fixtures/baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "onlysub", "sub", "x.json"), baseline, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"empty"}, "no fixture *.json files found in empty (subdirectories are not walked)\n"},
+		{[]string{"onlysub"}, "no fixture *.json files found in onlysub (subdirectories are not walked)\n"},
+		{[]string{"empty", "root"},
+			"no fixture *.json files found in empty, root/fixtures (subdirectories are not walked)\n"},
+	} {
+		code, stdout, stderr := runIn(t, dir, c.args...)
+		if code != 2 || stdout != "" || stderr != c.want {
+			t.Errorf("Run(%q) exits %d with stdout %q and stderr %q, want exit 2 and stderr %q",
+				c.args, code, stdout, stderr, c.want)
+		}
+	}
+}
+
+// TestFixtureWithNoATXMemberNamesTheCause pins the reason for a fixture
+// with no atx member, such as one of another conformance suite: it says
+// the member is missing and quotes a string $schema, where it read
+// "unexpected end of JSON input", json.Unmarshal's error for no bytes.
+func TestFixtureWithNoATXMemberNamesTheCause(t *testing.T) {
+	for _, c := range []struct{ doc, reason string }{
+		{`{"$schema": "https://atp.opena2a.org/schemas/fixture-v1.json", "expected": {"verifyResult": "ACCEPT"}}`,
+			`the fixture has no atx member (its $schema is "https://atp.opena2a.org/schemas/fixture-v1.json")`},
+		{`{"expected": {"verifyResult": "ACCEPT"}}`, "the fixture has no atx member"},
+		{`{"$schema": 7, "expected": {"verifyResult": "ACCEPT"}}`, "the fixture has no atx member"},
+	} {
+		f, err := parseFixture([]byte(c.doc))
+		if err != nil {
+			t.Fatalf("%s: load error %v", c.doc, err)
+		}
+		got := verify(f)
+		if got.Accepted || got.RejectCategory != "PARSE_ERROR" || got.Reason != c.reason {
+			t.Errorf("%s: %s, want REJECT[PARSE_ERROR: %s]", c.doc, got, c.reason)
+		}
+	}
+}
+
+// TestLoadErrorNamesTheFileShape pins the load error of a file that is not
+// a fixture object: one reason each for a file that is not JSON, one whose
+// value is not an object and one nested past encoding/json's depth limit,
+// the reasons the Python verifier writes. They were json.Unmarshal's own
+// errors, one naming this package's fixture type.
+func TestLoadErrorNamesTheFileShape(t *testing.T) {
+	deep := strings.Repeat("[", 200000) + strings.Repeat("]", 200000)
+	for _, c := range []struct{ doc, reason string }{
+		{"not json at all", "fixture is not valid JSON"},
+		{"", "fixture is not valid JSON"},
+		{`{"expected": {"verifyResult": "ACCEPT"}} trailing`, "fixture is not valid JSON"},
+		{"[1,2,3]", "fixture is not a JSON object"},
+		{`"text"`, "fixture is not a JSON object"},
+		{"7", "fixture is not a JSON object"},
+		{deep, "arrays and objects nested deeper than 10000 levels (the limit of Go's encoding/json)"},
+	} {
+		name := c.doc
+		if len(name) > 40 {
+			name = name[:40] + "..."
+		}
+		_, err := parseFixture([]byte(c.doc))
+		if err == nil || err.Error() != c.reason {
+			t.Errorf("%q: load error %v, want %q", name, err, c.reason)
+		}
+	}
+	// An error inside the fixture object still names the member.
+	if _, err := parseFixture([]byte(`{"verifierState": 7}`)); err == nil ||
+		!strings.Contains(err.Error(), "verifierState") {
+		t.Errorf(`{"verifierState": 7}: load error %v, want one naming verifierState`, err)
+	}
+}
+
+// TestReasonContainsMismatchNamesTheSubstring pins the FAIL block of a
+// fixture whose credential rejects in the expected category with a reason
+// that lacks expected.reasonContains: a line names the substring, which
+// the expected and observed lines do not show.
+func TestReasonContainsMismatchNamesTheSubstring(t *testing.T) {
+	root, err := filepath.Abs(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := fs.ReadFile(atxconformance.Fixtures, "fixtures/wrong-issuer.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["expected"].(map[string]any)["reasonContains"] = "zz-not-in-reason"
+	changed, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "r1.json"), changed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, _ := runIn(t, dir, "r1.json")
+	lines := strings.Split(stdout, "\n")
+	if code != 1 || len(lines) < 4 || lines[0] != "FAIL  r1.json" ||
+		!strings.HasPrefix(lines[2], "       observed: REJECT[UNTRUSTED_ISSUER: ") ||
+		lines[3] != `       reason does not contain "zz-not-in-reason"` {
+		t.Errorf("Run(r1.json) exits %d and writes:\n%s\nwant FAIL with the substring named under observed", code, stdout)
+	}
+	// The shipped fixture, which passes, has no such line.
+	code, stdout, _ = runIn(t, root, "fixtures/wrong-issuer.json")
+	if code != 0 || strings.Contains(stdout, "reason does not contain") {
+		t.Errorf("Run(fixtures/wrong-issuer.json) exits %d and writes:\n%s\nwant PASS and no reason line", code, stdout)
+	}
 }

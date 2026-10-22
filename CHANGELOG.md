@@ -255,6 +255,35 @@ they should not.
 
 ### Changed
 
+- Six kinds of line in the two reference verifiers' output change wording
+  (#276).
+  The summary line counts `(1 fixture)` for one fixture, where it read
+  `(1 fixtures)`; the shipped set's line, `(29 fixtures)`, is unchanged. An
+  argument `help` or `version` that names no file adds the option meant to
+  its line, `error: help: no such file or directory (--help prints the usage)`
+  and `error: version: no such file or directory (--version prints the version line)`.
+  Directories holding no `*.json` at their top level are reported as
+  `no fixture *.json files found in <dirs> (subdirectories are not walked)`,
+  naming each directory listed, where the line named none. A fixture with
+  no `atx` member, such as one of another conformance suite, rejects with
+  `PARSE_ERROR: the fixture has no atx member`, adding
+  ` (its $schema is "<value>")` when its `$schema` is a string, where the Go
+  verifier wrote `unexpected end of JSON input` and the Python verifier
+  added that phrase in parentheses. A file that is not JSON, one whose
+  value is not a JSON object and one nested deeper than 10000 levels are
+  load errors with one reason each in both verifiers,
+  `fixture is not valid JSON`, `fixture is not a JSON object` and
+  `arrays and objects nested deeper than 10000 levels (the limit of Go's encoding/json)`,
+  where each verifier wrote its JSON decoder's own error, the Go one naming
+  the type `verifier.fixture`. A REJECT fixture that fails on its
+  `expected.reasonContains` alone adds `reason does not contain "<substring>"`
+  under its `observed:` line. Exit codes, verdicts and categories do not
+  change, and both verifiers report `29 pass, 0 fail (29 fixtures)` on the
+  shipped set. The argument table of `scripts/parity/parity.py` adds five
+  cases, 46 from 41: the bare `help` and `version` words, and a file that is
+  not a JSON object, one that is not JSON and one nested 10001 levels deep;
+  run with the verifiers of the commit before, the gate fails on the last
+  three. `docs/running-the-verifiers.md` says what each line reads.
 - The `$schema` member of the 26 fixtures and of `conformance.json` names
   the address GitHub serves the schema of its format from on `main`,
   `https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/fixture-v1.schema.json`

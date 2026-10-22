@@ -10,7 +10,19 @@ Exit code is 0 if every fixture's observed result matches the expected
 result and the rejection category matches (when declared). A file that is
 not a fixture, one with no `expected.verifyResult` of `ACCEPT` or `REJECT`,
 is a load error: both verifiers print `FAIL  <file>  (load error: <reason>)`
-for it, count it as a fail and exit 1.
+for it, count it as a fail and exit 1. A file that is not JSON, one whose
+value is not a JSON object and one whose arrays and objects nest deeper
+than 10000 levels are load errors too, with the same reason in both
+verifiers: `fixture is not valid JSON`, `fixture is not a JSON object` and
+`arrays and objects nested deeper than 10000 levels (the limit of Go's encoding/json)`.
+A fixture with no `atx` member, such as one of another conformance suite,
+is reported as `observed: REJECT[PARSE_ERROR: the fixture has no atx member]`,
+with ` (its $schema is "<value>")` before the `]` when its `$schema` is a
+string. When a REJECT fixture's credential rejects in the expected
+category with a reason that does not contain `expected.reasonContains`,
+the FAIL block adds the line `reason does not contain "<substring>"` under
+`observed:`. The summary line counts `(1 fixture)` for one fixture and
+`(N fixtures)` for any other count.
 
 ## Arguments
 
@@ -23,12 +35,20 @@ first `--` ends the options: each argument after it is a path, one that
 starts with `-` included, so `-- -h.json` names a fixture file `-h.json`.
 Then an empty argument is a usage error,
 `error: an empty argument names no fixture file or directory` with exit 2,
-and nothing is verified. A directory is walked for `fixtures/*.json` when its
+and nothing is verified. An argument `help` or `version` that names no file
+is a missing path whose line adds the option meant:
+`error: help: no such file or directory (--help prints the usage)` and
+`error: version: no such file or directory (--version prints the version line)`,
+each with exit 2. A directory is walked for `fixtures/*.json` when its
 `fixtures` entry is a directory, so a repository root can be passed, and for
 its own `*.json` otherwise, as when `fixtures` is a file. Of the `*.json`
 entries a walk finds, a directory is skipped: for a directory holding
 `x.json` and a subdirectory `sub.json`, both verifiers verify `x.json`
-alone. A symbolic link is kept whatever it links to, so a link to a fixture
+alone. A walk is one level deep: when the directories named hold no
+`*.json` at that level, both verifiers write
+`no fixture *.json files found in <dirs> (subdirectories are not walked)`
+with exit 2, `<dirs>` naming each directory listed, a repository root's
+`fixtures` directory for a root, separated by `, `. A symbolic link is kept whatever it links to, so a link to a fixture
 is verified and a link to a directory is a load error. A path named twice
 is verified twice. A file is named in the report as its argument spells it,
 `./` and `//` included: for `../../fixtures/./baseline-valid.json` both

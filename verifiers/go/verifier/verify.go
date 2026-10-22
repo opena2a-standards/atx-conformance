@@ -85,6 +85,10 @@ type fixture struct {
 	VerifierState verifierState   `json:"verifierState"`
 	Expected      expectedOutcome `json:"expected"`
 	ATX           json.RawMessage `json:"atx"`
+	// Schema is held raw, so a $schema of any type loads as it did before
+	// the field existed; the reason for a fixture with no atx member quotes
+	// it when it is a string (noATXReason).
+	Schema json.RawMessage `json:"$schema"`
 }
 
 type keypairRef struct {
@@ -678,10 +682,30 @@ func foldKey(s string) string {
 	return b.String()
 }
 
+// noATXReason is the reason a fixture with no atx member rejects: the
+// missing member, and the fixture's $schema when it is a string, which
+// names the suite a fixture of another suite belongs to. The Python
+// verifier writes the same reason.
+func noATXReason(schema json.RawMessage) string {
+	const reason = "the fixture has no atx member"
+	var s string
+	if len(schema) == 0 || schema[0] != '"' || json.Unmarshal(schema, &s) != nil {
+		return reason
+	}
+	return fmt.Sprintf("%s (its $schema is %q)", reason, s)
+}
+
 // verify runs the ATX v1.0 and v1.1 verification algorithm with hybrid
 // signing enforcement per AIP §3. Step 7 (distinct signer-authority count) is
 // not performed; see the comment at that step.
 func verify(f fixture) result {
+	// A fixture with no atx member, such as one of another conformance
+	// suite, has no credential to parse. json.Unmarshal of no bytes reports
+	// "unexpected end of JSON input", which names no cause.
+	if len(f.ATX) == 0 {
+		return result{RejectCategory: "PARSE_ERROR", Reason: noATXReason(f.Schema)}
+	}
+
 	// Step 0: strict parse. Duplicate members reject before interpretation
 	// (see rawDuplicateMember).
 	if name, dup := rawDuplicateMember(f.ATX); dup {
@@ -1100,13 +1124,15 @@ func Run(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 	} else {
-		files, err := expandFixturePaths(paths)
+		files, dirs, err := expandFixtureDirs(paths)
 		if err != nil {
 			fmt.Fprintln(stderr, "error:", err)
 			return 2
 		}
 		if len(files) == 0 {
-			fmt.Fprintln(stderr, "no fixture *.json files found")
+			// Every argument was a directory, each listed one level deep.
+			fmt.Fprintf(stderr, "no fixture *.json files found in %s (subdirectories are not walked)\n",
+				strings.Join(dirs, ", "))
 			return 2
 		}
 		for _, f := range files {
@@ -1139,6 +1165,11 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintln(stdout)
 		fmt.Fprintf(stdout, "       observed: %s\n", got)
+		if reasonMismatch(f.Expected, got) {
+			// The expected and observed lines above agree on the verdict
+			// and category; the substring is what failed.
+			fmt.Fprintf(stdout, "       reason does not contain %q\n", f.Expected.ReasonContains)
+		}
 		if got.SigsExpected > 0 {
 			fmt.Fprintf(stdout, "       signatures: %d/%d valid (ed25519=%t mldsa65=%t)\n",
 				got.SigsValid, got.SigsExpected, got.Ed25519Valid, got.MLDSA65Valid)
@@ -1149,11 +1180,33 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	fmt.Fprintln(stdout)
-	fmt.Fprintf(stdout, "summary: %d pass, %d fail (%d fixtures)\n", totalPass, totalFail, totalPass+totalFail)
+	fmt.Fprintf(stdout, "summary: %d pass, %d fail (%s)\n", totalPass, totalFail, fixtureCount(totalPass+totalFail))
 	if totalFail > 0 {
 		return 1
 	}
 	return 0
+}
+
+// fixtureCount is n with the noun the summary line counts: "1 fixture",
+// "29 fixtures". The Python verifier writes the same.
+func fixtureCount(n int) string {
+	if n == 1 {
+		return "1 fixture"
+	}
+	return fmt.Sprintf("%d fixtures", n)
+}
+
+// reasonMismatch reports whether a REJECT fixture failed on its
+// reasonContains alone: the credential rejected, in the expected category
+// where one is declared, with a reason that does not contain the substring.
+func reasonMismatch(want expectedOutcome, got result) bool {
+	if strings.EqualFold(want.VerifyResult, "ACCEPT") || got.Accepted || want.ReasonContains == "" {
+		return false
+	}
+	if want.RejectCategory != "" && got.RejectCategory != want.RejectCategory {
+		return false
+	}
+	return !strings.Contains(strings.ToLower(got.Reason), strings.ToLower(want.ReasonContains))
 }
 
 // matchesExpected reports whether an observed result is the outcome a fixture
@@ -1203,7 +1256,7 @@ func loadFixture(path string) (fixture, error) {
 func parseFixture(b []byte) (fixture, error) {
 	var f fixture
 	if err := json.Unmarshal(b, &f); err != nil {
-		return fixture{}, err
+		return fixture{}, fixtureShapeError(err)
 	}
 	var wrapper struct {
 		Expected json.RawMessage `json:"expected"`
@@ -1229,17 +1282,64 @@ func parseFixture(b []byte) (fixture, error) {
 	return f, nil
 }
 
+// The load errors of a file whose top-level value is not a fixture object,
+// in the wording the Python verifier writes. json.Unmarshal's own errors
+// differ from Python's json module's for each of these, and its type error
+// names this package's fixture type.
+const (
+	errNotJSON       = "fixture is not valid JSON"
+	errNotJSONObject = "fixture is not a JSON object"
+	errTooDeep       = "arrays and objects nested deeper than 10000 levels (the limit of Go's encoding/json)"
+)
+
+// fixtureShapeError is the load error for err, json.Unmarshal's error
+// decoding a whole fixture file: errTooDeep for arrays and objects nested
+// past the decoder's limit, errNotJSON for any other syntax error,
+// errNotJSONObject when the top-level value is an array, string, number or
+// boolean, and err itself for an error inside the fixture object, which
+// names the member.
+func fixtureShapeError(err error) error {
+	var syntax *json.SyntaxError
+	if errors.As(err, &syntax) {
+		if strings.HasSuffix(syntax.Error(), "exceeded max depth") {
+			return errors.New(errTooDeep)
+		}
+		return errors.New(errNotJSON)
+	}
+	var typ *json.UnmarshalTypeError
+	if errors.As(err, &typ) && typ.Field == "" {
+		return errors.New(errNotJSONObject)
+	}
+	return err
+}
+
+// missingPathHint is what the line for an argument that names no file adds
+// when the argument is a word an option spells: help and version.
+var missingPathHint = map[string]string{
+	"help":    " (--help prints the usage)",
+	"version": " (--version prints the version line)",
+}
+
+// expandFixturePaths is expandFixtureDirs without the directories.
 func expandFixturePaths(args []string) ([]string, error) {
-	var out []string
+	out, _, err := expandFixtureDirs(args)
+	return out, err
+}
+
+// expandFixtureDirs returns the fixture files args name, sorted, and each
+// directory it listed for them, in argument order: a directory argument,
+// or its fixtures directory.
+func expandFixtureDirs(args []string) ([]string, []string, error) {
+	var out, dirs []string
 	for _, a := range args {
 		info, err := os.Stat(a) //nolint:gosec // G703: operator-supplied CLI arg, not request-derived
 		if errors.Is(err, fs.ErrNotExist) {
 			// The Python verifier's wording, which the parity gate holds
 			// this one to.
-			return nil, fmt.Errorf("%s: no such file or directory", a)
+			return nil, nil, fmt.Errorf("%s: no such file or directory%s", a, missingPathHint[a])
 		}
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		switch {
 		case info.IsDir():
@@ -1253,8 +1353,9 @@ func expandFixturePaths(args []string) ([]string, error) {
 			}
 			entries, err := os.ReadDir(fixDir)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
+			dirs = append(dirs, fixDir)
 			for _, e := range entries {
 				if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
 					out = append(out, join(fixDir, e.Name()))
@@ -1265,7 +1366,7 @@ func expandFixturePaths(args []string) ([]string, error) {
 		}
 	}
 	sort.Strings(out)
-	return out, nil
+	return out, dirs, nil
 }
 
 // dirJoin returns how expandFixturePaths joins a name onto the directory

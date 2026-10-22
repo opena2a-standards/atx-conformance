@@ -2765,7 +2765,7 @@ class ArgumentContract(unittest.TestCase):
         self.assertEqual((code, err), (0, ""), out)
         lines = out.splitlines()
         self.assertEqual(lines[0], f"PASS  {directory / 'x.json'}")
-        self.assertEqual(lines[-1], "summary: 1 pass, 0 fail (1 fixtures)")
+        self.assertEqual(lines[-1], "summary: 1 pass, 0 fail (1 fixture)")
 
     def test_a_subdirectory_named_json_is_skipped(self):
         # Path.glob("*.json") listed a subdirectory named sub.json with the
@@ -2784,9 +2784,9 @@ class ArgumentContract(unittest.TestCase):
             Path("l", "link.json").symlink_to("real", target_is_directory=True)
             for arg, code, want, summary in (
                 ("d", 0, ["PASS  d/x.json", "observed: ACCEPT"],
-                 "summary: 1 pass, 0 fail (1 fixtures)"),
+                 "summary: 1 pass, 0 fail (1 fixture)"),
                 ("r", 0, ["PASS  r/fixtures/x.json", "observed: ACCEPT"],
-                 "summary: 1 pass, 0 fail (1 fixtures)"),
+                 "summary: 1 pass, 0 fail (1 fixture)"),
                 ("l", 1, ["FAIL  l/link.json  (load error: read l/link.json: is a directory)",
                           "PASS  l/x.json", "observed: ACCEPT"],
                  "summary: 1 pass, 1 fail (2 fixtures)"),
@@ -2832,7 +2832,7 @@ class ArgumentContract(unittest.TestCase):
                 code, out, err = _run_main("--", "-h.json")
                 self.assertEqual((code, err), (0, ""), out)
                 self.assertTrue(out.startswith("PASS  -h.json\n"), out)
-                self.assertTrue(out.endswith("\nsummary: 1 pass, 0 fail (1 fixtures)\n"), out)
+                self.assertTrue(out.endswith("\nsummary: 1 pass, 0 fail (1 fixture)\n"), out)
                 for args, stderr in (
                     (("--", "-h.json", "--help"), "error: --help: no such file or directory\n"),
                     (("--", "--version"), "error: --version: no such file or directory\n"),
@@ -2964,7 +2964,7 @@ class UnreadableFixture(unittest.TestCase):
             ):
                 with self.subTest(arg=arg):
                     self.assertEqual(_run_main(arg), (
-                        1, f"{line}\n\nsummary: 0 pass, 1 fail (1 fixtures)\n", ""))
+                        1, f"{line}\n\nsummary: 0 pass, 1 fail (1 fixture)\n", ""))
 
     def test_a_failed_read_is_named_as_go_names_it(self):
         # os.ReadFile writes an error of the read after the file opened as
@@ -3231,6 +3231,91 @@ class HeaderDocs(unittest.TestCase):
         for doc, ref in refs:
             with self.subTest(doc=doc, ref=ref):
                 self.assertIn(ref, _readme_headings(doc))
+
+
+class ReportWording(unittest.TestCase):
+    """The lines the Go reference verifier's tests of the same names pin:
+    the summary's noun, a bare help or version word, the line for
+    directories with no *.json, the reason for a fixture with no atx
+    member, the load error of a file that is not a fixture object, and the
+    line naming a reasonContains substring the reason lacks."""
+
+    def test_summary_counts_one_fixture_in_the_singular(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            Path("x.json").write_text(BASELINE_V10.read_text())
+            for args, want in ((["x.json"], "\nsummary: 1 pass, 0 fail (1 fixture)\n"),
+                               (["x.json", "x.json"], "\nsummary: 2 pass, 0 fail (2 fixtures)\n")):
+                with self.subTest(args=args):
+                    code, out, err = _run_main(*args)
+                    self.assertEqual((code, err), (0, ""), out)
+                    self.assertTrue(out.endswith(want), out)
+
+    def test_bare_help_and_version_words_point_at_the_option(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            for arg, want in (
+                ("help", "error: help: no such file or directory (--help prints the usage)\n"),
+                ("version", "error: version: no such file or directory (--version prints the version line)\n"),
+                ("helps", "error: helps: no such file or directory\n"),
+            ):
+                with self.subTest(arg=arg):
+                    self.assertEqual(_run_main(arg), (2, "", want))
+
+    def test_no_fixtures_line_names_the_directories(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            for d in ("empty", "onlysub/sub", "root/fixtures"):
+                Path(d).mkdir(parents=True)
+            Path("onlysub/sub/x.json").write_text(BASELINE_V10.read_text())
+            for args, dirs in ((["empty"], "empty"), (["onlysub"], "onlysub"),
+                               (["empty", "root"], "empty, root/fixtures")):
+                with self.subTest(args=args):
+                    self.assertEqual(_run_main(*args), (
+                        2, "", f"no fixture *.json files found in {dirs} (subdirectories are not walked)\n"))
+
+    def test_fixture_with_no_atx_member_names_the_cause(self):
+        for doc, reason in (
+            ({"$schema": "https://atp.opena2a.org/schemas/fixture-v1.json", "expected": {"verifyResult": "ACCEPT"}},
+             'the fixture has no atx member (its $schema is "https://atp.opena2a.org/schemas/fixture-v1.json")'),
+            ({"expected": {"verifyResult": "ACCEPT"}}, "the fixture has no atx member"),
+            ({"$schema": 7, "expected": {"verifyResult": "ACCEPT"}}, "the fixture has no atx member"),
+        ):
+            with self.subTest(doc=doc), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "f.json"
+                path.write_text(json.dumps(doc))
+                got = verify.verify_fixture(verify.load_fixture(path))
+                self.assertEqual((got.accepted, got.reject_category, got.reason), (False, "PARSE_ERROR", reason))
+
+    def test_load_error_names_the_file_shape(self):
+        deep = "[" * 200000 + "]" * 200000
+        for text, reason in (
+            ("not json at all", "fixture is not valid JSON"),
+            ("", "fixture is not valid JSON"),
+            ('{"expected": {"verifyResult": "ACCEPT"}} trailing', "fixture is not valid JSON"),
+            ("[1,2,3]", "fixture is not a JSON object"),
+            ('"text"', "fixture is not a JSON object"),
+            ("7", "fixture is not a JSON object"),
+            (deep, "arrays and objects nested deeper than 10000 levels (the limit of Go's encoding/json)"),
+        ):
+            with self.subTest(text=text[:40]), tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+                Path("f.json").write_text(text)
+                self.assertEqual(_run_main("f.json"), (
+                    1, f"FAIL  f.json  (load error: {reason})\n\nsummary: 0 pass, 1 fail (1 fixture)\n", ""))
+
+    def test_reason_contains_mismatch_names_the_substring(self):
+        doc = json.loads((ROOT / "fixtures" / "wrong-issuer.json").read_text())
+        doc["expected"]["reasonContains"] = "zz-not-in-reason"
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            Path("r1.json").write_text(json.dumps(doc))
+            code, out, _ = _run_main("r1.json")
+        lines = out.splitlines()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(lines[0], "FAIL  r1.json", out)
+        self.assertTrue(lines[2].startswith("       observed: REJECT[UNTRUSTED_ISSUER: "), out)
+        self.assertEqual(lines[3], '       reason does not contain "zz-not-in-reason"', out)
+        # The shipped fixture, which passes, has no such line.
+        with contextlib.chdir(ROOT):
+            code, out, _ = _run_main("fixtures/wrong-issuer.json")
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("reason does not contain", out)
 
 
 if __name__ == "__main__":
