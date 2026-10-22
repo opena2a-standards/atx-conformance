@@ -953,6 +953,39 @@ they should not.
 
 ### Fixed
 
+- `scripts/parity/parity.py` refuses a `--json` path the report cannot be
+  written to as a usage error, exit 2 and one line naming the path and why,
+  before any verifier runs, and its self-test holds the docstring's Report
+  keys block exactly (#271). Run with Python 3.12 and with Python 3.14 from
+  a directory holding `ro/` of mode 555, `ro/existing.json` of mode 444,
+  `locked/sub/` under `locked/` of mode 000, and `dangling`, a symbolic
+  link to `missing/parity-report.json`, with no `missing/`: `--json
+  ro/parity-report.json` is
+  refused as `directory not writable: ro`, `--json ro/existing.json` as
+  `not writable` and `--json dangling` as `no such directory: missing`,
+  where on both releases the check accepted each and writing the report
+  raised `PermissionError` or `FileNotFoundError`. `--json
+  locked/parity-report.json`, `--json locked/sub` and `--json
+  locked/sub/parity-report.json` are refused as `Permission denied`, and a
+  path through a missing directory with a 300-character name as `File name
+  too long`, where with Python 3.12 the check raised `PermissionError` or
+  `OSError`, and with Python 3.14 it accepted the first two, said `no such
+  directory: locked/sub` for the third, a directory that exists, and `no
+  such directory` for the fourth. The check reads each path with
+  `os.stat`, whose error, other than a missing path, is the reason, where
+  `Path.is_dir` and `Path.exists` return False for a permission error on
+  Python 3.14 and raise it on Python 3.12. The self-test's case holding the Report keys
+  block equal to `REPORT_KEYS` now needs the block on lines of its own and
+  followed by a blank line, so a key line appended after its last entry
+  turns the case red, where it stayed green. The Report keys entry for
+  `unreported`, and the docstrings of `build_report` and `render_table`,
+  say a verifier is listed when it exited non-zero before reporting any
+  fixture, as `compare` lists it; one that exits 0 without reporting any
+  fixture is a fixture set mismatch. The self-test adds four cases (78,
+  from 74): the refusals above, under stand-ins for the permission errors
+  that deny access whatever user the self-test runs as, paths it accepts,
+  the appended key line, and a verifier exiting 0 without reporting any
+  fixture absent from `unreported`. No fixture changes.
 - The description of `fixtures/revoked.json` says that the credential's
   revoked flag is what rejects it in both reference verifiers, which read
   the flag before the CRL and return on it, and that
