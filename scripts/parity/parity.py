@@ -98,7 +98,9 @@ argument is named on the line above the usage, that a --json path that is
 a directory or whose directory does not exist is refused, as is one the
 report cannot be written to for another reason, each named by why, a path
 under a directory that cannot be searched as permission denied, while one
-in a directory that can be written is accepted, that a verifier
+in a directory that can be written is accepted, that a --json symbolic
+link whose target ends in / or /. is checked at the directory that
+target names, that a verifier
 that cannot start fails the gate as exiting 127, as does the argument
 table's go build with no go on PATH, as a build error, and that the Report keys
 block below names the keys of the --json report, a key line appended to it
@@ -115,7 +117,9 @@ naming the path and why: a directory, a file that cannot be written, a
 path whose directory does not exist, is not a directory or cannot be
 written, and a path os.stat raises another error for, permission denied
 or a name too long among them, named by that error. A symbolic link is
-checked at the path its chain of links ends at.
+checked at the path its chain of links ends at, which names a directory
+where a target in the chain ends in / or /.: a link to newdir/ is refused
+as no such directory: newdir where there is none.
 
 Report keys:
     fixtures     per fixture, each verifier's gate, verdict and category
@@ -1144,6 +1148,20 @@ def self_test() -> int:
         # Outside _denied, ro/ and ro.json can be written.
         usable = [_refusal(["--json", str(p)]) for p in (
             Path(d) / "parity-report.json", linked, ro / "parity-report.json", ro_file)]
+        # Symbolic links whose target ends in / or /.: to newdir/ and
+        # newdir/., with no newdir, to file/, and to linked/, which names
+        # the path linked links to as a directory.
+        slashed = [Path(d) / name for name in ("slash", "slash-dot", "file-slash", "link-slash")]
+        for link, target in zip(slashed, ("newdir/", "newdir/.", "file/", "linked/")):
+            link.symlink_to(target)
+        slashed_refusals = [_refusal(["--json", str(p)]) for p in slashed]
+        slashed_expected = [
+            *[(2, f"parity.py: error: --json {p}: no such directory: {d}/newdir\n")
+              for p in slashed[:2]],
+            (2, f"parity.py: error: --json {slashed[2]}: not a directory: {d}/file\n"),
+            (2, f"parity.py: error: --json {slashed[3]}: "
+                f"no such directory: {d}/parity-report.json\n"),
+        ]
     extra_key = "    extraKey     a key the report does not have\n"
     report_keys = [line.split()[0] for line in REPORT_KEYS.splitlines()[1:]]
 
@@ -1544,6 +1562,11 @@ def self_test() -> int:
         ("a --json path in a directory that can be written, a symbolic link to one, and "
          "a file that can be written are accepted",
          usable == [None] * 4),
+        ("a --json symbolic link whose target ends in / or /. is checked at the directory "
+         "that target names: links to newdir/ and newdir/. with no newdir are refused as "
+         "no such directory, one to file/ as not a directory, and one to linked/, a link "
+         "accepted above, as no such directory naming the path linked links to",
+         slashed_refusals == slashed_expected),
         ("the docstring's Exit codes block is EXIT_CODES",
          __doc__ is None or __doc__.endswith(EXIT_CODES)),
         ("the docstring's Report keys block is REPORT_KEYS",
@@ -1976,7 +1999,10 @@ def json_refusal(path: str) -> str | None:
     3.12. An error other than a missing path or a file named as a directory
     is the reason, by its strerror. A path that does not exist yet is
     created in the directory of the path its chain of symbolic links ends
-    at, so that directory is the one checked.
+    at, so that directory is the one checked. A target in that chain ending
+    in / or /. names a directory, and pathlib drops that / or /. in joining
+    it, so from that link on the path the chain ends at is the directory
+    checked.
     """
     report = Path(path)
     try:
@@ -1990,18 +2016,22 @@ def json_refusal(path: str) -> str | None:
             return "is a directory"
         return None if os.access(report, os.W_OK) else "not writable"
     # os.stat raised no ELOOP, so this chain of links ends.
+    names_dir = False
     while os.path.islink(report):
-        report = report.parent / os.readlink(report)
-    parent = report.parent
+        target = os.readlink(report)
+        # A trailing / or /. names a directory; joining with Path drops it.
+        names_dir = names_dir or target.endswith(("/", "/."))
+        report = report.parent / target
+    directory = report if names_dir else report.parent
     try:
-        mode = os.stat(parent).st_mode
+        mode = os.stat(directory).st_mode
     except (FileNotFoundError, NotADirectoryError):
-        return f"no such directory: {parent}"
+        return f"no such directory: {directory}"
     except OSError as exc:
-        return f"{parent}: {os.strerror(exc.errno)}"
+        return f"{directory}: {os.strerror(exc.errno)}"
     if not stat.S_ISDIR(mode):
-        return f"not a directory: {parent}"
-    return None if os.access(parent, os.W_OK) else f"directory not writable: {parent}"
+        return f"not a directory: {directory}"
+    return None if os.access(directory, os.W_OK) else f"directory not writable: {directory}"
 
 
 def gate(
