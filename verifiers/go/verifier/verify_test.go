@@ -685,6 +685,131 @@ func TestNonFixtureIsALoadError(t *testing.T) {
 	}
 }
 
+// TestRepeatedFixtureMemberIsALoadError pins that a fixture file that writes
+// a member more than once outside its atx member's subtree, under one name or
+// under two names that fold together (foldKey), fails to load: one FAIL line
+// naming the member's second spelling, with no expected or observed line,
+// counted as a fail. encoding/json decodes each repeat into the one field, so
+// a member a later expected object omits kept the earlier object's value,
+// while the Python verifier read the later object alone: for
+// fixtures/wrong-issuer.json with an expected of REJECT [SIGNATURE_INVALID]
+// and a second expected of REJECT, Run wrote FAIL and the Python verifier
+// PASS. A second verifierState holding only clockRfc3339 split them the other
+// way. A member written twice inside the one verifierState, which holds the
+// CRL and requiredSignatures, fails to load as well: both verifiers accepted
+// clockRfc3339 written there twice with one value. A repeat inside the
+// credential is still a verdict, REJECT[PARSE_ERROR] (rawDuplicateMember), as
+// the two shipped fixtures that carry one pin.
+func TestRepeatedFixtureMemberIsALoadError(t *testing.T) {
+	read := func(name string) []byte {
+		t.Helper()
+		b, err := fs.ReadFile(atxconformance.Fixtures, "fixtures/"+name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	// raw is the text of b's member name as b writes it.
+	raw := func(b []byte, name string) []byte {
+		t.Helper()
+		var members map[string]json.RawMessage
+		if err := json.Unmarshal(b, &members); err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Count(b, members[name]) != 1 {
+			t.Fatalf("the text of the %s member is not written once", name)
+		}
+		return members[name]
+	}
+	// with is b with the value of its member name written as value.
+	with := func(b []byte, name, value string) []byte {
+		t.Helper()
+		return bytes.Replace(b, raw(b, name), []byte(value), 1)
+	}
+	// appended is b with the member text written after its last member.
+	appended := func(b []byte, member string) []byte {
+		head := bytes.TrimRight(b[:bytes.LastIndexByte(b, '}')], " \t\r\n")
+		return []byte(string(head) + ",\n  " + member + "\n}\n")
+	}
+	issuer, v11 := read("wrong-issuer.json"), read("v1_1-baseline-valid.json")
+	category := with(issuer, "expected", `{"verifyResult": "REJECT", "rejectCategory": "SIGNATURE_INVALID"}`)
+	reason := with(issuer, "expected", `{"verifyResult": "REJECT", "reasonContains": "zz-not-in-reason"}`)
+	var state struct {
+		VerifierState struct {
+			ClockRFC3339 string `json:"clockRfc3339"`
+		} `json:"verifierState"`
+	}
+	if err := json.Unmarshal(v11, &state); err != nil || state.VerifierState.ClockRFC3339 == "" {
+		t.Fatalf("v1_1-baseline-valid.json holds no clockRfc3339 (%v)", err)
+	}
+	clock := `"verifierState": {"clockRfc3339": "` + state.VerifierState.ClockRFC3339 + `"}`
+	// v1_1-baseline-valid.json with clockRfc3339 written again, with the same
+	// value, after the last member of its one verifierState.
+	nested := with(v11, "verifierState", string(appended(raw(v11, "verifierState"),
+		`"clockRfc3339": "`+state.VerifierState.ClockRFC3339+`"`)))
+
+	cases := []struct {
+		file    string
+		content []byte
+		member  string
+	}{
+		{"a-expected-twice.json", appended(category, `"expected": {"verifyResult": "REJECT"}`), "expected"},
+		{"b-expected-case-variant.json", appended(category, `"EXPECTED": {"verifyResult": "REJECT"}`), "EXPECTED"},
+		{"c-expected-omits-a-member.json", appended(reason, `"EXPECTED": {"verifyResult": "REJECT"}`), "EXPECTED"},
+		{"d-verifier-state-twice.json", appended(v11, clock), "verifierState"},
+		{"e-verify-result-twice.json", with(v11, "expected", `{"verifyResult": "ACCEPT", "verifyResult": "ACCEPT"}`), "verifyResult"},
+		{"f-atx-twice.json", appended(v11, `"ATX": `+string(raw(v11, "atx"))), "ATX"},
+		{"g-undeclared-member.json", appended(v11, `"notes": {"by": "a", "BY": "b"}`), "BY"},
+		{"h-clock-twice.json", nested, "clockRfc3339"},
+	}
+	dir := t.TempDir()
+	var want strings.Builder
+	for _, c := range cases {
+		path := filepath.Join(dir, c.file)
+		if err := os.WriteFile(path, c.content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		want.WriteString("FAIL  " + relPath(path) + "  (load error: the fixture repeats the member \"" + c.member + "\")\n")
+	}
+	want.WriteString(fmt.Sprintf("\nsummary: 0 pass, %d fail (%d fixtures)\n", len(cases), len(cases)))
+
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{dir}, &stdout, &stderr); code != 1 {
+		t.Errorf("Run over fixtures that repeat a member exits %d, want 1 (stderr %q)", code, stderr.String())
+	}
+	if got := stdout.String(); got != want.String() {
+		t.Errorf("Run writes:\n%s\nwant one load error line per file and no expected or observed line:\n%s", got, want.String())
+	}
+
+	// A member repeated inside the credential: a verdict, not a load error.
+	credential := filepath.Join(t.TempDir(), "credential-twice.json")
+	atx := raw(v11, "atx")
+	twice := append([]byte(`{"revoked": false, "revoked": false, `), atx[bytes.IndexByte(atx, '{')+1:]...)
+	if err := os.WriteFile(credential, with(v11, "atx", string(twice)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	shipped := []string{
+		repoRoot + "/fixtures/v1_1-case-variant-member.json",
+		repoRoot + "/fixtures/v1_1-duplicate-purpose-member.json",
+	}
+	stdout.Reset()
+	stderr.Reset()
+	// Run verifies its paths in sorted order, the relative ones first.
+	code := Run(append([]string{credential}, shipped...), &stdout, &stderr)
+	wantLines := []string{
+		"PASS  " + shipped[0], "observed: REJECT[PARSE_ERROR]",
+		"PASS  " + shipped[1], "observed: REJECT[PARSE_ERROR]",
+		"FAIL  " + relPath(credential), "observed: REJECT[PARSE_ERROR]",
+	}
+	if got := verdictLines(stdout.String()); code != 1 || !slices.Equal(got, wantLines) {
+		t.Errorf("Run over a credential that repeats a member and the shipped fixtures that carry one exits %d and writes:\n%s\nwant exit 1 and verdict lines %q",
+			code, stdout.String(), wantLines)
+	}
+	if !strings.Contains(stdout.String(), `credential contains duplicate member "revoked"`) {
+		t.Errorf("Run writes:\n%s\nwant the credential's PARSE_ERROR to name the member \"revoked\"", stdout.String())
+	}
+}
+
 // TestEmptyArgumentIsAUsageError pins that an empty argument, alone or beside
 // a path, is a usage error, as it is in the Python verifier: one line on
 // stderr, nothing on stdout, exit 2. Run passed it to os.Stat and wrote
@@ -1159,8 +1284,9 @@ func TestRequiredSignaturesBelowOneIsAConfigError(t *testing.T) {
 // member decodes: a JSON integer in int range is the threshold, null or an
 // absent member sets none, a name in another case names the same member, and
 // a value of any other JSON type, a number written with a fraction or an
-// exponent among them, fails to load. Each case rewrites the member of
-// fixtures/threshold-1of3-cosignature.json, `"requiredSignatures": 2`.
+// exponent among them, fails to load, as does the member written twice,
+// under one name or two (repeatedFixtureMember). Each case rewrites the
+// member of fixtures/threshold-1of3-cosignature.json, `"requiredSignatures": 2`.
 func TestRequiredSignaturesDecode(t *testing.T) {
 	raw, err := os.ReadFile(repoRoot + "/fixtures/threshold-1of3-cosignature.json")
 	if err != nil {
@@ -1173,28 +1299,30 @@ func TestRequiredSignaturesDecode(t *testing.T) {
 	cases := []struct {
 		member string
 		load   bool
-		want   string // the observed result, for a file that loads
+		// The observed result, for a file that loads; what its load error
+		// names, for one that does not.
+		want string
 	}{
 		{`"requiredSignatures": 2`, true, "REJECT[SIGNATURE_INVALID: " + thresholdReason(2, 1) + "]"},
 		{`"RequiredSignatures": 2`, true, "REJECT[SIGNATURE_INVALID: " + thresholdReason(2, 1) + "]"},
 		{`"requiredSignatures": 1`, true, "ACCEPT"},
 		{`"requiredSignatures": null`, true, "ACCEPT"},
-		{`"requiredSignatures": null, "requiredSignatures": 2`, true, "REJECT[SIGNATURE_INVALID: " + thresholdReason(2, 1) + "]"},
-		{`"requiredSignatures": 2, "RequiredSignatures": null`, true, "ACCEPT"},
+		{`"requiredSignatures": null, "requiredSignatures": 2`, false, `the fixture repeats the member "requiredSignatures"`},
+		{`"requiredSignatures": 2, "RequiredSignatures": null`, false, `the fixture repeats the member "RequiredSignatures"`},
 		{`"requiredSignatures": -0`, true, "REJECT[VERIFIER_CONFIG_ERROR: bad requiredSignatures: 0 is not a positive integer]"},
-		{`"requiredSignatures": "2"`, false, ""},
-		{`"requiredSignatures": 2.0`, false, ""},
-		{`"requiredSignatures": 1e0`, false, ""},
-		{`"requiredSignatures": true`, false, ""},
-		{`"requiredSignatures": [2]`, false, ""},
-		{`"requiredSignatures": 9223372036854775808`, false, ""},
+		{`"requiredSignatures": "2"`, false, "requiredSignatures"},
+		{`"requiredSignatures": 2.0`, false, "requiredSignatures"},
+		{`"requiredSignatures": 1e0`, false, "requiredSignatures"},
+		{`"requiredSignatures": true`, false, "requiredSignatures"},
+		{`"requiredSignatures": [2]`, false, "requiredSignatures"},
+		{`"requiredSignatures": 9223372036854775808`, false, "requiredSignatures"},
 	}
 	for _, c := range cases {
 		t.Run(c.member, func(t *testing.T) {
 			f, err := parseFixture(bytes.Replace(raw, []byte(member), []byte(c.member), 1))
 			if !c.load {
-				if err == nil || !strings.Contains(err.Error(), "requiredSignatures") {
-					t.Errorf("loaded (err %v), want a load error naming requiredSignatures", err)
+				if err == nil || !strings.Contains(err.Error(), c.want) {
+					t.Errorf("loaded (err %v), want a load error naming %s", err, c.want)
 				}
 				return
 			}

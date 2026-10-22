@@ -49,9 +49,15 @@ sentence below:
    directory spelled with a `..` after a symbolic link, with a trailing
    `/` and without, a file named with a trailing `/`, a path and an option
    after `--`, an absolute path through the link, through its target, with
-   a `..` after a symbolic link and outside the working directory) the two
-   must exit with the same code and write the same first stderr line and
-   verdict lines, the load error a FAIL line names included. Where
+   a `..` after a symbolic link and outside the working directory, a
+   fixture that writes `expected` twice, under one name, under two that
+   differ in case and with a member the second omits, one that writes
+   `verifierState` twice, one that writes `verifyResult` twice in
+   `expected` and one that writes `clockRfc3339` twice in `verifierState`,
+   each of which both must fail to load, and a credential that writes a
+   member twice) the two must exit with the same code and write
+   the same first stderr line and verdict lines, the load error a FAIL line
+   names included. Where
    the file system refuses a file name that is not UTF-8, as APFS does, the
    three cases that need one are skipped, their rows saying why. Only
    `EILSEQ` or `EINVAL`, raised writing the scratch file so named, is a

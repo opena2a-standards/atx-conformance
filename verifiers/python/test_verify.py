@@ -15,9 +15,10 @@ behavioralProfile and scanSummary members outside their Go type, the signature
 base64 alphabet, a fixture whose expected member is not an object, a file
 with no expected.verifyResult of ACCEPT or REJECT, and a report line standard
 output cannot encode. They also pin the decode of the
-fixture wrapper: members outside their Go type, names in another case or
-repeated (a first value outside its Go type included), a public key that is
-not hex, arrays and objects nested to Go's
+fixture wrapper: members outside their Go type, names in another case, a
+member written twice outside the credential, under one name or two, which
+fails to load (a first value outside its Go type included), a public key
+that is not hex, arrays and objects nested to Go's
 depth limit (in declaredPurpose too, which the JCS serializer walks, and in a
 typed member, whose decode error writes the value to 8 levels), an integer
 with more digits than int() converts, bytes that are not UTF-8, the
@@ -89,6 +90,13 @@ BASELINE_CRL = ROOT / "fixtures" / "revoked-crl-only.json"
 # fixture whose credential it carries cut to the first of three signatures.
 THRESHOLD_1OF3 = ROOT / "fixtures" / "threshold-1of3-cosignature.json"
 THRESHOLD_2OF3 = ROOT / "fixtures" / "threshold-2of3-cosignature.json"
+# The fixture whose credential rejects as UNTRUSTED_ISSUER, and the two whose
+# credential repeats a member, which the strict parse rejects as PARSE_ERROR.
+WRONG_ISSUER = ROOT / "fixtures" / "wrong-issuer.json"
+DUPLICATE_CREDENTIALS = (
+    ROOT / "fixtures" / "v1_1-case-variant-member.json",
+    ROOT / "fixtures" / "v1_1-duplicate-purpose-member.json",
+)
 JCS_VECTORS = ROOT / "jcs-vectors" / "vectors"
 
 # The outcome the Go reference verifier reaches on a malformed typed member.
@@ -1053,63 +1061,55 @@ GO_WRAPPER_VERDICTS = (
     (BASELINE_CRL, ("verifierState", "crl", "revokedAt"), '"not-a-date"', None, "REVOKED"),
 )
 
-# An expected member that repeats a name with a case variant between the
-# repeats. Go keeps the last of the names that fold together in document
-# order. (raw literal, the verifyResult Go reads).
+# An expected member that repeats a name, with a case variant between the
+# repeats or in place of the second. The file fails to load, its load error
+# naming the member as written the second time. (raw literal, that member).
 GO_REPEATED_EXPECTED_NAMES = (
-    ('{"verifyResult": "ACCEPT", "VerifyResult": "REJECT", "verifyResult": "ACCEPT"}', "ACCEPT"),
-    ('{"verifyResult": "REJECT", "VerifyResult": "ACCEPT", "verifyResult": "REJECT"}', "REJECT"),
-    ('{"VerifyResult": "REJECT", "verifyResult": "ACCEPT"}', "ACCEPT"),
-    ('{"verifyResult": "REJECT", "VERIFYRESULT": "ACCEPT"}', "ACCEPT"),
+    ('{"verifyResult": "ACCEPT", "VerifyResult": "REJECT", "verifyResult": "ACCEPT"}', "VerifyResult"),
+    ('{"verifyResult": "REJECT", "VerifyResult": "ACCEPT", "verifyResult": "REJECT"}', "VerifyResult"),
+    ('{"VerifyResult": "REJECT", "verifyResult": "ACCEPT"}', "verifyResult"),
+    ('{"verifyResult": "REJECT", "VERIFYRESULT": "ACCEPT"}', "VERIFYRESULT"),
 )
 
 # The two tables below were recorded from `go run .` in ../go built with Go
 # 1.26.3, on fixtures _write_repeated writes: the member at path written
 # first under the name given (its own when None) holding the raw literal,
-# then as the baseline writes it.
+# then as the baseline writes it. Each file fails to load for the repeat,
+# before any member is decoded, whatever the first value holds: the load
+# error names the member as written the second time, its own name.
 
-# A repeated fixture member whose first value is outside its Go type. Go
-# reports the type error after decoding the second value, so the file fails
-# to load. (path, first name, raw literal, the member this verifier's load
-# error names), on the CRL baseline.
+# A repeated fixture member whose first value is outside its Go type, on the
+# CRL baseline. Go reported the type error once it had decoded the second
+# value; it now reports the repeat. (path, first name, raw literal, the
+# member the load error names).
 GO_UNLOADABLE_REPEATS = (
-    (("verifierState", "clockRfc3339"), None, "5", "verifierState.clockRfc3339"),
-    (("verifierState", "clockRfc3339"), None, "9" * 401, "verifierState.clockRfc3339"),
-    (("verifierState", "clockRfc3339"), None, "9" * 5001, "verifierState.clockRfc3339"),
-    (("verifierState", "clockRfc3339"), "ClockRfc3339", "9" * 5001, "verifierState.clockRfc3339"),
+    (("verifierState", "clockRfc3339"), None, "5", "clockRfc3339"),
+    (("verifierState", "clockRfc3339"), None, "9" * 401, "clockRfc3339"),
+    (("verifierState", "clockRfc3339"), None, "9" * 5001, "clockRfc3339"),
+    (("verifierState", "clockRfc3339"), "ClockRfc3339", "9" * 5001, "clockRfc3339"),
     (("name",), "NAME", "5", "name"),
-    (("expected", "verifyResult"), "VerifyResult", "7", "expected.verifyResult"),
-    (("keypairRefs", 0, "keyId"), None, "7", "keypairRefs[0].keyId"),
+    (("expected", "verifyResult"), "VerifyResult", "7", "verifyResult"),
+    (("keypairRefs", 0, "keyId"), None, "7", "keyId"),
     (("verifierState",), None, "[]", "verifierState"),
-    (("verifierState",), None, '{"clockRfc3339": 5}', "verifierState.clockRfc3339"),
-    (
-        ("verifierState", "crl", "issuedAt"),
-        None,
-        '"2026-05-23T00:00:00\\u005a"',
-        "verifierState.crl.issuedAt",
-    ),
-    (
-        ("verifierState", "crl"),
-        None,
-        '{"issuedAt": "2026-05-23T00:00:00\\u005a"}',
-        "verifierState.crl.issuedAt",
-    ),
+    (("verifierState",), None, '{"clockRfc3339": 5}', "verifierState"),
+    (("verifierState", "crl", "issuedAt"), None, '"2026-05-23T00:00:00\\u005a"', "issuedAt"),
+    (("verifierState", "crl"), None, '{"issuedAt": "2026-05-23T00:00:00\\u005a"}', "crl"),
     (
         ("verifierState", "crl", "entries", 0, "revokedAt"),
         "RevokedAt",
         '"2026-05-23T12:00:00\\u005a"',
-        "verifierState.crl.entries[0].revokedAt",
+        "revokedAt",
     ),
 )
 
-# A repeated fixture member whose first value is inside its Go type: the file
-# loads and the second value is the one verified. (baseline, path, first
-# name, raw literal, Go verdict).
-GO_REPEAT_VERDICTS = (
-    (BASELINE_V11, ("verifierState", "clockRfc3339"), None, "null", "ACCEPT"),
-    (BASELINE_V11, ("verifierState", "clockRfc3339"), None, '"2100-01-01T00:00:00Z"', "ACCEPT"),
-    (BASELINE_V11, ("name",), "NAME", '"another name"', "ACCEPT"),
-    (BASELINE_CRL, ("verifierState", "crl", "issuedAt"), None, '"2026-05-23T00:00:00Z"', "REVOKED"),
+# A repeated fixture member whose first value is inside its Go type. Go
+# verified the second value; the file now fails to load. (baseline, path,
+# first name, raw literal, the member the load error names).
+GO_REPEATS_INSIDE_THEIR_TYPE = (
+    (BASELINE_V11, ("verifierState", "clockRfc3339"), None, "null", "clockRfc3339"),
+    (BASELINE_V11, ("verifierState", "clockRfc3339"), None, '"2100-01-01T00:00:00Z"', "clockRfc3339"),
+    (BASELINE_V11, ("name",), "NAME", '"another name"', "name"),
+    (BASELINE_CRL, ("verifierState", "crl", "issuedAt"), None, '"2026-05-23T00:00:00Z"', "issuedAt"),
 )
 
 # What Go's hex.DecodeString makes of a public key's publicKeyHex, None where
@@ -2190,31 +2190,36 @@ class FixtureWrapper(unittest.TestCase):
                 got = _fixture_verdict(baseline, path, literal, rename)
                 self.assertEqual(_outcome(got), outcome, got.reason)
 
-    def test_repeated_expected_name_keeps_the_last_in_document_order(self):
-        for literal, verify_result in GO_REPEATED_EXPECTED_NAMES:
+    def test_repeated_expected_name_is_a_load_error(self):
+        # This verifier read the last of the names that fold together, and Go
+        # decoded each into the one field.
+        for literal, member in GO_REPEATED_EXPECTED_NAMES:
             with self.subTest(expected=literal), tempfile.TemporaryDirectory() as tmp:
                 path = _write_wrapper(Path(tmp), "e.json", BASELINE_V11, "expected", literal)
-                got = verify._expected_outcome(verify.load_fixture(path))
-                self.assertEqual(got["verifyResult"], verify_result)
+                with self.assertRaises(ValueError) as raised:
+                    verify._expected_outcome(verify.load_fixture(path))
+                self.assertEqual(str(raised.exception), f'the fixture repeats the member "{member}"')
 
     def test_repeat_outside_its_go_type_is_a_load_error(self):
-        # Only the second value was decoded, so each of these files loaded.
+        # Each of these files loaded while only the second value was
+        # decoded, then failed to load for the first value's type; it fails
+        # for the repeat now, before any member is decoded.
         for path, first_name, literal, member in GO_UNLOADABLE_REPEATS:
             with self.subTest(path=path, name=first_name, value=literal[:40]), \
                     tempfile.TemporaryDirectory() as tmp:
                 written = _write_repeated(Path(tmp), "r.json", BASELINE_CRL, path, first_name, literal)
                 with self.assertRaises(ValueError) as raised:
                     verify._expected_outcome(verify.load_fixture(written))
-                message = str(raised.exception)
-                self.assertTrue(message.startswith(member + " "), message[:200])
+                self.assertEqual(str(raised.exception), f'the fixture repeats the member "{member}"')
 
-    def test_repeat_inside_its_go_type_reaches_the_go_verdict(self):
-        for baseline, path, first_name, literal, outcome in GO_REPEAT_VERDICTS:
+    def test_repeat_inside_its_go_type_is_a_load_error(self):
+        for baseline, path, first_name, literal, member in GO_REPEATS_INSIDE_THEIR_TYPE:
             with self.subTest(baseline=baseline.name, path=path, name=first_name, value=literal), \
                     tempfile.TemporaryDirectory() as tmp:
                 written = _write_repeated(Path(tmp), "r.json", baseline, path, first_name, literal)
-                got = verify.verify_fixture(verify.load_fixture(written))
-                self.assertEqual(_outcome(got), outcome, got.reason)
+                with self.assertRaises(ValueError) as raised:
+                    verify._expected_outcome(verify.load_fixture(written))
+                self.assertEqual(str(raised.exception), f'the fixture repeats the member "{member}"')
 
     def test_null_fixture_is_the_zero_value_with_no_expected_member(self):
         # Go decodes a fixture file holding null into its zero value, which
@@ -2243,6 +2248,91 @@ class FixtureWrapper(unittest.TestCase):
         self.assertIn("a-name.json  (load error: name {'a': 1} is not a JSON string)", text)
         self.assertEqual(text.count("observed: ACCEPT"), 2, text)
         self.assertEqual(text.splitlines()[-1], "summary: 2 pass, 1 fail (3 fixtures)")
+
+
+class RepeatedFixtureMember(unittest.TestCase):
+    """A fixture file that writes a member more than once outside its atx
+    member's subtree, under one name or under two that fold together, is not
+    a fixture: it fails to load, the load error naming the member as written
+    the second time, as it fails to load in the Go reference verifier. Go's
+    encoding/json decodes each repeat into the one field, so a member a later
+    object omits keeps the earlier object's value, where this verifier read
+    the later object alone: on fixtures/wrong-issuer.json with an expected of
+    REJECT [SIGNATURE_INVALID] followed by an expected of REJECT, the Go
+    verifier wrote FAIL and this one PASS. A repeat inside the credential is
+    still a verdict, PARSE_ERROR."""
+
+    def _write_repeats(self, directory: Path) -> list[tuple[Path, str]]:
+        """Write the fixtures that repeat a member, each with the member its
+        load error names."""
+        v11 = json.loads(BASELINE_V11.read_text())
+        state, atx = json.dumps(v11["verifierState"]), json.dumps(v11["atx"])
+        clock = json.dumps({"clockRfc3339": v11["verifierState"]["clockRfc3339"]})
+        category = '{"verifyResult": "REJECT", "rejectCategory": "SIGNATURE_INVALID"}'
+        reason = '{"verifyResult": "REJECT", "reasonContains": "zz-not-in-reason"}'
+        later = '{"verifyResult": "REJECT"}'
+        return [
+            (_write_wrapper(directory, "a-expected-twice.json", WRONG_ISSUER, "expected",
+                            f'{category}, "expected": {later}'), "expected"),
+            (_write_wrapper(directory, "b-expected-case-variant.json", WRONG_ISSUER, "expected",
+                            f'{category}, "EXPECTED": {later}'), "EXPECTED"),
+            (_write_wrapper(directory, "c-expected-omits-a-member.json", WRONG_ISSUER, "expected",
+                            f'{reason}, "EXPECTED": {later}'), "EXPECTED"),
+            (_write_wrapper(directory, "d-verifier-state-twice.json", BASELINE_V11, "verifierState",
+                            f'{state}, "verifierState": {clock}'), "verifierState"),
+            (_write_wrapper(directory, "e-verify-result-twice.json", BASELINE_V11, "expected",
+                            '{"verifyResult": "ACCEPT", "verifyResult": "ACCEPT"}'), "verifyResult"),
+            (_write_wrapper(directory, "f-atx-twice.json", BASELINE_V11, "atx",
+                            f'{atx}, "ATX": {atx}'), "ATX"),
+            (_write_wrapper(directory, "g-undeclared-member.json", BASELINE_V11, "notes",
+                            '{"by": "a", "BY": "b"}'), "BY"),
+            (_write_repeated(directory, "h-clock-twice.json", BASELINE_V11,
+                             ("verifierState", "clockRfc3339"), None, '"2100-01-01T00:00:00Z"'),
+             "clockRfc3339"),
+            (_write_repeated(directory, "i-crl-entry-case-variant.json", BASELINE_CRL,
+                             ("verifierState", "crl", "entries", 0, "agentId"), "AgentId", '"x"'),
+             "agentId"),
+        ]
+
+    def test_repeat_outside_the_credential_is_a_load_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            cases = self._write_repeats(directory)
+            code, text, err = _run_main(str(directory))
+        self.assertEqual(code, 1, text + err)
+        want = "".join(
+            f'FAIL  {path}  (load error: the fixture repeats the member "{member}")\n' for path, member in cases
+        )
+        self.assertEqual(text, want + f"\nsummary: 0 pass, {len(cases)} fail ({len(cases)} fixtures)\n")
+
+    def test_load_fixture_alone_refuses_a_repeat_of_or_in_the_verifier_state(self):
+        # verify_fixture(load_fixture(path)) never calls _expected_outcome, so
+        # the refusal must be load_fixture's own; past it, this verifier would
+        # read the later verifierState alone, with no CRL or
+        # requiredSignatures that copy omits.
+        with tempfile.TemporaryDirectory() as tmp:
+            written = {path.name: (path, member) for path, member in self._write_repeats(Path(tmp))}
+            for name in ("d-verifier-state-twice.json", "h-clock-twice.json"):
+                path, member = written[name]
+                with self.subTest(fixture=name):
+                    with self.assertRaises(ValueError) as raised:
+                        verify.load_fixture(path)
+                    self.assertEqual(str(raised.exception), f'the fixture repeats the member "{member}"')
+
+    def test_repeat_inside_the_credential_is_still_a_verdict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            atx = json.dumps(json.loads(BASELINE_V11.read_text())["atx"])
+            twice = '{"revoked": false, "revoked": false, ' + atx[1:]
+            written = _write_wrapper(Path(tmp), "credential-twice.json", BASELINE_V11, "atx", twice)
+            for path, status in ((written, "FAIL"), *((p, "PASS") for p in DUPLICATE_CREDENTIALS)):
+                with self.subTest(fixture=path.name):
+                    code, text, err = _run_main(str(path))
+                    self.assertEqual(code, 1 if status == "FAIL" else 0, text + err)
+                    self.assertEqual(
+                        _verdict_lines(text),
+                        [f"{status}  {verify._rel_path(str(path))}", "observed: REJECT[PARSE_ERROR]"],
+                    )
+                    self.assertIn("credential contains duplicate member", text)
 
 
 def _threshold_observed(required: int, distinct: int) -> str:
@@ -2341,15 +2431,17 @@ GO_THRESHOLD_VERDICTS = (
 
 # The 1-of-3 fixture's requiredSignatures written twice: first under the name
 # given (its own when None) holding the raw literal, then as the fixture
-# writes it, 2. Go decodes both into the one field, keeps the last, and fails
-# to load the file when the first is outside the field's type. (first name,
-# raw literal, the result the Go verifier wrote, None for a load error).
+# writes it, 2. Go decoded both into the one field and kept the last, failing
+# to load the file only when the first was outside the field's type; the file
+# now fails to load for the repeat whatever the first holds, the load error
+# naming requiredSignatures, as written the second time. (first name, raw
+# literal).
 GO_THRESHOLD_REPEATS = (
-    (None, '"x"', None),
-    ("RequiredSignatures", "2.5", None),
-    (None, "null", _threshold_observed(2, 1)),
-    (None, "5", _threshold_observed(2, 1)),
-    ("RequiredSignatures", "0", _threshold_observed(2, 1)),
+    (None, '"x"'),
+    ("RequiredSignatures", "2.5"),
+    (None, "null"),
+    (None, "5"),
+    ("RequiredSignatures", "0"),
 )
 
 
@@ -2439,31 +2531,26 @@ class RequiredSignaturesThreshold(unittest.TestCase):
                 got = _fixture_verdict(baseline, REQUIRED_SIGNATURES, literal, rename)
                 self.assertEqual(str(got), observed)
 
-    def test_repeated_member_reaches_the_go_verdict(self):
-        for first_name, literal, observed in GO_THRESHOLD_REPEATS:
+    def test_repeated_member_is_a_load_error(self):
+        for first_name, literal in GO_THRESHOLD_REPEATS:
             with self.subTest(name=first_name, value=literal), tempfile.TemporaryDirectory() as tmp:
                 written = _write_repeated(Path(tmp), "r.json", THRESHOLD_1OF3, REQUIRED_SIGNATURES, first_name, literal)
-                fixture = verify.load_fixture(written)
-                if observed is None:
-                    with self.assertRaises(ValueError) as raised:
-                        verify._expected_outcome(fixture)
-                    self.assertTrue(
-                        str(raised.exception).startswith("verifierState.requiredSignatures "), raised.exception
-                    )
-                    continue
-                self.assertEqual(str(verify.verify_fixture(fixture)), observed)
+                with self.assertRaises(ValueError) as raised:
+                    verify._expected_outcome(verify.load_fixture(written))
+                self.assertEqual(str(raised.exception), 'the fixture repeats the member "requiredSignatures"')
 
-    def test_a_later_null_under_another_case_sets_no_threshold(self):
-        # Go keeps the last of the names that fold together, here a null,
-        # which leaves the field nil.
+    def test_a_later_null_under_another_case_is_a_load_error(self):
+        # Go kept the last of the names that fold together, here a null,
+        # which left the field nil and set no threshold.
         with tempfile.TemporaryDirectory() as tmp:
             text = THRESHOLD_1OF3.read_text().replace(
                 '"requiredSignatures": 2', '"requiredSignatures": 2, "RequiredSignatures": null', 1
             )
             path = Path(tmp) / "null-last.json"
             path.write_text(text)
-            got = verify.verify_fixture(verify.load_fixture(path))
-        self.assertTrue(got.accepted, got.reason)
+            with self.assertRaises(ValueError) as raised:
+                verify.load_fixture(path)
+        self.assertEqual(str(raised.exception), 'the fixture repeats the member "RequiredSignatures"')
 
 
 class PublicKeyHex(unittest.TestCase):

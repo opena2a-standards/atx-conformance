@@ -44,24 +44,24 @@ lesson and scoped to the whole body because ATX signs it all):
     JCS(TBS) projection, v1.0 pipe fields), so there is no layer with
     sanctioned RFC 7519 last-wins semantics — duplicates are the RFC 8259 §4
     first-wins/last-wins parser-divergence smuggling split.
-  - the fixture wrapper (name/verifierState/expected) is harness metadata and
-    parses leniently: a duplicate member there is no error. It is decoded as
-    the Go reference verifier's fixture struct decodes it: each member the
-    struct declares (name, description, keypairRefs, verifierState and every
-    member of it, expected) is type-checked against its field, a member name
-    in another case names the same member, and a member written more than
-    once, under one name or in two cases, is type-checked each time, as Go
-    type-checks each. A fixture the Go decode refuses, a name that is not a
-    string, even with a string name written after it, or a CRL entry's
-    revokedAt outside the timestamp grammar for example, fails to load, as
-    it does there. Of a member written more than once the last value is the
-    one read. Go decodes each into the same field, so a repeat whose last
-    value is null or an object can still differ: Go keeps a clockRfc3339
-    that a later null follows, and merges a later verifierState object into
-    the earlier one, where this verifier reads the null and the later object
-    alone. A verifierState public key whose publicKeyHex is not an even run
-    of hex digits is skipped, as Go's hex.DecodeString leads the Go verifier
-    to skip it.
+  - the fixture wrapper (name/verifierState/expected) is harness metadata,
+    decoded as the Go reference verifier's fixture struct decodes it: each
+    member the struct declares (name, description, keypairRefs,
+    verifierState and every member of it, expected) is type-checked against
+    its field, and a member name in another case names the same member. A
+    fixture the Go decode refuses, a name that is not a string or a CRL
+    entry's revokedAt outside the timestamp grammar for example, fails to
+    load, as it does there. A file that writes a member more than once
+    anywhere outside its atx member's subtree, under one name or under two
+    names that fold together, is not a fixture and fails to load in both
+    verifiers, before any member is decoded, its load error naming the
+    member as written the second time (_repeated_member). Go decodes each
+    repeat into the one field, so a member a later object omits kept the
+    earlier object's value there, while this verifier read the later object
+    alone, and the two reached opposite verdicts on one file. A
+    verifierState public key whose publicKeyHex is not an even run of hex
+    digits is skipped, as Go's hex.DecodeString leads the Go verifier to
+    skip it.
   - each member the Go reference verifier's atx struct declares with a typed
     field is type-checked against that field: strings, integers in int64
     range, a finite trustScore, a boolean revoked, arrays of strings,
@@ -117,8 +117,9 @@ Usage:
 
 Exit 0 iff every fixture's observed result matches expected.verifyResult, and
 after --help, -h or --version. A file with no expected.verifyResult of ACCEPT
-or REJECT is not a fixture: it fails to load and counts as a fail, so the run
-exits 1. Exit 2 on a usage error (no path argument, an empty one, or an
+or REJECT, or one that writes a member more than once outside its atx member,
+is not a fixture: it fails to load and counts as a fail, so the run exits 1.
+Exit 2 on a usage error (no path argument, an empty one, or an
 unknown option, which is named above the usage lines), a path that does not
 exist or that os.stat refuses (a file named with a trailing /), a directory
 os.scandir cannot open, or no fixture files. With no path argument the Go
@@ -966,10 +967,9 @@ def _members_by_folded_name(value: dict[str, Any]) -> dict[str, list[Any]]:
     matches a member to a struct field with: "Revoked" and "REVOKED" are the
     member "revoked". Each folded name maps to the value of every member
     whose name folds to it, in document order for an object load_fixture
-    built (dict order otherwise), so a member written twice, under one name
-    or two, has two values. Go's encoding/json decodes each one into the
-    field. The strict parse has already refused a credential in which two
-    names fold together."""
+    built (dict order otherwise). The strict parse has already refused a
+    credential in which two names fold together, and load_fixture a fixture
+    in which two do outside its credential."""
     names = getattr(value, "names", None)
     if names is None:
         pairs = value.items()
@@ -1088,8 +1088,8 @@ def _expected_outcome(fixture: Any) -> dict[str, str]:
     member or expected.verifyResult is absent or null, or its verifyResult is
     a string other than ACCEPT or REJECT, "accept" among them. Read as
     "expect REJECT", such a file passed whenever its credential rejected, and
-    {} or a package.json rejects at parse. The check reads the last expected
-    member and the last verifyResult in it, the values decoded here."""
+    {} or a package.json rejects at parse. load_fixture has refused a file
+    that writes the expected member, or a member of it, more than once."""
     expected = _decode_fixture(fixture)["expected"]
     member = _members_by_folded_name(fixture or {}).get(_fold_key("expected"), [None])[-1]
     if member is None:
@@ -1139,7 +1139,9 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
     # The Go reference verifier decodes the verifier state into typed fields,
     # so its strings are read the way the credential's are: the CRL's agentId
     # and the trusted issuers are compared with decoded credential members.
-    # Raises ValueError for a fixture that verifier fails to load.
+    # Raises ValueError for a fixture that verifier fails to load. fixture is
+    # what load_fixture returns, not a plain json.load result, which has
+    # already dropped the earlier copy of a member written twice.
     wrapper = _decode_fixture(fixture)
     vs = wrapper["verifierState"]
     atx = wrapper["atx"]
@@ -1520,16 +1522,45 @@ def _read_file(path: str) -> bytes:
             raise _go_path_error("read", path, exc) from None
 
 
+def _repeated_member(fixture: Any) -> str | None:
+    """The first member the fixture object writes more than once outside its
+    atx member's subtree, under one name or under two that fold together
+    (_fold_key), in document order, named as written the second time; None
+    when there is none or the fixture is not an object load_fixture built.
+    A member's name is checked before its value, as the Go reference
+    verifier's repeatedFixtureMember reads them. The atx member's value is
+    the strict parse's (verify_fixture), so it is not read here, and the
+    fixture's own duplicate_member, which covers it, is not either."""
+    if not isinstance(fixture, _DupMarkedDict):
+        return None
+    shadowed = fixture.shadowed or {}
+    folded: set[str] = set()
+    for i, key in enumerate(fixture.names):
+        name = _go_string(key)
+        fk = _fold_key(name)
+        if fk in folded:
+            return name
+        folded.add(fk)
+        if fk != "atx":
+            dup = _subtree_duplicate(shadowed[i] if i in shadowed else fixture[key])
+            if dup is not None:
+                return dup
+    return None
+
+
 def load_fixture(path: str | os.PathLike[str]) -> dict[str, Any]:
     """The fixture file at path as the Go reference verifier's json.Unmarshal
     reads it, before its members are decoded (_decode_fixture). Raises
-    ValueError where Go fails to load the file, and OSError, worded as Go
-    words it, where the file cannot be read (_read_file)."""
+    ValueError where Go fails to load the file, a file that writes a member
+    more than once outside its atx member among them (_repeated_member), and
+    OSError, worded as Go words it, where the file cannot be read
+    (_read_file)."""
     text = _read_file(os.fspath(path)).decode("utf-8", _GO_UTF8_ERRORS)
     literals = _string_literals(text)
     # The duplicate-marking hook preserves last-wins values (plain dict
-    # semantics) while recording duplicates for the strict-parse check in
-    # verify_fixture, which consults only the atx subtree.
+    # semantics) while recording duplicates: in the atx subtree for the
+    # strict-parse check in verify_fixture, and outside it for the check
+    # below.
     try:
         fixture = _parse_json(
             text,
@@ -1541,6 +1572,11 @@ def load_fixture(path: str | os.PathLike[str]) -> dict[str, Any]:
         # The Go reference verifier's wording for a syntax error; the
         # decoders' own texts and positions differ.
         raise ValueError("fixture is not valid JSON") from None
+    # Checked once the file has parsed and before any member is decoded, as
+    # the Go reference verifier checks it.
+    repeated = _repeated_member(fixture)
+    if repeated is not None:
+        raise ValueError(f"the fixture repeats the member {_go_quote(repeated)}")
     # json.loads does not say which strings were written with an escape, and
     # the Go reference verifier's timestamp decoder refuses a timestamp that
     # was. A second parse, with each such string value replaced by null, has

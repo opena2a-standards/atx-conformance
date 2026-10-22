@@ -982,6 +982,53 @@ they should not.
 
 ### Fixed
 
+- Both reference verifiers fail to load a fixture file that writes a member
+  more than once outside its `atx` member, under one name or under two that
+  Go's `encoding/json` reads as one, such as `expected` and `EXPECTED`. Each
+  prints `FAIL  <file>  (load error: the fixture repeats the member
+  "<member>")`, naming the member as written the second time, with no
+  `expected:` or `observed:` line, counts it as a fail and exits 1. The Go
+  verifier decoded each repeat into the one field of its fixture struct, so
+  a member a later object omits kept the earlier object's value, while the
+  Python verifier read the later object alone, and the two gave one file
+  opposite verdicts: `fixtures/wrong-issuer.json` with its `expected` set
+  to `REJECT [SIGNATURE_INVALID]` and a second `"expected": {"verifyResult":
+  "REJECT"}` appended failed in the Go verifier, exit 1, and passed in the
+  Python verifier, exit 0, as it did with the second member spelled
+  `EXPECTED` and with a first `expected` whose `reasonContains` the reason
+  does not hold, and `fixtures/v1_1-baseline-valid.json` with a second
+  `verifierState` holding only its `clockRfc3339` passed in the Go verifier
+  and failed in the Python verifier as `UNTRUSTED_ISSUER`. So before this
+  change a fixture that wrote a member twice outside `atx` could reach a
+  different verdict in each verifier, and for a repeated `verifierState`
+  that difference decided whether its CRL and its signature threshold
+  (`requiredSignatures`) were applied. The repeat is
+  checked once the file parses as JSON and before any member is decoded,
+  so it is named in place of a type error in the member repeated, and every
+  member outside `atx` is checked, those the fixture format does not
+  declare included. A member written twice inside `atx` is still the strict
+  parse's verdict, `REJECT[PARSE_ERROR]`, which
+  `fixtures/v1_1-duplicate-purpose-member.json` and
+  `fixtures/v1_1-case-variant-member.json` pin, and a member written once
+  in another case, `EXPECTED` with no `expected`, is read as before. No
+  shipped fixture writes a member twice outside `atx`, and both verifiers
+  pass the 30 fixtures as before. `TestRepeatedFixtureMemberIsALoadError`
+  and the Python verifier's `RepeatedFixtureMember` tests hold both
+  verifiers to the rule; the Python tables of repeated fixture members
+  (`GO_REPEATED_EXPECTED_NAMES`, `GO_UNLOADABLE_REPEATS`,
+  `GO_REPEATS_INSIDE_THEIR_TYPE`, `GO_THRESHOLD_REPEATS`) and the two
+  repeated members of `TestRequiredSignaturesDecode` now expect the load
+  error, which the Go verifier built with Go 1.26.3 writes on each. The
+  argument table of `scripts/parity/parity.py` adds seven cases (53, from
+  46) on files under `repeat/` in its scratch directory, written at run
+  time from `fixtures/baseline-valid.json`, `fixtures/wrong-issuer.json`
+  and `fixtures/v1_1-baseline-valid.json`: `expected` twice, `expected` and
+  `EXPECTED`, a second `EXPECTED` that omits a member, `verifierState`
+  twice, `verifyResult` twice and `clockRfc3339` twice inside the one
+  `verifierState`, each a load error both verifiers must word alike, and a
+  credential that writes a member twice, a verdict on both. Its self-test
+  adds one case (80, from 79): a verifier that verifies the first of those
+  files where the other fails to load it. No fixture changes.
 - Both verifiers fold a credential member name by a fixed table, ASCII
   `A-Z` to `a-z`, U+212A (Kelvin sign) to `k` and U+017F (long s) to `s`,
   and leave every other character unchanged, where they lowercased every
