@@ -806,6 +806,25 @@ func main() {
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
 				atx)
 		}},
+		{"fixtures/v1_1-integer-outside-exact-range.json", func() Fixture {
+			// A TBS INTEGER OUTSIDE THE I-JSON EXACT RANGE. The baseline with
+			// scanSummary.criticalFindings 2^53+1, signed over its JCS(TBS)
+			// as canonicalPayloadV11 writes it. The JCS library reads each
+			// number as an IEEE 754 double, which does not hold 2^53+1, and
+			// writes the count as 9007199254740992 (2^53), the bytes it
+			// writes for a credential carrying 2^53 too. A verifier that
+			// canonicalizes the count the same way verifies the signature
+			// and wrongly ACCEPTs a count its signature does not cover.
+			atx := newBaselineV11ATX()
+			atx.ScanSummary.CriticalFindings = 1<<53 + 1
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/integer-outside-exact-range",
+				"An ATX v1.1 credential carrying scanSummary.criticalFindings 9007199254740993, which is 2^53+1 and outside the I-JSON exact range, -(2^53-1) to 2^53-1 (RFC 7493 §2.2). Its Ed25519 signature covers JCS(TBS) as an RFC 8785 serializer that reads each number as an IEEE 754 double writes it, with criticalFindings 9007199254740992: the bytes that serializer writes for a credential carrying 9007199254740992 too. The signature does not tell the two counts apart, so it does not cover the count this credential carries (atx-spec §1.3a.2 rule 3 keeps RFC 8785 number serialization out of cross-language scope). The verifier MUST REJECT with a signature-validation reason. A verifier that canonicalizes the count as that serializer does verifies the signature and wrongly ACCEPTs a count its signature does not cover.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
 		{"fixtures/v1_1-declared-purpose-valid.json", func() Fixture {
 			// PRESENT-CASE: a credential that actually CARRIES a declaredPurpose
 			// (atx-spec §1.5). The purpose object is part of JCS(TBS), so the single
@@ -1101,6 +1120,11 @@ func main() {
 			panic("fixtureRequirements names no fixture: " + name)
 		}
 	}
+	for name := range fixtureOtherRefs {
+		if !fixtureOtherRefsUsed[name] {
+			panic("fixtureOtherRefs names no fixture: " + name)
+		}
+	}
 
 	// MANIFEST.sha256: one line per fixture, in path-sorted order.
 	sort.Slice(manifest, func(i, j int) bool { return manifest[i].path < manifest[j].path })
@@ -1243,6 +1267,7 @@ var fixtureSections = map[string][]string{
 	"atx-v1_1/hybrid-pq-only":                    {secSecurity},
 	"atx-v1_1/tampered-capabilities":             {secSignedFields},
 	"atx-v1_1/scan-summary-member-outside-type":  {secSignedFields},
+	"atx-v1_1/integer-outside-exact-range":       {secSignedFields},
 	"atx-v1_1/declared-purpose-valid":            {secDeclaredPurpose},
 	"atx-v1_1/tampered-declared-purpose":         {secDeclaredPurpose},
 	"atx-v1_1/declared-purpose-empty-whitespace": {secDeclaredPurpose},
@@ -1281,6 +1306,7 @@ var fixtureRequirements = map[string]string{
 	"atx-v1_1/hybrid-pq-only":                    "§13, Cryptographic agility: a credential that declares an ML-DSA-65 signature must also carry a verifying Ed25519 signature, so an ML-DSA-65 signature alone is a signature failure",
 	"atx-v1_1/tampered-capabilities":             "§1.3a.4: capabilities are under the v1.1 signature, so capabilities changed after signing are a signature failure",
 	"atx-v1_1/scan-summary-member-outside-type":  "§1.3a.2 rule 2: each scanSummary member enters the TBS with its type, so a member written outside that type after signing, criticalFindings as the string \"3\", has no value the signature covers and is a signature failure",
+	"atx-v1_1/integer-outside-exact-range":       "§1.3a.2 rule 3: RFC 8785 number serialization is kept out of cross-language scope, and outside the I-JSON exact range it does not write every integer as its digits, so criticalFindings 9007199254740993, which it writes as 9007199254740992, has no value the signature covers and is a signature failure",
 	"atx-v1_1/declared-purpose-valid":            "§1.5: a present declaredPurpose object is signed as part of JCS(TBS) (§1.3a.2 rule 5), and a credential carrying one is accepted",
 	"atx-v1_1/tampered-declared-purpose":         "§1.5: declaredPurpose is under the v1.1 signature, so a declaredPurpose changed after signing is a signature failure",
 	"atx-v1_1/declared-purpose-empty-whitespace": "§1.3a.2 rule 5: an empty declaredPurpose object, whatever whitespace it is written with, is treated as absent and left out of the TBS",
@@ -1295,6 +1321,19 @@ var fixtureRequirements = map[string]string{
 
 // fixtureRequirementsUsed records which fixtureRequirements entries wrap consumed.
 var fixtureRequirementsUsed = map[string]bool{}
+
+// fixtureOtherRefs names the documents a fixture cites beyond core.md,
+// AIP-SPEC, RFC 8032 and FIPS 204, which wrap cites by rule. main fails on an
+// entry that names no fixture.
+var fixtureOtherRefs = map[string][]SpecRef{
+	"atx-v1_1/integer-outside-exact-range": {
+		{ID: "RFC 7493", Ref: "https://datatracker.ietf.org/doc/html/rfc7493", Section: "§2.2 Numbers (the I-JSON exact integer range, -(2^53-1) to 2^53-1)"},
+		{ID: "RFC 8785", Ref: "https://datatracker.ietf.org/doc/html/rfc8785", Section: "§3.2.2.3 Serialization of Numbers"},
+	},
+}
+
+// fixtureOtherRefsUsed records which fixtureOtherRefs entries wrap consumed.
+var fixtureOtherRefsUsed = map[string]bool{}
 
 // atxSections lists the core.md sections a fixture cites: the schema and the
 // verification algorithm, the canonical signing form its atcVersion selects
@@ -1327,6 +1366,10 @@ func wrap(name, description string, refs []KeypairRef, vs VerifierState, expecte
 		SpecRef{ID: "AIP", Ref: aipSpecRef, Section: aipTrustScoring},
 		SpecRef{ID: "RFC 8032", Ref: "https://datatracker.ietf.org/doc/html/rfc8032", Section: "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"},
 	)
+	if other, ok := fixtureOtherRefs[name]; ok {
+		fixtureOtherRefsUsed[name] = true
+		spec = append(spec, other...)
+	}
 	// FIPS 204 is cited only by a credential that carries an ML-DSA-65
 	// signature (scripts/conformance_profile.py --check).
 	for _, sig := range atx.Signatures {

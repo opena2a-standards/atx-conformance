@@ -982,6 +982,29 @@ they should not.
 
 ### Fixed
 
+- Both reference verifiers reject a v1.1 credential whose signed payload
+  holds an integer of magnitude above 2^53-1, outside the I-JSON exact
+  range (RFC 7493 §2.2), as `SIGNATURE_INVALID`, with one reason naming the
+  member and the integer: `trustLevel`, `scanSummary.criticalFindings`,
+  `scanSummary.highFindings`, `behavioralProfile.observationDays` or an
+  integer in `declaredPurpose` (#278). The Go verifier's JCS library reads
+  each number as an IEEE 754 double and writes 9007199254740993 as
+  9007199254740992, so it accepted a credential carrying 9007199254740993
+  under a signature over those bytes, which the Python verifier, writing
+  the digits, rejected because the signature did not verify. The check
+  runs once the payload canonicalizes, so a `declaredPurpose` number
+  outside the float64 range or an unpaired surrogate escape still rejects
+  as `VERIFIER_CONFIG_ERROR`. The vendored RFC 8785 serializer
+  (`verifiers/python/rfc8785.py` and `jcs-vectors/python/rfc8785.py`)
+  refuses such an integer where it wrote its digits, as it refuses a
+  float. A MUST-REJECT fixture built by the generator,
+  `fixtures/v1_1-integer-outside-exact-range.json`, carries
+  `scanSummary.criticalFindings` 9007199254740993 signed over the bytes the
+  JCS library writes for it; the Go verifier reported ACCEPT on it before
+  this change. The 29 existing fixtures and their `MANIFEST.sha256` lines
+  are byte-identical, the manifest gains one line, the stated counts go
+  from 29 to 30, and `conformance.json` and the Go verifier capture are
+  regenerated.
 - `scripts/parity/parity.py` checks a `--json` symbolic link whose target
   ends in `/` or `/.` at the directory that target names, where it checked
   the directory of a file of that name, as pathlib drops that `/` or `/.`

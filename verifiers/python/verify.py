@@ -15,6 +15,14 @@ Spec coverage:
     v1.1 signs JCS(TBS), the RFC 8785 form of the to-be-signed projection
     (core.md section 1.3a.2). See docs/scope.md
     §"Canonicalization: v1.0 signs 11 fields; v1.1 signs JCS(TBS)".
+  - Integers in the v1.1 signed payload: once the checks that refuse a
+    payload the Go reference verifier cannot canonicalize pass, one whose
+    magnitude is above 2**53 - 1, outside the I-JSON exact range (RFC 7493
+    section 2.2), rejects as SIGNATURE_INVALID. The Go verifier's JCS library
+    reads each number as an IEEE 754 double, which does not hold every such
+    integer, and writes 9007199254740993 as 9007199254740992, so a signature
+    over those bytes does not tell the two apart
+    (_integer_outside_exact_range).
   - Ed25519 and ML-DSA-65 (FIPS 204) hybrid signature verification over the
     same canonical payload (every declared signature must verify and at
     least one must be present; an ML-DSA-65 signature needs a verifying
@@ -86,6 +94,8 @@ lesson and scoped to the whole body because ATX signs it all):
     make the credential a signature failure. A number in it outside the
     float64 range (1e400, or an integer of 401 digits) rejects as
     VERIFIER_CONFIG_ERROR too: that library parses every number as a float64.
+    An integer in it inside that range but outside the I-JSON exact range
+    rejects after these two checks, as SIGNATURE_INVALID (Spec coverage).
   - NaN, Infinity and -Infinity are not JSON, so a file carrying one fails to
     load, as it does in the Go reference verifier.
   - the file is read as UTF-8 the way Go's encoding/json reads it: each byte
@@ -505,6 +515,55 @@ def canonical_payload_v11(atx: dict[str, Any]) -> bytes:
     jcs-vectors suite, not by shared code. atx is the credential as
     _decode_credential returns it.
     """
+    return _jcs_canonicalize(_tbs_v11(atx))
+
+
+# 2**53 - 1, the largest magnitude of an integer in the I-JSON exact range
+# (RFC 7493 section 2.2), as the Go reference verifier's maxExactInteger.
+_MAX_EXACT_INTEGER = 2**53 - 1
+
+
+def _integer_outside_exact_range(tbs: dict[str, Any]) -> tuple[str, int] | None:
+    """The first integer of the v1.1 TBS (as _tbs_v11 projects it) whose
+    magnitude is above 2**53 - 1, with its member, as the Go reference
+    verifier's integerOutsideExactRangeV11 names it: the members
+    behavioralProfile.observationDays, declaredPurpose,
+    scanSummary.criticalFindings, scanSummary.highFindings and trustLevel, in
+    the order JCS writes them, and in declaredPurpose, which enters the TBS
+    as written, the first such integer the credential writes. None when the
+    TBS holds none. Walked with a stack, as _first_unpaired_surrogate is."""
+
+    def outside(n: Any) -> bool:
+        return (
+            isinstance(n, int)
+            and not isinstance(n, bool)
+            and not -_MAX_EXACT_INTEGER <= n <= _MAX_EXACT_INTEGER
+        )
+
+    profile = tbs["behavioralProfile"]
+    if profile is not None and outside(profile["observationDays"]):
+        return "behavioralProfile.observationDays", profile["observationDays"]
+    stack = [tbs.get("declaredPurpose")]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            stack.extend(reversed(list(item.values())))
+        elif isinstance(item, list):
+            stack.extend(reversed(item))
+        elif outside(item):
+            return "declaredPurpose", item
+    for name in ("criticalFindings", "highFindings"):
+        if outside(tbs["scanSummary"][name]):
+            return f"scanSummary.{name}", tbs["scanSummary"][name]
+    if outside(tbs["trustLevel"]):
+        return "trustLevel", tbs["trustLevel"]
+    return None
+
+
+def _tbs_v11(atx: dict[str, Any]) -> dict[str, Any]:
+    """The ATX v1.1 TBS object of the credential, which canonical_payload_v11
+    JCS-canonicalizes. atx is the credential as _decode_credential returns
+    it."""
     # The Go verifier's projectScanSummaryV11 ignores a decode error, which
     # leaves each member it could not decode at its zero value; a scanSummary
     # that is not an object leaves all six there. verify_fixture refuses such
@@ -560,7 +619,7 @@ def canonical_payload_v11(atx: dict[str, Any]) -> bytes:
     }
     if declared_purpose is not None:
         tbs["declaredPurpose"] = declared_purpose
-    return _jcs_canonicalize(tbs)
+    return tbs
 
 
 def _controller_did(key_id: str) -> str:
@@ -1199,8 +1258,23 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
                 reject_category="VERIFIER_CONFIG_ERROR",
                 reason="v1.1 canonicalization failed: declaredPurpose holds a number outside the float64 range",
             )
+        tbs = _tbs_v11(atx)
+        outside = _integer_outside_exact_range(tbs)
+        if outside is not None:
+            # The Go reference verifier's JCS library writes such an integer
+            # as the IEEE 754 double nearest it, which other integers can
+            # share (9007199254740993 and 9007199254740992 are written
+            # alike), so a signature over those bytes does not tell them
+            # apart; this serializer refuses it. The Go verifier refuses it
+            # once its canonicalization succeeds, which is after the two
+            # checks above, and the reason is its.
+            where, integer = outside
+            return VerifyResult(
+                reject_category="SIGNATURE_INVALID",
+                reason=f"no signature covers {where}: the integer {integer} is outside the I-JSON exact range, -(2^53-1) to 2^53-1",
+            )
         try:
-            payload = canonical_payload_v11(atx)
+            payload = _jcs_canonicalize(tbs)
         except NotImplementedError:
             # The vendored JCS serializer refuses non-integer numbers
             # (rfc8785.py); a schema-valid v1.1 TBS carries none. One can still

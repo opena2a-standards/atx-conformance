@@ -20,6 +20,12 @@
 //     v1.1 signs JCS(TBS), the RFC 8785 form of the to-be-signed projection
 //     (core.md §1.3a.2). See docs/scope.md
 //     §"Canonicalization: v1.0 signs 11 fields; v1.1 signs JCS(TBS)".
+//   - Integers in the v1.1 signed payload: once the payload canonicalizes,
+//     one whose magnitude is above 2^53-1, outside the I-JSON exact range
+//     (RFC 7493 §2.2), is a signature failure, because JCS reads each number
+//     as an IEEE 754 double, which does not hold every integer outside that
+//     range: it writes 9007199254740993 as 9007199254740992
+//     (integerOutsideExactRangeV11).
 //   - Signature threshold (core.md §3.1 step 8, cosignatures from 2 of 3 key
 //     holders): when the verifier state sets requiredSignatures, the declared
 //     Ed25519 signatures must verify under at least that many distinct keys.
@@ -64,6 +70,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -498,9 +505,13 @@ func projectDeclaredPurposeV11(raw json.RawMessage) json.RawMessage {
 	return raw
 }
 
-func projectBehavioralProfileV11(raw json.RawMessage) json.RawMessage {
+// decodeBehavioralProfileV11 decodes behavioralProfile into the three members
+// the v1.1 TBS carries. ok is false when the TBS carries null in its place:
+// behavioralProfile is absent or null, or does not decode (a member outside
+// its type, or a value that is not an object).
+func decodeBehavioralProfileV11(raw json.RawMessage) (bp tbsBehavioralProfileV11, ok bool) {
 	if len(raw) == 0 || string(raw) == "null" {
-		return json.RawMessage("null")
+		return bp, false
 	}
 	var wire struct {
 		Checksum        string    `json:"checksum"`
@@ -508,18 +519,79 @@ func projectBehavioralProfileV11(raw json.RawMessage) json.RawMessage {
 		ObservationDays int       `json:"observationDays"`
 	}
 	if err := json.Unmarshal(raw, &wire); err != nil {
-		return json.RawMessage("null")
+		return bp, false
 	}
-	bp := tbsBehavioralProfileV11{
+	return tbsBehavioralProfileV11{
 		Checksum:        wire.Checksum,
 		GeneratedAt:     wire.GeneratedAt.UTC().Format(time.RFC3339),
 		ObservationDays: wire.ObservationDays,
+	}, true
+}
+
+func projectBehavioralProfileV11(raw json.RawMessage) json.RawMessage {
+	bp, ok := decodeBehavioralProfileV11(raw)
+	if !ok {
+		return json.RawMessage("null")
 	}
 	out, err := json.Marshal(&bp)
 	if err != nil {
 		return json.RawMessage("null")
 	}
 	return out
+}
+
+// maxExactInteger is 2^53-1, the largest magnitude of an integer in the
+// I-JSON exact range (RFC 7493 §2.2). The JCS library reads each number of
+// the v1.1 TBS as an IEEE 754 double (RFC 8785 §3.2.2.3), which holds every
+// integer in that range and writes it as its decimal digits. Outside it a
+// double does not hold every integer: the library writes 9007199254740993 as
+// 9007199254740992, so a signature over those bytes verifies a credential
+// carrying either count. core.md §1.3a.2 rule 3 keeps that number
+// serialization out of cross-language scope.
+const maxExactInteger int64 = 1<<53 - 1
+
+// integerOutsideExactRangeV11 names the first integer the v1.1 TBS of a holds
+// whose magnitude is above maxExactInteger: where is its member,
+// behavioralProfile.observationDays, declaredPurpose,
+// scanSummary.criticalFindings, scanSummary.highFindings or trustLevel, the
+// order JCS writes them in, and literal is the integer in decimal digits. In
+// declaredPurpose, which enters the TBS as written, it is the first such
+// integer the credential writes, a number written with no fraction and no
+// exponent. It returns "" for both when the TBS holds none.
+func integerOutsideExactRangeV11(a *atx) (where, literal string) {
+	exact := func(n int64) bool { return -maxExactInteger <= n && n <= maxExactInteger }
+	if bp, ok := decodeBehavioralProfileV11(a.BehavioralProfile); ok && !exact(int64(bp.ObservationDays)) {
+		return "behavioralProfile.observationDays", strconv.Itoa(bp.ObservationDays)
+	}
+	if purpose := projectDeclaredPurposeV11(a.DeclaredPurpose); purpose != nil {
+		dec := json.NewDecoder(bytes.NewReader(purpose))
+		dec.UseNumber()
+		for {
+			tok, err := dec.Token()
+			if err != nil {
+				break // io.EOF: json.Unmarshal of the credential has read this text whole
+			}
+			number, ok := tok.(json.Number)
+			if !ok || strings.ContainsAny(string(number), ".eE") {
+				continue
+			}
+			// A JSON integer that ParseInt refuses is outside the int64 range.
+			if n, err := strconv.ParseInt(string(number), 10, 64); err != nil || !exact(n) {
+				return "declaredPurpose", string(number)
+			}
+		}
+	}
+	ss := projectScanSummaryV11(a.ScanSummary)
+	if !exact(int64(ss.CriticalFindings)) {
+		return "scanSummary.criticalFindings", strconv.Itoa(ss.CriticalFindings)
+	}
+	if !exact(int64(ss.HighFindings)) {
+		return "scanSummary.highFindings", strconv.Itoa(ss.HighFindings)
+	}
+	if !exact(int64(a.TrustLevel)) {
+		return "trustLevel", strconv.Itoa(a.TrustLevel)
+	}
+	return "", ""
 }
 
 // ---------------------------------------------------------------------------
@@ -807,6 +879,19 @@ func verifySignatures(a *atx, state verifierState) result {
 		pb, err := canonicalPayloadV11(a)
 		if err != nil {
 			return result{RejectCategory: "VERIFIER_CONFIG_ERROR", Reason: "v1.1 canonicalization failed: " + err.Error()}
+		}
+		// Outside the I-JSON exact range, JCS writes an integer of the TBS
+		// as the double nearest it, which other integers can share: pb is
+		// the same for 9007199254740993 as for 9007199254740992, so a
+		// signature over pb does not tell them apart. Each integer of the
+		// TBS outside that range is refused here (maxExactInteger). The
+		// Python reference verifier refuses it at this point too, with this
+		// reason.
+		if where, literal := integerOutsideExactRangeV11(a); where != "" {
+			return result{
+				RejectCategory: "SIGNATURE_INVALID",
+				Reason:         fmt.Sprintf("no signature covers %s: the integer %s is outside the I-JSON exact range, -(2^53-1) to 2^53-1", where, literal),
+			}
 		}
 		payload = pb
 	} else {

@@ -1069,6 +1069,62 @@
       "description": "An ATX v1.1 credential carrying a single ML-DSA-65 signature that verifies over JCS(TBS), and no Ed25519 signature. The spec requires a credential that declares an ML-DSA-65 entry to also carry a verifying Ed25519 entry, so a post-quantum signature alone cannot verify a credential. Verifier MUST REJECT with a signature-validation reason. A verifier that checks only that every declared signature verifies wrongly ACCEPTs."
     },
     {
+      "fixture": "fixtures/v1_1-integer-outside-exact-range.json",
+      "name": "atx-v1_1/integer-outside-exact-range",
+      "requirement": "§1.3a.2 rule 3: RFC 8785 number serialization is kept out of cross-language scope, and outside the I-JSON exact range it does not write every integer as its digits, so criticalFindings 9007199254740993, which it writes as 9007199254740992, has no value the signature covers and is a signature failure",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.4 Authorization on signed fields requires v1.1"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "RFC 7493",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc7493",
+          "section": "§2.2 Numbers (the I-JSON exact integer range, -(2^53-1) to 2^53-1)"
+        },
+        {
+          "id": "RFC 8785",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8785",
+          "section": "§3.2.2.3 Serialization of Numbers"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "An ATX v1.1 credential carrying scanSummary.criticalFindings 9007199254740993, which is 2^53+1 and outside the I-JSON exact range, -(2^53-1) to 2^53-1 (RFC 7493 §2.2). Its Ed25519 signature covers JCS(TBS) as an RFC 8785 serializer that reads each number as an IEEE 754 double writes it, with criticalFindings 9007199254740992: the bytes that serializer writes for a credential carrying 9007199254740992 too. The signature does not tell the two counts apart, so it does not cover the count this credential carries (atx-spec §1.3a.2 rule 3 keeps RFC 8785 number serialization out of cross-language scope). The verifier MUST REJECT with a signature-validation reason. A verifier that canonicalizes the count as that serializer does verifies the signature and wrongly ACCEPTs a count its signature does not cover."
+    },
+    {
       "fixture": "fixtures/v1_1-no-transparency-log-index.json",
       "name": "atx-v1_1/no-transparency-log-index",
       "requirement": "§1.1: transparencyLogIndex is optional and outside JCS(TBS), so a v1.1 credential that omits it is accepted",

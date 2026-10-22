@@ -81,6 +81,9 @@ PASS  fixtures/v1_1-hybrid-mldsa-tampered.json
 PASS  fixtures/v1_1-hybrid-pq-only.json
        expected: REJECT [SIGNATURE_INVALID]
        observed: REJECT[SIGNATURE_INVALID: ML-DSA-65 signature declared without a verifying Ed25519 signature (an ML-DSA-65 entry requires an Ed25519 companion)]
+PASS  fixtures/v1_1-integer-outside-exact-range.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: no signature covers scanSummary.criticalFindings: the integer 9007199254740993 is outside the I-JSON exact range, -(2^53-1) to 2^53-1]
 PASS  fixtures/v1_1-no-transparency-log-index.json
        expected: ACCEPT
        observed: ACCEPT
@@ -102,4 +105,4 @@ PASS  fixtures/wrong-issuer.json
        expected: REJECT [UNTRUSTED_ISSUER]
        observed: REJECT[UNTRUSTED_ISSUER: issuer DID did:opena2a:authority:attacker.example is not in the verifier's trusted set (untrusted issuer)]
 
-summary: 29 pass, 0 fail (29 fixtures)
+summary: 30 pass, 0 fail (30 fixtures)

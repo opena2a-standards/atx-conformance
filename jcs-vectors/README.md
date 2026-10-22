@@ -101,8 +101,15 @@ Determinism rules (the part that bites cross-language):
   `secretless`, `cryptoServe`, `oasbLevel`); never `null`.
 - **`trustScore` is string-encoded `%.6f`** in the TBS (e.g. `"87.500000"`),
   even though the wire field stays a JSON number. This removes the
-  float -> JCS-number formatting hazard entirely: every JSON number left in
-  the TBS is an integer, and integers serialize identically everywhere.
+  float -> JCS-number formatting hazard: every JSON number left in the TBS
+  is an integer, and an integer in the I-JSON exact range, -(2^53-1) to
+  2^53-1 (RFC 7493 §2.2), serializes as its decimal digits in all three
+  legs. Outside that range the Go and TypeScript legs read an integer as an
+  IEEE 754 double and write 9007199254740993 as 9007199254740992, and the
+  Python leg refuses it. Both reference verifiers reject a v1.1 credential
+  whose TBS holds such an integer before they verify a signature;
+  `fixtures/v1_1-integer-outside-exact-range.json` pins `SIGNATURE_INVALID`
+  for `criticalFindings` 9007199254740993.
 - **`issuerChain` order is root-first** and significant: JCS preserves array
   order, it never sorts arrays.
 - The ML-DSA-65 hybrid leg signs the **same** `JCS(TBS)` bytes as Ed25519.

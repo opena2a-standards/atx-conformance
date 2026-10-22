@@ -2151,3 +2151,196 @@ func TestReasonContainsMismatchNamesTheSubstring(t *testing.T) {
 		t.Errorf("Run(fixtures/wrong-issuer.json) exits %d and writes:\n%s\nwant PASS and no reason line", code, stdout)
 	}
 }
+
+// TestIntegerOutsideExactRange pins the verdict on a v1.1 credential whose
+// signed payload holds an integer of magnitude above 2^53-1, outside the
+// I-JSON exact range (RFC 7493 §2.2). The JCS library reads each number as an
+// IEEE 754 double and writes 9007199254740993 as 9007199254740992, so a
+// credential signed over those bytes verified carrying either count: this
+// verifier accepted fixtures/v1_1-integer-outside-exact-range.json, which
+// the Python reference verifier, writing the count's own digits, rejected
+// for a signature that did not verify. Both now refuse each such integer the
+// TBS holds as SIGNATURE_INVALID, with one reason naming its member, once
+// the payload canonicalizes. atx-conformance#278.
+func TestIntegerOutsideExactRange(t *testing.T) {
+	base := v11Baseline(t)
+	// with returns f with the member name of its credential's object member
+	// top written as raw, the other members of top as f writes them.
+	with := func(f fixture, top, name, raw string) fixture {
+		t.Helper()
+		var credential map[string]json.RawMessage
+		if err := json.Unmarshal(f.ATX, &credential); err != nil {
+			t.Fatal(err)
+		}
+		object := map[string]json.RawMessage{}
+		if err := json.Unmarshal(credential[top], &object); err != nil {
+			t.Fatal(err)
+		}
+		object[name] = json.RawMessage(raw)
+		b, err := json.Marshal(object)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return withMembers(t, f, map[string]string{top: string(b)})
+	}
+	count := func(f fixture, raw string) fixture { return with(f, "scanSummary", "criticalFindings", raw) }
+	reason := func(where, literal string) string {
+		return "no signature covers " + where + ": the integer " + literal + " is outside the I-JSON exact range, -(2^53-1) to 2^53-1"
+	}
+	// signatureVerifies reports whether every Ed25519 signature of f's
+	// credential verifies over the credential's own JCS(TBS) under a key of
+	// its verifier state, the check a verifier without the refusal makes.
+	signatureVerifies := func(f fixture) bool {
+		t.Helper()
+		var a atx
+		if err := json.Unmarshal(f.ATX, &a); err != nil {
+			t.Fatal(err)
+		}
+		payload, err := canonicalPayloadV11(&a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, sig := range a.Signatures {
+			value, err := base64.StdEncoding.DecodeString(sig.Value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ok := false
+			for _, ref := range f.VerifierState.PublicKeys {
+				if key, err := hex.DecodeString(ref.PublicKeyHex); err == nil && len(key) == ed25519.PublicKeySize && ed25519.Verify(key, payload, value) {
+					ok = true
+				}
+			}
+			if !ok {
+				return false
+			}
+		}
+		return len(a.Signatures) > 0
+	}
+
+	refused := []struct {
+		label, where, literal string
+		f                     fixture
+	}{
+		{"criticalFindings 2^53", "scanSummary.criticalFindings", "9007199254740992", count(base, "9007199254740992")},
+		{"criticalFindings 2^53+1", "scanSummary.criticalFindings", "9007199254740993", count(base, "9007199254740993")},
+		{"criticalFindings -2^53", "scanSummary.criticalFindings", "-9007199254740992", count(base, "-9007199254740992")},
+		{"criticalFindings 2^63-1", "scanSummary.criticalFindings", "9223372036854775807", count(base, "9223372036854775807")},
+		{"highFindings 2^53", "scanSummary.highFindings", "9007199254740992", with(base, "scanSummary", "highFindings", "9007199254740992")},
+		{"observationDays 2^53", "behavioralProfile.observationDays", "9007199254740992", with(base, "behavioralProfile", "observationDays", "9007199254740992")},
+		{"trustLevel 2^53+1", "trustLevel", "9007199254740993", withMembers(t, base, map[string]string{"trustLevel": "9007199254740993"})},
+		{"trustLevel -2^53-1", "trustLevel", "-9007199254740993", withMembers(t, base, map[string]string{"trustLevel": "-9007199254740993"})},
+		{"declaredPurpose 2^53+1", "declaredPurpose", "9007199254740993", withMembers(t, base, map[string]string{"declaredPurpose": "9007199254740993"})},
+		{"declaredPurpose nested", "declaredPurpose", "18014398509481985", withMembers(t, base, map[string]string{"declaredPurpose": `{"limits": {"refund": 18014398509481985}}`})},
+		{"declaredPurpose, the first integer written", "declaredPurpose", "9007199254740993",
+			withMembers(t, base, map[string]string{"declaredPurpose": `[1.5, "18014398509481985", 1e21, 9007199254740993, -9007199254740993]`})},
+		{"declaredPurpose integer beyond int64", "declaredPurpose", "100000000000000000000", withMembers(t, base, map[string]string{"declaredPurpose": `[100000000000000000000]`})},
+		// Several: the first in the order JCS writes the members.
+		{"observationDays and trustLevel", "behavioralProfile.observationDays", "9007199254740992",
+			withMembers(t, with(base, "behavioralProfile", "observationDays", "9007199254740992"), map[string]string{"trustLevel": "9007199254740993"})},
+		{"declaredPurpose and criticalFindings", "declaredPurpose", "-9007199254740992",
+			withMembers(t, count(base, "9007199254740993"), map[string]string{"declaredPurpose": `{"a": -9007199254740992}`})},
+		{"criticalFindings and highFindings", "scanSummary.criticalFindings", "9007199254740994",
+			with(count(base, "9007199254740994"), "scanSummary", "highFindings", "9007199254740993")},
+		{"highFindings and trustLevel", "scanSummary.highFindings", "9007199254740995",
+			withMembers(t, with(base, "scanSummary", "highFindings", "9007199254740995"), map[string]string{"trustLevel": "9007199254740992"})},
+	}
+	for _, tc := range refused {
+		got := verify(tc.f)
+		if got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != reason(tc.where, tc.literal) {
+			t.Errorf("%s on the v1.1 baseline: %s, want REJECT[SIGNATURE_INVALID: %s]", tc.label, got, reason(tc.where, tc.literal))
+		}
+	}
+
+	// Inside the range, and numbers that are not integers in declaredPurpose,
+	// are not refused: the baseline does not sign them, so the signature
+	// itself fails.
+	for _, tc := range []struct {
+		label string
+		f     fixture
+	}{
+		{"criticalFindings 2^53-1", count(base, "9007199254740991")},
+		{"criticalFindings -(2^53-1)", count(base, "-9007199254740991")},
+		{"trustLevel 2^53-1", withMembers(t, base, map[string]string{"trustLevel": "9007199254740991"})},
+		{"declaredPurpose 1e21", withMembers(t, base, map[string]string{"declaredPurpose": "1e21"})},
+		{"declaredPurpose 9007199254740993.0", withMembers(t, base, map[string]string{"declaredPurpose": "9007199254740993.0"})},
+	} {
+		if got := verify(tc.f); got.RejectCategory != "SIGNATURE_INVALID" || strings.Contains(got.Reason, "I-JSON") {
+			t.Errorf("%s on the v1.1 baseline: %s, want REJECT[SIGNATURE_INVALID] from the signature itself", tc.label, got)
+		}
+	}
+	for _, raw := range []string{"9007199254740991", "-9007199254740991"} {
+		if got := verify(signedByPrimary(t, count(base, raw))); !got.Accepted {
+			t.Errorf("criticalFindings %s, signed: %s, want ACCEPT", raw, got)
+		}
+	}
+
+	// Signed over the bytes JCS writes for 2^53+1, which are those it writes
+	// for 2^53: the signature verifies over them, and the count is refused.
+	signed := signedByPrimary(t, count(base, "9007199254740993"))
+	var a, b atx
+	if err := json.Unmarshal(signed.ATX, &a); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(count(signed, "9007199254740992").ATX, &b); err != nil {
+		t.Fatal(err)
+	}
+	pa, errA := canonicalPayloadV11(&a)
+	pb, errB := canonicalPayloadV11(&b)
+	if errA != nil || errB != nil || !bytes.Equal(pa, pb) {
+		t.Fatalf("JCS(TBS) of criticalFindings 2^53+1 and 2^53: %v, %v; want the same bytes", errA, errB)
+	}
+	if !signatureVerifies(signed) {
+		t.Fatal("criticalFindings 2^53+1, signed: the signature does not verify over JCS(TBS)")
+	}
+	for label, f := range map[string]fixture{
+		"criticalFindings 2^53+1, signed":                          signed,
+		"criticalFindings 2^53+1 on a credential signed with 2^53": count(signedByPrimary(t, count(base, "9007199254740992")), "9007199254740993"),
+	} {
+		if got := verify(f); got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != reason("scanSummary.criticalFindings", "9007199254740993") {
+			t.Errorf("%s: %s, want REJECT[SIGNATURE_INVALID: %s]", label, got, reason("scanSummary.criticalFindings", "9007199254740993"))
+		}
+	}
+
+	// The shipped fixture: its signature verifies over JCS(TBS), so a
+	// verifier without the refusal accepts it.
+	shipped, err := loadFixture(repoRoot + "/fixtures/v1_1-integer-outside-exact-range.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !signatureVerifies(shipped) {
+		t.Error("fixtures/v1_1-integer-outside-exact-range.json: its signature does not verify over JCS(TBS)")
+	}
+	if got := verify(shipped); got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != reason("scanSummary.criticalFindings", "9007199254740993") {
+		t.Errorf("fixtures/v1_1-integer-outside-exact-range.json: %s, want REJECT[SIGNATURE_INVALID: %s]", got, reason("scanSummary.criticalFindings", "9007199254740993"))
+	}
+
+	// Checks that run first keep their verdicts: a payload the JCS library
+	// cannot canonicalize, and a scanSummary member outside its type.
+	for _, tc := range []struct {
+		label, want, reasonHas string
+		f                      fixture
+	}{
+		{"declaredPurpose [1e400, 2^53+1]", "VERIFIER_CONFIG_ERROR", "v1.1 canonicalization failed",
+			withMembers(t, base, map[string]string{"declaredPurpose": "[1e400, 9007199254740993]"})},
+		{`declaredPurpose "\ud800" and criticalFindings 2^53+1`, "VERIFIER_CONFIG_ERROR", "unpaired UTF-16 surrogate",
+			withMembers(t, count(base, "9007199254740993"), map[string]string{"declaredPurpose": `"\ud800"`})},
+		{"hma 7 and criticalFindings 2^53+1", "SIGNATURE_INVALID", "member outside its type",
+			with(count(base, "9007199254740993"), "scanSummary", "hma", "7")},
+	} {
+		if got := verify(tc.f); got.RejectCategory != tc.want || !strings.Contains(got.Reason, tc.reasonHas) {
+			t.Errorf("%s on the v1.1 baseline: %s, want REJECT[%s] with a reason holding %q", tc.label, got, tc.want, tc.reasonHas)
+		}
+	}
+
+	// Under atcVersion 1.0 the pipe form writes trustLevel as its digits, and
+	// no integer is refused: the v1.0 baseline signs trustLevel 4, so the
+	// signature itself fails.
+	v10, err := loadFixture(repoRoot + "/fixtures/baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := verify(withMembers(t, v10, map[string]string{"trustLevel": "9007199254740993"})); got.RejectCategory != "SIGNATURE_INVALID" || strings.Contains(got.Reason, "I-JSON") {
+		t.Errorf("trustLevel 2^53+1 on the v1.0 baseline: %s, want REJECT[SIGNATURE_INVALID] from the signature itself", got)
+	}
+}
