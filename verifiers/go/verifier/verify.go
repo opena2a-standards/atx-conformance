@@ -73,7 +73,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	"github.com/gowebpki/jcs"
@@ -718,23 +717,24 @@ func scanValueForDuplicates(dec *json.Decoder, depth int) (name string, dup, abo
 // foldKey normalizes a JSON member name the way encoding/json folds names when
 // matching them to struct fields: ASCII letters lowercased, plus the two
 // non-ASCII letters encoding/json folds onto ASCII (Kelvin sign U+212A -> k,
-// long s U+017F -> s); any other rune is lowercased via unicode.ToLower. Two
-// names with the same fold key are the same field to the unmarshaler, so
-// treating them as a duplicate here catches the case-variant collapse.
+// long s U+017F -> s); every other rune is kept unchanged. Two names with the
+// same fold key are the same field to the unmarshaler, so treating them as a
+// duplicate here catches the case-variant collapse.
 //
 // This is faithful for every collapse that can smuggle: ATX member names are
 // ASCII (a non-ASCII member is already schema-invalid and matches no struct
-// field), and the only non-ASCII runes encoding/json folds onto ASCII field
-// names are the two special-cased above. The unicode.ToLower fallback governs
-// only other non-ASCII runes, which collapse onto no struct field; there it may
-// diverge from encoding/json — and from the Python reference, whose str.lower
-// can expand a rune Go's simple ToLower does not — but only on inputs no honest
-// credential produces. unicode.ToLower uses the Unicode tables of the Go
-// release the verifier is built with, so a pair of names whose case mapping a
-// later Unicode version added is a duplicate under one release and not under
-// another: U+1C89 and U+1C8A (Unicode 16.0) under Go 1.27 (Unicode 17.0) and
-// not under Go 1.22 through 1.26 (Unicode 15.0). docs/running-the-verifiers.md
-// says the same. Ported from opena2a-registry pkg/atcverify
+// field), and the only non-ASCII runes whose simple case fold reaches an ASCII
+// letter are the two special-cased above (U+0130 lowercases to i but does not
+// fold to it, and encoding/json does not match it to an i). Any other
+// non-ASCII rune collapses onto no struct field, and RFC 8259 §8.3 compares
+// member names code unit by code unit, so two such names are one member only
+// when they decode to the same name, which needs no fold. The fold is this
+// fixed table, the same in verifiers/python, and reads no Unicode table, so no
+// Go release changes it (docs/running-the-verifiers.md). A fallback to
+// unicode.ToLower, which reads the tables of the release the verifier is built
+// with, made U+1C89 and U+1C8A (a case pair from Unicode 16.0) a duplicate
+// under Go 1.27 and not under Go 1.22 through 1.26 (atx-conformance#173). The
+// ASCII and two-rune mappings are ported from opena2a-registry pkg/atcverify
 // (registry #307).
 func foldKey(s string) string {
 	var b strings.Builder
@@ -748,7 +748,7 @@ func foldKey(s string) string {
 		case r == 'ſ': // latin small letter long s -> s
 			b.WriteRune('s')
 		default:
-			b.WriteRune(unicode.ToLower(r))
+			b.WriteRune(r)
 		}
 	}
 	return b.String()

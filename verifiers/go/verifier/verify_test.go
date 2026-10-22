@@ -740,7 +740,8 @@ func TestFixturesFileEntryWalksTheDirectory(t *testing.T) {
 // TestFoldKey pins the field-fold used by the fold-aware duplicate detector to
 // encoding/json's own folding: ASCII case-insensitive plus the only two
 // non-ASCII runes encoding/json folds to ASCII (Kelvin U+212A -> k, long s
-// U+017F -> s). atx-conformance#16.
+// U+017F -> s), and every other rune unchanged, so no Unicode table of the Go
+// release decides a fold. atx-conformance#16, atx-conformance#173.
 func TestFoldKey(t *testing.T) {
 	cases := []struct {
 		in, want string
@@ -751,9 +752,11 @@ func TestFoldKey(t *testing.T) {
 		{"category", "category"},
 		{"Category", "category"},
 		{"agentId", "agentid"},
-		{"Kelvin", "kelvin"}, // U+212A Kelvin sign folds to ASCII k
-		{"ſmart", "smart"},   // U+017F long s folds to ASCII s
-		{"Éclair", "éclair"}, // any other rune: the unicode.ToLower fallback
+		{"Kelvin", "kelvin"},   // U+212A Kelvin sign folds to ASCII k
+		{"ſmart", "smart"},     // U+017F long s folds to ASCII s
+		{"Éclair", "Éclair"},   // any other rune is unchanged
+		{"\u1c89x", "\u1c89x"}, // U+1C89, lowercase U+1C8A since Unicode 16.0
+		{"\u0130d", "\u0130d"}, // U+0130, which unicode.ToLower maps to ASCII i
 	}
 	for _, c := range cases {
 		if got := foldKey(c.in); got != c.want {
@@ -786,7 +789,13 @@ func TestRawDuplicateMember(t *testing.T) {
 		{"case variant nested", `{"a":{"Category":"x","category":"y"}}`, true},
 		{"same-name in array", `{"a":[{"k":1,"k":2}]}`, true},
 		{"kelvin fold collision", "{\"K\":1,\"k\":2}", true},
-		{"non-ASCII case variant", `{"É":1,"é":2}`, true},
+		// A non-ASCII rune other than the Kelvin sign and the long s folds to
+		// itself, under every Go release (atx-conformance#173).
+		{"non-ASCII case variant", `{"É":1,"é":2}`, false},
+		{"non-ASCII same name", `{"É":1,"É":2}`, true},
+		{"U+1C89 and U+1C8A", `{"\u1c89x":1,"\u1c8ax":2}`, false},
+		{"U+0130 and ASCII i", `{"\u0130d":1,"id":2}`, false},
+		{"U+0130 and i with U+0307", `{"\u0130x":1,"i\u0307x":2}`, false},
 		// atx-conformance#187: a number outside the float64 range ahead of
 		// the duplicate aborted the scan before UseNumber.
 		{"after 1e400", `{"zzz":1e400,"trustLevel":1,"trustLevel":4}`, true},

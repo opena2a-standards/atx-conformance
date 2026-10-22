@@ -186,13 +186,10 @@ Depends on:
   `UnmarshalJSON`, which parses the bytes between the quotes. A plain
   `time.Time` field decodes the escaped form when built with Go 1.27.
 
-  The release also sets the Unicode version of the case folding the
-  duplicate-member check applies to a non-ASCII member name. Two names whose
-  lowercase mapping a later Unicode version added are a duplicate, and the
-  credential a `PARSE_ERROR`, under one release and not under another: U+1C89
-  and U+1C8A, mapped in Unicode 16.0, are a duplicate under Go 1.27 (Unicode
-  17.0) and not under Go 1.22 through 1.26 (Unicode 15.0). No fixture carries
-  a non-ASCII member name.
+  The duplicate-member check folds a member name by three fixed mappings,
+  ASCII `A-Z` to `a-z`, U+212A (Kelvin sign) to `k` and U+017F (long s) to
+  `s`, and leaves every other character unchanged, so no Go release changes
+  which names it reports as a duplicate.
 - `github.com/cloudflare/circl v1.6.2` (resolved by `go mod tidy`)
 - `github.com/gowebpki/jcs v1.0.1` (RFC 8785 canonicalization of the v1.1
   signed payload; resolved the same way)
@@ -213,12 +210,11 @@ provide `python3` and `pip3` only, with no `python` or `pip` on `PATH`.
 
 Depends on:
 
-- Python 3.11 or later. As with the Go release, the Python release sets the
-  Unicode version of the case folding the duplicate-member check applies to a
-  non-ASCII member name: U+1C89 and U+1C8A are a duplicate under Python 3.14
-  (Unicode 16.0) and not under Python 3.12 (Unicode 15.0), which CI uses.
-  `python3 verify.py --help` prints the usage lines, and `--version` the
-  commit of the checkout the verifier runs from
+- Python 3.11 or later. The duplicate-member check folds a member name by
+  the same three fixed mappings as the Go verifier, so no Python release
+  changes which names it reports as a duplicate. `python3 verify.py --help`
+  prints the usage lines, and `--version` the commit of the checkout the
+  verifier runs from
   ([which commit a run verified](#which-commit-a-run-verified)).
 - `cryptography >= 42.0.0`
 - `dilithium-py >= 1.1.0` (ML-DSA-65 per FIPS 204)
