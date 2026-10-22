@@ -1867,8 +1867,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.self_test and args.json is not None:
         ap.error(SELF_TEST_JSON_ERROR)
     if args.json is not None:
-        # The report is written after every verifier ran; a path it cannot be
-        # written to is refused here, before any of them runs.
+        # The report is written after every verifier ran; a path that is a
+        # directory, or whose directory is missing or not a directory, is
+        # refused here, before any of them runs.
         report, parent = Path(args.json), Path(args.json).parent
         reason = None
         if report.is_dir():
