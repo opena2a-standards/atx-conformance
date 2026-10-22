@@ -953,6 +953,25 @@ they should not.
 
 ### Fixed
 
+- `scripts/parity/parity.py` checks a `--json` symbolic link whose target
+  ends in `/` or `/.` at the directory that target names, where it checked
+  the directory of a file of that name, as pathlib drops that `/` or `/.`
+  in joining the target (#274). Run with Python 3.12 and with Python 3.14
+  on macOS from a directory holding `file`, a regular file, and symbolic
+  links `tsl` to `newdir/`, `dot` to `newdir/.`, `fsl` to `file/` and
+  `via` to `b/`, with `b` a symbolic link to `newdir` and no `newdir`:
+  `--json tsl`, `--json dot` and `--json via` are refused as `no such
+  directory: newdir` and `--json fsl` as `not a directory: file`, exit 2
+  and one line naming the path and why, before any verifier runs, where
+  the check accepted each and writing the report to it, as the gate does,
+  raised `FileNotFoundError`, and `NotADirectoryError` for `fsl`. A link
+  to `missing/x/` with no `missing` and one to `file/x/`, refused before
+  as `no such directory: missing` and `not a directory: file`, are refused
+  as `no such directory: missing/x` and `no such directory: file/x`, as
+  `--json missing/x/y.json` and `--json file/x/y.json` are. The self-test
+  adds one case (79, from 78): links to `newdir/` and `newdir/.` with no
+  `newdir`, to a file's name followed by `/`, and to the name of a link it
+  accepts followed by `/`. No fixture changes.
 - `scripts/parity/parity.py` refuses a `--json` path the report cannot be
   written to as a usage error, exit 2 and one line naming the path and why,
   before any verifier runs, and its self-test holds the docstring's Report
