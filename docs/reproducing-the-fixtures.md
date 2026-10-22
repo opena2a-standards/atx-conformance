@@ -49,10 +49,10 @@ The generator:
      when present, `declaredPurpose` to the signed fields, and canonicalizes
      it per RFC 8785 with `github.com/gowebpki/jcs`.
 6. Ed25519-signs and ML-DSA-65-signs that payload, as each fixture carries
-   those signatures (`v1_1-hybrid-pq-only.json` carries the ML-DSA-65
-   signature alone). A fixture that tests tampering changes the field or
-   signature it tampers with after this step, so its signature covers the
-   original bytes.
+   those signatures (`hybrid-pq-only.json` and `v1_1-hybrid-pq-only.json`
+   carry the ML-DSA-65 signature alone). A fixture that tests tampering
+   changes the field or signature it tampers with after this step, so its
+   signature covers the original bytes.
 7. Marshals each fixture to byte-stable JSON (`encoding/json` with 2-space
    indent, fields in struct-declaration order).
 8. Writes the fixture file. Recomputes its SHA-256. Updates

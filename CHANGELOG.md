@@ -13,6 +13,36 @@ they should not.
 
 ### Added
 
+- A MUST-REJECT fixture built by the generator, `fixtures/hybrid-pq-only.json`,
+  holds the Ed25519 companion rule under `atcVersion` 1.0 (#151). It is the
+  credential of `fixtures/baseline-valid-hybrid.json` with its Ed25519
+  signature removed: one ML-DSA-65 signature that verifies over the legacy
+  canonical bytes, and no Ed25519 signature. core.md §13, Cryptographic
+  agility, says "a credential that declares an ML-DSA-65 entry MUST also
+  carry a verifying Ed25519 entry" and names no `atcVersion`, while
+  `fixtures/v1_1-hybrid-pq-only.json` was the one fixture for the rule, so
+  a verifier that applies it to v1.1 alone passed the suite. The fixture
+  expects `REJECT [SIGNATURE_INVALID]` with a reason containing
+  `signature`, and both reference verifiers report
+  `REJECT[SIGNATURE_INVALID: ML-DSA-65 signature declared without a
+  verifying Ed25519 signature (an ML-DSA-65 entry requires an Ed25519
+  companion)]` on it; `verify.go` and `verify.py` do not change. In the Go
+  verifier, `TestSuitePinsEd25519CompanionUnderEachVersion` requires, for
+  `atcVersion` 1.0 and for 1.1, a shipped fixture that the verifier rejects
+  for the missing companion as that fixture pins; on the fixtures of the
+  commit before this change it names `atcVersion` 1.0 and fails. The other
+  27 existing fixtures and their `MANIFEST.sha256` lines are
+  byte-identical, `fixtures/revoked.json` changing in its description alone
+  (under Fixed); the manifest gains one line. `conformance.json` and the
+  capture under `docs/captures/` are regenerated; the capture gains the
+  fixture's three lines, and its summary line counts 29. The fixture
+  counts in README.md, COSIGNERS.md, CONTRIBUTING.md,
+  `docs/continuous-verification.md` and `docs/sibling-repositories.md` go
+  from 28 to 29 (the sibling row's v1.0 count from 11 to 12), and
+  `docs/scope.md` counts 22 of 29 fixtures that reach signature
+  verification, where it counted 21 of 28. `docs/fixtures.md` lists the
+  fixture, and `docs/scope.md`, `docs/reproducing-the-fixtures.md` and
+  COSIGNERS.md name it beside `fixtures/v1_1-hybrid-pq-only.json`.
 - A verifier state can set a k-of-n signature threshold, and a MUST-REJECT
   fixture built by the generator, `fixtures/threshold-1of3-cosignature.json`,
   holds both reference verifiers to it (#132). The fixture is the
@@ -923,6 +953,18 @@ they should not.
 
 ### Fixed
 
+- The description of `fixtures/revoked.json` says that the credential's
+  revoked flag is what rejects it in both reference verifiers, which read
+  the flag before the CRL and return on it, and that
+  `fixtures/revoked-crl-only.json` is the fixture whose verdict depends on
+  the CRL, where it ended "Both rejection paths are exercised." (#151).
+  Both verifiers report `REJECT[REVOKED: credential revoked field is true]`
+  on it and never read its CRL entry, as `docs/fixtures.md` says. Only the
+  description changes, at its source in the generator:
+  `scripts/check_fixture_immutability.py` finds the fixture's `atx`,
+  `verifierState` and `expected` members unchanged, and its
+  `MANIFEST.sha256` line and its `conformance.json` entry change with the
+  description, as `docs/versioning.md` allows for documentation.
 - `scripts/parity/parity.py` ends with an exit code, not a traceback, on two
   paths, and documents its `--json` report's keys (#126). A `--json` path
   that is a directory or whose directory does not exist is a usage error:

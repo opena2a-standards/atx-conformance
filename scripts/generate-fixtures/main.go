@@ -535,6 +535,29 @@ func main() {
 				ExpectedOutcome{VerifyResult: "ACCEPT"},
 				atx)
 		}},
+		{"fixtures/hybrid-pq-only.json", func() Fixture {
+			// The missing-classical-companion control under atcVersion 1.0.
+			// The v1.0 hybrid baseline with the Ed25519 entry removed, so the
+			// credential carries one ML-DSA-65 signature that verifies over
+			// the legacy canonical bytes. core.md section 13 (Cryptographic
+			// agility) requires a credential that declares an ML-DSA-65 entry
+			// to also carry a verifying Ed25519 entry, and names no
+			// atcVersion. fixtures/v1_1-hybrid-pq-only.json pins the rule
+			// under atcVersion 1.1, so without this fixture a verifier that
+			// applies it to v1.1 alone passes the suite.
+			atx := newBaselineATX()
+			pq, _ := signMLDSA65(mldsa.SeedHex, canonicalPayload(&atx))
+			pq.KeyID = mldsa.KeyID
+			atx.Signatures = []ATCSignature{pq}
+			return wrap("atx-v1/hybrid-pq-only",
+				"An ATX v1.0 credential carrying a single ML-DSA-65 signature that verifies over the legacy canonical payload, and no Ed25519 signature: the v1.0 hybrid baseline with its Ed25519 entry removed. The spec requires a credential that declares an ML-DSA-65 entry to also carry a verifying Ed25519 entry, and names no atcVersion, so a post-quantum signature alone cannot verify a v1.0 credential either. Verifier MUST REJECT with a signature-validation reason. A verifier that checks only that every declared signature verifies, or that applies the rule to atcVersion 1.1 alone, wrongly ACCEPTs.",
+				[]KeypairRef{
+					{Role: mldsa.Role, Path: "vectors/mldsa65-seed.json", Algorithm: mldsa.Algorithm, PublicKeyHex: mldsa.PublicKeyHex, KeyID: mldsa.KeyID},
+				},
+				hybridVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
 		{"fixtures/revoked.json", func() Fixture {
 			atx := newBaselineATX()
 			atx.Signatures = []ATCSignature{signWithKey(primary, atx)}
@@ -548,7 +571,7 @@ func main() {
 			atx.RevokedAt = &rt
 			atx.RevocationReason = "key compromise (test)"
 			return wrap("atx-v1/revoked",
-				"A previously-valid ATX whose credential-level Revoked flag is set and whose AgentID also appears in the verifier's CRL. Verifier MUST REJECT with revocation reason. Both rejection paths are exercised.",
+				"A previously-valid ATX whose credential-level Revoked flag is set and whose AgentID also appears in the verifier's CRL. Verifier MUST REJECT with revocation reason. The flag is what rejects it in both reference verifiers, which read the flag before the CRL and return on it; fixtures/revoked-crl-only.json is the fixture whose verdict depends on the CRL.",
 				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
 				revokingVerifierState,
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "REVOKED", ReasonContains: "revoked"},
@@ -1216,6 +1239,7 @@ var fixtureSections = map[string][]string{
 	"atx-v1/revoked-crl-only":                    {secRevocation},
 	"atx-v1/threshold-1of3-cosignature":          {secIssuance},
 	"atx-v1/wrong-issuer":                        {secSecurity},
+	"atx-v1/hybrid-pq-only":                      {secSecurity},
 	"atx-v1_1/hybrid-pq-only":                    {secSecurity},
 	"atx-v1_1/tampered-capabilities":             {secSignedFields},
 	"atx-v1_1/scan-summary-member-outside-type":  {secSignedFields},
@@ -1240,6 +1264,7 @@ var fixtureSectionsUsed = map[string]bool{}
 var fixtureRequirements = map[string]string{
 	"atx-v1/baseline-valid":                      "§1.3 step 8: a v1.0 credential whose one Ed25519 signature, made with its issuer's key, verifies over the legacy canonical bytes passes every step and is accepted",
 	"atx-v1/baseline-valid-hybrid":               "§1.3 step 5: every declared signature verifies, the ML-DSA-65 signature included, so a v1.0 hybrid credential is accepted",
+	"atx-v1/hybrid-pq-only":                      "§13, Cryptographic agility: under atcVersion 1.0 too, a credential that declares an ML-DSA-65 signature must also carry a verifying Ed25519 signature, so an ML-DSA-65 signature alone over the legacy canonical bytes is a signature failure",
 	"atx-v1/revoked":                             "§3.3 step 7: a credential its issuing node marked revoked is rejected; its revoked flag is set and its agentId is also on the verifier's CRL",
 	"atx-v1/revoked-crl-only":                    "§1.3 step 6: an agentId listed on the verifier's CRL is rejected although the credential's own revoked flag is false",
 	"atx-v1/threshold-2of3-cosignature":          "§1.3 step 5: every declared signature verifies, here three Ed25519 signatures by three keys, so the credential is accepted; the 2-of-3 threshold of §3.1 step 8 is not tested",

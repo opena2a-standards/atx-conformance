@@ -4,7 +4,7 @@ Second-party cosigners attest that they have independently:
 
 1. Cloned this repository at a specific commit SHA
 2. Run BOTH reference verifiers against the published fixture set
-3. Observed `summary: 28 pass, 0 fail (28 fixtures)` from each verifier
+3. Observed `summary: 29 pass, 0 fail (29 fixtures)` from each verifier
 4. Produced a Sigstore keyless cosign signature over [`MANIFEST.sha256`](./MANIFEST.sha256)
 
 The signature attests to the fixture bytes; the entry below attests that
@@ -39,8 +39,9 @@ ML-DSA-65 (FIPS 204), each over the same canonical payload — the Go verifier
 via `cloudflare/circl`, the Python verifier via `dilithium-py`. The
 forged-post-quantum control `fixtures/v1_1-hybrid-mldsa-tampered.json` pins
 that each REJECTs a tampered ML-DSA-65 signature even when the Ed25519
-signature is intact, and `fixtures/v1_1-hybrid-pq-only.json` pins that each
-REJECTs a valid ML-DSA-65 signature that carries no Ed25519 companion. See
+signature is intact, and `fixtures/hybrid-pq-only.json` (atcVersion 1.0) and
+`fixtures/v1_1-hybrid-pq-only.json` (atcVersion 1.1) pin that each REJECTs a
+valid ML-DSA-65 signature that carries no Ed25519 companion. See
 "Hybrid signing: what this suite requires" in
 [`docs/scope.md`](./docs/scope.md#hybrid-signing-what-this-suite-requires)
 for the full picture.
@@ -72,7 +73,7 @@ SHA-256 of `MANIFEST.sha256`.
 
 | Cosigner | Commit SHA | Go verifier | Python verifier | Sigstore artifact | Date |
 |---|---|---|---|---|---|
-| opena2a-org (self-cosigned baseline, CI) | every `main` push (see CI self-cosignature) | `28 pass, 0 fail` | `28 pass, 0 fail` | Rekor entry per push (keyless CI signature) | 2026-07-04 onward |
+| opena2a-org (self-cosigned baseline, CI) | every `main` push (see CI self-cosignature) | `29 pass, 0 fail` | `29 pass, 0 fail` | Rekor entry per push (keyless CI signature) | 2026-07-04 onward |
 
 Self-cosignature exists to anchor the baseline; second-party signatures are
 what close criterion (c). Recruiting at least one second-party cosigner per
