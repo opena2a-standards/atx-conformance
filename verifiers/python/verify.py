@@ -77,13 +77,22 @@ lesson and scoped to the whole body because ATX signs it all):
     every timestamp with time.Time's own UnmarshalJSON, which parses the
     bytes between the quotes under every Go release (a plain time.Time field
     decodes the escaped form when built with Go 1.27). The members of
-    scanSummary, behavioralProfile and each signatures entry are read the
-    same way.
+    scanSummary and each signatures entry are read the same way.
   - under atcVersion 1.1 a scanSummary member outside its type, or a
     scanSummary that is not an object, rejects as SIGNATURE_INVALID: the
     signed payload holds each of its six members typed (core.md section
     1.3a.2 rule 2), so no signature covers such a value, and the Go reference
     verifier refuses it before projecting the zero value in its place.
+  - under atcVersion 1.1 a present behavioralProfile that is not an object
+    holding exactly checksum (a string), generatedAt (a timestamp) and
+    observationDays (an integer), under those names as written, rejects as
+    SIGNATURE_INVALID: the signed payload holds null for a credential with
+    no profile (core.md section 1.3a.2 rule 1) and otherwise those three
+    members, so no signature covers any other value. A member outside the
+    three or missing, a name in another case, and a member that is null or
+    outside its type are each refused, as the Go reference verifier refuses
+    them, which reads the profile's member names without encoding/json's
+    folding and takes no null as a zero value there.
   - declaredPurpose is the one member no decoder reads: it enters the v1.1
     signed payload as written. An unpaired surrogate escape in it, alone or
     followed directly by another \\u escape, cannot be canonicalized (RFC 8785
@@ -646,22 +655,10 @@ def _tbs_v11(atx: dict[str, Any]) -> dict[str, Any]:
     # a credential before it reads a signature (_decode_scan_summary).
     scan_summary = _decode_scan_summary(atx.get("scanSummary"), lenient=True)
 
-    # The Go verifier's projectBehavioralProfileV11 projects behavioralProfile
-    # as null when it is absent, null or not an object, and when one member
-    # fails its decode: a checksum that is not a string, an observationDays
-    # that is not an integer, a generatedAt outside the time.Time grammar. An
-    # absent or null generatedAt is the zero time, 0001-01-01T00:00:00Z.
-    bp_in = atx.get("behavioralProfile")
-    behavioral_profile: Any = None
-    if isinstance(bp_in, dict):
-        try:
-            behavioral_profile = _decode_members(
-                _BEHAVIORAL_PROFILE_TYPES, bp_in, "behavioralProfile."
-            )
-        except _DecodeError:
-            behavioral_profile = None
-        else:
-            behavioral_profile["generatedAt"] = _format_rfc3339(behavioral_profile["generatedAt"])
+    # behavioralProfile as the Go verifier's projectBehavioralProfileV11
+    # projects it. One it refuses raises _DecodeError here; verify_fixture
+    # refuses such a credential before it reads a signature.
+    behavioral_profile = _project_behavioral_profile(atx.get("behavioralProfile"))
 
     # declaredPurpose is the one presence-based TBS member (atx-spec §1.3a.2
     # rule 5, degenerate inputs pinned per issue #11): absent / null /
@@ -844,8 +841,10 @@ _MEMBER_TYPES = {
 _RAW_MEMBERS = ("declaredPurpose", "behavioralProfile", "scanSummary")
 
 # The Go type of each member of one signatures entry, of behavioralProfile as
-# the Go verifier's projectBehavioralProfileV11 decodes it, of scanSummary as
-# its tbsScanSummaryV11 does, and of a fixture's expected object.
+# the Go verifier's projectBehavioralProfileV11 decodes it (each member
+# present, under its name as written, and not null:
+# _project_behavioral_profile), of scanSummary as its tbsScanSummaryV11 does,
+# and of a fixture's expected object.
 _SIGNATURE_TYPES = {"keyId": "string", "algorithm": "string", "value": "string"}
 _BEHAVIORAL_PROFILE_TYPES = {
     "checksum": "string",
@@ -1105,6 +1104,46 @@ def _decode_scan_summary(scan: Any, lenient: bool = False) -> dict[str, Any]:
     return _decode_members(_SCAN_SUMMARY_TYPES, scan, "scanSummary.", lenient=lenient)
 
 
+# The reason a v1.1 credential whose behavioralProfile
+# _project_behavioral_profile refuses rejects with, the Go reference
+# verifier's text, which names no Go decode error.
+_BEHAVIORAL_PROFILE_UNSIGNED = (
+    "no signature covers behavioralProfile, which is not an object of exactly checksum "
+    "(a string), generatedAt (a timestamp) and observationDays (an integer)"
+)
+
+
+def _project_behavioral_profile(profile: Any) -> dict[str, Any] | None:
+    """behavioralProfile as the Go reference verifier's
+    projectBehavioralProfileV11 projects it into the v1.1 signed payload:
+    None (JSON null) when it is absent or null (core.md section 1.3a.2 rule
+    1), and otherwise its three members with generatedAt written in UTC to
+    the second. A present behavioralProfile must be an object holding
+    exactly checksum, a JSON string, generatedAt, a timestamp, and
+    observationDays, a JSON integer in int64 range, under those names as
+    written; any other raises _DecodeError: one that is not an object, a
+    member outside the three or missing, a name in another case, and a
+    member that is null or outside its type. The Go verifier reads the
+    member names without encoding/json's folding and takes no null as a
+    zero value there, so neither does this one."""
+    if profile is None:
+        return None
+    if not isinstance(profile, dict):
+        raise _DecodeError(f"behavioralProfile {_value_repr(profile)} is not a JSON object")
+    names = sorted(profile)
+    if names != sorted(_BEHAVIORAL_PROFILE_TYPES):
+        raise _DecodeError(
+            f"behavioralProfile members {names!r} are not exactly {sorted(_BEHAVIORAL_PROFILE_TYPES)!r}"
+        )
+    decoded = {}
+    for name, go_type in _BEHAVIORAL_PROFILE_TYPES.items():
+        if profile[name] is None:
+            raise _DecodeError(f"behavioralProfile.{name} is null")
+        decoded[name] = _decode_member(f"behavioralProfile.{name}", go_type, profile[name])
+    decoded["generatedAt"] = _format_rfc3339(decoded["generatedAt"])
+    return decoded
+
+
 def _decode_credential(atx: Any) -> dict[str, Any]:
     """The credential as the Go reference verifier's atx struct holds it, or
     raise _DecodeError. Each member in _MEMBER_TYPES is type-checked against
@@ -1320,6 +1359,16 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
             _decode_scan_summary(atx.get("scanSummary"))
         except _DecodeError:
             return VerifyResult(reject_category="SIGNATURE_INVALID", reason=_SCAN_SUMMARY_UNSIGNED)
+        # behavioralProfile enters the TBS as null when the credential has
+        # none (atx-spec §1.3a.2 rule 1), and otherwise as an object of
+        # exactly three members, each with its type. A present
+        # behavioralProfile of any other form has no value there, so no
+        # signature covers the credential. The Go reference verifier refuses
+        # it here too, after the scanSummary check.
+        try:
+            _project_behavioral_profile(atx.get("behavioralProfile"))
+        except _DecodeError:
+            return VerifyResult(reject_category="SIGNATURE_INVALID", reason=_BEHAVIORAL_PROFILE_UNSIGNED)
         surrogate = _first_unpaired_surrogate(atx.get("declaredPurpose"))
         if surrogate is not None:
             # declaredPurpose enters the TBS as written, and RFC 8785

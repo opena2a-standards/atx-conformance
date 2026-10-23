@@ -825,6 +825,86 @@ func main() {
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
 				atx)
 		}},
+		// ---- behavioralProfile form (§1.1 schema, §1.3a.2 rule 1, atx-conformance#277) ----
+		{"fixtures/v1_1-behavioral-profile-extra-member.json", func() Fixture {
+			// A MEMBER OUTSIDE THE THREE. Sign the baseline, whose
+			// behavioralProfile holds checksum, generatedAt and
+			// observationDays, then add a fourth member, riskLevel "low",
+			// AFTER signing (postWrite, below: ATCBehavioralProfile has no
+			// field for it, so it is written at the byte level). The
+			// credential schema gives behavioralProfile those three members
+			// and no other, so the TBS has no value for this profile and no
+			// signature covers it. A verifier that decodes the profile into
+			// its three fields drops the fourth, projects the signed profile
+			// and wrongly ACCEPTs.
+			atx := newBaselineV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/behavioral-profile-extra-member",
+				"An ATX v1.1 credential signed with the baseline behavioralProfile (checksum, generatedAt, observationDays), carrying a fourth member in it, riskLevel \"low\", written AFTER signing. The credential schema of atx-spec §1.1 gives behavioralProfile exactly those three members (additionalProperties false), and JCS(TBS) holds the profile as those three members (§1.3a.2), so no signature covers a profile with a fourth. The verifier MUST REJECT with a signature-validation reason. A verifier that decodes the profile into its three fields drops the fourth member, projects the signed profile and wrongly ACCEPTs a credential carrying a member its signature does not cover.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
+		{"fixtures/v1_1-behavioral-profile-case-variant-member.json", func() Fixture {
+			// A NAME IN ANOTHER CASE. Sign the baseline, then rename its
+			// behavioralProfile.observationDays to OBSERVATIONDAYS AFTER
+			// signing, the value 14 unchanged (postWrite, below). Member
+			// names are compared exactly, so the profile lacks
+			// observationDays and carries a member outside the three. Go's
+			// encoding/json matches the name to the observationDays field
+			// case-insensitively, so a verifier that decodes the profile
+			// into a struct projects the signed profile and wrongly ACCEPTs.
+			// The renamed member stands alone, so the fold-aware duplicate
+			// check does not reject it.
+			atx := newBaselineV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/behavioral-profile-case-variant-member",
+				"An ATX v1.1 credential signed with the baseline behavioralProfile, carrying its observationDays member under the name OBSERVATIONDAYS, value unchanged (14), renamed AFTER signing. Member names are compared exactly, and the credential schema of atx-spec §1.1 gives behavioralProfile exactly checksum, generatedAt and observationDays (additionalProperties false), so this profile lacks observationDays and carries a member outside the three: JCS(TBS) has no value for it (§1.3a.2) and no signature covers it. The verifier MUST REJECT with a signature-validation reason. Go's encoding/json matches a member name to a struct field case-insensitively, so a verifier that decodes the profile into a struct reads OBSERVATIONDAYS as observationDays, projects the signed profile and wrongly ACCEPTs, while a case-sensitive reader of the same bytes finds no observationDays. The renamed member is the only one of its name, so a duplicate-member check does not reject it.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
+		{"fixtures/v1_1-behavioral-profile-not-object.json", func() Fixture {
+			// A PROFILE THAT IS NOT AN OBJECT, on a credential signed with
+			// none. Sign the baseline with no behavioralProfile, whose TBS
+			// holds null there (§1.3a.2 rule 1), then add the JSON string
+			// "sha256:ghi789" as its behavioralProfile AFTER signing
+			// (postWrite, below). A verifier that projects a profile it
+			// cannot decode as null, the absent form, reaches the bytes the
+			// signature covers and wrongly ACCEPTs.
+			atx := newBaselineV11ATX()
+			atx.BehavioralProfile = nil
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/behavioral-profile-not-object",
+				"An ATX v1.1 credential signed with no behavioralProfile, carrying the JSON string \"sha256:ghi789\" as its behavioralProfile, added AFTER signing. JCS(TBS) holds null for a credential with no profile (atx-spec §1.3a.2 rule 1) and otherwise an object of the profile's three members (the credential schema of §1.1), so no signature covers a profile that is not an object. The verifier MUST REJECT with a signature-validation reason. A verifier that projects a profile it cannot decode as null, the absent form, reaches the bytes the signature covers and wrongly ACCEPTs a credential carrying a profile its signature does not cover.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
+		{"fixtures/v1_1-behavioral-profile-member-outside-type.json", func() Fixture {
+			// A PROFILE MEMBER OUTSIDE ITS TYPE, on a credential signed with
+			// no profile. Sign the baseline with no behavioralProfile, then
+			// carry the baseline's profile with observationDays written as
+			// the JSON string "14" (postWrite, below: ATCBehavioralProfile
+			// holds the count as an int). The TBS holds null for a
+			// credential with no profile and otherwise observationDays as an
+			// integer, so no signature covers this profile. A verifier that
+			// projects a profile it cannot decode as null reaches the bytes
+			// the signature covers and wrongly ACCEPTs.
+			atx := newBaselineV11ATX()
+			unsigned := atx
+			unsigned.BehavioralProfile = nil
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, unsigned)}
+			return wrap("atx-v1_1/behavioral-profile-member-outside-type",
+				"An ATX v1.1 credential signed with no behavioralProfile, carrying one added AFTER signing whose observationDays is the JSON string \"14\", not an integer; its checksum and generatedAt are the baseline's. JCS(TBS) holds null for a credential with no profile (atx-spec §1.3a.2 rule 1) and otherwise the profile's three members with their types (the credential schema of §1.1: observationDays an integer), so no signature covers a profile with a string there. The verifier MUST REJECT with a signature-validation reason. A verifier that projects a profile it cannot decode as null, the absent form, reaches the bytes the signature covers and wrongly ACCEPTs a credential carrying a profile its signature does not cover.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
 		{"fixtures/v1_1-declared-purpose-valid.json", func() Fixture {
 			// PRESENT-CASE: a credential that actually CARRIES a declaredPurpose
 			// (atx-spec §1.5). The purpose object is part of JCS(TBS), so the single
@@ -1147,6 +1227,20 @@ func main() {
 			//nolint:gosec // G703: build-time tool rewriting the fixture it just wrote under outDir
 			must(os.WriteFile(path, replaced, 0o644))
 		}
+		if write, ok := behavioralProfileWrites[fs.writePath]; ok {
+			// ATCBehavioralProfile cannot hold the profile these fixtures
+			// carry, so it is written at the byte level after signing;
+			// every other byte is the credential the signature covers.
+			b, err := os.ReadFile(path) //nolint:gosec // G304: file just written above
+			must(err)
+			if n := bytes.Count(b, []byte(write.from)); n != 1 {
+				panic(fmt.Sprintf("%s: %d behavioralProfile substitution targets, want 1", fs.writePath, n))
+			}
+			replaced := bytes.Replace(b, []byte(write.from), []byte(write.to), 1)
+			//nolint:gosec // G703: build-time tool rewriting the fixture it just wrote under outDir
+			must(os.WriteFile(path, replaced, 0o644))
+			behavioralProfileWritten[fs.writePath] = true
+		}
 		sha := sha256FileHex(path)
 		manifest = append(manifest, manifestEntry{path: fs.writePath, sha: sha})
 		fmt.Printf("wrote %s (sha256=%s)\n", fs.writePath, sha)
@@ -1173,6 +1267,11 @@ func main() {
 		}
 		if !written {
 			panic("memberAddedAfter names no fixture: " + path)
+		}
+	}
+	for path := range behavioralProfileWrites {
+		if !behavioralProfileWritten[path] {
+			panic("behavioralProfileWrites names no fixture: " + path)
 		}
 	}
 
@@ -1203,6 +1302,33 @@ var memberAddedAfter = map[string]struct{ after, member string }{
 		member: `    "` + string(rune(0x0131)) + `ssuedAt": "2099-01-01T00:00:00Z",`,
 	},
 }
+
+// behavioralProfileWrites is the byte-level write main makes after signing
+// in each behavioralProfile fixture (atx-conformance#277): the text it
+// replaces, which the fixture must hold exactly once, and the text it writes
+// in its place.
+var behavioralProfileWrites = map[string]struct{ from, to string }{
+	"fixtures/v1_1-behavioral-profile-extra-member.json": {
+		"      \"observationDays\": 14\n    },",
+		"      \"observationDays\": 14,\n      \"riskLevel\": \"low\"\n    },",
+	},
+	"fixtures/v1_1-behavioral-profile-case-variant-member.json": {
+		"      \"observationDays\": 14\n",
+		"      \"OBSERVATIONDAYS\": 14\n",
+	},
+	"fixtures/v1_1-behavioral-profile-not-object.json": {
+		"    \"scanSummary\": {",
+		"    \"behavioralProfile\": \"sha256:ghi789\",\n    \"scanSummary\": {",
+	},
+	"fixtures/v1_1-behavioral-profile-member-outside-type.json": {
+		"      \"observationDays\": 14\n",
+		"      \"observationDays\": \"14\"\n",
+	},
+}
+
+// behavioralProfileWritten records which behavioralProfileWrites entries main
+// applied; main fails on an entry that names no fixture.
+var behavioralProfileWritten = map[string]bool{}
 
 // logIndex returns a pointer to the log-assigned issuance index, so a fixture
 // can omit transparencyLogIndex entirely by leaving the field nil. The field is
@@ -1386,6 +1512,12 @@ var fixtureRequirements = map[string]string{
 	"atx-v1_1/dotless-i-member":                  "§1.3 step 1: parsing the credential rejects a member name outside printable ASCII in an object the verifier decodes (U+0131 followed by ssuedAt, beside issuedAt) as PARSE_ERROR before any field is read (§12)",
 	"atx-v1_1/cross-issuer-key":                  "§1.3 step 4, key eligibility: under atcVersion 1.1 a key is eligible only for the issuerDid or a trusted issuer the signed issuerChain names, so a signature made with a trusted authority's key outside both is a signature failure",
 	"atx-v1_1/untrusted-chain-authority":         "§1.3 step 4, key eligibility: a DID the signed issuerChain names that is not a trusted issuer contributes no eligible key, so a signature made with its key is a signature failure",
+
+	// behavioralProfile form (atx-conformance#277).
+	"atx-v1_1/behavioral-profile-extra-member":        "§1.1: the credential schema gives behavioralProfile exactly checksum, generatedAt and observationDays, so a fourth member added after signing leaves a profile the TBS has no value for, a signature failure",
+	"atx-v1_1/behavioral-profile-case-variant-member": "§1.1: behavioralProfile member names are compared exactly, so observationDays renamed OBSERVATIONDAYS after signing leaves a profile the TBS has no value for, a signature failure",
+	"atx-v1_1/behavioral-profile-not-object":          "§1.3a.2 rule 1: the TBS holds null for a credential with no behavioralProfile and otherwise an object of its three members, so a string added as the profile after signing is a signature failure",
+	"atx-v1_1/behavioral-profile-member-outside-type": "§1.3a.2 rule 1: a behavioralProfile added after signing whose observationDays is a string has no value in the TBS, where a credential with no profile holds null, so it is a signature failure",
 }
 
 // fixtureRequirementsUsed records which fixtureRequirements entries wrap consumed.

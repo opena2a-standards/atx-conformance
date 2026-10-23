@@ -1,0 +1,129 @@
+{
+  "$schema": "https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/fixture-v1.schema.json",
+  "name": "atx-v1_1/behavioral-profile-extra-member",
+  "description": "An ATX v1.1 credential signed with the baseline behavioralProfile (checksum, generatedAt, observationDays), carrying a fourth member in it, riskLevel \"low\", written AFTER signing. The credential schema of atx-spec §1.1 gives behavioralProfile exactly those three members (additionalProperties false), and JCS(TBS) holds the profile as those three members (§1.3a.2), so no signature covers a profile with a fourth. The verifier MUST REJECT with a signature-validation reason. A verifier that decodes the profile into its three fields drops the fourth member, projects the signed profile and wrongly ACCEPTs a credential carrying a member its signature does not cover.",
+  "requirement": "§1.1: the credential schema gives behavioralProfile exactly checksum, generatedAt and observationDays, so a fourth member added after signing leaves a profile the TBS has no value for, a signature failure",
+  "spec": [
+    {
+      "id": "ATX",
+      "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+      "section": "1.1 ATX schema"
+    },
+    {
+      "id": "ATX",
+      "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+      "section": "1.3 Local verification algorithm"
+    },
+    {
+      "id": "ATX",
+      "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+      "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+    },
+    {
+      "id": "AIP",
+      "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+      "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+    },
+    {
+      "id": "AIP",
+      "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+      "section": "§6.1 Multi-Factor Algorithm"
+    },
+    {
+      "id": "RFC 8032",
+      "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+      "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+    }
+  ],
+  "keypairRefs": [
+    {
+      "role": "issuer-primary",
+      "path": "vectors/issuer-primary.json",
+      "algorithm": "Ed25519",
+      "publicKeyHex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+      "keyId": "did:opena2a:authority:opena2a.org#key-1"
+    }
+  ],
+  "verifierState": {
+    "clockRfc3339": "2026-05-24T00:00:00Z",
+    "trustedIssuers": [
+      "did:opena2a:authority:opena2a.org"
+    ],
+    "publicKeys": [
+      {
+        "role": "issuer-primary",
+        "path": "vectors/issuer-primary.json",
+        "algorithm": "Ed25519",
+        "publicKeyHex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+        "keyId": "did:opena2a:authority:opena2a.org#key-1"
+      },
+      {
+        "role": "issuer-cosigner-1",
+        "path": "vectors/issuer-cosigner-1.json",
+        "algorithm": "Ed25519",
+        "publicKeyHex": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+        "keyId": "did:opena2a:authority:opena2a.org#key-2"
+      },
+      {
+        "role": "issuer-cosigner-2",
+        "path": "vectors/issuer-cosigner-2.json",
+        "algorithm": "Ed25519",
+        "publicKeyHex": "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025",
+        "keyId": "did:opena2a:authority:opena2a.org#key-3"
+      }
+    ]
+  },
+  "expected": {
+    "verifyResult": "REJECT",
+    "rejectCategory": "SIGNATURE_INVALID",
+    "reasonContains": "signature"
+  },
+  "atx": {
+    "id": "00000000-0000-0000-0000-000000000001",
+    "atcVersion": "1.1",
+    "agentId": "agent_conformance_test_001",
+    "agentDid": "did:opena2a:agent:agent_conformance_test_001",
+    "publisher": "opena2a-conformance",
+    "publisherDid": "did:opena2a:publisher:opena2a-conformance",
+    "version": "1.0.0",
+    "contentHash": "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff",
+    "buildAttestation": "https://slsa.dev/provenance/v1#opena2a-conformance",
+    "transparencyLogIndex": 42,
+    "capabilities": [
+      "db:read",
+      "db:write"
+    ],
+    "behavioralProfile": {
+      "checksum": "sha256:ghi789",
+      "generatedAt": "2026-05-19T00:00:00Z",
+      "observationDays": 14,
+      "riskLevel": "low"
+    },
+    "scanSummary": {
+      "hma": "passed",
+      "criticalFindings": 0,
+      "highFindings": 0,
+      "secretless": "clean",
+      "cryptoServe": "no-weak-crypto",
+      "oasbLevel": "L1"
+    },
+    "trustScore": 87.5,
+    "trustLevel": 4,
+    "issuedAt": "2026-05-23T00:00:00Z",
+    "expiresAt": "2099-12-31T23:59:59Z",
+    "issuerDid": "did:opena2a:authority:opena2a.org",
+    "issuerChain": [
+      "did:opena2a:authority:opena2a.org-root",
+      "did:opena2a:authority:opena2a.org"
+    ],
+    "signatures": [
+      {
+        "keyId": "did:opena2a:authority:opena2a.org#key-1",
+        "algorithm": "Ed25519",
+        "value": "avfPHRdMUb4tBMWoOJpATKnvsI+aSDkcGWpEznE6D9s19YIDG2jjV/aURzoBsNKphxhdlxu93bMer+TF1y26Cw=="
+      }
+    ],
+    "revoked": false,
+    "createdAt": "2026-05-23T00:00:00Z"
+  }
+}

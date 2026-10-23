@@ -372,7 +372,9 @@ type tbsV11 struct {
 
 // canonicalPayloadV11 projects the credential into the v1.1 TBS and returns its
 // JCS (RFC 8785) canonicalization. Unlike canonicalPayload, this covers
-// capabilities, scanSummary, issuerChain, publisher, and behavioralProfile.
+// capabilities, scanSummary, issuerChain, publisher, and behavioralProfile. A
+// behavioralProfile the TBS has no value for returns errBehavioralProfileForm
+// (projectBehavioralProfileV11).
 func canonicalPayloadV11(a *atx) ([]byte, error) {
 	caps := a.Capabilities
 	if caps == nil {
@@ -389,6 +391,10 @@ func canonicalPayloadV11(a *atx) ([]byte, error) {
 	if hasNumberOutsideFloat64RangeV11(a) {
 		return nil, errors.New("declaredPurpose holds a number outside the float64 range")
 	}
+	profile, err := projectBehavioralProfileV11(a.BehavioralProfile)
+	if err != nil {
+		return nil, err
+	}
 	tbs := tbsV11{
 		ATCVersion:        a.ATCVersion,
 		AgentID:           a.AgentID,
@@ -400,7 +406,7 @@ func canonicalPayloadV11(a *atx) ([]byte, error) {
 		BuildAttestation:  a.BuildAttestation,
 		Capabilities:      caps,
 		DeclaredPurpose:   purpose,
-		BehavioralProfile: projectBehavioralProfileV11(a.BehavioralProfile),
+		BehavioralProfile: profile,
 		ScanSummary:       projectScanSummaryV11(a.ScanSummary),
 		TrustScore:        fmt.Sprintf("%.6f", a.TrustScore),
 		TrustLevel:        a.TrustLevel,
@@ -516,9 +522,9 @@ func projectDeclaredPurposeV11(raw json.RawMessage) json.RawMessage {
 }
 
 // decodeBehavioralProfileV11 decodes behavioralProfile into the three members
-// the v1.1 TBS carries. ok is false when the TBS carries null in its place:
-// behavioralProfile is absent or null, or does not decode (a member outside
-// its type, or a value that is not an object).
+// the v1.1 TBS carries. ok is false when behavioralProfile is absent or null,
+// where the TBS carries null, or does not decode (a member outside its type,
+// or a value that is not an object).
 func decodeBehavioralProfileV11(raw json.RawMessage) (bp tbsBehavioralProfileV11, ok bool) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return bp, false
@@ -538,16 +544,65 @@ func decodeBehavioralProfileV11(raw json.RawMessage) (bp tbsBehavioralProfileV11
 	}, true
 }
 
-func projectBehavioralProfileV11(raw json.RawMessage) json.RawMessage {
-	bp, ok := decodeBehavioralProfileV11(raw)
-	if !ok {
-		return json.RawMessage("null")
+// errBehavioralProfileForm is the error projectBehavioralProfileV11 returns
+// for a present behavioralProfile the v1.1 TBS has no value for.
+var errBehavioralProfileForm = errors.New("behavioralProfile is not an object of exactly checksum (a string), generatedAt (a timestamp) and observationDays (an integer)")
+
+// projectBehavioralProfileV11 is behavioralProfile as the v1.1 TBS carries
+// it: null when the credential has none or carries null (atx-spec §1.3a.2
+// rule 1), and otherwise its three members, generatedAt written in UTC to
+// the second. A present behavioralProfile must be an object holding exactly
+// checksum, a JSON string, generatedAt, a timestamp, and observationDays, a
+// JSON integer, under those names as written: the credential schema core.md
+// §1.1 points to gives it those three members and no other
+// (additionalProperties false). Any other present behavioralProfile returns
+// errBehavioralProfileForm: one that is not an object, a member outside the
+// three or missing, a name in another case, and a member that is null or
+// outside its type. The TBS has no value for such a profile. Projected as
+// null, the absent form, it verified under a signature made without a
+// profile; a member outside the three, which the projection drops, and a
+// name encoding/json folds onto one of the three rode a signature that does
+// not cover them. verifySignatures refuses the credential on this error
+// before it reads a signature.
+func projectBehavioralProfileV11(raw json.RawMessage) (json.RawMessage, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return json.RawMessage("null"), nil
 	}
-	out, err := json.Marshal(&bp)
-	if err != nil {
-		return json.RawMessage("null")
+	// A map compares member names exactly, where a struct would match them
+	// under encoding/json's folding. A null member leaves its pointer nil.
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &members); err != nil {
+		return nil, errBehavioralProfileForm
 	}
-	return out
+	var (
+		checksum        *string
+		generatedAt     *timestamp
+		observationDays *int
+	)
+	for name, value := range members {
+		var err error
+		switch name {
+		case "checksum":
+			err = json.Unmarshal(value, &checksum)
+		case "generatedAt":
+			err = json.Unmarshal(value, &generatedAt)
+		case "observationDays":
+			err = json.Unmarshal(value, &observationDays)
+		default:
+			return nil, errBehavioralProfileForm
+		}
+		if err != nil {
+			return nil, errBehavioralProfileForm
+		}
+	}
+	if checksum == nil || generatedAt == nil || observationDays == nil {
+		return nil, errBehavioralProfileForm
+	}
+	return json.Marshal(&tbsBehavioralProfileV11{
+		Checksum:        *checksum,
+		GeneratedAt:     generatedAt.UTC().Format(time.RFC3339),
+		ObservationDays: *observationDays,
+	})
 }
 
 // maxExactInteger is 2^53-1, the largest magnitude of an integer in the
@@ -1075,6 +1130,19 @@ func verifySignatures(a *atx, state verifierState) result {
 			return result{
 				RejectCategory: "SIGNATURE_INVALID",
 				Reason:         "no signature covers scanSummary, which holds a member outside its type or is not an object",
+			}
+		}
+		// behavioralProfile enters the TBS as null when the credential has
+		// none (atx-spec §1.3a.2 rule 1), and otherwise as an object of
+		// exactly three members, each with its type. A present
+		// behavioralProfile of any other form has no value there, so no
+		// signature covers the credential (projectBehavioralProfileV11).
+		// The reason names no decode error, so the Python reference
+		// verifier writes the same line.
+		if _, err := projectBehavioralProfileV11(a.BehavioralProfile); err != nil {
+			return result{
+				RejectCategory: "SIGNATURE_INVALID",
+				Reason:         "no signature covers behavioralProfile, which is not an object of exactly checksum (a string), generatedAt (a timestamp) and observationDays (an integer)",
 			}
 		}
 		pb, err := canonicalPayloadV11(a)
