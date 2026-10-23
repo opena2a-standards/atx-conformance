@@ -400,10 +400,11 @@ GO_PURPOSE_NUMBER_VERDICTS = (
     ("1e-400", "SIGNATURE_INVALID"),
 )
 
-# The reason both reference verifiers write for a number outside the float64
-# range in a v1.1 declaredPurpose. The Go verifier wrote the error its JCS
-# library returned, strconv.ParseFloat: parsing "1e400": value out of range,
-# until atx-conformance#289.
+# The reason both reference verifiers write for a number in a v1.1
+# declaredPurpose that strconv.ParseFloat refuses as outside the float64
+# range, such as the VERIFIER_CONFIG_ERROR rows above. The Go verifier wrote
+# the error its JCS library returned, strconv.ParseFloat: parsing "1e400":
+# value out of range, until atx-conformance#289.
 GO_OUTSIDE_FLOAT64_REASON = "v1.1 canonicalization failed: declaredPurpose holds a number outside the float64 range"
 
 

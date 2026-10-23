@@ -94,8 +94,13 @@ lesson and scoped to the whole body because ATX signs it all):
     make the credential a signature failure. A number in it outside the
     float64 range (1e400, or an integer of 401 digits) rejects as
     VERIFIER_CONFIG_ERROR too, with the reason the Go reference verifier
-    gives, which refuses it before its JCS library reads it: that library
-    parses every number as a float64.
+    gives a number strconv.ParseFloat refuses as out of range, which it
+    refuses before its JCS library reads it: that library parses every
+    number as a float64. strconv.ParseFloat can read a number written with
+    more than 800 digits and an exponent part as finite when its value is
+    outside the range (1 followed by 1000 zeros and e-650), and the Go
+    reference verifier rejects a credential carrying one as
+    SIGNATURE_INVALID.
     An integer in it inside that range but outside the I-JSON exact range
     rejects after these two checks, as SIGNATURE_INVALID (Spec coverage).
     A number in it written with a fraction or an exponent part, which
@@ -1268,10 +1273,15 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
         if _holds_number_outside_float64(atx.get("declaredPurpose")):
             # declaredPurpose enters the TBS as written, so no typed decode
             # refuses the number first. The Go reference verifier's JCS
-            # library cannot canonicalize it; the verifier refuses it before
-            # the library reads it, with the category and reason below,
-            # where this serializer would refuse it as a float (1e400) or
-            # write it out (an integer of 401 digits).
+            # library cannot canonicalize a number strconv.ParseFloat
+            # refuses as out of range; the verifier refuses it before the
+            # library reads it, with the category and reason below, where
+            # this serializer would refuse it as a float (1e400) or write it
+            # out (an integer of 401 digits). strconv.ParseFloat can read a
+            # number written with more than 800 digits and an exponent part
+            # as finite when its value is outside the range (1 followed by
+            # 1000 zeros and e-650), and the Go verifier rejects such a
+            # credential as SIGNATURE_INVALID instead.
             return VerifyResult(
                 reject_category="VERIFIER_CONFIG_ERROR",
                 reason="v1.1 canonicalization failed: declaredPurpose holds a number outside the float64 range",

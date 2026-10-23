@@ -983,17 +983,18 @@ they should not.
 ### Fixed
 
 - The Go reference verifier gives the reason the Python reference verifier
-  gives when a v1.1 credential's `declaredPurpose` holds a number outside
-  the float64 range (#289). Both rejected such a credential as
-  `VERIFIER_CONFIG_ERROR`: the Go verifier wrote the error its JCS library
-  returned, whose text the Go release sets, as `v1.1 canonicalization
-  failed: strconv.ParseFloat: parsing "1e400": value out of range`, and the
-  Python verifier wrote `v1.1 canonicalization failed: declaredPurpose holds
-  a number outside the float64 range`, which names the member. The Go
-  verifier now refuses such a number before its JCS library reads it, with
-  the Python verifier's reason, and still refuses an unpaired surrogate
-  escape in `declaredPurpose` first, as the Python verifier does. On
-  `fixtures/v1_1-declared-purpose-number-injected.json` with its
+  gives when a v1.1 credential's `declaredPurpose` holds a number that
+  `strconv.ParseFloat` refuses as outside the float64 range, such as
+  `1e400`, `-1e400` or an integer of 401 digits (#289). Both rejected such a
+  credential as `VERIFIER_CONFIG_ERROR`: the Go verifier wrote the error its
+  JCS library returned, whose text the Go release sets, as `v1.1
+  canonicalization failed: strconv.ParseFloat: parsing "1e400": value out of
+  range`, and the Python verifier wrote `v1.1 canonicalization failed:
+  declaredPurpose holds a number outside the float64 range`, which names the
+  member. The Go verifier now refuses such a number before its JCS library
+  reads it, with the Python verifier's reason, and still refuses an unpaired
+  surrogate escape in `declaredPurpose` first, as the Python verifier does.
+  On `fixtures/v1_1-declared-purpose-number-injected.json` with its
   `declaredPurpose` written as `{"n": 1e400}`, `1e400` or `{"n": -1e400}`,
   the two verifiers now print the same lines, built with Go 1.26.3 and run
   under Python 3.14.3. `TestDeclaredPurposeNumberOutsideFloat64Range` in the
@@ -1009,9 +1010,15 @@ they should not.
   `GO_PURPOSE_NUMBER_VERDICTS` adds `{"n": 1e400}`, `{"n": -1e400}`, `1E400`
   and `1e+400`; `InjectedNumberPurpose` expects that reason on the 13 values
   the table expects `VERIFIER_CONFIG_ERROR` for, and `LongInteger` on its 8
-  values holding an integer of 401 or 5001 digits. `verify.py` changes in
-  its comments alone. `docs/captures/go-verifier.txt` is unchanged. No
-  fixture changes.
+  values holding an integer of 401 or 5001 digits. `strconv.ParseFloat` can
+  read a number written with more than 800 digits and an exponent part as
+  finite when its value is outside the float64 range: it reads `1` followed
+  by 1000 zeros and `e-650`, whose value is 10^350, as `1e+149`. The Go
+  verifier does not refuse such a number as outside the range, and rejects
+  the credential as `SIGNATURE_INVALID`, as it did before this change, where
+  the Python verifier rejects it as `VERIFIER_CONFIG_ERROR`. `verify.py`
+  changes in its comments alone. `docs/captures/go-verifier.txt` is
+  unchanged. No fixture changes.
 - The Python reference verifier fails to load a file that is not JSON and
   nests arrays and objects deeper than 10000 levels with the reason for
   whichever comes first in its text, as the Go reference verifier does
