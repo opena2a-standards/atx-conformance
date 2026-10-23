@@ -298,12 +298,13 @@ they should not.
   `behavioralProfile` still verifies as the absent form, and the check does
   not run under `atcVersion` 1.0, which signs no `behavioralProfile`. A
   `behavioralProfile.generatedAt` whose offset is out of range is rejected
-  by this check, where a signature over a null profile failed before
-  (`docs/running-the-verifiers.md`). `TestBehavioralProfileForm`,
-  `TestBehavioralProfileProjection`, `TestSuitePinsBehavioralProfileForm`
-  and the Python verifier's `GoBehavioralProfileForm` class pin it. A
-  `scanSummary` member outside its six is unchanged; its treatment waits on
-  the atx-spec decision on rule 2.
+  by this check; before, the signed payload held such a profile as null, so
+  a signature made over the profile failed, and a credential signed with no
+  profile verified carrying it (`docs/running-the-verifiers.md`).
+  `TestBehavioralProfileForm`, `TestBehavioralProfileProjection`,
+  `TestSuitePinsBehavioralProfileForm` and the Python verifier's
+  `GoBehavioralProfileForm` class pin it. A `scanSummary` member outside its
+  six is unchanged; its treatment waits on the atx-spec decision on rule 2.
 - Six kinds of line in the two reference verifiers' output change wording
   (#276).
   The summary line counts `(1 fixture)` for one fixture, where it read
