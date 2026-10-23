@@ -305,6 +305,8 @@ they should not.
   `TestSuitePinsBehavioralProfileForm` and the Python verifier's
   `GoBehavioralProfileForm` class pin it. A `scanSummary` member outside its
   six is unchanged; its treatment waits on the atx-spec decision on rule 2.
+  A `behavioralProfile` member name outside printable ASCII is still
+  rejected as `PARSE_ERROR` (#284) before the profile's form is checked.
 - Six kinds of line in the two reference verifiers' output change wording
   (#276).
   The summary line counts `(1 fixture)` for one fixture, where it read
