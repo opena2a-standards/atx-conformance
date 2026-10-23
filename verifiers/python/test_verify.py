@@ -11,8 +11,10 @@ the verifier raises on, a path that does not exist, and the verifier's own v1.1
 projection over every jcs-vectors vector. They also pin what Go's encoding/json
 makes of a member name in another case, a timestamp written with a JSON
 escape, an unpaired surrogate escape and a trustScore of -0, the projection of
-behavioralProfile and scanSummary members outside their Go type, the signature
-base64 alphabet, a fixture whose expected member is not an object, a file
+behavioralProfile and scanSummary members outside their Go type, a v1.1
+behavioralProfile that is not an object of exactly checksum, generatedAt and
+observationDays (a member outside them or missing, a name in another case, a
+member that is null or outside its type), the signature base64 alphabet, a fixture whose expected member is not an object, a file
 with no expected.verifyResult of ACCEPT or REJECT, and a report line standard
 output cannot encode. They also pin the decode of the
 fixture wrapper: members outside their Go type, names in another case, a
@@ -697,9 +699,11 @@ GO_VERDICTS = (
 # `go run .` in ../go with Go 1.22.12 and with Go 1.26.3, which agree on each;
 # the escaped row holds with Go 1.27.2 too, since the Go verifier decodes the
 # timestamp with time.Time's own UnmarshalJSON.
-# A generatedAt Go's time.Time decoder refuses makes the Go verifier project
-# the whole behavioralProfile as null, so the signature rejects; one that
-# decodes to the signed instant projects as signed.
+# A generatedAt Go's time.Time decoder refuses leaves a behavioralProfile the
+# Go verifier refuses as one no signature covers; one that decodes to the
+# signed instant projects as signed. Rows recorded again with Go 1.26.3 for
+# atx-conformance#277: the verdicts are unchanged, and each rejected row is
+# now refused before the signature is read.
 GO_GENERATED_AT_VERDICTS = (
     ('"2026-05-19T00:00:00"', "SIGNATURE_INVALID"),
     ('"2026-05-19"', "SIGNATURE_INVALID"),
@@ -750,15 +754,19 @@ GO_FOLDED_NAME_VERDICTS = (
     (("signatures", 0, "algorithm"), "Algorithm", '"none"', "SIGNATURE_INVALID"),
 )
 
-# The same for members only the v1.1 payload signs, on the v1.1 baseline.
+# The same for members only the v1.1 payload signs, on the v1.1 baseline. The
+# Go verifier reads the names of behavioralProfile's own members as written
+# (atx-conformance#277), so a member of it named in another case is not that
+# member: the profile is one no signature covers, refused as
+# SIGNATURE_INVALID before the signature is read.
 GO_FOLDED_NAME_VERDICTS_V11 = (
     (("declaredPurpose",), "DeclaredPurpose", '{"x": 1}', "SIGNATURE_INVALID"),
     (("behavioralProfile",), "BEHAVIORALPROFILE", KEEP, "ACCEPT"),
     (("behavioralProfile",), "BehavioralProfile", "null", "SIGNATURE_INVALID"),
-    (("behavioralProfile", "checksum"), "Checksum", KEEP, "ACCEPT"),
-    (("behavioralProfile", "generatedAt"), "GENERATEDAT", KEEP, "ACCEPT"),
+    (("behavioralProfile", "checksum"), "Checksum", KEEP, "SIGNATURE_INVALID"),
+    (("behavioralProfile", "generatedAt"), "GENERATEDAT", KEEP, "SIGNATURE_INVALID"),
     (("behavioralProfile", "generatedAt"), "GeneratedAt", '"2026-05-19"', "SIGNATURE_INVALID"),
-    (("behavioralProfile", "observationDays"), "ObservationDays", KEEP, "ACCEPT"),
+    (("behavioralProfile", "observationDays"), "ObservationDays", KEEP, "SIGNATURE_INVALID"),
     (("scanSummary",), "ScanSummary", KEEP, "ACCEPT"),
     (("scanSummary", "hma"), "HMA", KEEP, "ACCEPT"),
     (("scanSummary", "criticalFindings"), "CRITICALFINDINGS", "3", "SIGNATURE_INVALID"),
@@ -898,48 +906,57 @@ ZERO_SCAN = {
     "oasbLevel": "",
 }
 
+# In place of a projection: the Go verifier's projectBehavioralProfileV11
+# refuses the profile, and _project_behavioral_profile raises _DecodeError.
+REFUSED = object()
+
 # behavioralProfile as the Go verifier's projectBehavioralProfileV11 projects
 # it into the v1.1 signed payload when the member at path holds the raw
-# literal (None: absent). A member outside its Go type projects the whole
-# profile as null; an absent or null member takes the Go zero value.
+# literal (None: absent). An absent or null profile projects as null. Any
+# other profile that is not an object of exactly checksum, generatedAt and
+# observationDays, each present, not null and of its Go type, is REFUSED
+# (atx-conformance#277): Go projected one with a member outside its type as
+# null, and took an absent or null member as its zero value.
 # (path, raw literal, projection).
 GO_BEHAVIORAL_PROFILE_PROJECTIONS = (
-    (("behavioralProfile", "generatedAt"), '"2026-05-19"', None),
-    (("behavioralProfile", "generatedAt"), '"2026-05-19T00:00:00\\u005a"', None),
-    (("behavioralProfile", "generatedAt"), '""', None),
-    (("behavioralProfile", "generatedAt"), "0", None),
-    (("behavioralProfile", "generatedAt"), "false", None),
-    (("behavioralProfile", "generatedAt"), "[]", None),
-    (("behavioralProfile", "generatedAt"), "{}", None),
-    (("behavioralProfile", "generatedAt"), "null", {**SIGNED_PROFILE, "generatedAt": GO_ZERO_TIME}),
-    (("behavioralProfile", "generatedAt"), None, {**SIGNED_PROFILE, "generatedAt": GO_ZERO_TIME}),
+    (("behavioralProfile", "generatedAt"), '"2026-05-19"', REFUSED),
+    (("behavioralProfile", "generatedAt"), '"2026-05-19T00:00:00\\u005a"', REFUSED),
+    (("behavioralProfile", "generatedAt"), '""', REFUSED),
+    (("behavioralProfile", "generatedAt"), "0", REFUSED),
+    (("behavioralProfile", "generatedAt"), "false", REFUSED),
+    (("behavioralProfile", "generatedAt"), "[]", REFUSED),
+    (("behavioralProfile", "generatedAt"), "{}", REFUSED),
+    (("behavioralProfile", "generatedAt"), "null", REFUSED),
+    (("behavioralProfile", "generatedAt"), None, REFUSED),
     (("behavioralProfile", "generatedAt"), '"2026-05-19T01:00:00+01:00"', SIGNED_PROFILE),
-    (("behavioralProfile", "observationDays"), '"14"', None),
-    (("behavioralProfile", "observationDays"), "14.0", None),
-    (("behavioralProfile", "observationDays"), "14.5", None),
-    (("behavioralProfile", "observationDays"), "1e1", None),
-    (("behavioralProfile", "observationDays"), "true", None),
-    (("behavioralProfile", "observationDays"), '"abc"', None),
-    (("behavioralProfile", "observationDays"), "[]", None),
-    (("behavioralProfile", "observationDays"), "9223372036854775808", None),
-    (("behavioralProfile", "observationDays"), "null", {**SIGNED_PROFILE, "observationDays": 0}),
-    (("behavioralProfile", "observationDays"), None, {**SIGNED_PROFILE, "observationDays": 0}),
+    (("behavioralProfile", "observationDays"), '"14"', REFUSED),
+    (("behavioralProfile", "observationDays"), "14.0", REFUSED),
+    (("behavioralProfile", "observationDays"), "14.5", REFUSED),
+    (("behavioralProfile", "observationDays"), "1e1", REFUSED),
+    (("behavioralProfile", "observationDays"), "true", REFUSED),
+    (("behavioralProfile", "observationDays"), '"abc"', REFUSED),
+    (("behavioralProfile", "observationDays"), "[]", REFUSED),
+    (("behavioralProfile", "observationDays"), "9223372036854775808", REFUSED),
+    (("behavioralProfile", "observationDays"), "null", REFUSED),
+    (("behavioralProfile", "observationDays"), None, REFUSED),
     (("behavioralProfile", "observationDays"), "-0", {**SIGNED_PROFILE, "observationDays": 0}),
     (("behavioralProfile", "observationDays"), "-1", {**SIGNED_PROFILE, "observationDays": -1}),
-    (("behavioralProfile", "checksum"), "7", None),
-    (("behavioralProfile", "checksum"), "[]", None),
-    (("behavioralProfile", "checksum"), "true", None),
-    (("behavioralProfile", "checksum"), "{}", None),
-    (("behavioralProfile", "checksum"), "null", {**SIGNED_PROFILE, "checksum": ""}),
-    (("behavioralProfile", "checksum"), None, {**SIGNED_PROFILE, "checksum": ""}),
+    (("behavioralProfile", "checksum"), "7", REFUSED),
+    (("behavioralProfile", "checksum"), "[]", REFUSED),
+    (("behavioralProfile", "checksum"), "true", REFUSED),
+    (("behavioralProfile", "checksum"), "{}", REFUSED),
+    (("behavioralProfile", "checksum"), "null", REFUSED),
+    (("behavioralProfile", "checksum"), None, REFUSED),
     (("behavioralProfile", "checksum"), '"\\ud800"', {**SIGNED_PROFILE, "checksum": "\ufffd"}),
-    (("behavioralProfile",), "7", None),
-    (("behavioralProfile",), '"x"', None),
-    (("behavioralProfile",), "[]", None),
-    (("behavioralProfile",), "true", None),
+    (("behavioralProfile", "riskLevel"), '"low"', REFUSED),
+    (("behavioralProfile",), "7", REFUSED),
+    (("behavioralProfile",), '"x"', REFUSED),
+    (("behavioralProfile",), "[]", REFUSED),
+    (("behavioralProfile",), "true", REFUSED),
     (("behavioralProfile",), "null", None),
     (("behavioralProfile",), None, None),
-    (("behavioralProfile",), "{}", ZERO_PROFILE),
+    (("behavioralProfile",), "{}", REFUSED),
+    (("behavioralProfile",), json.dumps(ZERO_PROFILE), ZERO_PROFILE),
 )
 
 # scanSummary as the Go verifier's projectScanSummaryV11 projects it. It
@@ -977,8 +994,9 @@ GO_SCAN_SUMMARY_PROJECTIONS = (
 # criticalFindings 0 and highFindings 0, so a scanSummary count the Go verifier
 # cannot decode projects the signed 0; it has no value in the signed payload,
 # which holds each scanSummary member typed, so the Go verifier refuses the
-# credential as no signature covers it (decodeScanSummaryV11), and a null
-# behavioralProfile is not what was signed. (path, raw literal, Go verdict).
+# credential as no signature covers it (decodeScanSummaryV11). It refuses a
+# behavioralProfile member outside its type the same way
+# (projectBehavioralProfileV11). (path, raw literal, Go verdict).
 GO_UNDECODABLE_MEMBER_VERDICTS = (
     (("scanSummary", "criticalFindings"), '"3"', "SIGNATURE_INVALID"),
     (("scanSummary", "criticalFindings"), "3.5", "SIGNATURE_INVALID"),
@@ -1154,8 +1172,9 @@ GO_HEX_DECODES = (
 # where the file fails to load). declaredPurpose enters the v1.1 TBS as
 # written, so there the arrays are canonicalized at that depth too. A member
 # Go decodes into a typed field is a PARSE_ERROR when it holds an array, and
-# one of scanSummary or behavioralProfile, which the v1.1 projection decodes
-# without failing, leaves a payload the signature does not cover.
+# one of scanSummary or behavioralProfile has no value in the v1.1 signed
+# payload, so the verifier refuses it as SIGNATURE_INVALID before it reads a
+# signature.
 GO_NESTING_VERDICTS = (
     (("deep",), 5000, "ACCEPT"),
     (("deep",), 9999, "ACCEPT"),
@@ -1230,7 +1249,8 @@ LONG_INTEGER = "1" + "0" * 5000
 # member Go decodes into int64 or float64 and of the wrong type for any other
 # typed member. A scanSummary member the v1.1 projection cannot decode has no
 # value in the signed payload, so the verifier refuses it before it reads a
-# signature, though the projection holds the 0 the baseline signs in its place.
+# signature, though the projection holds the 0 the baseline signs in its place;
+# it refuses a behavioralProfile member it cannot decode the same way.
 GO_LONG_INTEGER_VERDICTS = (
     (("unknownMember",), "ACCEPT"),
     (("atx", "unknownMember"), "ACCEPT"),
@@ -1801,7 +1821,11 @@ class GoUndecodableProjection(unittest.TestCase):
     def test_behavioral_profile_projects_as_go_projects_it(self):
         for path, literal, projection in GO_BEHAVIORAL_PROFILE_PROJECTIONS:
             with self.subTest(path=path, value=literal):
-                self.assertEqual(_projection_at(path, literal)["behavioralProfile"], projection)
+                if projection is REFUSED:
+                    with self.assertRaises(verify._DecodeError):
+                        _projection_at(path, literal)
+                else:
+                    self.assertEqual(_projection_at(path, literal)["behavioralProfile"], projection)
 
     def test_scan_summary_projects_as_go_projects_it(self):
         for path, literal, projection in GO_SCAN_SUMMARY_PROJECTIONS:
@@ -2159,6 +2183,124 @@ class GoPurposeNumberSpellings(unittest.TestCase):
         # the v1.0 baseline accepted, as it does in the Go reference verifier.
         got = _at_verdict(BASELINE_V10, PURPOSE, '{"n": 1e3}')
         self.assertTrue(got.accepted, got.reason)
+
+
+class GoBehavioralProfileForm(unittest.TestCase):
+    """A v1.1 behavioralProfile that is present and is not an object of
+    exactly checksum (a string), generatedAt (a timestamp) and observationDays
+    (an integer), under those names as written, has no value in the signed
+    payload, which holds null for a credential with no profile and otherwise
+    those three members, so the Go verifier refuses the credential as no
+    signature covers it, before it reads one (TestBehavioralProfileForm in
+    verifiers/go/verifier/verify_test.go, atx-conformance#277). It projected
+    such a profile as null, or read a member named in another case as that
+    member and left a member outside the three out."""
+
+    # The Go verifier's reason, read from its run over these profiles.
+    REASON = (
+        "no signature covers behavioralProfile, which is not an object of exactly checksum "
+        "(a string), generatedAt (a timestamp) and observationDays (an integer)"
+    )
+
+    def assert_refused(self, got: verify.VerifyResult) -> None:
+        self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+        self.assertEqual(got.reason, self.REASON)
+
+    def assert_signature_fails(self, got: verify.VerifyResult) -> None:
+        # A profile with a value in the signed payload that the signature does
+        # not cover fails the signature itself.
+        self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+        self.assertNotIn("behavioralProfile", got.reason)
+
+    def test_baseline_profile_of_another_form_is_refused(self):
+        # The v1.1 baseline signs SIGNED_PROFILE.
+        days = SIGNED_PROFILE["observationDays"]
+        without_days = {k: v for k, v in SIGNED_PROFILE.items() if k != "observationDays"}
+        without_checksum = {k: v for k, v in SIGNED_PROFILE.items() if k != "checksum"}
+        for profile in (
+            {**SIGNED_PROFILE, "riskLevel": "low"},
+            {**SIGNED_PROFILE, "extra": "x"},
+            {**without_days, "OBSERVATIONDAYS": days},
+            {**without_checksum, "Checksum": SIGNED_PROFILE["checksum"]},
+            without_days,
+            {**SIGNED_PROFILE, "checksum": None},
+            {**SIGNED_PROFILE, "observationDays": "14"},
+            {**SIGNED_PROFILE, "observationDays": 14.0},
+            {**SIGNED_PROFILE, "generatedAt": "2026-05-19"},
+            [],
+        ):
+            literal = json.dumps(profile)
+            with self.subTest(profile=literal):
+                self.assert_refused(_at_verdict(BASELINE_V11, ("behavioralProfile",), literal))
+        # The Kelvin sign, which Go folds onto k, is outside printable ASCII,
+        # so the strict parse refuses the profile first, naming the member
+        # (atx-conformance#284).
+        literal = json.dumps({**without_checksum, "chec\N{KELVIN SIGN}sum": SIGNED_PROFILE["checksum"]})
+        got = _at_verdict(BASELINE_V11, ("behavioralProfile",), literal)
+        self.assertEqual(got.reject_category, "PARSE_ERROR", got.reason)
+        self.assertEqual(got.reason, _name_reason('"chec' + _escaped("212a") + 'sum"', "U+212A"))
+
+    def test_baseline_profile_written_another_way_verifies(self):
+        for profile in (
+            dict(reversed(list(SIGNED_PROFILE.items()))),
+            {**SIGNED_PROFILE, "generatedAt": "2026-05-19T01:00:00+01:00"},
+        ):
+            literal = json.dumps(profile)
+            with self.subTest(profile=literal):
+                got = _at_verdict(BASELINE_V11, ("behavioralProfile",), literal)
+                self.assertTrue(got.accepted, got.reason)
+
+    def test_baseline_profile_with_another_value_fails_the_signature(self):
+        for literal in (json.dumps({**SIGNED_PROFILE, "observationDays": 15}), "null", None):
+            with self.subTest(profile=literal):
+                self.assert_signature_fails(_at_verdict(BASELINE_V11, ("behavioralProfile",), literal))
+
+    def test_credential_signed_with_no_profile(self):
+        fixture = json.loads(BASELINE_V11.read_text())
+        del fixture["atx"]["behavioralProfile"]
+        with tempfile.TemporaryDirectory() as tmp:
+            signed = _write_signed_v11(Path(tmp), "signed.json", fixture)
+            got = verify.verify_fixture(verify.load_fixture(signed))
+            self.assertTrue(got.accepted, got.reason)
+            got = _at_verdict(signed, ("behavioralProfile",), "null")
+            self.assertTrue(got.accepted, got.reason)
+            for literal in (
+                '"sha256:ghi789"',
+                "7",
+                "true",
+                "[]",
+                "{}",
+                '{"checksum": 1, "generatedAt": "x", "observationDays": "many"}',
+                json.dumps({**SIGNED_PROFILE, "observationDays": "14"}),
+                '{"checksum": null, "generatedAt": null, "observationDays": null}',
+            ):
+                with self.subTest(profile=literal):
+                    self.assert_refused(_at_verdict(signed, ("behavioralProfile",), literal))
+            self.assert_signature_fails(
+                _at_verdict(signed, ("behavioralProfile",), json.dumps(SIGNED_PROFILE))
+            )
+
+    def test_v1_0_profile_is_not_read(self):
+        # atcVersion 1.0 signs no behavioralProfile (core.md section 1.3a.1).
+        got = _at_verdict(BASELINE_V10, ("behavioralProfile",), '{"checksum": 1}')
+        self.assertTrue(got.accepted, got.reason)
+
+    def test_shipped_fixtures_are_refused_for_their_profile(self):
+        # One fixture per form atx-conformance#277 names. Each verifies with
+        # its profile replaced by the one a verifier that folds member names,
+        # drops a member outside the three and projects a profile it cannot
+        # decode as null reads from it, so such a verifier accepts it.
+        for name, lenient in (
+            ("v1_1-behavioral-profile-extra-member.json", json.dumps(SIGNED_PROFILE)),
+            ("v1_1-behavioral-profile-case-variant-member.json", json.dumps(SIGNED_PROFILE)),
+            ("v1_1-behavioral-profile-not-object.json", "null"),
+            ("v1_1-behavioral-profile-member-outside-type.json", "null"),
+        ):
+            path = ROOT / "fixtures" / name
+            with self.subTest(fixture=name):
+                self.assert_refused(verify.verify_fixture(verify.load_fixture(path)))
+                got = _at_verdict(path, ("behavioralProfile",), lenient)
+                self.assertTrue(got.accepted, got.reason)
 
 
 class GoNonObjectCredential(unittest.TestCase):

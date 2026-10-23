@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"math/big"
@@ -2002,12 +2003,12 @@ func TestOffsetOutOfRangeVerdict(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"verifierState":{"crl":{"entries":[{"revokedAt":"2026-05-23T00:00:00+00:61"}]}}}`), &f); err == nil {
 		t.Error("CRL entry revokedAt +00:61: the fixture loaded, want a load error")
 	}
-	if p := projectBehavioralProfileV11(json.RawMessage(`{"generatedAt":"2026-05-23T00:00:00+25:00"}`)); string(p) != "null" {
-		t.Errorf("behavioralProfile.generatedAt +25:00 projected as %s, want null", p)
+	if p, err := projectBehavioralProfileV11(profileWithGeneratedAt(`"2026-05-23T00:00:00+25:00"`)); err == nil {
+		t.Errorf("behavioralProfile.generatedAt +25:00 projected as %s, want the profile refused", p)
 	}
 	// Control: +24:00 and +23:60 decode under every release.
-	if p := projectBehavioralProfileV11(json.RawMessage(`{"generatedAt":"2026-05-23T00:00:00+24:00"}`)); string(p) == "null" {
-		t.Error("behavioralProfile.generatedAt +24:00 projected as null")
+	if _, err := projectBehavioralProfileV11(profileWithGeneratedAt(`"2026-05-23T00:00:00+24:00"`)); err != nil {
+		t.Errorf("behavioralProfile.generatedAt +24:00: %v, want it projected", err)
 	}
 	if _, err := parseRFC3339("2026-06-01T00:00:00+23:60"); err != nil {
 		t.Errorf("clock +23:60: %v, want it to parse", err)
@@ -2062,8 +2063,9 @@ func TestOffsetOutsideLayoutVerdict(t *testing.T) {
 // TestEscapedTimestampFailsToDecode pins that a timestamp written with a JSON
 // escape fails to decode wherever this verifier decodes one: the credential's
 // issuedAt is a PARSE_ERROR, a CRL entry's revokedAt fails to load the
-// fixture, and a v1.1 behavioralProfile.generatedAt projects the profile as
-// null. With plain time.Time fields, a Go 1.27 build decoded all three.
+// fixture, and a v1.1 behavioralProfile.generatedAt leaves a profile the
+// projection refuses. With plain time.Time fields, a Go 1.27 build decoded
+// all three.
 func TestEscapedTimestampFailsToDecode(t *testing.T) {
 	const escaped = "\"2026-05-23T00:00:00\\u005a\""
 	got := verify(fixture{ATX: json.RawMessage(`{"atcVersion":"1.1","issuedAt":` + escaped + `}`)})
@@ -2075,13 +2077,23 @@ func TestEscapedTimestampFailsToDecode(t *testing.T) {
 	if err := json.Unmarshal([]byte(crl), &f); err == nil {
 		t.Error("escaped CRL revokedAt: the fixture loaded, want a load error")
 	}
-	if p := projectBehavioralProfileV11(json.RawMessage(`{"generatedAt":` + escaped + `}`)); string(p) != "null" {
-		t.Errorf("escaped behavioralProfile.generatedAt projected as %s, want null", p)
+	if p, err := projectBehavioralProfileV11(profileWithGeneratedAt(escaped)); err == nil {
+		t.Errorf("escaped behavioralProfile.generatedAt projected as %s, want the profile refused", p)
 	}
 	// Control: the same instant without the escape decodes.
-	if p := projectBehavioralProfileV11(json.RawMessage(`{"generatedAt":"2026-05-23T00:00:00Z"}`)); string(p) == "null" {
-		t.Error("unescaped behavioralProfile.generatedAt projected as null")
+	if _, err := projectBehavioralProfileV11(profileWithGeneratedAt(`"2026-05-23T00:00:00Z"`)); err != nil {
+		t.Errorf("unescaped behavioralProfile.generatedAt: %v, want it projected", err)
 	}
+}
+
+// signedProfile is the behavioralProfile the v1.1 baseline signs, as the TBS
+// carries it.
+const signedProfile = `{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":14}`
+
+// profileWithGeneratedAt is signedProfile with generatedAt written as the
+// JSON text given.
+func profileWithGeneratedAt(generatedAt string) json.RawMessage {
+	return json.RawMessage(`{"checksum":"sha256:ghi789","generatedAt":` + generatedAt + `,"observationDays":14}`)
 }
 
 // v11Baseline is fixtures/v1_1-baseline-valid.json as the verifier loads it.
@@ -2894,5 +2906,211 @@ func TestDeclaredPurposeNumberOutsideFloat64Range(t *testing.T) {
 	}
 	if got := verify(withMembers(t, v10, map[string]string{"declaredPurpose": `{"n": 1e400}`})); !got.Accepted {
 		t.Errorf(`declaredPurpose {"n": 1e400} on the v1.0 baseline: %s, want ACCEPT`, got)
+	}
+}
+
+// TestBehavioralProfileProjection pins projectBehavioralProfileV11 on each
+// form of behavioralProfile. An absent or null profile projects as null
+// (atx-spec §1.3a.2 rule 1). An object of exactly checksum, a JSON string,
+// generatedAt, a timestamp, and observationDays, a JSON integer, under those
+// names as written, projects as those three members, generatedAt in UTC to
+// the second. Every other present profile is refused with
+// errBehavioralProfileForm. The projection read a profile that did not
+// decode, a member outside its type included, as null; a null member as its
+// zero value; and member names under encoding/json's folding, dropping a
+// member outside the three. verifiers/python/test_verify.py holds the Python
+// projection to the same rule (GO_BEHAVIORAL_PROFILE_PROJECTIONS).
+// atx-conformance#277.
+func TestBehavioralProfileProjection(t *testing.T) {
+	const refused = ""
+	zeroProfile := `{"checksum":"","generatedAt":"0001-01-01T00:00:00Z","observationDays":0}`
+	for _, tc := range []struct{ raw, want string }{
+		{``, `null`},
+		{`null`, `null`},
+		{signedProfile, signedProfile},
+		{`{"observationDays":14,"generatedAt":"2026-05-19T00:00:00Z","checksum":"sha256:ghi789"}`, signedProfile},
+		{string(profileWithGeneratedAt(`"2026-05-19T01:00:00+01:00"`)), signedProfile},
+		{string(profileWithGeneratedAt(`"2026-05-19T00:00:00.5Z"`)), signedProfile},
+		{`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":-0}`,
+			`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":0}`},
+		{zeroProfile, zeroProfile},
+		// Not an object.
+		{`7`, refused},
+		{`"sha256:ghi789"`, refused},
+		{`[]`, refused},
+		{`true`, refused},
+		// Not exactly the three members, names compared as written.
+		{`{}`, refused},
+		{`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z"}`, refused},
+		{`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":14,"riskLevel":"low"}`, refused},
+		{`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","OBSERVATIONDAYS":14}`, refused},
+		{`{"Checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":14}`, refused},
+		{`{"checksum":"sha256:ghi789","generatedat":"2026-05-19T00:00:00Z","observationDays":14}`, refused},
+		// The Kelvin sign, which encoding/json folds onto k.
+		{`{"checKsum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":14}`, refused},
+		// A member that is null or outside its type.
+		{`{"checksum":null,"generatedAt":"2026-05-19T00:00:00Z","observationDays":14}`, refused},
+		{`{"checksum":7,"generatedAt":"2026-05-19T00:00:00Z","observationDays":14}`, refused},
+		{`{"checksum":["sha256:ghi789"],"generatedAt":"2026-05-19T00:00:00Z","observationDays":14}`, refused},
+		{string(profileWithGeneratedAt(`null`)), refused},
+		{string(profileWithGeneratedAt(`"2026-05-19"`)), refused},
+		{string(profileWithGeneratedAt(`0`)), refused},
+		{string(profileWithGeneratedAt(`"2026-05-19T00:00:00+25:00"`)), refused},
+		{string(profileWithGeneratedAt("\"2026-05-19T00:00:00\\u005a\"")), refused},
+		{`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":null}`, refused},
+		{`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":"14"}`, refused},
+		{`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":14.0}`, refused},
+		{`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":1e1}`, refused},
+		{`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":true}`, refused},
+		{`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":9223372036854775808}`, refused},
+		{`{"checksum":1,"generatedAt":"x","observationDays":"many"}`, refused},
+	} {
+		got, err := projectBehavioralProfileV11(json.RawMessage(tc.raw))
+		switch {
+		case tc.want == refused:
+			if !errors.Is(err, errBehavioralProfileForm) {
+				t.Errorf("behavioralProfile %s: projected as %s (error %v), want it refused", tc.raw, got, err)
+			}
+		case err != nil || string(got) != tc.want:
+			t.Errorf("behavioralProfile %s: projected as %s (error %v), want %s", tc.raw, got, err, tc.want)
+		}
+	}
+}
+
+// TestBehavioralProfileForm pins the verdict on a v1.1 credential carrying a
+// behavioralProfile that is not an object of exactly checksum (a string),
+// generatedAt (a timestamp) and observationDays (an integer), under those
+// names as written. The TBS holds null for a credential with no profile
+// (atx-spec §1.3a.2 rule 1) and otherwise those three members, which the
+// credential schema core.md §1.1 points to gives the profile and no other
+// (additionalProperties false), so no signature covers any other profile:
+// it rejects as SIGNATURE_INVALID with a reason naming behavioralProfile.
+// Without the check, the v1.1 baseline verified carrying a fourth member in
+// its profile or observationDays under the name OBSERVATIONDAYS, and a
+// credential signed with no profile verified carrying one that did not
+// decode, which the projection read as null. Under atcVersion 1.0
+// behavioralProfile is unsigned (§1.3a.1) and is not read.
+// atx-conformance#277.
+func TestBehavioralProfileForm(t *testing.T) {
+	base := v11Baseline(t)
+	check := func(label string, f fixture, want string) {
+		t.Helper()
+		got := verify(f)
+		switch {
+		case want == "ACCEPT":
+			if !got.Accepted {
+				t.Errorf("%s: %s, want ACCEPT", label, got)
+			}
+		case got.RejectCategory != want || !strings.Contains(got.Reason, "behavioralProfile") || !strings.Contains(got.Reason, "signature"):
+			t.Errorf("%s: %s, want REJECT[%s] with a reason naming behavioralProfile and the signature", label, got, want)
+		}
+	}
+	// signatureFails holds f to a SIGNATURE_INVALID the signature itself
+	// reports: its profile has a value in the TBS, one the signature does
+	// not cover.
+	signatureFails := func(label string, f fixture) {
+		t.Helper()
+		if got := verify(f); got.Accepted || got.RejectCategory != "SIGNATURE_INVALID" || strings.Contains(got.Reason, "behavioralProfile") {
+			t.Errorf("%s: %s, want REJECT[SIGNATURE_INVALID] from the signature itself", label, got)
+		}
+	}
+
+	// The v1.1 baseline signs signedProfile.
+	for _, raw := range []string{
+		`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":14,"riskLevel":"low"}`,
+		`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":14,"extra":"x"}`,
+		`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","OBSERVATIONDAYS":14}`,
+		`{"Checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":14}`,
+		`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z"}`,
+		`{"checksum":null,"generatedAt":"2026-05-19T00:00:00Z","observationDays":14}`,
+		`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":"14"}`,
+		`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":14.0}`,
+		string(profileWithGeneratedAt(`"2026-05-19"`)),
+		`[]`,
+	} {
+		check("behavioralProfile "+raw+" on the v1.1 baseline",
+			withMembers(t, base, map[string]string{"behavioralProfile": raw}), "SIGNATURE_INVALID")
+	}
+	// The Kelvin sign, which encoding/json folds onto k, is outside printable
+	// ASCII, so the strict parse refuses the profile first, naming the member
+	// (atx-conformance#284).
+	kelvinProfile := withMembers(t, base, map[string]string{"behavioralProfile": `{"checKsum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":14}`})
+	if got, want := verify(kelvinProfile), memberNameReason(`"chec\u`+`212asum"`, "U+212A"); got.Accepted || got.RejectCategory != "PARSE_ERROR" || got.Reason != want {
+		t.Errorf("behavioralProfile with checksum written with the Kelvin sign on the v1.1 baseline: %s, want REJECT[PARSE_ERROR: %s]", got, want)
+	}
+	for _, raw := range []string{
+		`{"observationDays":14,"generatedAt":"2026-05-19T00:00:00Z","checksum":"sha256:ghi789"}`,
+		string(profileWithGeneratedAt(`"2026-05-19T01:00:00+01:00"`)),
+	} {
+		check("behavioralProfile "+raw+", the signed profile written another way, on the v1.1 baseline",
+			withMembers(t, base, map[string]string{"behavioralProfile": raw}), "ACCEPT")
+	}
+	// Controls: each profile below has a value in the TBS other than the
+	// signed one.
+	for _, raw := range []string{
+		`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":15}`,
+		`null`,
+		``,
+	} {
+		signatureFails("behavioralProfile "+raw+" on the v1.1 baseline", withMembers(t, base, map[string]string{"behavioralProfile": raw}))
+	}
+
+	unsigned := signedByPrimary(t, withMembers(t, base, map[string]string{"behavioralProfile": ""}))
+	check("credential signed with no behavioralProfile", unsigned, "ACCEPT")
+	check("behavioralProfile null on a credential signed with none",
+		withMembers(t, unsigned, map[string]string{"behavioralProfile": "null"}), "ACCEPT")
+	for _, raw := range []string{
+		`"sha256:ghi789"`,
+		`7`,
+		`true`,
+		`[]`,
+		`{}`,
+		`{"checksum":1,"generatedAt":"x","observationDays":"many"}`,
+		`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":"14"}`,
+		`{"checksum":null,"generatedAt":null,"observationDays":null}`,
+	} {
+		check("behavioralProfile "+raw+" on a credential signed with none",
+			withMembers(t, unsigned, map[string]string{"behavioralProfile": raw}), "SIGNATURE_INVALID")
+	}
+	signatureFails("behavioralProfile "+signedProfile+" on a credential signed with none",
+		withMembers(t, unsigned, map[string]string{"behavioralProfile": signedProfile}))
+
+	v10, err := loadFixture(repoRoot + "/fixtures/baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(`behavioralProfile {"checksum":1} on the v1.0 baseline, which signs no behavioralProfile`,
+		withMembers(t, v10, map[string]string{"behavioralProfile": `{"checksum":1}`}), "ACCEPT")
+}
+
+// TestSuitePinsBehavioralProfileForm pins that the shipped fixture set holds
+// the behavioralProfile rule TestBehavioralProfileForm tests, one fixture for
+// each form atx-conformance#277 names: a member outside the three, a name in
+// another case, a profile that is not an object and a member outside its
+// type, the last two on a credential signed with no profile. Each fixture
+// must pin a REJECT this verifier reaches for the profile, and its
+// credential must verify once its profile is replaced by lenient, the one a
+// verifier that matches member names under encoding/json's folding, drops a
+// member outside the three and projects a profile it cannot decode as null
+// reads from it. Such a verifier ACCEPTs each fixture.
+func TestSuitePinsBehavioralProfileForm(t *testing.T) {
+	for _, tc := range []struct{ fixture, lenient string }{
+		{"v1_1-behavioral-profile-extra-member.json", signedProfile},
+		{"v1_1-behavioral-profile-case-variant-member.json", signedProfile},
+		{"v1_1-behavioral-profile-not-object.json", "null"},
+		{"v1_1-behavioral-profile-member-outside-type.json", "null"},
+	} {
+		f, err := loadFixture(repoRoot + "/fixtures/" + tc.fixture)
+		if err != nil {
+			t.Errorf("%s: %v", tc.fixture, err)
+			continue
+		}
+		got := verify(f)
+		if !matchesExpected(f.Expected, got) || got.Accepted || !strings.Contains(got.Reason, "behavioralProfile") {
+			t.Errorf("%s: %s, want the fixture's pinned REJECT, reached for its behavioralProfile", tc.fixture, got)
+		}
+		if got := verify(withMembers(t, f, map[string]string{"behavioralProfile": tc.lenient})); !got.Accepted {
+			t.Errorf("%s with behavioralProfile %s: %s, want ACCEPT, so that a verifier reading the profile that way accepts the fixture", tc.fixture, tc.lenient, got)
+		}
 	}
 }

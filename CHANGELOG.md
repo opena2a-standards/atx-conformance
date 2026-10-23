@@ -13,6 +13,30 @@ they should not.
 
 ### Added
 
+- Four MUST-REJECT fixtures built by the generator hold both reference
+  verifiers to the form of a present v1.1 `behavioralProfile` (#277):
+  `fixtures/v1_1-behavioral-profile-extra-member.json`, the v1.1 baseline
+  with a fourth member, `riskLevel`, written in its profile after signing;
+  `fixtures/v1_1-behavioral-profile-case-variant-member.json`, the baseline
+  with `observationDays` renamed `OBSERVATIONDAYS` after signing;
+  `fixtures/v1_1-behavioral-profile-not-object.json`, a credential signed
+  with no profile carrying the string `"sha256:ghi789"` as one; and
+  `fixtures/v1_1-behavioral-profile-member-outside-type.json`, a credential
+  signed with no profile carrying one whose `observationDays` is the string
+  `"14"`. Each expects `REJECT [SIGNATURE_INVALID]` with a reason
+  containing `signature`; both reference verifiers reported ACCEPT on each
+  before the change to them under Changed. The 32 existing fixtures and
+  their `MANIFEST.sha256` lines are byte-identical; the manifest gains four
+  lines. `conformance.json` and the capture under `docs/captures/` are
+  regenerated; the capture gains the fixtures' twelve lines, and its
+  summary line counts 36. The fixture counts in README.md, COSIGNERS.md,
+  CONTRIBUTING.md, `docs/continuous-verification.md` and
+  `docs/sibling-repositories.md` go from 32 to 36 (the sibling row's v1.1
+  count from 20 to 24), and `docs/scope.md` counts 27 of 36 fixtures that
+  reach signature verification, where it counted 23 of 32.
+  `docs/fixtures.md` and `docs/scope.md` list the fixtures, and
+  `scripts/schema_validation.py` holds each to the schema errors
+  `BEHAVIORAL_PROFILE_PINS` lists for it, all under `behavioralProfile`.
 - A MUST-REJECT fixture built by the generator, `fixtures/hybrid-pq-only.json`,
   holds the Ed25519 companion rule under `atcVersion` 1.0 (#151). It is the
   credential of `fixtures/baseline-valid-hybrid.json` with its Ed25519
@@ -255,6 +279,34 @@ they should not.
 
 ### Changed
 
+- Both reference verifiers reject a v1.1 credential whose
+  `behavioralProfile` is present and is not an object of exactly
+  `checksum` (a string), `generatedAt` (a timestamp) and `observationDays`
+  (an integer), under those names as written, as `SIGNATURE_INVALID` with
+  the reason `no signature covers behavioralProfile, which is not an object
+  of exactly checksum (a string), generatedAt (a timestamp) and
+  observationDays (an integer)` (#277). The credential schema core.md §1.1
+  points to gives the profile those three members and no other, and the
+  signed payload holds null for a credential with no profile (§1.3a.2
+  rule 1), so no signature covers such a profile. Both verifiers projected
+  a profile that did not decode to null, the absent form, dropped a member
+  outside the three and matched member names case-insensitively: on the
+  v1.1 baseline, a fourth member in the profile, and `observationDays`
+  renamed `OBSERVATIONDAYS`, verified, and a credential signed with no
+  profile verified carrying `{"checksum": 1, "generatedAt": "x",
+  "observationDays": "many"}` or a string as its profile. An absent or null
+  `behavioralProfile` still verifies as the absent form, and the check does
+  not run under `atcVersion` 1.0, which signs no `behavioralProfile`. A
+  `behavioralProfile.generatedAt` whose offset is out of range is rejected
+  by this check; before, the signed payload held such a profile as null, so
+  a signature made over the profile failed, and a credential signed with no
+  profile verified carrying it (`docs/running-the-verifiers.md`).
+  `TestBehavioralProfileForm`, `TestBehavioralProfileProjection`,
+  `TestSuitePinsBehavioralProfileForm` and the Python verifier's
+  `GoBehavioralProfileForm` class pin it. A `scanSummary` member outside its
+  six is unchanged; its treatment waits on the atx-spec decision on rule 2.
+  A `behavioralProfile` member name outside printable ASCII is still
+  rejected as `PARSE_ERROR` (#284) before the profile's form is checked.
 - Six kinds of line in the two reference verifiers' output change wording
   (#276).
   The summary line counts `(1 fixture)` for one fixture, where it read
