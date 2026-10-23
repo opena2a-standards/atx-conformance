@@ -96,6 +96,13 @@ lesson and scoped to the whole body because ATX signs it all):
     VERIFIER_CONFIG_ERROR too: that library parses every number as a float64.
     An integer in it inside that range but outside the I-JSON exact range
     rejects after these two checks, as SIGNATURE_INVALID (Spec coverage).
+    A number in it written with a fraction or an exponent part, which
+    json.loads reads as a float, leaves the payload with no bytes, since the
+    serializer writes no float (rfc8785.py): each declared signature fails
+    to verify under any configured key, as it does in the Go reference
+    verifier, whose JCS library would write 1e3 and 1000.0 as 1000 (core.md
+    section 1.3a.2 rule 3 keeps that number serialization out of
+    cross-language scope).
   - NaN, Infinity and -Infinity are not JSON, so a file carrying one fails to
     load with the reason the Go reference verifier gives a file that is not
     JSON, fixture is not valid JSON, unless it also nests arrays and objects
@@ -1281,17 +1288,20 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
         try:
             payload = _jcs_canonicalize(tbs)
         except NotImplementedError:
-            # The vendored JCS serializer refuses non-integer numbers
+            # The vendored JCS serializer refuses a number written with a
+            # fraction or an exponent part, which json.loads reads as a float
             # (rfc8785.py); a schema-valid v1.1 TBS carries none. One can still
-            # arrive in content the signer never signed, e.g. a number
-            # injected into declaredPurpose, which enters the TBS verbatim
+            # arrive in declaredPurpose, which enters the TBS verbatim, signed
+            # or injected after signing
             # (fixtures/v1_1-declared-purpose-number-injected.json). Without
             # the canonical bytes no declared signature can verify, so the
             # loop below runs with no key to verify against, instead of
-            # raising out of the run. On content the signer never signed, each
-            # signature then fails with the reason the Go reference verifier
-            # writes: it canonicalizes the number, and the signature does not
-            # verify over those bytes.
+            # raising out of the run. Each signature then fails with the
+            # reason the Go reference verifier writes: it verifies no
+            # signature over a declaredPurpose number written with a fraction
+            # or an exponent part either, signed or not, where its JCS
+            # library would write 1e3 as the 1000 a signer signed
+            # (atx-conformance#283).
             payload = None
         except UnicodeEncodeError as exc:
             # Every decoded member holds U+FFFD where an unpaired surrogate

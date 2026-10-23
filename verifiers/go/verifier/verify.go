@@ -26,6 +26,13 @@
 //     as an IEEE 754 double, which does not hold every integer outside that
 //     range: it writes 9007199254740993 as 9007199254740992
 //     (integerOutsideExactRangeV11).
+//   - Numbers in the v1.1 declaredPurpose: after that check, a number
+//     declaredPurpose writes with a fraction or an exponent part leaves the
+//     payload with no bytes a signature is verified over, so each declared
+//     signature fails, as in the Python reference verifier. JCS writes such a
+//     number as the double nearest it, 1e3 as 1000, and core.md §1.3a.2
+//     rule 3 keeps that number serialization out of cross-language scope
+//     (hasNumberWithFractionOrExponentV11).
 //   - Signature threshold (core.md §3.1 step 8, cosignatures from 2 of 3 key
 //     holders): when the verifier state sets requiredSignatures, the declared
 //     Ed25519 signatures must verify under at least that many distinct keys.
@@ -563,22 +570,13 @@ func integerOutsideExactRangeV11(a *atx) (where, literal string) {
 	if bp, ok := decodeBehavioralProfileV11(a.BehavioralProfile); ok && !exact(int64(bp.ObservationDays)) {
 		return "behavioralProfile.observationDays", strconv.Itoa(bp.ObservationDays)
 	}
-	if purpose := projectDeclaredPurposeV11(a.DeclaredPurpose); purpose != nil {
-		dec := json.NewDecoder(bytes.NewReader(purpose))
-		dec.UseNumber()
-		for {
-			tok, err := dec.Token()
-			if err != nil {
-				break // io.EOF: json.Unmarshal of the credential has read this text whole
-			}
-			number, ok := tok.(json.Number)
-			if !ok || strings.ContainsAny(string(number), ".eE") {
-				continue
-			}
-			// A JSON integer that ParseInt refuses is outside the int64 range.
-			if n, err := strconv.ParseInt(string(number), 10, 64); err != nil || !exact(n) {
-				return "declaredPurpose", string(number)
-			}
+	for _, number := range purposeNumbersV11(a) {
+		if strings.ContainsAny(string(number), ".eE") {
+			continue
+		}
+		// A JSON integer that ParseInt refuses is outside the int64 range.
+		if n, err := strconv.ParseInt(string(number), 10, 64); err != nil || !exact(n) {
+			return "declaredPurpose", string(number)
 		}
 	}
 	ss := projectScanSummaryV11(a.ScanSummary)
@@ -592,6 +590,47 @@ func integerOutsideExactRangeV11(a *atx) (where, literal string) {
 		return "trustLevel", strconv.Itoa(a.TrustLevel)
 	}
 	return "", ""
+}
+
+// hasNumberWithFractionOrExponentV11 reports whether the declaredPurpose of a
+// writes a number with a fraction or an exponent part. The JCS library writes
+// such a number as the double nearest it: 1000.0, 1e3 and 1E3 as 1000, and
+// 9007199254740993.0 and 9.007199254740993e15 as 9007199254740992, which
+// integerOutsideExactRangeV11 does not refuse, since it reads only a number
+// written as an integer. core.md §1.3a.2 rule 3 keeps that number
+// serialization out of cross-language scope, and the Python reference
+// verifier's serializer writes no such number (verifiers/python/rfc8785.py),
+// so a TBS that holds one has no bytes the two verifiers share.
+func hasNumberWithFractionOrExponentV11(a *atx) bool {
+	for _, number := range purposeNumbersV11(a) {
+		if strings.ContainsAny(string(number), ".eE") {
+			return true
+		}
+	}
+	return false
+}
+
+// purposeNumbersV11 returns each number the declaredPurpose of a writes, as
+// written and in the order written, and none when the v1.1 TBS omits
+// declaredPurpose. declaredPurpose enters the TBS as written, so no typed
+// decode reads these numbers.
+func purposeNumbersV11(a *atx) []json.Number {
+	purpose := projectDeclaredPurposeV11(a.DeclaredPurpose)
+	if purpose == nil {
+		return nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(purpose))
+	dec.UseNumber()
+	var numbers []json.Number
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return numbers // io.EOF: json.Unmarshal of the credential has read this text whole
+		}
+		if number, ok := tok.(json.Number); ok {
+			numbers = append(numbers, number)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -912,6 +951,9 @@ func verifySignatures(a *atx, state verifierState) result {
 	// Step 5: signature verification.
 	// Spec mandate: every declared signature MUST verify.
 	var payload []byte
+	// noBytes is set when the v1.1 TBS has no bytes that both reference
+	// verifiers write; no key then verifies a declared signature.
+	noBytes := false
 	if a.ATCVersion == "1.1" {
 		// scanSummary enters the TBS as six typed members (atx-spec §1.3a.2
 		// rule 2). A member outside its type, or a scanSummary that is not an
@@ -943,6 +985,14 @@ func verifySignatures(a *atx, state verifierState) result {
 				Reason:         fmt.Sprintf("no signature covers %s: the integer %s is outside the I-JSON exact range, -(2^53-1) to 2^53-1", where, literal),
 			}
 		}
+		// A number declaredPurpose writes with a fraction or an exponent
+		// part leaves the TBS with no bytes the Python reference verifier
+		// writes (hasNumberWithFractionOrExponentV11). pb writes it as the
+		// double JCS reads it as, so a signature over pb verified a
+		// credential that writes 1e3 where the signer wrote 1000. Each
+		// declared signature is checked against no key below instead, and
+		// fails with the reason the Python reference verifier writes.
+		noBytes = hasNumberWithFractionOrExponentV11(a)
 		payload = pb
 	} else {
 		payload = canonicalPayload(a)
@@ -954,6 +1004,9 @@ func verifySignatures(a *atx, state verifierState) result {
 	// DID is not in the authority set is not an eligible signer for this
 	// credential, so one trusted authority cannot impersonate another.
 	edKeys, pqKeys := indexPublicKeys(state.PublicKeys, authoritySetFor(a, state.TrustedIssuers))
+	if noBytes {
+		edKeys, pqKeys = nil, nil
+	}
 
 	// edSigners holds, by its bytes, each Ed25519 key a declared signature
 	// verified under, for the requiredSignatures count below.

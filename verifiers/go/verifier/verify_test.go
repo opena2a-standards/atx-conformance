@@ -2329,36 +2329,6 @@ func TestIntegerOutsideExactRange(t *testing.T) {
 	reason := func(where, literal string) string {
 		return "no signature covers " + where + ": the integer " + literal + " is outside the I-JSON exact range, -(2^53-1) to 2^53-1"
 	}
-	// signatureVerifies reports whether every Ed25519 signature of f's
-	// credential verifies over the credential's own JCS(TBS) under a key of
-	// its verifier state, the check a verifier without the refusal makes.
-	signatureVerifies := func(f fixture) bool {
-		t.Helper()
-		var a atx
-		if err := json.Unmarshal(f.ATX, &a); err != nil {
-			t.Fatal(err)
-		}
-		payload, err := canonicalPayloadV11(&a)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, sig := range a.Signatures {
-			value, err := base64.StdEncoding.DecodeString(sig.Value)
-			if err != nil {
-				t.Fatal(err)
-			}
-			ok := false
-			for _, ref := range f.VerifierState.PublicKeys {
-				if key, err := hex.DecodeString(ref.PublicKeyHex); err == nil && len(key) == ed25519.PublicKeySize && ed25519.Verify(key, payload, value) {
-					ok = true
-				}
-			}
-			if !ok {
-				return false
-			}
-		}
-		return len(a.Signatures) > 0
-	}
 
 	refused := []struct {
 		label, where, literal string
@@ -2394,9 +2364,11 @@ func TestIntegerOutsideExactRange(t *testing.T) {
 		}
 	}
 
-	// Inside the range, and numbers that are not integers in declaredPurpose,
-	// are not refused: the baseline does not sign them, so the signature
-	// itself fails.
+	// Inside the range, and numbers in declaredPurpose written with an
+	// exponent or a fraction part, are not refused as outside it: the
+	// baseline does not sign them, and such a number leaves no bytes to
+	// verify a signature over (TestDeclaredPurposeNumberWithFractionOrExponent),
+	// so a signature fails.
 	for _, tc := range []struct {
 		label string
 		f     fixture
@@ -2432,7 +2404,7 @@ func TestIntegerOutsideExactRange(t *testing.T) {
 	if errA != nil || errB != nil || !bytes.Equal(pa, pb) {
 		t.Fatalf("JCS(TBS) of criticalFindings 2^53+1 and 2^53: %v, %v; want the same bytes", errA, errB)
 	}
-	if !signatureVerifies(signed) {
+	if !signaturesVerifyOverTBS(t, signed) {
 		t.Fatal("criticalFindings 2^53+1, signed: the signature does not verify over JCS(TBS)")
 	}
 	for label, f := range map[string]fixture{
@@ -2450,7 +2422,7 @@ func TestIntegerOutsideExactRange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !signatureVerifies(shipped) {
+	if !signaturesVerifyOverTBS(t, shipped) {
 		t.Error("fixtures/v1_1-integer-outside-exact-range.json: its signature does not verify over JCS(TBS)")
 	}
 	if got := verify(shipped); got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != reason("scanSummary.criticalFindings", "9007199254740993") {
@@ -2484,5 +2456,112 @@ func TestIntegerOutsideExactRange(t *testing.T) {
 	}
 	if got := verify(withMembers(t, v10, map[string]string{"trustLevel": "9007199254740993"})); got.RejectCategory != "SIGNATURE_INVALID" || strings.Contains(got.Reason, "I-JSON") {
 		t.Errorf("trustLevel 2^53+1 on the v1.0 baseline: %s, want REJECT[SIGNATURE_INVALID] from the signature itself", got)
+	}
+}
+
+// signaturesVerifyOverTBS reports whether every Ed25519 signature of f's v1.1
+// credential verifies over the credential's own JCS(TBS) under a key of its
+// verifier state: the check made by a verifier that verifies a signature over
+// whatever bytes the JCS library writes.
+func signaturesVerifyOverTBS(t *testing.T, f fixture) bool {
+	t.Helper()
+	var a atx
+	if err := json.Unmarshal(f.ATX, &a); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := canonicalPayloadV11(&a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sig := range a.Signatures {
+		value, err := base64.StdEncoding.DecodeString(sig.Value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ok := false
+		for _, ref := range f.VerifierState.PublicKeys {
+			if key, err := hex.DecodeString(ref.PublicKeyHex); err == nil && len(key) == ed25519.PublicKeySize && ed25519.Verify(key, payload, value) {
+				ok = true
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	return len(a.Signatures) > 0
+}
+
+// TestDeclaredPurposeNumberWithFractionOrExponent pins the verdict on a v1.1
+// credential whose declaredPurpose writes a number with a fraction or an
+// exponent part. The JCS library writes such a number as the double nearest
+// it, so this verifier accepted a credential signed over {"n": 1000} that
+// carried 1000.0, 1e3 or 1E3, and one signed over the bytes the library writes
+// for 9007199254740993, those of 9007199254740992, that carried
+// 9007199254740993.0 or 9.007199254740993e15, which the exact-range check
+// does not read as integers. The Python reference verifier, whose serializer
+// writes no such number, rejected each. Both now verify no signature over
+// such a TBS, so each declared signature fails, with one reason
+// (GO_PURPOSE_NUMBER_SPELLINGS in verifiers/python/test_verify.py).
+// atx-conformance#283.
+func TestDeclaredPurposeNumberWithFractionOrExponent(t *testing.T) {
+	base := v11Baseline(t)
+	const notVerified = "Ed25519 signature did:opena2a:authority:opena2a.org#key-1 did not verify against any configured public key"
+	// signedOver is the v1.1 baseline with declaredPurpose written as
+	// presented, under one Ed25519 signature over its JCS(TBS) with
+	// declaredPurpose written as signed.
+	signedOver := func(signed, presented string) fixture {
+		t.Helper()
+		f := signedByPrimary(t, withMembers(t, base, map[string]string{"declaredPurpose": signed}))
+		return withMembers(t, f, map[string]string{"declaredPurpose": presented})
+	}
+
+	for _, tc := range []struct{ signed, presented string }{
+		{`{"n": 1000}`, `{"n": 1000.0}`},
+		{`{"n": 1000}`, `{"n": 1e3}`},
+		{`{"n": 1000}`, `{"n": 1E3}`},
+		{`{"n": 1000}`, `{"n": 1e+3}`},
+		{`{"n": 1000}`, `{"n": 10000e-1}`},
+		{`{"n": 9007199254740993}`, `{"n": 9007199254740993.0}`},
+		{`{"n": 9007199254740993}`, `{"n": 9.007199254740993e15}`},
+		{`{"n": 1.5}`, `{"n": 1.5}`},
+		{`{"n": 0}`, `{"n": -0.0}`},
+		{`[1000]`, `[1000.0]`},
+		{`1000`, `1e3`},
+		{`{"limits": {"refund": [1, 2.5e1]}}`, `{"limits": {"refund": [1, 2.5e1]}}`},
+	} {
+		f := signedOver(tc.signed, tc.presented)
+		// The JCS library writes the number as presented with the bytes it
+		// writes for it as signed, so a verifier that verifies the signature
+		// over those bytes accepts f.
+		if !signaturesVerifyOverTBS(t, f) {
+			t.Fatalf("declaredPurpose %s signed as %s: the signature does not verify over JCS(TBS)", tc.presented, tc.signed)
+		}
+		if got := verify(f); got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != notVerified {
+			t.Errorf("declaredPurpose %s signed as %s: %s, want REJECT[SIGNATURE_INVALID: %s]", tc.presented, tc.signed, got, notVerified)
+		}
+	}
+
+	// Controls: integers in the exact range, written as signed, are verified
+	// over the bytes JCS writes for them, as are a fraction or an exponent
+	// written inside a string or a member name; an integer outside the range
+	// is refused as the exact-range check refuses it.
+	for _, signed := range []string{`{"n": 1000}`, `{"n": 0}`, `[1000]`, `1000`, `{"1.5": "2e3", "n": [1, -7]}`} {
+		if got := verify(signedOver(signed, signed)); !got.Accepted {
+			t.Errorf("declaredPurpose %s, signed: %s, want ACCEPT", signed, got)
+		}
+	}
+	outside := "no signature covers declaredPurpose: the integer 9007199254740993 is outside the I-JSON exact range, -(2^53-1) to 2^53-1"
+	if got := verify(signedOver(`{"n": 9007199254740993}`, `{"n": 9007199254740993}`)); got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != outside {
+		t.Errorf(`declaredPurpose {"n": 9007199254740993}, signed: %s, want REJECT[SIGNATURE_INVALID: %s]`, got, outside)
+	}
+
+	// Under atcVersion 1.0 no signature covers declaredPurpose, and a number
+	// in it leaves the verdict as it was: the v1.0 baseline is accepted.
+	v10, err := loadFixture(repoRoot + "/fixtures/baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := verify(withMembers(t, v10, map[string]string{"declaredPurpose": `{"n": 1e3}`})); !got.Accepted {
+		t.Errorf(`declaredPurpose {"n": 1e3} on the v1.0 baseline: %s, want ACCEPT`, got)
 	}
 }

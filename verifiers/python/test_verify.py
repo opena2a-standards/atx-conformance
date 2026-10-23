@@ -408,13 +408,13 @@ class InjectedNumberPurpose(unittest.TestCase):
                 self.assertIn("signature", got.reason.lower())
 
     def test_reason_is_the_go_verifier_reason(self):
-        # The Go reference verifier canonicalizes the number, and the
-        # signature does not verify over those bytes. This verifier cannot
-        # write them, so no key verifies the signature here either, and the
-        # reason names it in the Go verifier's words, read from its run over
-        # these values. GoReportText holds the report over fixtures/, which
-        # holds fixtures/v1_1-declared-purpose-number-injected.json, to the
-        # Go capture.
+        # Neither reference verifier verifies a signature over a number
+        # written with a fraction or an exponent part (GoPurposeNumberSpellings):
+        # each checks every declared signature against no key, and the reason
+        # names it in the Go verifier's words, read from its run over these
+        # values. GoReportText holds the report over fixtures/, which holds
+        # fixtures/v1_1-declared-purpose-number-injected.json, to the Go
+        # capture.
         for purpose in (1.5, {"autonomy": 0.5}, ["billing:inquiry", 0.25]):
             with self.subTest(purpose=purpose):
                 self.assertEqual(
@@ -1842,6 +1842,122 @@ class GoIntegerOutsideExactRange(unittest.TestCase):
             code, text, err = _run_main(str(directory))
         self.assertEqual(code, 0, text + err)
         self.assertEqual(text.splitlines()[-1], f"summary: {n} pass, 0 fail ({n} fixtures)")
+
+
+def _write_signed_purpose(directory: Path, name: str, written: str, signed: bytes) -> Path:
+    """Write the v1.1 baseline with declaredPurpose written as the raw JSON
+    text written, under one Ed25519 signature made with the primary issuer's
+    key (the RFC 8032 test vector in vectors/issuer-primary.json) over its
+    JCS(TBS) with signed, canonical JSON bytes, as declaredPurpose, and
+    return its path. This verifier's serializer writes neither 1.5 nor
+    9007199254740992, so the TBS is canonicalized with a string in
+    declaredPurpose's place, which JCS orders by the member's name alone,
+    and signed is put where that string was."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    key = json.loads((ROOT / "vectors" / "issuer-primary.json").read_text())
+    fixture = json.loads(BASELINE_V11.read_text())
+    fixture["atx"]["declaredPurpose"] = "@@PURPOSE@@"
+    path = directory / name
+    path.write_text(json.dumps(fixture))
+    tbs = verify.canonical_payload_v11(verify._decode_credential(verify.load_fixture(path)["atx"]))
+    placeholder = b'"declaredPurpose":"@@PURPOSE@@"'
+    if tbs.count(placeholder) != 1:
+        raise ValueError(f"JCS(TBS) holds {placeholder!r} {tbs.count(placeholder)} times, not once")
+    payload = tbs.replace(placeholder, b'"declaredPurpose":' + signed)
+    signer = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(key["seedHex"]))
+    fixture["atx"]["signatures"] = [{
+        "keyId": key["keyId"],
+        "algorithm": "Ed25519",
+        "value": base64.b64encode(signer.sign(payload)).decode("ascii"),
+    }]
+    path.write_text(json.dumps(fixture).replace('"@@PURPOSE@@"', written, 1))
+    return path
+
+
+# The reason both reference verifiers write when no configured key verifies
+# the Ed25519 signature of the v1.1 baseline.
+ED25519_NOT_VERIFIED = (
+    "Ed25519 signature did:opena2a:authority:opena2a.org#key-1 "
+    "did not verify against any configured public key"
+)
+
+# The two tables below were recorded from `go run .` in ../go, built with
+# Go 1.26.3, on the files _write_signed_purpose writes.
+#
+# A declaredPurpose number written with a fraction or an exponent part, and
+# the bytes the Go reference verifier's JCS library writes for it, which the
+# signature covers: 1000.0, 1e3 and 1E3 as 1000, and 9007199254740993.0 and
+# 9.007199254740993e15 as 9007199254740992. The Go verifier accepted each
+# under that signature before atx-conformance#283, and this verifier, whose
+# serializer writes no such number, rejected each. Both now reject each as
+# SIGNATURE_INVALID, with ED25519_NOT_VERIFIED.
+GO_PURPOSE_NUMBER_SPELLINGS = (
+    ('{"n": 1000.0}', b'{"n":1000}'),
+    ('{"n": 1e3}', b'{"n":1000}'),
+    ('{"n": 1E3}', b'{"n":1000}'),
+    ('{"n": 1e+3}', b'{"n":1000}'),
+    ('{"n": 10000e-1}', b'{"n":1000}'),
+    ('{"n": 9007199254740993.0}', b'{"n":9007199254740992}'),
+    ('{"n": 9.007199254740993e15}', b'{"n":9007199254740992}'),
+    ('{"n": 1.5}', b'{"n":1.5}'),
+    ('{"n": -0.0}', b'{"n":0}'),
+    ("[1000.0]", b"[1000]"),
+    ("1e3", b"1000"),
+    ('{"limits": {"refund": [1, 2.5e1]}}', b'{"limits":{"refund":[1,25]}}'),
+)
+
+# declaredPurpose written as the bytes the signature covers: integers in the
+# I-JSON exact range, and a fraction and an exponent inside a member name and
+# a string. The Go reference verifier accepts each, as this verifier does.
+GO_PURPOSE_SIGNED_AS_WRITTEN = (
+    ('{"n": 1000}', b'{"n":1000}'),
+    ('{"n": 0}', b'{"n":0}'),
+    ("[1000]", b"[1000]"),
+    ("1000", b"1000"),
+    ('{"1.5": "2e3", "n": [1, -7]}', b'{"1.5":"2e3","n":[1,-7]}'),
+)
+
+
+class GoPurposeNumberSpellings(unittest.TestCase):
+    """A declaredPurpose number written with a fraction or an exponent part,
+    under a signature over the bytes the Go reference verifier's JCS library
+    writes for it. That library writes such a number as the double nearest
+    it, so the Go verifier accepted a credential signed over 1000 that
+    carried 1e3, while this verifier's serializer writes no such number and
+    rejected it. Neither verifies a signature over such a number now, so
+    both reject it with one reason. atx-conformance#283."""
+
+    def _verdict(self, written: str, signed: bytes) -> verify.VerifyResult:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write_signed_purpose(Path(tmp), "purpose.json", written, signed)
+            return verify.verify_fixture(verify.load_fixture(path))
+
+    def test_number_with_a_fraction_or_exponent_rejects_with_the_go_reason(self):
+        for written, signed in GO_PURPOSE_NUMBER_SPELLINGS:
+            with self.subTest(written=written):
+                got = self._verdict(written, signed)
+                self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+                self.assertEqual(got.reason, ED25519_NOT_VERIFIED)
+
+    def test_written_as_signed_is_accepted(self):
+        # The signature _write_signed_purpose makes verifies wherever
+        # declaredPurpose is written as the bytes it covers.
+        for written, signed in GO_PURPOSE_SIGNED_AS_WRITTEN:
+            with self.subTest(written=written):
+                got = self._verdict(written, signed)
+                self.assertTrue(got.accepted, got.reason)
+
+    def test_integer_outside_the_exact_range_keeps_its_reason(self):
+        got = self._verdict('{"n": 9007199254740993}', b'{"n":9007199254740992}')
+        self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+        self.assertEqual(got.reason, _exact_range_reason("declaredPurpose", "9007199254740993"))
+
+    def test_v1_0_declared_purpose_is_not_signed(self):
+        # The legacy form signs no declaredPurpose, so a number in it leaves
+        # the v1.0 baseline accepted, as it does in the Go reference verifier.
+        got = _at_verdict(BASELINE_V10, PURPOSE, '{"n": 1e3}')
+        self.assertTrue(got.accepted, got.reason)
 
 
 class GoNonObjectCredential(unittest.TestCase):
