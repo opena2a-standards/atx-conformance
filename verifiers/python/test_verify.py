@@ -450,9 +450,12 @@ class InjectedNumberPurpose(unittest.TestCase):
 
     def test_number_outside_float64_range_reaches_the_go_category(self):
         # The Go reference verifier's JCS library parses each number with
-        # strconv.ParseFloat: one it cannot hold rejects as
-        # VERIFIER_CONFIG_ERROR, one it holds is canonicalized and the
-        # signature fails. Python's float() rounds at the same edge.
+        # strconv.ParseFloat: one it refuses as out of range rejects as
+        # VERIFIER_CONFIG_ERROR, one it reads as finite is canonicalized and
+        # the signature fails. On each number of GO_PURPOSE_NUMBER_VERDICTS
+        # Python's float() rounds at the same edge. It does not on 1 followed
+        # by 1000 zeros and e-650, which strconv.ParseFloat reads as finite
+        # (test_number_outside_float64_range_that_go_reads_as_finite).
         for literal, category in GO_PURPOSE_NUMBER_VERDICTS:
             with self.subTest(literal=literal[:40], length=len(literal)):
                 got = _at_verdict(BASELINE_V11, ("declaredPurpose",), literal)
@@ -470,6 +473,20 @@ class InjectedNumberPurpose(unittest.TestCase):
             with self.subTest(literal=literal[:40], length=len(literal)):
                 got = _at_verdict(BASELINE_V11, ("declaredPurpose",), literal)
                 self.assertEqual(got.reason, GO_OUTSIDE_FLOAT64_REASON)
+
+    def test_number_outside_float64_range_that_go_reads_as_finite(self):
+        # 1 followed by 1000 zeros and e-650, whose value is 10^350, is
+        # outside the float64 range: float() returns inf, and this verifier
+        # rejects it as VERIFIER_CONFIG_ERROR with GO_OUTSIDE_FLOAT64_REASON.
+        # strconv.ParseFloat reads it as 1e+149, and the Go reference
+        # verifier rejects it as SIGNATURE_INVALID
+        # (TestDecoderWithoutUseNumberOnOutOfRangeNumbers), so it is in no
+        # row of GO_PURPOSE_NUMBER_VERDICTS. atx-conformance#294.
+        literal = "1" + "0" * 1000 + "e-650"
+        self.assertEqual(float(literal), float("inf"))
+        self.assertTrue(verify._holds_number_outside_float64(json.loads(literal)))
+        got = _at_verdict(BASELINE_V11, ("declaredPurpose",), literal)
+        self.assertEqual((got.reject_category, got.reason), ("VERIFIER_CONFIG_ERROR", GO_OUTSIDE_FLOAT64_REASON))
 
     def test_directory_run_reaches_the_summary_line(self):
         # One fixture the verifier cannot canonicalize must not end the run:
