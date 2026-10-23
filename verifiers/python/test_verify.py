@@ -458,8 +458,9 @@ class InjectedNumberPurpose(unittest.TestCase):
                 self.assertEqual(got.reject_category, category, got.reason[:200])
 
     def test_number_outside_float64_range_has_the_go_reason(self):
-        # Both reference verifiers refuse such a number before their JCS
-        # serializer reads it, with one reason, which names the member
+        # Both reference verifiers refuse such a number (the
+        # VERIFIER_CONFIG_ERROR rows) before their JCS serializer reads it,
+        # with one reason, which names the member
         # (TestDeclaredPurposeNumberOutsideFloat64Range in the Go verifier).
         for literal, category in GO_PURPOSE_NUMBER_VERDICTS:
             if category != "VERIFIER_CONFIG_ERROR":

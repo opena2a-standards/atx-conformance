@@ -2601,15 +2601,21 @@ func TestDeclaredPurposeNumberWithFractionOrExponent(t *testing.T) {
 }
 
 // TestDeclaredPurposeNumberOutsideFloat64Range pins the verdict and reason on
-// a v1.1 credential whose declaredPurpose writes a number outside the float64
-// range. declaredPurpose enters the TBS as written, and the JCS library
-// refuses such a number with the error strconv.ParseFloat returns for it,
-// whose text the Go release sets. This verifier wrote that error as its
-// reason, v1.1 canonicalization failed: strconv.ParseFloat: parsing "1e400":
-// value out of range, where the Python reference verifier writes a sentence
-// that names the member. Both now reject each as VERIFIER_CONFIG_ERROR with
-// that sentence (GO_PURPOSE_NUMBER_VERDICTS in
-// verifiers/python/test_verify.py). atx-conformance#289.
+// a v1.1 credential whose declaredPurpose writes a number strconv.ParseFloat
+// refuses as outside the float64 range, such as 1e400. declaredPurpose enters
+// the TBS as written, and the JCS library refuses such a number with the
+// error strconv.ParseFloat returns for it, whose text the Go release sets.
+// This verifier wrote that error as its reason, v1.1 canonicalization failed:
+// strconv.ParseFloat: parsing "1e400": value out of range, where the Python
+// reference verifier writes a sentence that names the member. Both now reject
+// each value in purposes as VERIFIER_CONFIG_ERROR with that sentence
+// (GO_PURPOSE_NUMBER_VERDICTS in verifiers/python/test_verify.py).
+// strconv.ParseFloat can read a number written with more than 800 digits and
+// an exponent part as finite when its value is outside the range: it reads 1
+// followed by 1000 zeros and e-650 as 1e+149. On a declaredPurpose of that
+// number this verifier rejects the credential as SIGNATURE_INVALID, where the
+// Python reference verifier rejects it as VERIFIER_CONFIG_ERROR
+// (hasNumberOutsideFloat64RangeV11). atx-conformance#289.
 func TestDeclaredPurposeNumberOutsideFloat64Range(t *testing.T) {
 	base := v11Baseline(t)
 	const outside = "v1.1 canonicalization failed: declaredPurpose holds a number outside the float64 range"
