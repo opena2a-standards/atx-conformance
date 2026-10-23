@@ -180,9 +180,9 @@ Depends on:
   the fixture fails to load, in the credential's `issuedAt` or `expiresAt`
   the rejection is a `PARSE_ERROR`, in the verifier clock `clockRfc3339` it
   is a `VERIFIER_CONFIG_ERROR`, and in a v1.1 credential's
-  `behavioralProfile.generatedAt` the signed payload carries
-  `behavioralProfile` as null, so a signature made over the profile fails as
-  `SIGNATURE_INVALID`. An offset of `+24:00` or `+23:60` decodes. Outside
+  `behavioralProfile.generatedAt` the profile is outside its form, so no
+  signature covers it and the credential rejects as `SIGNATURE_INVALID`.
+  An offset of `+24:00` or `+23:60` decodes. Outside
   the RFC 3339 layout, with text after such an offset
   (`2099-12-31T23:59:59+25:00x`) or a minute that is not two digits after
   an hour above 24 (`2026-02-30T00:00:00+25:0a`), Go 1.22 refuses the

@@ -35,7 +35,10 @@ Contract:
 - the two member-name fixtures (atx-conformance#284), which each carry a
   top-level member named with a character outside printable ASCII beside the
   member its name spells, and MUST fail validation on exactly one root
-  `additionalProperties` error naming that member.
+  `additionalProperties` error naming that member, and
+- the four behavioralProfile fixtures (atx-conformance#277), which each carry
+  a behavioralProfile outside its form by design and MUST fail validation on
+  exactly the errors BEHAVIORAL_PROFILE_PINS lists for that fixture.
 
 Any other schema error means fixture and schema have drifted apart.
 Exit 0 only if the whole contract holds.
@@ -102,6 +105,26 @@ FIXTURE_MEMBERS = (
     "$schema", "name", "description", "requirement", "spec",
     "keypairRefs", "verifierState", "expected", "atx",
 )
+
+# The schema errors each behavioralProfile fixture (atx-conformance#277) MUST
+# fail on, and no others: (validator, absolute path, text the error message
+# carries). The text names the offending member or the type the schema wants,
+# so a fixture that loses its malformed member but gains another cannot pass.
+BEHAVIORAL_PROFILE_PINS = {
+    "v1_1-behavioral-profile-case-variant-member.json": (
+        ("additionalProperties", ("behavioralProfile",), "'OBSERVATIONDAYS'"),
+        ("required", ("behavioralProfile",), "'observationDays'"),
+    ),
+    "v1_1-behavioral-profile-extra-member.json": (
+        ("additionalProperties", ("behavioralProfile",), "'riskLevel'"),
+    ),
+    "v1_1-behavioral-profile-member-outside-type.json": (
+        ("type", ("behavioralProfile", "observationDays"), "'integer'"),
+    ),
+    "v1_1-behavioral-profile-not-object.json": (
+        ("type", ("behavioralProfile",), "'object'"),
+    ),
+}
 
 
 def schema_problem(rel: pathlib.PurePath, schema: dict) -> str:
@@ -424,6 +447,7 @@ def check_credentials() -> int:
         # The member each member-name fixture adds: U+0130 followed by d, and
         # U+0131 followed by ssuedAt.
         added_member = NON_ASCII_MEMBERS.get(path.name)
+        expect_profile_errors = BEHAVIORAL_PROFILE_PINS.get(path.name)
         if expect_version_invalid:
             only_version_enum = len(errors) == 1 and list(errors[0].absolute_path) == ["atcVersion"]
             if only_version_enum:
@@ -507,6 +531,25 @@ def check_credentials() -> int:
                     print(f"      {err.json_path}: {err.message}")
                 if not errors:
                     print("      (validated cleanly - fixture no longer carries the added member)")
+                failures += 1
+        elif expect_profile_errors is not None:
+            # One error per pin, matched on validator and path, each message
+            # carrying its pinned text. Pins are distinct on (validator, path),
+            # so sorting both sides pairs each error with its pin.
+            got = sorted((e.validator, tuple(e.absolute_path), e.message) for e in errors)
+            want = sorted(expect_profile_errors)
+            only_pinned = len(got) == len(want) and all(
+                g[0] == w[0] and g[1] == w[1] and w[2] in g[2] for g, w in zip(got, want)
+            )
+            if only_pinned:
+                kinds = ", ".join(w[0] for w in want)
+                print(f"PASS  {path.name}: schema-invalid on exactly behavioralProfile ({kinds}, as pinned)")
+            else:
+                print(f"FAIL  {path.name}: expected exactly the pinned behavioralProfile errors, got:")
+                for err in errors or []:
+                    print(f"      {err.json_path}: {err.message}")
+                if not errors:
+                    print("      (validated cleanly - fixture no longer carries a malformed behavioralProfile)")
                 failures += 1
         elif errors:
             print(f"FAIL  {path.name}:")

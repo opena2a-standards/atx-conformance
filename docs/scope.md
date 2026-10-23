@@ -24,7 +24,7 @@ What this suite verifies:
 | Revocation via the credential `revoked` flag | `fixtures/revoked.json` |
 | Revocation via CRL membership alone, the credential's own flag being false (§1.3 step 6, which both reference verifiers perform at their step 3, before any signature) | `fixtures/revoked-crl-only.json` |
 | Trusted-issuer DID set | `fixtures/wrong-issuer.json` |
-| Ed25519 signature verification over the canonical payload | every fixture that passes steps 0 to 4 of the reference verifiers (strict parse, schema version, expiry, revocation by the flag or the CRL, trusted issuer): 23 of 32. The others reject before step 5; `go test` in `verifiers/go` checks that their signatures verify once that gate is lifted. The count follows the reference verifiers' order, which checks the CRL (§1.3 step 6) before the signatures (§1.3 steps 4 and 5), so `fixtures/revoked-crl-only.json` is among the others. Both fixtures whose CRL lists their agent carry valid signatures, so in the spec's order they reject as `REVOKED` too |
+| Ed25519 signature verification over the canonical payload | every fixture that passes steps 0 to 4 of the reference verifiers (strict parse, schema version, expiry, revocation by the flag or the CRL, trusted issuer): 27 of 36. The others reject before step 5; `go test` in `verifiers/go` checks that their signatures verify once that gate is lifted. The count follows the reference verifiers' order, which checks the CRL (§1.3 step 6) before the signatures (§1.3 steps 4 and 5), so `fixtures/revoked-crl-only.json` is among the others. Both fixtures whose CRL lists their agent carry valid signatures, so in the spec's order they reject as `REVOKED` too |
 | Hybrid Ed25519 + ML-DSA-65 signature verification (FIPS 204) | `fixtures/baseline-valid-hybrid.json` |
 | Multi-signature: every declared signature must verify (three Ed25519 signatures from three distinct keys) | `fixtures/threshold-2of3-cosignature.json` |
 | k-of-n signature threshold, such as 2-of-3 (§3.1 step 8): with `requiredSignatures` set in the verifier state, a credential whose declared Ed25519 signatures verify under fewer distinct keys than it sets rejects | `fixtures/threshold-1of3-cosignature.json`; no fixture sets a threshold its credential meets, see conformance.json notCovered |
@@ -33,6 +33,7 @@ What this suite verifies:
 | ATX v1.1 JCS(TBS) signing, signed-field integrity | `fixtures/v1_1-baseline-valid.json`, `fixtures/v1_1-tampered-capabilities.json` |
 | A v1.1 scanSummary member outside its type (§1.3a.2 rule 2) is a signature failure: no signature covers it, and a verifier that reads it as its zero value accepts it under a signature over that zero value | `fixtures/v1_1-scan-summary-member-outside-type.json` |
 | A v1.1 scanSummary count outside the I-JSON exact range, -(2^53-1) to 2^53-1 (RFC 7493 §2.2), is a signature failure: an RFC 8785 serializer that reads each number as an IEEE 754 double writes `criticalFindings` 9007199254740993 as 9007199254740992, so a verifier that canonicalizes it that way accepts it under a signature over 9007199254740992 | `fixtures/v1_1-integer-outside-exact-range.json` |
+| A present v1.1 behavioralProfile that is not an object of exactly `checksum`, `generatedAt` and `observationDays`, names compared exactly, each in its type (the credential schema of §1.1, §1.3a.2 rule 1), is a signature failure: no signature covers it, and a verifier that projects it to null, the absent form, or drops or folds a member accepts it under a signature that does not cover it | `fixtures/v1_1-behavioral-profile-extra-member.json`, `fixtures/v1_1-behavioral-profile-case-variant-member.json`, `fixtures/v1_1-behavioral-profile-not-object.json`, `fixtures/v1_1-behavioral-profile-member-outside-type.json` |
 | ATX v1.1 declaredPurpose carried under the signature (§1.5) | `fixtures/v1_1-declared-purpose-valid.json`, `fixtures/v1_1-tampered-declared-purpose.json` |
 | Degenerate declaredPurpose (§1.3a.2 rule 5, issue #11): parse-level emptiness, verbatim non-object inclusion | `fixtures/v1_1-declared-purpose-empty-whitespace.json`, `fixtures/v1_1-declared-purpose-array-injected.json`, `fixtures/v1_1-declared-purpose-string-injected.json`, `fixtures/v1_1-declared-purpose-number-injected.json` |
 | Strict credential parse: duplicate object members reject at any depth (RFC 8259 §4 parser-divergence smuggling) | `fixtures/v1_1-duplicate-purpose-member.json` |
@@ -51,7 +52,10 @@ What this suite does NOT verify:
   field in ATX v1.0 (not a structured SLSA v1 predicate inline); verifiers
   do not parse it.
 - Behavioral profile validation. The `behavioralProfile` field is carried and
-  signed in the v1.1 fixtures, but not validated.
+  signed in the v1.1 fixtures, except two signed with no profile that carry
+  one added after signing, and a present profile outside its form is a
+  signature failure (the table above), but what its members state about the
+  agent is not validated.
 
 The full requirement-to-fixture mapping is machine-readable in
 [`conformance.json`](../conformance.json), regenerated from the fixtures by

@@ -47,6 +47,18 @@ PASS  fixtures/v1_1-baseline-valid.json
        observed: ACCEPT
        signatures: 1/1 valid (ed25519=true mldsa65=false)
        trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+PASS  fixtures/v1_1-behavioral-profile-case-variant-member.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: no signature covers behavioralProfile, which is not an object of exactly checksum (a string), generatedAt (a timestamp) and observationDays (an integer)]
+PASS  fixtures/v1_1-behavioral-profile-extra-member.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: no signature covers behavioralProfile, which is not an object of exactly checksum (a string), generatedAt (a timestamp) and observationDays (an integer)]
+PASS  fixtures/v1_1-behavioral-profile-member-outside-type.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: no signature covers behavioralProfile, which is not an object of exactly checksum (a string), generatedAt (a timestamp) and observationDays (an integer)]
+PASS  fixtures/v1_1-behavioral-profile-not-object.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: no signature covers behavioralProfile, which is not an object of exactly checksum (a string), generatedAt (a timestamp) and observationDays (an integer)]
 PASS  fixtures/v1_1-case-variant-member.json
        expected: REJECT [PARSE_ERROR]
        observed: REJECT[PARSE_ERROR: credential contains duplicate member "trustLevel" (strict parse: the whole ATX credential is a signed body; RFC 8259 §4 duplicate names are parser-divergent)]
@@ -111,4 +123,4 @@ PASS  fixtures/wrong-issuer.json
        expected: REJECT [UNTRUSTED_ISSUER]
        observed: REJECT[UNTRUSTED_ISSUER: issuer DID did:opena2a:authority:attacker.example is not in the verifier's trusted set (untrusted issuer)]
 
-summary: 32 pass, 0 fail (32 fixtures)
+summary: 36 pass, 0 fail (36 fixtures)
