@@ -396,7 +396,10 @@ def _fold_key(s: str) -> str:
     changes it (docs/running-the-verifiers.md). A fallback to str.lower(), which
     reads the tables of the release, made U+1C89 and U+1C8A (a case pair from
     Unicode 16.0) a duplicate under Python 3.14 and not under Python 3.12, and
-    folded U+0130 to i followed by U+0307 (atx-conformance#173).
+    folded U+0130 to i followed by U+0307 (atx-conformance#173). In an object
+    the Go verifier decodes, a name that holds a character outside printable
+    ASCII, folded together with another or not, is refused once this check
+    passes (_name_outside_printable_ascii).
     """
     out: list[str] = []
     for ch in s:
@@ -425,7 +428,7 @@ _GO_QUOTE_ESCAPES = {
 }
 
 
-def _go_quote(value: str) -> str:
+def _go_quote(value: str, ascii_only: bool = False) -> str:
     """value as the Go reference verifier's %q writes it (strconv.Quote), so a
     reason that quotes a credential's string reads the same in both reports:
     in double quotes, with a quote or a backslash escaped, each printable
@@ -434,12 +437,15 @@ def _go_quote(value: str) -> str:
     \\UHHHHHHHH above. Printable is a letter, mark, number, punctuation or
     symbol, or the ASCII space, for str.isprintable and for Go's
     strconv.IsPrint alike, each by the Unicode tables of its release. An
-    unpaired surrogate is U+FFFD, as _go_string reads it."""
+    unpaired surrogate is U+FFFD, as _go_string reads it. With ascii_only,
+    value as %+q writes it (strconv.QuoteToASCII): printable is U+0020 to
+    U+007E, so every other character is escaped and no Unicode table
+    decides the text."""
     out = ['"']
     for ch in _go_string(value):
         if ch in _GO_QUOTE_ESCAPES:
             out.append(_GO_QUOTE_ESCAPES[ch])
-        elif ch.isprintable():
+        elif (" " <= ch <= "~") if ascii_only else ch.isprintable():
             out.append(ch)
         elif ord(ch) < 0x20 or ord(ch) == 0x7F:
             out.append(f"\\x{ord(ch):02x}")
@@ -480,6 +486,55 @@ def _dup_marking_pairs(pairs: list[tuple[str, Any]]) -> "_DupMarkedDict":
     out.names = names
     out.shadowed = shadowed
     return out
+
+
+def _outside_printable_ascii(key: str) -> tuple[str, str] | None:
+    """The member name key as _go_string reads it, so an unpaired surrogate
+    escape is U+FFFD as in Go, and its first character outside printable
+    ASCII (U+0020 to U+007E), or None when it holds none."""
+    name = _go_string(key)
+    for ch in name:
+        if not " " <= ch <= "~":
+            return name, ch
+    return None
+
+
+def _name_outside_printable_ascii(credential: Any) -> tuple[str, str] | None:
+    """The first member name, in document order, that holds a character
+    outside printable ASCII in an object the Go reference verifier decodes
+    into a struct: the credential, each object of its signatures array, and
+    its scanSummary and behavioralProfile objects, with the first such
+    character in it (_outside_printable_ascii), or None when there is none.
+    Those three members are matched by folded name, as Go matches them to
+    its atx struct's fields. memberNameOutsidePrintableASCII
+    (verifiers/go/verifier/verify.go) says why the strict parse refuses such
+    a name: no case table then decides which member it is.
+
+    declaredPurpose is not scanned, nor is a member the Go verifier's atx
+    struct does not declare. A value that is not an object holds no member
+    name. credential is what load_fixture returns; once the strict parse's
+    duplicate check has passed, no name repeats in it, so each object's
+    order is its document order."""
+    if not isinstance(credential, dict):
+        return None
+    for key, value in credential.items():
+        found = _outside_printable_ascii(key)
+        if found is not None:
+            return found
+        folded = _fold_key(_go_string(key))
+        if folded in ("scansummary", "behavioralprofile"):
+            objects = [value]
+        elif folded == "signatures" and isinstance(value, list):
+            objects = value
+        else:
+            continue
+        for obj in objects:
+            if isinstance(obj, dict):
+                for inner in obj:
+                    found = _outside_printable_ascii(inner)
+                    if found is not None:
+                        return found
+    return None
 
 
 @dataclass
@@ -1183,6 +1238,16 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
         return VerifyResult(
             reject_category="PARSE_ERROR",
             reason=f"credential contains duplicate member {_go_quote(dup)} (strict parse: the whole ATX credential is a signed body; RFC 8259 §4 duplicate names are parser-divergent)",
+        )
+    # A member name outside printable ASCII in an object the Go reference
+    # verifier decodes, with its reason: the name as %+q writes it and the
+    # character as %U does, neither read from a Unicode table.
+    outside = _name_outside_printable_ascii(atx)
+    if outside is not None:
+        name, char = outside
+        return VerifyResult(
+            reject_category="PARSE_ERROR",
+            reason=f"credential member name {_go_quote(name, ascii_only=True)} holds U+{ord(char):04X}, outside printable ASCII (strict parse: a member name in the credential, a signature entry, scanSummary or behavioralProfile must be printable ASCII, U+0020 to U+007E)",
         )
     try:
         atx = _decode_credential(atx)

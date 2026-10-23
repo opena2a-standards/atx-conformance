@@ -31,7 +31,11 @@ Contract:
   on exactly one root `additionalProperties` error, and
 - the scanSummary type fixture (atx-conformance#173), which carries
   scanSummary.criticalFindings as a string by design and MUST fail validation
-  on exactly one `type` error, at that member.
+  on exactly one `type` error, at that member, and
+- the two member-name fixtures (atx-conformance#284), which each carry a
+  top-level member named with a character outside printable ASCII beside the
+  member its name spells, and MUST fail validation on exactly one root
+  `additionalProperties` error naming that member.
 
 Any other schema error means fixture and schema have drifted apart.
 Exit 0 only if the whole contract holds.
@@ -83,6 +87,13 @@ PROFILE = ROOT / "conformance.json"
 SERVED_FROM = "https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/"
 FIXTURE_FORMAT = "schemas/fixture-v1.schema.json"
 PROFILE_FORMAT = "schemas/conformance-profile-v1.schema.json"
+# The member-name fixtures (atx-conformance#284) and the member each adds to
+# its credential: U+0130 followed by d beside id, and U+0131 followed by
+# ssuedAt beside issuedAt.
+NON_ASCII_MEMBERS = {
+    "v1_1-dotted-capital-i-member.json": chr(0x0130) + "d",
+    "v1_1-dotless-i-member.json": chr(0x0131) + "ssuedAt",
+}
 
 # The members every v1 fixture carries, as the generator writes them. Listed
 # here rather than read from the schema, so a schema that stops requiring one
@@ -410,6 +421,9 @@ def check_credentials() -> int:
         )
         expect_case_variant_invalid = path.name == "v1_1-case-variant-member.json"
         expect_scan_summary_invalid = path.name == "v1_1-scan-summary-member-outside-type.json"
+        # The member each member-name fixture adds: U+0130 followed by d, and
+        # U+0131 followed by ssuedAt.
+        added_member = NON_ASCII_MEMBERS.get(path.name)
         if expect_version_invalid:
             only_version_enum = len(errors) == 1 and list(errors[0].absolute_path) == ["atcVersion"]
             if only_version_enum:
@@ -475,6 +489,24 @@ def check_credentials() -> int:
                     print(f"      {err.json_path}: {err.message}")
                 if not errors:
                     print("      (validated cleanly - fixture no longer carries a string count)")
+                failures += 1
+        elif added_member is not None:
+            # The added member is no credential member: exactly one error, at
+            # the root, from additionalProperties, and it names that member.
+            only_added = (
+                len(errors) == 1
+                and errors[0].validator == "additionalProperties"
+                and list(errors[0].absolute_path) == []
+                and repr(added_member) in errors[0].message
+            )
+            if only_added:
+                print(f"PASS  {path.name}: schema-invalid on exactly the added member at root (additionalProperties, as pinned)")
+            else:
+                print(f"FAIL  {path.name}: expected exactly one root additionalProperties error naming {added_member!r}, got:")
+                for err in errors or []:
+                    print(f"      {err.json_path}: {err.message}")
+                if not errors:
+                    print("      (validated cleanly - fixture no longer carries the added member)")
                 failures += 1
         elif errors:
             print(f"FAIL  {path.name}:")

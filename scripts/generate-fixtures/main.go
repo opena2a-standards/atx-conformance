@@ -1050,6 +1050,34 @@ func main() {
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "PARSE_ERROR", ReasonContains: "duplicate"},
 				atx)
 		}},
+		// ---- member name outside printable ASCII (atx-conformance#284) ----
+		// Each signs the v1.1 baseline, then carries one member its issuer did
+		// not write, added after signing directly after the signed member its
+		// name spells (memberAddedAfter, below): ATX has no field for it.
+		// JCS(TBS) holds no member the credential does not specify, so the
+		// signature verifies, and a verifier that folds names by ASCII case,
+		// or by a table that keeps the dotted capital I and the dotless i
+		// apart from i, accepts.
+		{"fixtures/v1_1-dotted-capital-i-member.json", func() Fixture {
+			atx := newBaselineV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/dotted-capital-i-member",
+				"An ATX v1.1 credential whose Ed25519 signature verifies, carrying one member its issuer did not write: a member named U+0130 (LATIN CAPITAL LETTER I WITH DOT ABOVE) followed by d, holding x, written directly after its id member once the credential is signed. JCS(TBS) holds no member the credential does not specify, so the signature does not cover it. Java 25's String.equalsIgnoreCase compares that name equal to id, so a relying party that binds the credential's JSON again by such a comparison, keeping the last of the members it joins, reads x as the credential's id, where the verifier read the id the issuer wrote. Verifiers MUST reject a member name outside printable ASCII (U+0020 to U+007E) in an object they decode (the credential, a signature entry, scanSummary or behavioralProfile) as PARSE_ERROR before interpreting any field, a rule that needs no case table. A verifier that folds names by ASCII case, or by a table that keeps U+0130 apart from i, wrongly ACCEPTs.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "PARSE_ERROR", ReasonContains: "printable ASCII"},
+				atx)
+		}},
+		{"fixtures/v1_1-dotless-i-member.json", func() Fixture {
+			atx := newBaselineV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/dotless-i-member",
+				"An ATX v1.1 credential whose Ed25519 signature verifies, carrying one member its issuer did not write: a member named U+0131 (LATIN SMALL LETTER DOTLESS I) followed by ssuedAt, holding 2099-01-01T00:00:00Z, written directly after its signed issuedAt member once the credential is signed. JCS(TBS) holds no member the credential does not specify, so the signature does not cover it. Java 25's String.equalsIgnoreCase compares that name equal to issuedAt, so a relying party that binds the credential's JSON again by such a comparison, keeping the last of the members it joins, reads an issuedAt of 2099-01-01T00:00:00Z, where the signature covers 2026-05-23T00:00:00Z. Verifiers MUST reject a member name outside printable ASCII (U+0020 to U+007E) in an object they decode (the credential, a signature entry, scanSummary or behavioralProfile) as PARSE_ERROR before interpreting any field, a rule that needs no case table. A verifier that folds names by ASCII case, or by a table that keeps U+0131 apart from i, wrongly ACCEPTs.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "PARSE_ERROR", ReasonContains: "printable ASCII"},
+				atx)
+		}},
 	}
 
 	type manifestEntry struct {
@@ -1106,6 +1134,19 @@ func main() {
 			//nolint:gosec // G703: build-time tool rewriting the fixture it just wrote under outDir
 			must(os.WriteFile(path, replaced, 0o644))
 		}
+		if added, ok := memberAddedAfter[fs.writePath]; ok {
+			// Write the member directly after the line it follows. ATX has no
+			// field for it, so it is added at the byte level after signing;
+			// every other byte is the credential the signature covers.
+			b, err := os.ReadFile(path) //nolint:gosec // G304: file just written above
+			must(err)
+			if n := bytes.Count(b, []byte(added.after)); n != 1 {
+				panic(fmt.Sprintf("%s: %d substitution targets for %q, want 1", fs.writePath, n, added.after))
+			}
+			replaced := bytes.Replace(b, []byte(added.after), []byte(added.after+"\n"+added.member), 1)
+			//nolint:gosec // G703: build-time tool rewriting the fixture it just wrote under outDir
+			must(os.WriteFile(path, replaced, 0o644))
+		}
 		sha := sha256FileHex(path)
 		manifest = append(manifest, manifestEntry{path: fs.writePath, sha: sha})
 		fmt.Printf("wrote %s (sha256=%s)\n", fs.writePath, sha)
@@ -1125,6 +1166,15 @@ func main() {
 			panic("fixtureOtherRefs names no fixture: " + name)
 		}
 	}
+	for path := range memberAddedAfter {
+		written := false
+		for _, e := range manifest {
+			written = written || e.path == path
+		}
+		if !written {
+			panic("memberAddedAfter names no fixture: " + path)
+		}
+	}
 
 	// MANIFEST.sha256: one line per fixture, in path-sorted order.
 	sort.Slice(manifest, func(i, j int) bool { return manifest[i].path < manifest[j].path })
@@ -1135,6 +1185,23 @@ func main() {
 	}
 	must(os.WriteFile(manifestPath, manifestLines, 0o644))
 	fmt.Printf("wrote MANIFEST.sha256 (%d fixtures)\n", len(manifest))
+}
+
+// memberAddedAfter holds, for each fixture whose credential carries a member
+// its issuer did not write under a name ATX has no field for, the line of the
+// written fixture the member follows and the line that writes it. main writes
+// the member after signing. Each name holds one character outside printable
+// ASCII, written as its UTF-8 bytes: U+0130, LATIN CAPITAL LETTER I WITH DOT
+// ABOVE, and U+0131, LATIN SMALL LETTER DOTLESS I (atx-conformance#284).
+var memberAddedAfter = map[string]struct{ after, member string }{
+	"fixtures/v1_1-dotted-capital-i-member.json": {
+		after:  `    "id": "00000000-0000-0000-0000-000000000001",`,
+		member: `    "` + string(rune(0x0130)) + `d": "x",`,
+	},
+	"fixtures/v1_1-dotless-i-member.json": {
+		after:  `    "issuedAt": "2026-05-23T00:00:00Z",`,
+		member: `    "` + string(rune(0x0131)) + `ssuedAt": "2099-01-01T00:00:00Z",`,
+	},
 }
 
 // logIndex returns a pointer to the log-assigned issuance index, so a fixture
@@ -1315,6 +1382,8 @@ var fixtureRequirements = map[string]string{
 	"atx-v1_1/declared-purpose-number-injected":  "§1.3a.2 rule 5: a present non-object declaredPurpose value enters the TBS verbatim, so a number that is not an integer, added after signing, is a signature failure",
 	"atx-v1_1/duplicate-purpose-member":          "§1.3 step 1: parsing the credential rejects an object member repeated at any depth (RFC 8259 §4) as PARSE_ERROR before any field is read (§12)",
 	"atx-v1_1/case-variant-member":               "§1.3 step 1: parsing the credential rejects two member names that fold to one field (TRUSTLEVEL and trustLevel) as PARSE_ERROR before any field is read (§12)",
+	"atx-v1_1/dotted-capital-i-member":           "§1.3 step 1: parsing the credential rejects a member name outside printable ASCII in an object the verifier decodes (U+0130 followed by d, beside id) as PARSE_ERROR before any field is read (§12)",
+	"atx-v1_1/dotless-i-member":                  "§1.3 step 1: parsing the credential rejects a member name outside printable ASCII in an object the verifier decodes (U+0131 followed by ssuedAt, beside issuedAt) as PARSE_ERROR before any field is read (§12)",
 	"atx-v1_1/cross-issuer-key":                  "§1.3 step 4, key eligibility: under atcVersion 1.1 a key is eligible only for the issuerDid or a trusted issuer the signed issuerChain names, so a signature made with a trusted authority's key outside both is a signature failure",
 	"atx-v1_1/untrusted-chain-authority":         "§1.3 step 4, key eligibility: a DID the signed issuerChain names that is not a trusted issuer contributes no eligible key, so a signature made with its key is a signature failure",
 }

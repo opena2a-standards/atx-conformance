@@ -730,14 +730,14 @@ GO_ACCEPTED_ESCAPES = (
     (("createdAt",), '"2026-05-23T00:00:00\\u005a"'),
 )
 
-# A member whose name differs from the Go struct field's only in case, or by
-# the two letters Go folds onto ASCII (Kelvin sign U+212A, long s U+017F): Go
-# reads it as that member. (path, name as written, raw literal, Go verdict).
+# A member whose name differs from the Go struct field's only in ASCII case:
+# Go reads it as that member. (path, name as written, raw literal, Go
+# verdict). A name that differs by one of the two letters Go also folds onto
+# ASCII, the Kelvin sign (U+212A) or the long s (U+017F), is outside
+# printable ASCII, and both verifiers refuse it (GO_NON_ASCII_RENAMES).
 GO_FOLDED_NAME_VERDICTS = (
     (("revoked",), "Revoked", "true", "REVOKED"),
     (("revoked",), "REVOKED", "true", "REVOKED"),
-    (("revoked",), "revo\u212aed", "true", "REVOKED"),
-    (("signatures",), "\u017fignatures", "[]", "SIGNATURE_INVALID"),
     (("expiresAt",), "ExpiresAt", KEEP, "ACCEPT"),
     (("expiresAt",), "expiresat", '"2000-01-01T00:00:00Z"', "EXPIRED"),
     (("agentId",), "AGENTID", KEEP, "ACCEPT"),
@@ -1453,6 +1453,182 @@ class GoMemberNameFolding(unittest.TestCase):
             with self.subTest(baseline=baseline.name):
                 got = _at_verdict(baseline, ("revoked",), "true", rename="revoked_")
                 self.assertTrue(got.accepted, got.reason)
+
+
+def _escaped(*units: str) -> str:
+    """Each UTF-16 code unit given in hex as a JSON \\u escape: also the
+    text %+q writes for a character below U+10000."""
+    return "".join("\\" + "u" + unit for unit in units)
+
+
+def _name_reason(quoted: str, char: str) -> str:
+    """The reason the Go reference verifier writes for a credential member
+    name outside printable ASCII: quoted is the name as its %+q writes it,
+    char the character as its %U writes it."""
+    return (
+        f"credential member name {quoted} holds {char}, outside printable ASCII (strict parse: "
+        "a member name in the credential, a signature entry, scanSummary or behavioralProfile "
+        "must be printable ASCII, U+0020 to U+007E)"
+    )
+
+
+DOTTED_CAPITAL_I = chr(0x0130)
+DOTLESS_I = chr(0x0131)
+KELVIN = chr(0x212A)
+LONG_S = chr(0x017F)
+DOTTED_CAPITAL_I_MEMBER = ROOT / "fixtures" / "v1_1-dotted-capital-i-member.json"
+DOTLESS_I_MEMBER = ROOT / "fixtures" / "v1_1-dotless-i-member.json"
+
+# A credential member name that holds a character outside printable ASCII
+# (U+0020 to U+007E), in an object the Go reference verifier decodes, and the
+# name and character its reason gives: (baseline, edits for _write_with, in
+# which a path that names no member adds one after the last, the name as %+q
+# writes it, the character as %U writes it). Recorded from the Go reference
+# verifier built with Go 1.26.3. The first two were ACCEPT on both verifiers
+# before the check (atx-conformance#284).
+GO_NON_ASCII_NAME_VERDICTS = (
+    (BASELINE_V11, {(DOTTED_CAPITAL_I + "d",): '"x"'}, '"' + _escaped("0130") + 'd"', "U+0130"),
+    (BASELINE_V11, {(DOTLESS_I + "ssuedAt",): '"2099-01-01T00:00:00Z"'}, '"' + _escaped("0131") + 'ssuedAt"', "U+0131"),
+    (BASELINE_V10, {(DOTTED_CAPITAL_I + "d",): '"x"'}, '"' + _escaped("0130") + 'd"', "U+0130"),
+    (BASELINE_V10, {(DOTLESS_I + "ssuedAt",): '"2099-01-01T00:00:00Z"'}, '"' + _escaped("0131") + 'ssuedAt"', "U+0131"),
+    (BASELINE_V11, {("a\x01",): "1"}, '"a\\x01"', "U+0001"),
+    (BASELINE_V11, {("a\tb",): "1"}, '"a\\tb"', "U+0009"),
+    (BASELINE_V11, {("a\x7f",): "1"}, '"a\\x7f"', "U+007F"),
+    (BASELINE_V11, {(chr(0xD800) + "x",): "1"}, '"' + _escaped("fffd") + 'x"', "U+FFFD"),
+    (BASELINE_V11, {(chr(0x1F600),): "1"}, '"' + "\\" + 'U0001f600"', "U+1F600"),
+    (BASELINE_V11, {("aé" + DOTTED_CAPITAL_I,): "1"}, '"a' + _escaped("00e9", "0130") + '"', "U+00E9"),
+    (BASELINE_V11, {('q"\\é',): "1"}, '"q\\"\\\\' + _escaped("00e9") + '"', "U+00E9"),
+    (BASELINE_V11, {("signatures", 0, "kéyId"): '"x"'}, '"k' + _escaped("00e9") + 'yId"', "U+00E9"),
+    (BASELINE_V11, {("scanSummary", "hmä"): '"x"'}, '"hm' + _escaped("00e4") + '"', "U+00E4"),
+    (BASELINE_V10, {("scanSummary", "hmä"): '"x"'}, '"hm' + _escaped("00e4") + '"', "U+00E4"),
+    (BASELINE_V11, {("behavioralProfile", "checksüm"): '"x"'}, '"checks' + _escaped("00fc") + 'm"', "U+00FC"),
+)
+
+# The same for a member written under another name: (path, name as written,
+# raw literal, the name as %+q writes it, the character as %U writes it). Go
+# read these two as revoked and signatures through its fold, so on each
+# baseline they reached REVOKED and SIGNATURE_INVALID before the check.
+GO_NON_ASCII_RENAMES = (
+    (("revoked",), "revo" + KELVIN + "ed", "true", '"revo' + _escaped("212a") + 'ed"', "U+212A"),
+    (("signatures",), LONG_S + "ignatures", "[]", '"' + _escaped("017f") + 'ignatures"', "U+017F"),
+)
+
+# Credentials holding two such names, and one whose signatures array holds a
+# value that is not an object first: the reason names the first name in
+# document order. (raw JSON credential, the name as %+q writes it, the
+# character as %U writes it).
+GO_NON_ASCII_CREDENTIALS = (
+    (
+        '{"' + _escaped("0131") + 'x": 1, "scanSummary": {"' + _escaped("0130") + 'y": 2}}',
+        '"' + _escaped("0131") + 'x"', "U+0131",
+    ),
+    (
+        '{"scanSummary": {"' + _escaped("0130") + 'y": 2}, "' + _escaped("0131") + 'x": 1}',
+        '"' + _escaped("0130") + 'y"', "U+0130",
+    ),
+    ('{"signatures": [1, {"' + _escaped("00e9") + '": 1}]}', '"' + _escaped("00e9") + '"', "U+00E9"),
+)
+
+# Names outside printable ASCII the check does not refuse, or that another
+# check names first, and the verdict each keeps, with a part of its reason:
+# (baseline, edits for _write_with, outcome, reason part).
+GO_NON_ASCII_NAME_CONTROLS = (
+    (BASELINE_V11, {(" ~",): "1"}, "ACCEPT", ""),
+    (BASELINE_V10, {(" ~",): "1"}, "ACCEPT", ""),
+    # Objects the Go verifier does not decode, and a name written as a value.
+    (BASELINE_V11, {("extra",): '{"' + _escaped("0130") + 'd": 1}'}, "ACCEPT", ""),
+    (BASELINE_V11, {("signatures", 0, "x"): '{"' + _escaped("0130") + 'd": 1}'}, "ACCEPT", ""),
+    (BASELINE_V11, {("extra",): '"' + _escaped("0130") + 'd"'}, "ACCEPT", ""),
+    # v1.1 signs declaredPurpose as written, and the baseline signs none.
+    (BASELINE_V11, {("declaredPurpose",): '{"' + _escaped("0130") + 'd": 1}'}, "SIGNATURE_INVALID", ""),
+    # The duplicate check runs first.
+    (
+        BASELINE_V11, {("zzz",): '1, "' + _escaped("0130") + 'd": 1, "' + _escaped("0130") + 'd": 2'},
+        "PARSE_ERROR", 'duplicate member "' + DOTTED_CAPITAL_I + 'd"',
+    ),
+    (BASELINE_V11, {("zzz",): '1, "revo' + _escaped("212a") + 'ed": true'}, "PARSE_ERROR", 'duplicate member "revo' + KELVIN + 'ed"'),
+    (BASELINE_V11, {("zzz",): '1, "' + _escaped("017f") + 'ignatures": []'}, "PARSE_ERROR", 'duplicate member "' + LONG_S + 'ignatures"'),
+    # signatures is not an array, so its decode says why.
+    (BASELINE_V11, {("signatures",): '{"' + _escaped("0130") + 'd": 1}'}, "PARSE_ERROR", "is not a JSON array"),
+)
+
+
+class GoMemberNameOutsidePrintableASCII(unittest.TestCase):
+    """A credential member name that holds a character outside printable
+    ASCII (U+0020 to U+007E) in an object the Go reference verifier decodes:
+    the credential, an entry of its signatures, its scanSummary or its
+    behavioralProfile. Both verifiers refuse it as PARSE_ERROR, naming the
+    first such name in document order with the Go verifier's reason, so no
+    case table decides which member it is. A member named U+0130 followed by
+    d beside id, or U+0131 followed by ssuedAt beside issuedAt, was ACCEPT on
+    both, while Java 25's String.equalsIgnoreCase compares those names equal
+    to id and issuedAt. atx-conformance#284."""
+
+    def test_name_is_refused_with_the_go_reason(self):
+        for baseline, edits, quoted, char in GO_NON_ASCII_NAME_VERDICTS:
+            with self.subTest(baseline=baseline.name, edits=edits):
+                got = _with_verdict(baseline, edits)
+                self.assertEqual(got.reject_category, "PARSE_ERROR", got.reason)
+                self.assertEqual(got.reason, _name_reason(quoted, char))
+
+    def test_renamed_member_is_refused_with_the_go_reason(self):
+        scan = json.loads(BASELINE_V11.read_text(encoding="utf-8"))["atx"]["scanSummary"]
+        renames = GO_NON_ASCII_RENAMES + (
+            # Go reads SCANSUMMARY as scanSummary, so the names it holds are read.
+            (
+                ("scanSummary",), "SCANSUMMARY", json.dumps({**scan, DOTTED_CAPITAL_I: 1}),
+                '"' + _escaped("0130") + '"', "U+0130",
+            ),
+        )
+        for baseline in (BASELINE_V10, BASELINE_V11):
+            for path, name, literal, quoted, char in renames:
+                with self.subTest(baseline=baseline.name, name=name):
+                    got = _at_verdict(baseline, path, literal, rename=name)
+                    self.assertEqual(got.reject_category, "PARSE_ERROR", got.reason)
+                    self.assertEqual(got.reason, _name_reason(quoted, char))
+
+    def test_first_name_in_document_order_is_named(self):
+        for literal, quoted, char in GO_NON_ASCII_CREDENTIALS:
+            with self.subTest(atx=literal), tempfile.TemporaryDirectory() as tmp:
+                path = _write_wrapper(Path(tmp), "atx.json", BASELINE_V11, "atx", literal)
+                got = verify.verify_fixture(verify.load_fixture(path))
+                self.assertEqual(got.reject_category, "PARSE_ERROR", got.reason)
+                self.assertEqual(got.reason, _name_reason(quoted, char))
+
+    def test_name_written_as_utf_8(self):
+        # The cases above write each name as JSON escapes; this file holds
+        # the name's UTF-8 bytes.
+        got = _fixture_verdict(BASELINE_V11, ("atx", "zzz"), '1, "é": 1')
+        self.assertEqual(got.reject_category, "PARSE_ERROR", got.reason)
+        self.assertEqual(got.reason, _name_reason('"' + _escaped("00e9") + '"', "U+00E9"))
+
+    def test_other_names_keep_their_verdicts(self):
+        for baseline, edits, outcome, held in GO_NON_ASCII_NAME_CONTROLS:
+            with self.subTest(baseline=baseline.name, edits=edits):
+                got = _with_verdict(baseline, edits)
+                self.assertEqual(_outcome(got), outcome, got.reason)
+                self.assertIn(held, got.reason)
+                self.assertNotIn("printable ASCII", got.reason)
+
+    def test_shipped_fixtures_pin_the_rule(self):
+        # Each is the credential of fixtures/v1_1-baseline-valid.json with one
+        # member added directly after the member its name spells, and that
+        # member is the only difference, so a verifier without the check
+        # accepts it.
+        baseline = json.loads(BASELINE_V11.read_text(encoding="utf-8"))["atx"]
+        for path, added, spells, quoted, char in (
+            (DOTTED_CAPITAL_I_MEMBER, DOTTED_CAPITAL_I + "d", "id", '"' + _escaped("0130") + 'd"', "U+0130"),
+            (DOTLESS_I_MEMBER, DOTLESS_I + "ssuedAt", "issuedAt", '"' + _escaped("0131") + 'ssuedAt"', "U+0131"),
+        ):
+            with self.subTest(fixture=path.name):
+                got = verify.verify_fixture(verify.load_fixture(path))
+                self.assertEqual(got.reject_category, "PARSE_ERROR", got.reason)
+                self.assertEqual(got.reason, _name_reason(quoted, char))
+                credential = json.loads(path.read_text(encoding="utf-8"))["atx"]
+                names = list(credential)
+                self.assertEqual(names[names.index(spells) + 1], added, names)
+                del credential[added]
+                self.assertEqual(credential, baseline)
 
 
 class GoEscapedString(unittest.TestCase):

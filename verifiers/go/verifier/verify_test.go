@@ -979,6 +979,217 @@ func TestDuplicateAfterOutOfRangeNumberRejects(t *testing.T) {
 	}
 }
 
+// memberNameReason is the reason the strict parse gives a member name that
+// holds a character outside printable ASCII: quoted is the name as %+q writes
+// it, char the character as %U writes it.
+func memberNameReason(quoted, char string) string {
+	return "credential member name " + quoted + " holds " + char + ", outside printable ASCII (strict parse: a member name in the credential, a signature entry, scanSummary or behavioralProfile must be printable ASCII, U+0020 to U+007E)"
+}
+
+// appendedMember is the JSON object raw with the member text written after
+// its last member.
+func appendedMember(t *testing.T, raw json.RawMessage, member string) string {
+	t.Helper()
+	s := strings.TrimSpace(string(raw))
+	if !strings.HasSuffix(s, "}") {
+		t.Fatalf("%.40s is not a JSON object", s)
+	}
+	return s[:len(s)-1] + "," + member + "}"
+}
+
+// withAppendedMember returns f with the member text written after the last
+// member of its credential.
+func withAppendedMember(t *testing.T, f fixture, member string) fixture {
+	t.Helper()
+	f.ATX = json.RawMessage(appendedMember(t, f.ATX, member))
+	return f
+}
+
+// credentialMember is the member of f's credential named name, as written.
+func credentialMember(t *testing.T, f fixture, name string) json.RawMessage {
+	t.Helper()
+	var credential map[string]json.RawMessage
+	if err := json.Unmarshal(f.ATX, &credential); err != nil {
+		t.Fatal(err)
+	}
+	return credential[name]
+}
+
+// TestMemberNameOutsidePrintableASCII pins that the strict parse rejects as
+// PARSE_ERROR a credential holding a member name with a character outside
+// printable ASCII (U+0020 to U+007E) in an object the verifier decodes: the
+// credential, an entry of its signatures, its scanSummary or its
+// behavioralProfile. The reason names the first such name in document order
+// and its first such character, written in ASCII, as the Python verifier
+// writes it (GO_NON_ASCII_NAME_VERDICTS in verifiers/python/test_verify.py).
+// The first two cases were ACCEPT before the check (atx-conformance#284):
+// fixtures/v1_1-baseline-valid.json with U+0130 followed by d, or U+0131
+// followed by ssuedAt, added, which Java 25's String.equalsIgnoreCase
+// compares equal to id and issuedAt and foldKey keeps apart. The controls
+// keep the verdict they had: a name in an object the verifier does not
+// decode, and a name that repeats, which the duplicate check names first.
+func TestMemberNameOutsidePrintableASCII(t *testing.T) {
+	v11 := v11Baseline(t)
+	v10, err := loadFixture(repoRoot + "/fixtures/baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// firstSignatureWith is the baseline's signatures with the member text
+	// written after the last member of its first entry.
+	firstSignatureWith := func(f fixture, member string) string {
+		var entries []json.RawMessage
+		if err := json.Unmarshal(credentialMember(t, f, "signatures"), &entries); err != nil || len(entries) == 0 {
+			t.Fatalf("baseline signatures do not decode to an entry: %v", err)
+		}
+		entries[0] = json.RawMessage(appendedMember(t, entries[0], member))
+		b, err := json.Marshal(entries)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	scanSummaryWith := func(f fixture, member string) string {
+		return appendedMember(t, credentialMember(t, f, "scanSummary"), member)
+	}
+	profileWith := appendedMember(t, credentialMember(t, v11, "behavioralProfile"), `"checksüm":"x"`)
+	// u writes each UTF-16 code unit given in hex as a \u escape: JSON text
+	// for a name, and what %+q writes for a character below U+10000.
+	u := func(units ...string) string { return `\u` + strings.Join(units, `\u`) }
+	kelvin, longS := string(rune(0x212a)), string(rune(0x017f))
+
+	for _, c := range []struct {
+		name         string
+		f            fixture
+		quoted, char string
+	}{
+		{"U+0130 d beside id", withAppendedMember(t, v11, `"İd":"x"`), `"` + u("0130") + `d"`, "U+0130"},
+		{"U+0131 ssuedAt beside issuedAt", withAppendedMember(t, v11, `"ıssuedAt":"2099-01-01T00:00:00Z"`), `"` + u("0131") + `ssuedAt"`, "U+0131"},
+		{"U+0130 d, v1.0", withAppendedMember(t, v10, `"İd":"x"`), `"` + u("0130") + `d"`, "U+0130"},
+		{"U+0131 ssuedAt, v1.0", withAppendedMember(t, v10, `"ıssuedAt":"2099-01-01T00:00:00Z"`), `"` + u("0131") + `ssuedAt"`, "U+0131"},
+		{"U+0130 written as a JSON escape", withAppendedMember(t, v11, `"`+u("0130")+`d":"x"`), `"` + u("0130") + `d"`, "U+0130"},
+		{"U+00E9", withAppendedMember(t, v11, `"é":1`), `"` + u("00e9") + `"`, "U+00E9"},
+		{"Kelvin sign for the k of revoked", withMembers(t, v11, map[string]string{"revoked": "", "revo" + kelvin + "ed": "true"}), `"revo` + u("212a") + `ed"`, "U+212A"},
+		{"long s for the s of signatures", withMembers(t, v11, map[string]string{"signatures": "", longS + "ignatures": "[]"}), `"` + u("017f") + `ignatures"`, "U+017F"},
+		{"a control character", withAppendedMember(t, v11, `"a\u0001":1`), `"a\x01"`, "U+0001"},
+		{"a tab", withAppendedMember(t, v11, `"a\tb":1`), `"a\tb"`, "U+0009"},
+		{"U+007F", withAppendedMember(t, v11, `"a\u007f":1`), `"a\x7f"`, "U+007F"},
+		{"an unpaired surrogate escape, decoded as U+FFFD", withAppendedMember(t, v11, `"`+u("d800")+`x":1`), `"` + u("fffd") + `x"`, "U+FFFD"},
+		{"a surrogate pair escape, U+1F600", withAppendedMember(t, v11, `"`+u("d83d", "de00")+`":1`), `"` + `\U` + `0001f600"`, "U+1F600"},
+		{"the first such character of the name", withAppendedMember(t, v11, `"aéİ":1`), `"a` + u("00e9", "0130") + `"`, "U+00E9"},
+		{"a quote and a backslash before it", withAppendedMember(t, v11, `"q\"\\é":1`), `"q\"\\` + u("00e9") + `"`, "U+00E9"},
+		{"in a signature entry", withMembers(t, v11, map[string]string{"signatures": firstSignatureWith(v11, `"kéyId":"x"`)}), `"k` + u("00e9") + `yId"`, "U+00E9"},
+		{"in scanSummary", withMembers(t, v11, map[string]string{"scanSummary": scanSummaryWith(v11, `"hmä":"x"`)}), `"hm` + u("00e4") + `"`, "U+00E4"},
+		{"in scanSummary, v1.0", withMembers(t, v10, map[string]string{"scanSummary": scanSummaryWith(v10, `"hmä":"x"`)}), `"hm` + u("00e4") + `"`, "U+00E4"},
+		{"in scanSummary written SCANSUMMARY", withMembers(t, v11, map[string]string{"scanSummary": "", "SCANSUMMARY": scanSummaryWith(v11, `"İ":1`)}), `"` + u("0130") + `"`, "U+0130"},
+		{"in behavioralProfile", withMembers(t, v11, map[string]string{"behavioralProfile": profileWith}), `"checks` + u("00fc") + `m"`, "U+00FC"},
+		{"the credential's name first in document order", fixture{ATX: json.RawMessage(`{"ıx":1,"scanSummary":{"İy":2}}`)}, `"` + u("0131") + `x"`, "U+0131"},
+		{"scanSummary's name first in document order", fixture{ATX: json.RawMessage(`{"scanSummary":{"İy":2},"ıx":1}`)}, `"` + u("0130") + `y"`, "U+0130"},
+		{"a signature entry after one that is not an object", fixture{ATX: json.RawMessage(`{"signatures":[1,{"é":1}]}`)}, `"` + u("00e9") + `"`, "U+00E9"},
+	} {
+		got := verify(c.f)
+		if want := memberNameReason(c.quoted, c.char); got.Accepted || got.RejectCategory != "PARSE_ERROR" || got.Reason != want {
+			t.Errorf("%s: got %s, want REJECT[PARSE_ERROR: %s]", c.name, got, want)
+		}
+	}
+
+	for _, c := range []struct {
+		name, want, reasonContains string
+		f                          fixture
+	}{
+		{"printable ASCII at both ends of the range", "ACCEPT", "", withAppendedMember(t, v11, `" ~":1`)},
+		{"printable ASCII at both ends of the range, v1.0", "ACCEPT", "", withAppendedMember(t, v10, `" ~":1`)},
+		{"in a member the verifier does not declare", "ACCEPT", "", withAppendedMember(t, v11, `"extra":{"İd":1}`)},
+		{"in an object a signature entry holds", "ACCEPT", "", withMembers(t, v11, map[string]string{"signatures": firstSignatureWith(v11, `"x":{"İd":1}`)})},
+		{"in a value", "ACCEPT", "", withAppendedMember(t, v11, `"extra":"İd"`)},
+		// v1.1 signs declaredPurpose as written, and the baseline signs none.
+		{"in declaredPurpose", "SIGNATURE_INVALID", "", withMembers(t, v11, map[string]string{"declaredPurpose": `{"İd":1}`})},
+		{"written twice", "PARSE_ERROR", `duplicate member "İd"`, withAppendedMember(t, v11, `"İd":1,"İd":2`)},
+		{"Kelvin sign beside revoked", "PARSE_ERROR", `duplicate member "revo` + kelvin + `ed"`, withAppendedMember(t, v11, `"revo`+kelvin+`ed":true`)},
+		{"long s beside signatures", "PARSE_ERROR", `duplicate member "` + longS + `ignatures"`, withAppendedMember(t, v11, `"`+longS+`ignatures":[]`)},
+		// signatures is not an array, so json.Unmarshal says why.
+		{"in signatures that is an object", "PARSE_ERROR", "cannot unmarshal object", withMembers(t, v11, map[string]string{"signatures": `{"İd":1}`})},
+	} {
+		got := verify(c.f)
+		outcome := got.RejectCategory
+		if got.Accepted {
+			outcome = "ACCEPT"
+		}
+		if outcome != c.want || !strings.Contains(got.Reason, c.reasonContains) || strings.Contains(got.Reason, "printable ASCII") {
+			t.Errorf("%s: got %s, want %s with a reason containing %q and not naming printable ASCII", c.name, got, c.want, c.reasonContains)
+		}
+	}
+}
+
+// topLevelNames lists the member names of the JSON object raw in document
+// order.
+func topLevelNames(t *testing.T, raw json.RawMessage) []string {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		t.Fatalf("%.40s is not a JSON object", raw)
+	}
+	var names []string
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, tok.(string))
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return names
+}
+
+// TestSuitePinsMemberNamesOutsidePrintableASCII pins the two shipped fixtures
+// that hold a verifier to the rule above, one per spelling from
+// atx-conformance#284: each is the credential of
+// fixtures/v1_1-baseline-valid.json with one member added directly after the
+// member its name spells, and that member is the only difference. The
+// verifier rejects each naming the added member. With the strict parse
+// lifted its signature verifies (TestEarlyRejectFixturesCarryValidSignatures),
+// so a verifier without the rule accepts it.
+func TestSuitePinsMemberNamesOutsidePrintableASCII(t *testing.T) {
+	var baseline map[string]json.RawMessage
+	if err := json.Unmarshal(v11Baseline(t).ATX, &baseline); err != nil {
+		t.Fatal(err)
+	}
+	want, err := json.Marshal(baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The added names: U+0130 followed by d, and U+0131 followed by ssuedAt,
+	// and each as %+q writes it.
+	dotted, dotless := string(rune(0x0130))+"d", string(rune(0x0131))+"ssuedAt"
+	for _, c := range []struct{ file, added, spells, quoted, char string }{
+		{"v1_1-dotted-capital-i-member.json", dotted, "id", `"\` + `u0130d"`, "U+0130"},
+		{"v1_1-dotless-i-member.json", dotless, "issuedAt", `"\` + `u0131ssuedAt"`, "U+0131"},
+	} {
+		f, err := loadFixture(repoRoot + "/fixtures/" + c.file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, reason := verify(f), memberNameReason(c.quoted, c.char); got.Accepted || got.RejectCategory != "PARSE_ERROR" || got.Reason != reason {
+			t.Errorf("%s: got %s, want REJECT[PARSE_ERROR: %s]", c.file, got, reason)
+		}
+		names := topLevelNames(t, f.ATX)
+		at := slices.Index(names, c.spells)
+		if at < 0 || at+1 >= len(names) || names[at+1] != c.added {
+			t.Errorf("%s: credential members %q, want %q directly after %q", c.file, names, c.added, c.spells)
+		}
+		var credential map[string]json.RawMessage
+		if err := json.Unmarshal(f.ATX, &credential); err != nil {
+			t.Fatal(err)
+		}
+		delete(credential, c.added)
+		if got, err := json.Marshal(credential); err != nil || !bytes.Equal(got, want) {
+			t.Errorf("%s: without %q its credential is not that of fixtures/v1_1-baseline-valid.json (%v)", c.file, c.added, err)
+		}
+	}
+}
+
 // TestSuiteCatchesCRLBlindVerifier pins that the shipped fixture set depends
 // on CRL membership (atx-spec core.md §1.3 step 6). It runs every fixture
 // twice: as shipped, where the reference verifier must report the pinned

@@ -202,7 +202,12 @@ Depends on:
   The duplicate-member check folds a member name by three fixed mappings,
   ASCII `A-Z` to `a-z`, U+212A (Kelvin sign) to `k` and U+017F (long s) to
   `s`, and leaves every other character unchanged, so no Go release changes
-  which names it reports as a duplicate.
+  which names it reports as a duplicate. Once it passes, a member name that
+  holds a character outside printable ASCII (U+0020 to U+007E) in the
+  credential, a signature entry, `scanSummary` or `behavioralProfile` is a
+  `PARSE_ERROR`. That check compares each character with the range and
+  reads no Unicode table, and its reason writes the name and the character
+  in ASCII (`%+q`, `%U`), so no Go release changes it either.
 - `github.com/cloudflare/circl v1.6.2` (resolved by `go mod tidy`)
 - `github.com/gowebpki/jcs v1.0.1` (RFC 8785 canonicalization of the v1.1
   signed payload; resolved the same way)
@@ -225,7 +230,9 @@ Depends on:
 
 - Python 3.11 or later. The duplicate-member check folds a member name by
   the same three fixed mappings as the Go verifier, so no Python release
-  changes which names it reports as a duplicate. `python3 verify.py --help`
+  changes which names it reports as a duplicate. The member-name check after
+  it reads the same objects and the same range as the Go verifier's, and
+  writes its reason. `python3 verify.py --help`
   prints the usage lines, and `--version` the commit of the checkout the
   verifier runs from
   ([which commit a run verified](#which-commit-a-run-verified)).

@@ -72,6 +72,12 @@ PASS  fixtures/v1_1-declared-purpose-valid.json
        observed: ACCEPT
        signatures: 1/1 valid (ed25519=true mldsa65=false)
        trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+PASS  fixtures/v1_1-dotless-i-member.json
+       expected: REJECT [PARSE_ERROR]
+       observed: REJECT[PARSE_ERROR: credential member name "\u0131ssuedAt" holds U+0131, outside printable ASCII (strict parse: a member name in the credential, a signature entry, scanSummary or behavioralProfile must be printable ASCII, U+0020 to U+007E)]
+PASS  fixtures/v1_1-dotted-capital-i-member.json
+       expected: REJECT [PARSE_ERROR]
+       observed: REJECT[PARSE_ERROR: credential member name "\u0130d" holds U+0130, outside printable ASCII (strict parse: a member name in the credential, a signature entry, scanSummary or behavioralProfile must be printable ASCII, U+0020 to U+007E)]
 PASS  fixtures/v1_1-duplicate-purpose-member.json
        expected: REJECT [PARSE_ERROR]
        observed: REJECT[PARSE_ERROR: credential contains duplicate member "category" (strict parse: the whole ATX credential is a signed body; RFC 8259 §4 duplicate names are parser-divergent)]
@@ -105,4 +111,4 @@ PASS  fixtures/wrong-issuer.json
        expected: REJECT [UNTRUSTED_ISSUER]
        observed: REJECT[UNTRUSTED_ISSUER: issuer DID did:opena2a:authority:attacker.example is not in the verifier's trusted set (untrusted issuer)]
 
-summary: 30 pass, 0 fail (30 fixtures)
+summary: 32 pass, 0 fail (32 fixtures)

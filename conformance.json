@@ -926,6 +926,88 @@
       "description": "A baseline ATX v1.1 credential carrying a populated declaredPurpose (atx-spec §1.5): vocabVersion, statement, category, taskScopes, capabilityJustification, autonomy, dataScopes, egressScopes. declaredPurpose is the one presence-based TBS member (§1.3a.2 rule 5); when present it is signed as part of JCS(TBS). Verifier MUST ACCEPT. Canonical bytes equal the jcs-vectors 08-declared-purpose vector."
     },
     {
+      "fixture": "fixtures/v1_1-dotless-i-member.json",
+      "name": "atx-v1_1/dotless-i-member",
+      "requirement": "§1.3 step 1: parsing the credential rejects a member name outside printable ASCII in an object the verifier decodes (U+0131 followed by ssuedAt, beside issuedAt) as PARSE_ERROR before any field is read (§12)",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "REJECT[PARSE_ERROR]",
+      "description": "An ATX v1.1 credential whose Ed25519 signature verifies, carrying one member its issuer did not write: a member named U+0131 (LATIN SMALL LETTER DOTLESS I) followed by ssuedAt, holding 2099-01-01T00:00:00Z, written directly after its signed issuedAt member once the credential is signed. JCS(TBS) holds no member the credential does not specify, so the signature does not cover it. Java 25's String.equalsIgnoreCase compares that name equal to issuedAt, so a relying party that binds the credential's JSON again by such a comparison, keeping the last of the members it joins, reads an issuedAt of 2099-01-01T00:00:00Z, where the signature covers 2026-05-23T00:00:00Z. Verifiers MUST reject a member name outside printable ASCII (U+0020 to U+007E) in an object they decode (the credential, a signature entry, scanSummary or behavioralProfile) as PARSE_ERROR before interpreting any field, a rule that needs no case table. A verifier that folds names by ASCII case, or by a table that keeps U+0131 apart from i, wrongly ACCEPTs."
+    },
+    {
+      "fixture": "fixtures/v1_1-dotted-capital-i-member.json",
+      "name": "atx-v1_1/dotted-capital-i-member",
+      "requirement": "§1.3 step 1: parsing the credential rejects a member name outside printable ASCII in an object the verifier decodes (U+0130 followed by d, beside id) as PARSE_ERROR before any field is read (§12)",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "REJECT[PARSE_ERROR]",
+      "description": "An ATX v1.1 credential whose Ed25519 signature verifies, carrying one member its issuer did not write: a member named U+0130 (LATIN CAPITAL LETTER I WITH DOT ABOVE) followed by d, holding x, written directly after its id member once the credential is signed. JCS(TBS) holds no member the credential does not specify, so the signature does not cover it. Java 25's String.equalsIgnoreCase compares that name equal to id, so a relying party that binds the credential's JSON again by such a comparison, keeping the last of the members it joins, reads x as the credential's id, where the verifier read the id the issuer wrote. Verifiers MUST reject a member name outside printable ASCII (U+0020 to U+007E) in an object they decode (the credential, a signature entry, scanSummary or behavioralProfile) as PARSE_ERROR before interpreting any field, a rule that needs no case table. A verifier that folds names by ASCII case, or by a table that keeps U+0130 apart from i, wrongly ACCEPTs."
+    },
+    {
       "fixture": "fixtures/v1_1-duplicate-purpose-member.json",
       "name": "atx-v1_1/duplicate-purpose-member",
       "requirement": "§1.3 step 1: parsing the credential rejects an object member repeated at any depth (RFC 8259 §4) as PARSE_ERROR before any field is read (§12)",
