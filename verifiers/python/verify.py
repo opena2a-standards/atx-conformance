@@ -105,12 +105,15 @@ lesson and scoped to the whole body because ATX signs it all):
     cross-language scope).
   - NaN, Infinity and -Infinity are not JSON, so a file carrying one fails to
     load with the reason the Go reference verifier gives a file that is not
-    JSON, fixture is not valid JSON, unless it also nests arrays and objects
-    deeper than the 10000 levels of the next item.
+    JSON, fixture is not valid JSON, unless arrays and objects nest deeper
+    than the 10000 levels of the next item before it.
   - the file is read as UTF-8 the way Go's encoding/json reads it: each byte
     of an invalid sequence inside a string decodes to U+FFFD, and arrays and
     objects nested deeper than 10000 levels, the fixture object included,
-    fail to load.
+    fail to load. A file that also stops being JSON fails with the reason
+    for whichever of the two comes first in its text, as Go's encoding/json
+    reports the first error it reads: [x, before 10001 nested arrays is a
+    file that is not JSON.
   - a JSON integer of any length loads, as it does in the Go reference
     verifier. Python's int() refuses one of more than 4300 digits by default;
     such a number is kept as its literal, is out of range for every member
@@ -1444,15 +1447,28 @@ def _go_replace(exc: UnicodeError) -> tuple[str, int]:
 codecs.register_error(_GO_UTF8_ERRORS, _go_replace)
 
 
+class _TooDeep(ValueError):
+    """Arrays and objects nested deeper than Go's encoding/json decodes, which
+    _string_literals raises. at is the index of the bracket that opens the
+    level past the limit."""
+
+    def __init__(self, at: int) -> None:
+        super().__init__(
+            f"arrays and objects nested deeper than {_GO_MAX_DEPTH} levels "
+            "(the limit of Go's encoding/json)"
+        )
+        self.at = at
+
+
 def _string_literals(text: str) -> list[tuple[int, int, bool]]:
     """Each JSON string literal of text in document order, as (start, end,
     is_name), found in one pass: a literal is matched once, from its opening
     quote, and an unterminated one ends the pass, since the rest of the text
     is inside it. A regular expression searched over the whole text would
     instead retry from every quote inside an unterminated literal, which
-    takes quadratic time. Raises ValueError where arrays and objects nest
+    takes quadratic time. Raises _TooDeep where arrays and objects nest
     deeper than Go's encoding/json decodes; the Go verifier fails to load
-    such a file."""
+    such a file, with the reason _starts_json decides."""
     literals = []
     depth = pos = 0
     while True:
@@ -1461,10 +1477,7 @@ def _string_literals(text: str) -> list[tuple[int, int, bool]]:
             if bracket.group() in "[{":
                 depth += 1
                 if depth > _GO_MAX_DEPTH:
-                    raise ValueError(
-                        f"arrays and objects nested deeper than {_GO_MAX_DEPTH} levels "
-                        "(the limit of Go's encoding/json)"
-                    )
+                    raise _TooDeep(bracket.start())
             else:
                 depth -= 1
         if start < 0:
@@ -1512,6 +1525,24 @@ def _parse_json(text: str, **hooks: Any) -> Any:
         return decoder.decode(text)
     finally:
         sys.setrecursionlimit(limit)
+
+
+def _starts_json(text: str) -> bool:
+    """Whether text, a file's text through the bracket a _TooDeep names, is
+    the start of a JSON text: its parse fails at its end, for want of what
+    that bracket opens, and not on a token before it. Go's encoding/json
+    reports the first error it reads, so it fails the file on its depth
+    where this holds, and on a token that is not JSON where it does not.
+    The parse goes no deeper than the level that bracket opens. It reads
+    integers as load_fixture does, so one int() refuses for its length does
+    not end it early."""
+    try:
+        _parse_json(text, parse_constant=_reject_constant, parse_int=_parse_int)
+    except json.JSONDecodeError as exc:
+        return exc.pos == len(text)
+    except _NonJSONConstant:
+        pass
+    return False
 
 
 def _read_file(path: str) -> bytes:
@@ -1573,7 +1604,15 @@ def load_fixture(path: str | os.PathLike[str]) -> dict[str, Any]:
     OSError, worded as Go words it, where the file cannot be read
     (_read_file)."""
     text = _read_file(os.fspath(path)).decode("utf-8", _GO_UTF8_ERRORS)
-    literals = _string_literals(text)
+    try:
+        literals = _string_literals(text)
+    except _TooDeep as exc:
+        # The Go reference verifier reports the first error it reads, so the
+        # text through the bracket past the limit decides whether that is
+        # the depth or a token that is not JSON, as [x, before it is.
+        if not _starts_json(text[: exc.at + 1]):
+            raise ValueError("fixture is not valid JSON") from None
+        raise
     # The duplicate-marking hook preserves last-wins values (plain dict
     # semantics) while recording duplicates: in the atx subtree for the
     # strict-parse check in verify_fixture, and outside it for the check

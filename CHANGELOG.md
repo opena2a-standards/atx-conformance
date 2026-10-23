@@ -982,6 +982,34 @@ they should not.
 
 ### Fixed
 
+- The Python reference verifier fails to load a file that is not JSON and
+  nests arrays and objects deeper than 10000 levels with the reason for
+  whichever comes first in its text, as the Go reference verifier does
+  (#287). It counted the nesting over the whole file before it parsed it,
+  so the depth won wherever the token that is not JSON stood; it now parses
+  the text through the bracket that passes the limit, and gives the depth
+  reason only where that text is the start of a JSON text. On `[x,` or
+  `[NaN,` before 10001 nested arrays, both verifiers print
+  `FAIL  <file>  (load error: fixture is not valid JSON)` and exit 1, where
+  the Python verifier wrote `arrays and objects nested deeper than 10000
+  levels (the limit of Go's encoding/json)`; it exited 1 before this change
+  too, so only its reason changes. On those arrays with `x` or `NaN` inside
+  the deepest, both give the depth reason, before this change and after it.
+  `docs/running-the-verifiers.md` and the Python verifier's module docstring
+  say so. `TestLoadErrorIsTheFirstInTheText` in the Go verifier and
+  `test_load_error_is_the_first_in_the_text` in the Python one pin the same
+  11 rows, among them the bracket that passes the limit standing where a
+  member name belongs, and a 5001-digit integer before the nesting. The
+  Python verifier of the commit before this change fails 6 of them, the 6
+  in which the token that is not JSON comes first; `verify.go` does not
+  change, and passes all 11. The argument table of
+  `scripts/parity/parity.py` adds two cases (57, from 55) on files under
+  `shapes/` in its scratch directory: a file that stops being JSON before
+  it nests too deep, `[x,` and `[NaN,` before 10001 nested arrays, and one
+  that nests too deep before it stops being JSON, those arrays with `x` and
+  `NaN` inside the deepest. The verifiers of the commit before this change
+  differ on the first case and agree on the second; they agree on both
+  after it. No fixture changes.
 - The Go reference verifier verifies no signature over a v1.1 credential
   whose `declaredPurpose` writes a number with a fraction or an exponent
   part, as the Python reference verifier verifies none (#283). Its JCS

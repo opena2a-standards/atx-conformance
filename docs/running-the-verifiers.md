@@ -23,6 +23,11 @@ verifiers: `fixture is not valid JSON`, `fixture is not a JSON object` and
 A file that writes a value as `NaN`, `Infinity` or `-Infinity`, inside its
 `atx` member or outside it, is a file that is not JSON: RFC 8259 §6 has
 none of them.
+A file that is not JSON and also nests deeper than 10000 levels fails with
+the reason for whichever comes first in its text, the first error Go's
+`encoding/json` reads: `[x,` or `[NaN,` before 10001 nested arrays is a
+file that is not JSON, and those arrays with `x` or `NaN` inside the
+deepest nest too deep.
 A fixture with no `atx` member, such as one of another conformance suite,
 is reported as `observed: REJECT[PARSE_ERROR: the fixture has no atx member]`,
 with ` (its $schema is "<value>")` before the `]` when its `$schema` is a
