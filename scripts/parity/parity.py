@@ -44,9 +44,11 @@ twice, a file spelled with ./ and // and one spelled with .., a directory
 spelled with ./ and // and one spelled with .., a directory spelled with a
 .. after a symbolic link, with a trailing / and without, a file named with
 a trailing /, a file that is not a JSON object, one that is not JSON, one
-holding NaN, Infinity or -Infinity and one nested deeper than Go's
-encoding/json decodes, a fixture whose credential holds NaN, a path and an
-option after `--`, an absolute path through a
+holding NaN, Infinity or -Infinity, one nested deeper than Go's
+encoding/json decodes, one that stops being JSON before it nests that
+deep and one that nests that deep before it stops being JSON, a fixture
+whose credential holds NaN, a path and an option after `--`, an
+absolute path through a
 symbolic link to the working directory, through its target, with a ..
 after a symbolic link and outside it, a fixture that writes expected twice,
 under one name, under two that differ in case and with a member the second
@@ -225,8 +227,11 @@ OBSERVED_RE = re.compile(r"^\s*observed:\s+(ACCEPT|REJECT\[([A-Z_]+))")
 # nan.json, infinity.json and negative-infinity.json, an object whose one
 # member is NaN, Infinity or -Infinity, which RFC 8259 §6 does not allow,
 # credential-nan.json, ARGUMENT_FIXTURE with its credential's trustLevel
-# written as NaN, and deep.json, arrays nested one level past Go's
-# encoding/json limit,
+# written as NaN, deep.json, arrays nested one level past Go's
+# encoding/json limit, text-then-deep.json and nan-then-deep.json, an array
+# holding x or NaN, which is not JSON, and then those arrays, and
+# deep-then-text.json and deep-then-nan.json, those arrays with x or NaN
+# inside the deepest,
 # repeat/ holds the files _repeat_files writes, each writing a member twice,
 # and nothing there is named missing, -, help or version. In an argument,
 # {link} is the link's absolute path, {target} the directory's, its symbolic
@@ -277,6 +282,10 @@ ARGUMENT_CASES: list[tuple[str, list[str]]] = [
      ["shapes/nan.json", "shapes/infinity.json", "shapes/negative-infinity.json"]),
     ("a credential holding NaN", ["shapes/credential-nan.json"]),
     ("a file nested too deep", ["shapes/deep.json"]),
+    ("a file that stops being JSON before it nests too deep",
+     ["shapes/text-then-deep.json", "shapes/nan-then-deep.json"]),
+    ("a file that nests too deep before it stops being JSON",
+     ["shapes/deep-then-text.json", "shapes/deep-then-nan.json"]),
     ("a path after --", ["--", "-h.json"]),
     ("an option after --", ["--", "-h.json", "--help"]),
     ("an absolute path via the link", ["{link}/fixfile/x.json"]),
@@ -634,6 +643,11 @@ def _argument_scratch(scratch: Path, fixture: Path) -> tuple[Path, str]:
     (root / "shapes" / "credential-nan.json").write_text(
         _with_raw(arg, "atx", credential.replace(json.dumps(RAW_PLACEHOLDER), "NaN", 1)))
     (root / "shapes" / "deep.json").write_text("[" * 10001 + "]" * 10001 + "\n")
+    for name, literal in (("text", "x"), ("nan", "NaN")):
+        (root / "shapes" / f"{name}-then-deep.json").write_text(
+            f"[{literal}," + "[" * 10001 + "]" * 10001 + "]\n")
+        (root / "shapes" / f"deep-then-{name}.json").write_text(
+            "[" * 10001 + literal + "]" * 10001 + "\n")
     reject = fixture.with_name(REPEAT_FIXTURE)
     reject = reject if reject.exists() else fixture
     nested = fixture.with_name(NESTED_REPEAT_FIXTURE)

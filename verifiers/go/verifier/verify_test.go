@@ -2254,6 +2254,39 @@ func TestLoadErrorNamesTheFileShape(t *testing.T) {
 	}
 }
 
+// TestLoadErrorIsTheFirstInTheText pins the load error of a file that is
+// not JSON and nests past encoding/json's depth limit: the reason for
+// whichever comes first in its text, as json.Unmarshal reports the first
+// error it reads. The bracket that opens the level past the limit can
+// itself be the token that is not JSON. The Python verifier's
+// test_load_error_is_the_first_in_the_text pins the same rows.
+func TestLoadErrorIsTheFirstInTheText(t *testing.T) {
+	past := strings.Repeat("[", 10001) + strings.Repeat("]", 10001)
+	long := "1" + strings.Repeat("0", 5000)
+	for _, c := range []struct{ name, doc, reason string }{
+		{"a token before the nesting", "[x," + past + "]", errNotJSON},
+		{"NaN before the nesting", "[NaN," + past + "]", errNotJSON},
+		{"a token at level 9999", strings.Repeat("[", 9999) + "x[[" + strings.Repeat("]", 10001), errNotJSON},
+		{"the bracket after a value", strings.Repeat("[", 10000) + "1[" + strings.Repeat("]", 10001), errNotJSON},
+		{"the bracket where a member name belongs",
+			strings.Repeat(`{"a":`, 9999) + "{{}}" + strings.Repeat("}", 9999), errNotJSON},
+		{"the nesting after the top-level value", "[]" + past, errNotJSON},
+		{"a token after the nesting", strings.Repeat("[", 10001) + "x" + strings.Repeat("]", 10001), errTooDeep},
+		{"NaN after the nesting", strings.Repeat("[", 10001) + "NaN" + strings.Repeat("]", 10001), errTooDeep},
+		{"NaN after objects nested past the limit",
+			strings.Repeat(`{"a":`, 10000) + `{"b": NaN}` + strings.Repeat("}", 10000), errTooDeep},
+		{"brackets and a quote in strings before the nesting",
+			`["x[", "y\"]", ` + strings.Repeat("[", 10000) + "x", errTooDeep},
+		{"a 5001-digit integer before the nesting",
+			"[" + long + "," + strings.Repeat("[", 10001) + "x", errTooDeep},
+	} {
+		_, err := parseFixture([]byte(c.doc))
+		if err == nil || err.Error() != c.reason {
+			t.Errorf("%s: load error %v, want %q", c.name, err, c.reason)
+		}
+	}
+}
+
 // TestReasonContainsMismatchNamesTheSubstring pins the FAIL block of a
 // fixture whose credential rejects in the expected category with a reason
 // that lacks expected.reasonContains: a line names the substring, which

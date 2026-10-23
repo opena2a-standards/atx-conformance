@@ -20,7 +20,9 @@ member written twice outside the credential, under one name or two, which
 fails to load (a first value outside its Go type included), a public key
 that is not hex, arrays and objects nested to Go's
 depth limit (in declaredPurpose too, which the JCS serializer walks, and in a
-typed member, whose decode error writes the value to 8 levels), an integer
+typed member, whose decode error writes the value to 8 levels) and past it
+in a file that is also not JSON, whose load error names whichever comes
+first in the text, an integer
 with more digits than int() converts, bytes that are not UTF-8, the
 single-pass string-literal scan, --help, an unknown option, --version, an
 empty argument, a directory whose fixtures entry is a file, a directory
@@ -2789,6 +2791,42 @@ class NestingDepth(unittest.TestCase):
 
     def test_brackets_inside_a_string_do_not_nest(self):
         self.assertEqual(len(verify._string_literals('{"a": "' + "[" * 20000 + '"}')), 2)
+
+    def test_load_error_is_the_first_in_the_text(self):
+        # A file that is not JSON and nests past Go's depth limit fails with
+        # the reason for whichever comes first in its text, as Go's
+        # encoding/json reports the first error it reads. The bracket that
+        # opens the level past the limit can itself be the token that is not
+        # JSON. The Go verifier's TestLoadErrorIsTheFirstInTheText pins the
+        # same rows.
+        # The default limit, which int() applies to the 5001-digit integer.
+        self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
+        sys.set_int_max_str_digits(4300)
+        not_json = "fixture is not valid JSON"
+        too_deep = "arrays and objects nested deeper than 10000 levels (the limit of Go's encoding/json)"
+        past = _arrays(10001)
+        for name, text, reason in (
+            ("a token before the nesting", "[x," + past + "]", not_json),
+            ("NaN before the nesting", "[NaN," + past + "]", not_json),
+            ("a token at level 9999", "[" * 9999 + "x[[" + "]" * 10001, not_json),
+            ("the bracket after a value", "[" * 10000 + "1[" + "]" * 10001, not_json),
+            ("the bracket where a member name belongs", '{"a":' * 9999 + "{{}}" + "}" * 9999, not_json),
+            ("the nesting after the top-level value", "[]" + past, not_json),
+            ("a token after the nesting", "[" * 10001 + "x" + "]" * 10001, too_deep),
+            ("NaN after the nesting", "[" * 10001 + "NaN" + "]" * 10001, too_deep),
+            ("NaN after objects nested past the limit",
+             '{"a":' * 10000 + '{"b": NaN}' + "}" * 10000, too_deep),
+            ("brackets and a quote in strings before the nesting",
+             '["x[", "y\\"]", ' + "[" * 10000 + "x", too_deep),
+            ("a 5001-digit integer before the nesting",
+             "[" + LONG_INTEGER + "," + "[" * 10001 + "x", too_deep),
+        ):
+            with self.subTest(name), tempfile.TemporaryDirectory() as tmp:
+                written = Path(tmp) / "f.json"
+                written.write_text(text)
+                with self.assertRaises(ValueError) as raised:
+                    verify.load_fixture(written)
+                self.assertEqual(str(raised.exception), reason)
 
 
 class LongInteger(unittest.TestCase):
