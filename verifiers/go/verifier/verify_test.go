@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"math/big"
 	"os"
@@ -923,8 +924,9 @@ func TestRawDuplicateMember(t *testing.T) {
 		{"U+1C89 and U+1C8A", `{"\u1c89x":1,"\u1c8ax":2}`, false},
 		{"U+0130 and ASCII i", `{"\u0130d":1,"id":2}`, false},
 		{"U+0130 and i with U+0307", `{"\u0130x":1,"i\u0307x":2}`, false},
-		// atx-conformance#187: a number outside the float64 range ahead of
-		// the duplicate aborted the scan before UseNumber.
+		// atx-conformance#187: a number strconv.ParseFloat refuses as outside
+		// the float64 range ahead of the duplicate aborted the scan before
+		// UseNumber.
 		{"after 1e400", `{"zzz":1e400,"trustLevel":1,"trustLevel":4}`, true},
 		{"after -1e400", `{"zzz":-1e400,"trustLevel":1,"trustLevel":4}`, true},
 		{"after 401-digit integer", `{"zzz":1` + strings.Repeat("0", 400) + `,"trustLevel":1,"trustLevel":4}`, true},
@@ -1188,6 +1190,51 @@ func TestSuitePinsMemberNamesOutsidePrintableASCII(t *testing.T) {
 		if got, err := json.Marshal(credential); err != nil || !bytes.Equal(got, want) {
 			t.Errorf("%s: without %q its credential is not that of fixtures/v1_1-baseline-valid.json (%v)", c.file, c.added, err)
 		}
+	}
+}
+
+// TestDecoderWithoutUseNumberOnOutOfRangeNumbers pins what the comment on
+// UseNumber in rawDuplicateMember says. Without UseNumber, Token() returns an
+// error on a number strconv.ParseFloat refuses as outside the float64 range,
+// 1e400, -1e400 and an integer of 401 digits here, and none on 1 followed by
+// 1000 zeros and e-650, whose value is 10^350 and which strconv.ParseFloat
+// reads as 1e+149. rawDuplicateMember reports the duplicate after each. A
+// v1.1 credential whose declaredPurpose is that last number rejects as
+// SIGNATURE_INVALID, where the Python reference verifier rejects it as
+// VERIFIER_CONFIG_ERROR (hasNumberOutsideFloat64RangeV11). atx-conformance#294.
+func TestDecoderWithoutUseNumberOnOutOfRangeNumbers(t *testing.T) {
+	misread := "1" + strings.Repeat("0", 1000) + "e-650"
+	for _, tc := range []struct {
+		literal string
+		refused bool
+	}{
+		{`1e400`, true},
+		{`-1e400`, true},
+		{"1" + strings.Repeat("0", 400), true},
+		{misread, false},
+	} {
+		f, err := strconv.ParseFloat(tc.literal, 64)
+		if tc.refused && !errors.Is(err, strconv.ErrRange) || !tc.refused && err != nil {
+			t.Errorf("strconv.ParseFloat(%.40s, %d bytes) = %g, %.80v; want ErrRange: %v", tc.literal, len(tc.literal), f, err, tc.refused)
+		}
+		dec := json.NewDecoder(strings.NewReader("[" + tc.literal + "]"))
+		var tokenErr error
+		for tokenErr == nil {
+			_, tokenErr = dec.Token()
+		}
+		if failed := !errors.Is(tokenErr, io.EOF); failed != tc.refused {
+			t.Errorf("Token() without UseNumber on [%.40s] (%d bytes): %.80v; want an error: %v", tc.literal, len(tc.literal), tokenErr, tc.refused)
+		}
+		if _, dup := rawDuplicateMember([]byte(`{"zzz":` + tc.literal + `,"trustLevel":1,"trustLevel":4}`)); !dup {
+			t.Errorf("rawDuplicateMember: no duplicate reported after %.40s (%d bytes)", tc.literal, len(tc.literal))
+		}
+	}
+	if f, err := strconv.ParseFloat(misread, 64); f != 1e149 || err != nil {
+		t.Errorf("strconv.ParseFloat(1 followed by 1000 zeros and e-650) = %g, %.80v; want 1e+149, <nil>", f, err)
+	}
+	const notVerified = "Ed25519 signature did:opena2a:authority:opena2a.org#key-1 did not verify against any configured public key"
+	if got := verify(withMembers(t, v11Baseline(t), map[string]string{"declaredPurpose": misread})); got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != notVerified {
+		t.Errorf("declaredPurpose 1 followed by 1000 zeros and e-650: %.300s, want REJECT[SIGNATURE_INVALID: %s]", got, notVerified)
 	}
 }
 

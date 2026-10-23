@@ -769,11 +769,15 @@ const maxScanDepth = 10000
 func rawDuplicateMember(raw []byte) (string, bool) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	// UseNumber keeps Token() from converting each number to float64. Without
-	// it, a number outside the float64 range (1e400, an integer of 401 digits)
-	// makes Token() return an error and aborts the scan, although the number is
-	// valid JSON that json.Unmarshal accepts in a member the atx struct holds as
-	// raw JSON (declaredPurpose) or does not declare: a duplicate member after
-	// it was then not reported. atx-conformance#187.
+	// it, a number strconv.ParseFloat refuses as outside the float64 range
+	// (1e400, an integer of 401 digits) makes Token() return an error and
+	// aborts the scan, although the number is valid JSON that json.Unmarshal
+	// accepts in a member the atx struct holds as raw JSON (declaredPurpose)
+	// or does not declare: a duplicate member after it was then not reported
+	// (atx-conformance#187). strconv.ParseFloat reads 1 followed by 1000
+	// zeros and e-650, whose value is 10^350, as 1e+149, so without UseNumber
+	// Token() returns no error on that number
+	// (TestDecoderWithoutUseNumberOnOutOfRangeNumbers).
 	dec.UseNumber()
 	name, dup, _ := scanValueForDuplicates(dec, 0)
 	return name, dup

@@ -768,9 +768,13 @@ def _finite_number(value: Any) -> bool:
 def _holds_number_outside_float64(value: Any) -> bool:
     """True if the raw JSON value holds, at any depth, a number that is not
     finite as a float64. The Go reference verifier's JCS library parses each
-    number it canonicalizes with strconv.ParseFloat, which refuses such a
-    literal. Walked with a stack, not by recursion, so a value nested as deep
-    as load_fixture allows is read whole."""
+    number it canonicalizes with strconv.ParseFloat, which refuses some such
+    literals as out of range, such as 1e400 or an integer of 401 digits, and
+    can read one written with more than 800 digits and an exponent part as
+    finite: it reads 1 followed by 1000 zeros and e-650, whose value is
+    10^350, as 1e+149, where float() returns inf and this returns True.
+    Walked with a stack, not by recursion, so a value nested as deep as
+    load_fixture allows is read whole."""
     stack = [value]
     while stack:
         item = stack.pop()

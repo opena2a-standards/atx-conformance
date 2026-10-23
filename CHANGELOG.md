@@ -1034,6 +1034,35 @@ they should not.
 
 ### Fixed
 
+- Four comments limit what they say Go does with a number outside the
+  float64 range to a number `strconv.ParseFloat` refuses as out of range,
+  such as `1e400` or an integer of 401 digits (#294). The docstring of
+  `_holds_number_outside_float64` in `verifiers/python/verify.py` said
+  `strconv.ParseFloat` refuses a number that is not finite as a float64;
+  the comment in `test_number_outside_float64_range_reaches_the_go_category`
+  in `verifiers/python/test_verify.py` said Python's `float()` rounds at
+  the same edge; the comment on `UseNumber` in `rawDuplicateMember` in
+  `verifiers/go/verifier/verify.go`, and the one on the #187 cases of
+  `TestRawDuplicateMember`, said that without `UseNumber` a number outside
+  the float64 range aborts the duplicate-member scan, the first saying
+  that `Token()` returns an error on it. Built with Go 1.26.3 and with
+  Go 1.22.12, `strconv.ParseFloat` reads `1` followed by 1000 zeros and
+  `e-650`, whose value is 10^350, as `1e+149` with no error, and a
+  `json.Decoder` without `UseNumber` reads that number in an array with no
+  `Token()` error; under Python 3.13.12 and 3.14.3, `float()` returns `inf`
+  for it. The docstring and the comments in `test_verify.py` and in
+  `rawDuplicateMember` now name that number.
+  `TestDecoderWithoutUseNumberOnOutOfRangeNumbers` in the Go verifier pins
+  those Go results, the `Token()` error on `1e400`, `-1e400` and an integer
+  of 401 digits, the duplicate member `rawDuplicateMember` reports after
+  each of the four numbers, and `SIGNATURE_INVALID` on a v1.1 credential
+  whose `declaredPurpose` is that number.
+  `test_number_outside_float64_range_that_go_reads_as_finite` in the Python
+  verifier pins `float()` returning `inf` for it, and the Python verifier's
+  `VERIFIER_CONFIG_ERROR` on that credential with the reason `v1.1
+  canonicalization failed: declaredPurpose holds a number outside the
+  float64 range`. `verify.go` changes in a comment alone, and `verify.py`
+  in a docstring alone. No fixture changes.
 - Both reference verifiers reject as `PARSE_ERROR` a credential holding a
   member name with a character outside printable ASCII (U+0020 to U+007E)
   in an object they decode: the credential, an entry of its `signatures`,
