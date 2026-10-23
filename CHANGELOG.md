@@ -1088,9 +1088,15 @@ they should not.
   member the verifiers do not declare keeps the verdict it had. A member
   named with the Kelvin sign for the `k` of `revoked`, or with the long s
   for the `s` of `signatures`, which Go's `encoding/json` reads as that
-  member, was `REVOKED` or `SIGNATURE_INVALID` on both verifiers and is now
-  a `PARSE_ERROR` naming it; written beside the member it spells, it is
-  still a duplicate member. Members named `É` and `é` in the credential,
+  member, is now a `PARSE_ERROR` naming it. Before this change,
+  `fixtures/v1_1-baseline-valid.json` with that member renamed was, on
+  both verifiers built with Go 1.26.3 and run under Python 3.14.3, ACCEPT
+  with the baseline's own values (`false` for `revoked`, its one signature
+  entry for `signatures`), `REVOKED` with `revoked` holding `true`, and
+  `SIGNATURE_INVALID` with `signatures` holding `[]`, the two values the
+  rows of `GO_NON_ASCII_RENAMES` use; each of those four is now that
+  `PARSE_ERROR`. Written beside the member it spells, it is still a
+  duplicate member. Members named `É` and `é` in the credential,
   two members and ACCEPT on both since #173, are a `PARSE_ERROR` too; in a
   member the verifiers do not declare they are still two members.
   Two MUST-REJECT fixtures built by the generator, one per spelling, hold
