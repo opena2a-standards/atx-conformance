@@ -383,6 +383,10 @@ FLOAT64_EDGE = 2**1024 - 2**970
 GO_PURPOSE_NUMBER_VERDICTS = (
     ("1e400", "VERIFIER_CONFIG_ERROR"),
     ("-1e400", "VERIFIER_CONFIG_ERROR"),
+    ('{"n": 1e400}', "VERIFIER_CONFIG_ERROR"),
+    ('{"n": -1e400}', "VERIFIER_CONFIG_ERROR"),
+    ("1E400", "VERIFIER_CONFIG_ERROR"),
+    ("1e+400", "VERIFIER_CONFIG_ERROR"),
     ("1.7976931348623159e308", "VERIFIER_CONFIG_ERROR"),
     (str(FLOAT64_EDGE), "VERIFIER_CONFIG_ERROR"),
     (str(-FLOAT64_EDGE), "VERIFIER_CONFIG_ERROR"),
@@ -395,6 +399,12 @@ GO_PURPOSE_NUMBER_VERDICTS = (
     ("1e308", "SIGNATURE_INVALID"),
     ("1e-400", "SIGNATURE_INVALID"),
 )
+
+# The reason both reference verifiers write for a number outside the float64
+# range in a v1.1 declaredPurpose. The Go verifier wrote the error its JCS
+# library returned, strconv.ParseFloat: parsing "1e400": value out of range,
+# until atx-conformance#289.
+GO_OUTSIDE_FLOAT64_REASON = "v1.1 canonicalization failed: declaredPurpose holds a number outside the float64 range"
 
 
 class InjectedNumberPurpose(unittest.TestCase):
@@ -445,6 +455,17 @@ class InjectedNumberPurpose(unittest.TestCase):
                 got = _at_verdict(BASELINE_V11, ("declaredPurpose",), literal)
                 self.assertFalse(got.accepted)
                 self.assertEqual(got.reject_category, category, got.reason[:200])
+
+    def test_number_outside_float64_range_has_the_go_reason(self):
+        # Both reference verifiers refuse such a number before their JCS
+        # serializer reads it, with one reason, which names the member
+        # (TestDeclaredPurposeNumberOutsideFloat64Range in the Go verifier).
+        for literal, category in GO_PURPOSE_NUMBER_VERDICTS:
+            if category != "VERIFIER_CONFIG_ERROR":
+                continue
+            with self.subTest(literal=literal[:40], length=len(literal)):
+                got = _at_verdict(BASELINE_V11, ("declaredPurpose",), literal)
+                self.assertEqual(got.reason, GO_OUTSIDE_FLOAT64_REASON)
 
     def test_directory_run_reaches_the_summary_line(self):
         # One fixture the verifier cannot canonicalize must not end the run:
@@ -2883,7 +2904,9 @@ class LongInteger(unittest.TestCase):
         # declaredPurpose enters the v1.1 signed payload as written, so no
         # typed decode refuses the number there. An integer of 401 digits,
         # which int() converts, is outside float64 range too, and the Go
-        # verifier's JCS library refuses both (VERIFIER_CONFIG_ERROR).
+        # verifier refuses both before its JCS library reads them, as
+        # VERIFIER_CONFIG_ERROR with the reason this one writes
+        # (TestDeclaredPurposeNumberOutsideFloat64Range).
         shorter = "1" + "0" * 400
         for purpose in ("%s", "-%s", '{"x": %s}', "[7, %s]"):
             with self.subTest(purpose=purpose):
@@ -2892,6 +2915,8 @@ class LongInteger(unittest.TestCase):
                 self.assertFalse(got.accepted)
                 self.assertEqual(got.reject_category, control.reject_category)
                 self.assertEqual(got.reject_category, "VERIFIER_CONFIG_ERROR", got.reason[:200])
+                self.assertEqual(got.reason, GO_OUTSIDE_FLOAT64_REASON)
+                self.assertEqual(control.reason, GO_OUTSIDE_FLOAT64_REASON)
 
     def test_directory_run_reaches_the_summary_line(self):
         with tempfile.TemporaryDirectory() as tmp:

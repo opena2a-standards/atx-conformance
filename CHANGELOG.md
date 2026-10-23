@@ -982,6 +982,36 @@ they should not.
 
 ### Fixed
 
+- The Go reference verifier gives the reason the Python reference verifier
+  gives when a v1.1 credential's `declaredPurpose` holds a number outside
+  the float64 range (#289). Both rejected such a credential as
+  `VERIFIER_CONFIG_ERROR`: the Go verifier wrote the error its JCS library
+  returned, whose text the Go release sets, as `v1.1 canonicalization
+  failed: strconv.ParseFloat: parsing "1e400": value out of range`, and the
+  Python verifier wrote `v1.1 canonicalization failed: declaredPurpose holds
+  a number outside the float64 range`, which names the member. The Go
+  verifier now refuses such a number before its JCS library reads it, with
+  the Python verifier's reason, and still refuses an unpaired surrogate
+  escape in `declaredPurpose` first, as the Python verifier does. On
+  `fixtures/v1_1-declared-purpose-number-injected.json` with its
+  `declaredPurpose` written as `{"n": 1e400}`, `1e400` or `{"n": -1e400}`,
+  the two verifiers now print the same lines, built with Go 1.26.3 and run
+  under Python 3.14.3. `TestDeclaredPurposeNumberOutsideFloat64Range` in the
+  Go verifier expects that reason on 22 `declaredPurpose` values, among them
+  `1E400`, `1e+400`, `1.7976931348623159e308`, 2^1024 - 2^970 written as its
+  digits, integers of 401 and 5001 digits and `1e400` nested in 9997
+  arrays; the Go verifier of the commit before this change fails each of the
+  22 with the `strconv.ParseFloat` error, in the same category. Its controls
+  keep the verdicts and reasons they had: `1.7976931348623158e308`,
+  `1e-400`, 2^1024 - 2^970 - 1, and `1e400` written in a string or as a
+  member name reject as `SIGNATURE_INVALID`, and under `atcVersion` 1.0 the
+  baseline carrying `{"n": 1e400}` is accepted. In the Python verifier,
+  `GO_PURPOSE_NUMBER_VERDICTS` adds `{"n": 1e400}`, `{"n": -1e400}`, `1E400`
+  and `1e+400`; `InjectedNumberPurpose` expects that reason on the 13 values
+  the table expects `VERIFIER_CONFIG_ERROR` for, and `LongInteger` on its 8
+  values holding an integer of 401 or 5001 digits. `verify.py` changes in
+  its comments alone. `docs/captures/go-verifier.txt` is unchanged. No
+  fixture changes.
 - The Python reference verifier fails to load a file that is not JSON and
   nests arrays and objects deeper than 10000 levels with the reason for
   whichever comes first in its text, as the Go reference verifier does

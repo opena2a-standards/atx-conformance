@@ -386,6 +386,9 @@ func canonicalPayloadV11(a *atx) ([]byte, error) {
 	if escape := unpairedSurrogateEscape(purpose); escape != "" {
 		return nil, fmt.Errorf("declaredPurpose holds an unpaired UTF-16 surrogate escape (%s)", escape)
 	}
+	if hasNumberOutsideFloat64RangeV11(a) {
+		return nil, errors.New("declaredPurpose holds a number outside the float64 range")
+	}
 	tbs := tbsV11{
 		ATCVersion:        a.ATCVersion,
 		AgentID:           a.AgentID,
@@ -604,6 +607,22 @@ func integerOutsideExactRangeV11(a *atx) (where, literal string) {
 func hasNumberWithFractionOrExponentV11(a *atx) bool {
 	for _, number := range purposeNumbersV11(a) {
 		if strings.ContainsAny(string(number), ".eE") {
+			return true
+		}
+	}
+	return false
+}
+
+// hasNumberOutsideFloat64RangeV11 reports whether the declaredPurpose of a
+// writes a number outside the float64 range, one strconv.ParseFloat refuses
+// as out of range: 1e400, -1e400 or an integer of 401 digits. declaredPurpose
+// enters the TBS as written, so no typed decode refuses such a number first,
+// and the JCS library refuses it with the error strconv.ParseFloat returns,
+// whose text the Go release sets. canonicalPayloadV11 refuses it before the
+// library reads it, with the reason the Python reference verifier writes.
+func hasNumberOutsideFloat64RangeV11(a *atx) bool {
+	for _, number := range purposeNumbersV11(a) {
+		if _, err := strconv.ParseFloat(string(number), 64); errors.Is(err, strconv.ErrRange) {
 			return true
 		}
 	}

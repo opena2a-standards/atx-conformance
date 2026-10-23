@@ -93,7 +93,9 @@ lesson and scoped to the whole body because ATX signs it all):
     so a number beside it that the serializer cannot write (1.5) does not
     make the credential a signature failure. A number in it outside the
     float64 range (1e400, or an integer of 401 digits) rejects as
-    VERIFIER_CONFIG_ERROR too: that library parses every number as a float64.
+    VERIFIER_CONFIG_ERROR too, with the reason the Go reference verifier
+    gives, which refuses it before its JCS library reads it: that library
+    parses every number as a float64.
     An integer in it inside that range but outside the I-JSON exact range
     rejects after these two checks, as SIGNATURE_INVALID (Spec coverage).
     A number in it written with a fraction or an exponent part, which
@@ -1266,9 +1268,10 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
         if _holds_number_outside_float64(atx.get("declaredPurpose")):
             # declaredPurpose enters the TBS as written, so no typed decode
             # refuses the number first. The Go reference verifier's JCS
-            # library cannot canonicalize it and the verifier reports the
-            # category below, where this serializer would refuse it as a
-            # float (1e400) or write it out (an integer of 401 digits).
+            # library cannot canonicalize it; the verifier refuses it before
+            # the library reads it, with the category and reason below,
+            # where this serializer would refuse it as a float (1e400) or
+            # write it out (an integer of 401 digits).
             return VerifyResult(
                 reject_category="VERIFIER_CONFIG_ERROR",
                 reason="v1.1 canonicalization failed: declaredPurpose holds a number outside the float64 range",

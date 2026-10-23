@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"math/big"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -2596,5 +2597,85 @@ func TestDeclaredPurposeNumberWithFractionOrExponent(t *testing.T) {
 	}
 	if got := verify(withMembers(t, v10, map[string]string{"declaredPurpose": `{"n": 1e3}`})); !got.Accepted {
 		t.Errorf(`declaredPurpose {"n": 1e3} on the v1.0 baseline: %s, want ACCEPT`, got)
+	}
+}
+
+// TestDeclaredPurposeNumberOutsideFloat64Range pins the verdict and reason on
+// a v1.1 credential whose declaredPurpose writes a number outside the float64
+// range. declaredPurpose enters the TBS as written, and the JCS library
+// refuses such a number with the error strconv.ParseFloat returns for it,
+// whose text the Go release sets. This verifier wrote that error as its
+// reason, v1.1 canonicalization failed: strconv.ParseFloat: parsing "1e400":
+// value out of range, where the Python reference verifier writes a sentence
+// that names the member. Both now reject each as VERIFIER_CONFIG_ERROR with
+// that sentence (GO_PURPOSE_NUMBER_VERDICTS in
+// verifiers/python/test_verify.py). atx-conformance#289.
+func TestDeclaredPurposeNumberOutsideFloat64Range(t *testing.T) {
+	base := v11Baseline(t)
+	const outside = "v1.1 canonicalization failed: declaredPurpose holds a number outside the float64 range"
+	// edge is 2^1024 - 2^970, the largest float64 plus half a unit in its
+	// last place: the smallest integer that rounds past it, to infinity.
+	edge := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 1024), new(big.Int).Lsh(big.NewInt(1), 970))
+	purposes := []string{
+		`1e400`,
+		`-1e400`,
+		`{"n": 1e400}`,
+		`{"n": -1e400}`,
+		`1E400`,
+		`1e+400`,
+		`1.7976931348623159e308`,
+		edge.String(),
+		"-" + edge.String(),
+		`{"limit": 1e400}`,
+		`["billing:inquiry", 1e400]`,
+		`[1.5, 1e400]`,
+		`[1e400, 9007199254740993]`,
+		strings.Repeat("[", 9997) + "1e400" + strings.Repeat("]", 9997),
+	}
+	// Integers of 401 and 5001 digits, written as the Python verifier's
+	// LongInteger tests write them.
+	for _, digits := range []string{"1" + strings.Repeat("0", 400), "1" + strings.Repeat("0", 5000)} {
+		purposes = append(purposes, digits, "-"+digits, `{"x": `+digits+`}`, `[7, `+digits+`]`)
+	}
+	for _, purpose := range purposes {
+		got := verify(withMembers(t, base, map[string]string{"declaredPurpose": purpose}))
+		if got.RejectCategory != "VERIFIER_CONFIG_ERROR" || got.Reason != outside {
+			t.Errorf("declaredPurpose %.40s (%d bytes): %.300s, want REJECT[VERIFIER_CONFIG_ERROR: %s]", purpose, len(purpose), got, outside)
+		}
+	}
+
+	// Controls: a number in the float64 range keeps its verdict and reason,
+	// and 1e400 written in a string or as a member name is no number. The
+	// baseline signs no declaredPurpose.
+	const notVerified = "Ed25519 signature did:opena2a:authority:opena2a.org#key-1 did not verify against any configured public key"
+	below := new(big.Int).Sub(edge, big.NewInt(1)).String()
+	for _, tc := range []struct{ purpose, want string }{
+		{`1.7976931348623158e308`, notVerified},
+		{`1e-400`, notVerified},
+		{below, "no signature covers declaredPurpose: the integer " + below + " is outside the I-JSON exact range, -(2^53-1) to 2^53-1"},
+		{`{"n": "1e400"}`, notVerified},
+		{`{"1e400": 1}`, notVerified},
+	} {
+		got := verify(withMembers(t, base, map[string]string{"declaredPurpose": tc.purpose}))
+		if got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != tc.want {
+			t.Errorf("declaredPurpose %.40s (%d bytes): %.300s, want REJECT[SIGNATURE_INVALID: %.300s]", tc.purpose, len(tc.purpose), got, tc.want)
+		}
+	}
+
+	// An unpaired surrogate escape beside such a number is refused first, as
+	// the Python verifier refuses it.
+	surrogate := `v1.1 canonicalization failed: declaredPurpose holds an unpaired UTF-16 surrogate escape (\ud800)`
+	if got := verify(withMembers(t, base, map[string]string{"declaredPurpose": `{"a": 1e400, "b": "\ud800"}`})); got.RejectCategory != "VERIFIER_CONFIG_ERROR" || got.Reason != surrogate {
+		t.Errorf(`declaredPurpose {"a": 1e400, "b": "\ud800"}: %s, want REJECT[VERIFIER_CONFIG_ERROR: %s]`, got, surrogate)
+	}
+
+	// Under atcVersion 1.0 no signature covers declaredPurpose, and the
+	// verifier reads no number in it: the v1.0 baseline is accepted.
+	v10, err := loadFixture(repoRoot + "/fixtures/baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := verify(withMembers(t, v10, map[string]string{"declaredPurpose": `{"n": 1e400}`})); !got.Accepted {
+		t.Errorf(`declaredPurpose {"n": 1e400} on the v1.0 baseline: %s, want ACCEPT`, got)
 	}
 }
