@@ -848,7 +848,9 @@ func scanValueForDuplicates(dec *json.Decoder, depth int) (name string, dup, abo
 // with, made U+1C89 and U+1C8A (a case pair from Unicode 16.0) a duplicate
 // under Go 1.27 and not under Go 1.22 through 1.26 (atx-conformance#173). The
 // ASCII and two-rune mappings are ported from opena2a-registry pkg/atcverify
-// (registry #307).
+// (registry #307). In an object this verifier decodes, a name that holds a
+// character outside printable ASCII, folded together with another or not,
+// is refused once this check passes (memberNameOutsidePrintableASCII).
 func foldKey(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
@@ -865,6 +867,79 @@ func foldKey(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// memberNameOutsidePrintableASCII returns the first member name, in document
+// order, that holds a character outside printable ASCII (U+0020 to U+007E)
+// in an object this verifier decodes into a struct: the credential, each
+// object of its signatures array, and its scanSummary and behavioralProfile
+// objects. It also returns the first such character in the name. found is
+// false when there is none.
+//
+// The strict parse refuses such a name as PARSE_ERROR, whatever its
+// characters, a rule that reads no case table. foldKey joins a name to a
+// specified member by a fixed table, and a relying party that binds the
+// credential's JSON again may join by another: Java 25's
+// String.equalsIgnoreCase compares U+0130 followed by d equal to id, and
+// U+0131 followed by ssuedAt equal to issuedAt, two pairs foldKey keeps
+// apart. Beside the specified member, such a name is a member the signature
+// does not cover, which that relying party can read as the specified one.
+// (Same rule in verifiers/python; atx-conformance#284.)
+//
+// declaredPurpose is not scanned: the verifier decodes none of its members
+// into a field, and v1.1 signs it as written, its member names included. Nor
+// is a member the atx struct does not declare. A value that is not an object
+// holds no member name; json.Unmarshal of the credential says why one this
+// verifier decodes is not an object.
+func memberNameOutsidePrintableASCII(raw []byte) (name string, char rune, found bool) {
+	return objectNameOutsidePrintableASCII(raw, true)
+}
+
+// objectNameOutsidePrintableASCII is memberNameOutsidePrintableASCII on the
+// JSON object raw. With credential set, raw is the credential, and the
+// objects its signatures, scanSummary and behavioralProfile members hold are
+// scanned after each member's name. Those members are matched by foldKey, as
+// encoding/json matches them to the atx struct's fields; their names are
+// printable ASCII by then, so the fold is ASCII's.
+func objectNameOutsidePrintableASCII(raw []byte, credential bool) (string, rune, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return "", 0, false
+	}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return "", 0, false
+		}
+		key, _ := tok.(string)
+		for _, r := range key {
+			if r < ' ' || r > '~' {
+				return key, r, true
+			}
+		}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return "", 0, false
+		}
+		if !credential {
+			continue
+		}
+		var objects []json.RawMessage
+		switch foldKey(key) {
+		case "scansummary", "behavioralprofile":
+			objects = []json.RawMessage{value}
+		case "signatures":
+			if json.Unmarshal(value, &objects) != nil {
+				objects = nil // not an array
+			}
+		}
+		for _, object := range objects {
+			if name, char, found := objectNameOutsidePrintableASCII(object, false); found {
+				return name, char, true
+			}
+		}
+	}
+	return "", 0, false
 }
 
 // noATXReason is the reason a fixture with no atx member rejects: the
@@ -897,6 +972,16 @@ func verify(f fixture) result {
 		return result{
 			RejectCategory: "PARSE_ERROR",
 			Reason:         fmt.Sprintf("credential contains duplicate member %q (strict parse: the whole ATX credential is a signed body; RFC 8259 §4 duplicate names are parser-divergent)", name),
+		}
+	}
+	// A member name outside printable ASCII in an object this verifier
+	// decodes (see memberNameOutsidePrintableASCII). %+q and %U write the
+	// name and the character in ASCII, so no Unicode table of the Go
+	// release decides the reason's text.
+	if name, char, found := memberNameOutsidePrintableASCII(f.ATX); found {
+		return result{
+			RejectCategory: "PARSE_ERROR",
+			Reason:         fmt.Sprintf("credential member name %+q holds %U, outside printable ASCII (strict parse: a member name in the credential, a signature entry, scanSummary or behavioralProfile must be printable ASCII, U+0020 to U+007E)", name, char),
 		}
 	}
 

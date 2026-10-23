@@ -982,6 +982,55 @@ they should not.
 
 ### Fixed
 
+- Both reference verifiers reject as `PARSE_ERROR` a credential holding a
+  member name with a character outside printable ASCII (U+0020 to U+007E)
+  in an object they decode: the credential, an entry of its `signatures`,
+  its `scanSummary` or its `behavioralProfile` (#284). The duplicate-member
+  check joins a name to a specified member by a fixed fold (#173), and a
+  relying party that binds the credential's JSON again may join by another:
+  Java 25's `String.equalsIgnoreCase` compares a member named U+0130
+  followed by `d` equal to `id`, and one named U+0131 followed by `ssuedAt`
+  equal to `issuedAt`, two pairs the fold keeps apart.
+  `fixtures/v1_1-baseline-valid.json` with either member added, which no
+  signature covers, was ACCEPT on both verifiers. Both now report
+  `REJECT[PARSE_ERROR: credential member name <name> holds U+0130,
+  outside printable ASCII (strict parse: a member name in the credential, a
+  signature entry, scanSummary or behavioralProfile must be printable
+  ASCII, U+0020 to U+007E)]` for the first, `<name>` being the name as Go's
+  `%+q` writes it, U+0130 written as a `\u` escape, and the same rule holds
+  on `fixtures/baseline-valid.json`. The check runs once the duplicate-member
+  check passes and before any member is decoded. It names the first such
+  name in document order and the first such character in it, written in
+  ASCII (`%+q` and `%U` in the Go verifier, the same text in the Python
+  one), so no Unicode table decides the reason. It reads no other object:
+  such a name in `declaredPurpose`, which v1.1 signs as written, or in a
+  member the verifiers do not declare keeps the verdict it had. A member
+  named with the Kelvin sign for the `k` of `revoked`, or with the long s
+  for the `s` of `signatures`, which Go's `encoding/json` reads as that
+  member, was `REVOKED` or `SIGNATURE_INVALID` on both verifiers and is now
+  a `PARSE_ERROR` naming it; written beside the member it spells, it is
+  still a duplicate member. Members named `É` and `é` in the credential,
+  two members and ACCEPT on both since #173, are a `PARSE_ERROR` too; in a
+  member the verifiers do not declare they are still two members.
+  Two MUST-REJECT fixtures built by the generator, one per spelling, hold
+  a verifier to the rule: `fixtures/v1_1-dotted-capital-i-member.json` and
+  `fixtures/v1_1-dotless-i-member.json`, each the credential of
+  `fixtures/v1_1-baseline-valid.json` with the member added after signing,
+  directly after the member it spells, expecting `REJECT [PARSE_ERROR]`
+  with a reason containing `printable ASCII`. Both reference verifiers at
+  the previous commit report ACCEPT on each. The 30 existing fixtures and
+  their `MANIFEST.sha256` lines are byte-identical, and the manifest gains
+  two lines. `scripts/schema_validation.py` holds each new fixture to
+  exactly one root `additionalProperties` error naming its added member.
+  The stated counts go from 30 to 32 (the sibling row's v1.1 count from 18
+  to 20, and 23 of 32 fixtures reach signature verification),
+  `conformance.json` and the Go verifier capture are regenerated, and both
+  verifiers report `summary: 32 pass, 0 fail (32 fixtures)`.
+  `TestMemberNameOutsidePrintableASCII` and
+  `TestSuitePinsMemberNamesOutsidePrintableASCII` hold the rule in the Go
+  verifier, and `GoMemberNameOutsidePrintableASCII` in the Python one; the
+  two rows of `GO_FOLDED_NAME_VERDICTS` for the Kelvin sign and the long s
+  move to `GO_NON_ASCII_RENAMES`, with the new verdict.
 - The Go reference verifier gives the reason the Python reference verifier
   gives when a v1.1 credential's `declaredPurpose` holds a number that
   `strconv.ParseFloat` refuses as outside the float64 range, such as
