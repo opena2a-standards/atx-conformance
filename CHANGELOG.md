@@ -1034,6 +1034,66 @@ they should not.
 
 ### Fixed
 
+- The Go reference verifier decides the float64 range of a number in a
+  v1.1 `declaredPurpose` on its digits as written, at 2^1024 - 2^970, the
+  edge Python's `float()` rounds to infinity at, so both reference
+  verifiers reject a credential carrying `1` followed by 1000 zeros and
+  `e-650`, whose value is 10^350, as `VERIFIER_CONFIG_ERROR` with the
+  reason `v1.1 canonicalization failed: declaredPurpose holds a number
+  outside the float64 range` (#293). `hasNumberOutsideFloat64RangeV11`
+  decided the range with `strconv.ParseFloat`, which keeps at most 800
+  digits of a literal, places the decimal point by the digits it kept and
+  caps the exponent it reads: it reads that number as `1e+149` with no
+  error, so the Go verifier canonicalized the credential and rejected it
+  as `SIGNATURE_INVALID` through the fraction-or-exponent rule. On
+  `fixtures/v1_1-declared-purpose-number-injected.json` with that number
+  in place of `1.5`, `go run .` in `verifiers/go` printed
+  `REJECT[SIGNATURE_INVALID: Ed25519 signature
+  did:opena2a:authority:opena2a.org#key-1 did not verify against any
+  configured public key]` and exited 0, where `python3 verify.py` in
+  `verifiers/python` printed `REJECT[VERIFIER_CONFIG_ERROR: v1.1
+  canonicalization failed: declaredPurpose holds a number outside the
+  float64 range]` and exited 1; the Go verifier now prints that line and
+  exits 1 there too, and both exit 1 on `fixtures/v1_1-baseline-valid.json`
+  with a `declaredPurpose` of that number added. The new
+  `numberOutsideFloat64Range` in `verifiers/go/verifier/verify.go` reads
+  the sign, the digits, the decimal point and the exponent of the literal,
+  drops leading zeros, stops reading an exponent 400 past the literal's
+  length, and compares the position of the decimal point, then the digits,
+  with the 309 digits of 2^1024 - 2^970 (`float64OverflowDigits`, computed
+  with `math/big`); a literal with no nonzero digit is zero.
+  `TestNumberOutsideFloat64Range` pins it on 54 literals, among them `0`,
+  `-0`, `0e400`, `1e-400`, `1e308`, `1e309`, `0.1e309`, `0.1e310`,
+  2^1024 - 2^970 and 2^1024 - 2^970 - 1 as digits, with a fraction, with a
+  leading `0.` and `e309`, and with 1000 trailing zeros and `e-1000`, `1`
+  followed by 1000 zeros and `e-691` (10^309) and `e-692` (10^308), `0.`
+  followed by 200000 zeros, `1` and `e200400` (10^399) and `e200308`
+  (10^307), and exponents of 20 digits; on each literal of at most 800
+  bytes it holds the decision to `strconv.ParseFloat` returning `ErrRange`.
+  A run of 6000 random literals at and around the edge, written short and
+  written long, agreed with exact rational arithmetic and with Python
+  3.14.3's `float()` on each. `TestDeclaredPurposeNumberOutsideFloat64Range`
+  expects `VERIFIER_CONFIG_ERROR` with that reason on 34 `declaredPurpose`
+  values, 12 of them written with more than 800 digits and an exponent
+  part: the 10 forms #293 lists, then 10^309 and 2^1024 - 2^970 written
+  with 1000 trailing zeros and `e-1000`; its controls add 10^308, 10^300,
+  10^307 and 2^1024 - 2^970 - 1 written so, which reject as
+  `SIGNATURE_INVALID` as before. The Go verifier of the commit before this
+  change fails the 12 with `SIGNATURE_INVALID`.
+  `TestDecoderWithoutUseNumberOnOutOfRangeNumbers` expects
+  `VERIFIER_CONFIG_ERROR` on the 10^350 credential, where it expected
+  `SIGNATURE_INVALID`. In the Python verifier, `GO_PURPOSE_NUMBER_VERDICTS`
+  gains those 16 rows, 12 expecting `VERIFIER_CONFIG_ERROR` and 4
+  `SIGNATURE_INVALID`, and
+  `test_number_outside_float64_range_that_go_reads_as_finite` is
+  `test_number_outside_float64_range_written_with_more_than_800_digits`;
+  `verify.py` changes in two docstrings and a comment alone. Built with
+  Go 1.26.3 and run under Python 3.14.3. `go run .` in `verifiers/go` with
+  no argument reports `36 pass, 0 fail`, as `docs/captures/go-verifier.txt`
+  records; that capture is unchanged byte for byte, and its sidecar,
+  `docs/captures/go-verifier.json`, records the new tree id of
+  `verifiers/go/verifier`, so `scripts/capture_go_verifier.py --check`
+  passes. No fixture changes.
 - Four comments limit what they say Go does with a number outside the
   float64 range to a number `strconv.ParseFloat` refuses as out of range,
   such as `1e400` or an integer of 401 digits (#294). The docstring of

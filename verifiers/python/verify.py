@@ -101,15 +101,15 @@ lesson and scoped to the whole body because ATX signs it all):
     escape. This verifier refuses it before it canonicalizes the payload too,
     so a number beside it that the serializer cannot write (1.5) does not
     make the credential a signature failure. A number in it outside the
-    float64 range (1e400, or an integer of 401 digits) rejects as
-    VERIFIER_CONFIG_ERROR too, with the reason the Go reference verifier
-    gives a number strconv.ParseFloat refuses as out of range, which it
-    refuses before its JCS library reads it: that library parses every
-    number as a float64. strconv.ParseFloat can read a number written with
-    more than 800 digits and an exponent part as finite when its value is
-    outside the range (1 followed by 1000 zeros and e-650), and the Go
-    reference verifier rejects a credential carrying one as
-    SIGNATURE_INVALID.
+    float64 range (1e400, an integer of 401 digits, or 1 followed by 1000
+    zeros and e-650) rejects as VERIFIER_CONFIG_ERROR too, with the reason
+    the Go reference verifier gives such a number, which it refuses before
+    its JCS library reads it: that library parses every number as a float64
+    with strconv.ParseFloat, which can read a number written with more than
+    800 digits and an exponent part as finite when its value is outside the
+    range (it reads 1 followed by 1000 zeros and e-650 as 1e+149), so the Go
+    verifier decides the range on the digits as written, at 2^1024 - 2^970,
+    where float() returns inf.
     An integer in it inside that range but outside the I-JSON exact range
     rejects after these two checks, as SIGNATURE_INVALID (Spec coverage).
     A number in it written with a fraction or an exponent part, which
@@ -767,14 +767,14 @@ def _finite_number(value: Any) -> bool:
 
 def _holds_number_outside_float64(value: Any) -> bool:
     """True if the raw JSON value holds, at any depth, a number that is not
-    finite as a float64. The Go reference verifier's JCS library parses each
-    number it canonicalizes with strconv.ParseFloat, which refuses some such
-    literals as out of range, such as 1e400 or an integer of 401 digits, and
-    can read one written with more than 800 digits and an exponent part as
-    finite: it reads 1 followed by 1000 zeros and e-650, whose value is
-    10^350, as 1e+149, where float() returns inf and this returns True.
-    Walked with a stack, not by recursion, so a value nested as deep as
-    load_fixture allows is read whole."""
+    finite as a float64: one whose magnitude is 2^1024 - 2^970 or more,
+    which float() rounds to inf. The Go reference verifier decides the same
+    edge on the digits as written (numberOutsideFloat64Range), since its JCS
+    library parses each number it canonicalizes with strconv.ParseFloat,
+    which refuses 1e400 and an integer of 401 digits as out of range and
+    reads 1 followed by 1000 zeros and e-650, whose value is 10^350, as
+    1e+149. Walked with a stack, not by recursion, so a value nested as deep
+    as load_fixture allows is read whole."""
     stack = [value]
     while stack:
         item = stack.pop()
@@ -1391,15 +1391,14 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
         if _holds_number_outside_float64(atx.get("declaredPurpose")):
             # declaredPurpose enters the TBS as written, so no typed decode
             # refuses the number first. The Go reference verifier's JCS
-            # library cannot canonicalize a number strconv.ParseFloat
-            # refuses as out of range; the verifier refuses it before the
+            # library parses each number with strconv.ParseFloat, which
+            # refuses 1e400 as out of range and reads a number written with
+            # more than 800 digits and an exponent part, 1 followed by 1000
+            # zeros and e-650, as finite; the verifier decides the range on
+            # the digits as written and refuses the number before the
             # library reads it, with the category and reason below, where
             # this serializer would refuse it as a float (1e400) or write it
-            # out (an integer of 401 digits). strconv.ParseFloat can read a
-            # number written with more than 800 digits and an exponent part
-            # as finite when its value is outside the range (1 followed by
-            # 1000 zeros and e-650), and the Go verifier rejects such a
-            # credential as SIGNATURE_INVALID instead.
+            # out (an integer of 401 digits).
             return VerifyResult(
                 reject_category="VERIFIER_CONFIG_ERROR",
                 reason="v1.1 canonicalization failed: declaredPurpose holds a number outside the float64 range",

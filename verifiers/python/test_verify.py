@@ -382,6 +382,10 @@ FLOAT64_EDGE = 2**1024 - 2**970
 
 # Numbers written into an unsigned declaredPurpose, and the category the Go
 # reference verifier reports for each, read from its run over these values.
+# The rows written with more than 800 digits and an exponent part, which
+# strconv.ParseFloat reads as finite, are those atx-conformance#293 lists,
+# then 10^309 and 2^1024 - 2^970 written with 1000 trailing zeros, and, in
+# the range, 10^308, 10^300, 10^307 and 2^1024 - 2^970 - 1 written so.
 GO_PURPOSE_NUMBER_VERDICTS = (
     ("1e400", "VERIFIER_CONFIG_ERROR"),
     ("-1e400", "VERIFIER_CONFIG_ERROR"),
@@ -396,10 +400,26 @@ GO_PURPOSE_NUMBER_VERDICTS = (
     ('["billing:inquiry", 1e400]', "VERIFIER_CONFIG_ERROR"),
     ("[1.5, 1e400]", "VERIFIER_CONFIG_ERROR"),
     ("[" * 9997 + "1e400" + "]" * 9997, "VERIFIER_CONFIG_ERROR"),
+    ("1" + "0" * 1000 + "e-650", "VERIFIER_CONFIG_ERROR"),
+    ("-1" + "0" * 1000 + "e-650", "VERIFIER_CONFIG_ERROR"),
+    ('{"n": 1' + "0" * 1000 + "e-650}", "VERIFIER_CONFIG_ERROR"),
+    ("[1.5, 1" + "0" * 1000 + "e-650]", "VERIFIER_CONFIG_ERROR"),
+    ("1" + "0" * 1000 + "E-650", "VERIFIER_CONFIG_ERROR"),
+    ("1" + "0" * 900 + "1e-560", "VERIFIER_CONFIG_ERROR"),
+    ("1" + "0" * 850 + "e-500", "VERIFIER_CONFIG_ERROR"),
+    ("1" + "0" * 5000 + "e-4600", "VERIFIER_CONFIG_ERROR"),
+    ("0." + "0" * 200000 + "1e200400", "VERIFIER_CONFIG_ERROR"),
+    ("1" + "0" * 1000 + ".5e-650", "VERIFIER_CONFIG_ERROR"),
+    ("1" + "0" * 1000 + "e-691", "VERIFIER_CONFIG_ERROR"),
+    (str(FLOAT64_EDGE) + "0" * 1000 + "e-1000", "VERIFIER_CONFIG_ERROR"),
     ("1.7976931348623158e308", "SIGNATURE_INVALID"),
     (str(FLOAT64_EDGE - 1), "SIGNATURE_INVALID"),
     ("1e308", "SIGNATURE_INVALID"),
     ("1e-400", "SIGNATURE_INVALID"),
+    ("1" + "0" * 1000 + "e-692", "SIGNATURE_INVALID"),
+    ("1" + "0" * 1000 + "e-700", "SIGNATURE_INVALID"),
+    ("0." + "0" * 30000 + "1e30308", "SIGNATURE_INVALID"),
+    (str(FLOAT64_EDGE - 1) + "0" * 1000 + "e-1000", "SIGNATURE_INVALID"),
 )
 
 # The reason both reference verifiers write for a number in a v1.1
@@ -449,13 +469,15 @@ class InjectedNumberPurpose(unittest.TestCase):
                 self.assertIn("signature", got.reason.lower())
 
     def test_number_outside_float64_range_reaches_the_go_category(self):
-        # The Go reference verifier's JCS library parses each number with
-        # strconv.ParseFloat: one it refuses as out of range rejects as
-        # VERIFIER_CONFIG_ERROR, one it reads as finite is canonicalized and
-        # the signature fails. On each number of GO_PURPOSE_NUMBER_VERDICTS
-        # Python's float() rounds at the same edge. It does not on 1 followed
-        # by 1000 zeros and e-650, which strconv.ParseFloat reads as finite
-        # (test_number_outside_float64_range_that_go_reads_as_finite).
+        # The Go reference verifier decides the float64 range on the digits
+        # as written, at 2^1024 - 2^970 (numberOutsideFloat64Range): a number
+        # at or past that edge rejects as VERIFIER_CONFIG_ERROR, one below it
+        # is canonicalized and the signature fails. Python's float() rounds
+        # at the same edge on each number of GO_PURPOSE_NUMBER_VERDICTS, those
+        # written with more than 800 digits and an exponent part included,
+        # which strconv.ParseFloat reads as finite and the Go verifier decided
+        # the range with until atx-conformance#293
+        # (test_number_outside_float64_range_written_with_more_than_800_digits).
         for literal, category in GO_PURPOSE_NUMBER_VERDICTS:
             with self.subTest(literal=literal[:40], length=len(literal)):
                 got = _at_verdict(BASELINE_V11, ("declaredPurpose",), literal)
@@ -474,14 +496,16 @@ class InjectedNumberPurpose(unittest.TestCase):
                 got = _at_verdict(BASELINE_V11, ("declaredPurpose",), literal)
                 self.assertEqual(got.reason, GO_OUTSIDE_FLOAT64_REASON)
 
-    def test_number_outside_float64_range_that_go_reads_as_finite(self):
+    def test_number_outside_float64_range_written_with_more_than_800_digits(self):
         # 1 followed by 1000 zeros and e-650, whose value is 10^350, is
         # outside the float64 range: float() returns inf, and this verifier
         # rejects it as VERIFIER_CONFIG_ERROR with GO_OUTSIDE_FLOAT64_REASON.
         # strconv.ParseFloat reads it as 1e+149, and the Go reference
-        # verifier rejects it as SIGNATURE_INVALID
-        # (TestDecoderWithoutUseNumberOnOutOfRangeNumbers), so it is in no
-        # row of GO_PURPOSE_NUMBER_VERDICTS. atx-conformance#294.
+        # verifier, which decided the range with it, rejected it as
+        # SIGNATURE_INVALID until atx-conformance#293; it now decides the
+        # range on the digits as written
+        # (TestDecoderWithoutUseNumberOnOutOfRangeNumbers), and the number is
+        # a row of GO_PURPOSE_NUMBER_VERDICTS. atx-conformance#294.
         literal = "1" + "0" * 1000 + "e-650"
         self.assertEqual(float(literal), float("inf"))
         self.assertTrue(verify._holds_number_outside_float64(json.loads(literal)))
