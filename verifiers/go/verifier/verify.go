@@ -73,6 +73,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math/big"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -669,24 +670,96 @@ func hasNumberWithFractionOrExponentV11(a *atx) bool {
 }
 
 // hasNumberOutsideFloat64RangeV11 reports whether the declaredPurpose of a
-// writes a number strconv.ParseFloat refuses as outside the float64 range:
-// 1e400, -1e400 or an integer of 401 digits. declaredPurpose enters the TBS
-// as written, so no typed decode refuses such a number first, and the JCS
-// library refuses it with the error strconv.ParseFloat returns, whose text
-// the Go release sets. canonicalPayloadV11 refuses it before the library
-// reads it, with the reason the Python reference verifier writes.
-// strconv.ParseFloat can read a number written with more than 800 digits
-// and an exponent part as finite when its value is outside the range: it
-// reads 1 followed by 1000 zeros and e-650 as 1e+149. This reports no such
-// number, and the credential rejects as SIGNATURE_INVALID, where the Python
-// reference verifier rejects it as VERIFIER_CONFIG_ERROR.
+// writes a number outside the float64 range (numberOutsideFloat64Range):
+// 1e400, -1e400, an integer of 401 digits, or 1 followed by 1000 zeros and
+// e-650. declaredPurpose enters the TBS as written, so no typed decode
+// refuses such a number first, and the JCS library reads each number with
+// strconv.ParseFloat, which refuses 1e400 with an error whose text the Go
+// release sets and reads 1 followed by 1000 zeros and e-650 as 1e+149.
+// canonicalPayloadV11 refuses the number before the library reads it, with
+// the reason the Python reference verifier writes, whose float() decides the
+// range on every digit written.
 func hasNumberOutsideFloat64RangeV11(a *atx) bool {
 	for _, number := range purposeNumbersV11(a) {
-		if _, err := strconv.ParseFloat(string(number), 64); errors.Is(err, strconv.ErrRange) {
+		if numberOutsideFloat64Range(string(number)) {
 			return true
 		}
 	}
 	return false
+}
+
+// float64OverflowDigits is 2^1024 - 2^970 in decimal digits: the largest
+// float64 plus half a unit in its last place, the least magnitude IEEE 754
+// round-to-nearest-even takes to infinity, since the tie rounds to the even
+// significand, 2^1024. It has 309 digits.
+var float64OverflowDigits = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 1024), new(big.Int).Lsh(big.NewInt(1), 970)).String()
+
+// numberOutsideFloat64Range reports whether the JSON number literal s, as
+// json.Unmarshal has read it (an optional minus sign, an integer part, an
+// optional fraction and an optional exponent part), has a magnitude of
+// 2^1024 - 2^970 or more, which rounds to infinity as a float64
+// (float64OverflowDigits): Python's float() returns inf for such a literal.
+// It decides on the digits as written, whatever their count and whatever
+// the exponent. strconv.ParseFloat keeps at most 800 digits of a literal,
+// places the decimal point by the digits it kept and caps the exponent it
+// reads, so it reads 1 followed by 1000 zeros and e-650, whose value is
+// 10^350, as 1e+149 with no error, and 0. followed by 200000 zeros, 1 and
+// e200400, whose value is 10^399, as 0. A literal with no nonzero digit is
+// zero. Any other is 0.d1d2d3... × 10^point, with d1 its first nonzero digit
+// and point the count of digits before the decimal point from d1 on, plus
+// the exponent: it is outside the range when point is above 309, and when
+// point is 309 and its digits, those past the last written being zero, are
+// those of 2^1024 - 2^970 or above them. An exponent that reaches 400 past
+// the length of s decides on its own, since point is within that length of
+// zero, so the digits of an exponent of any length are read without
+// overflow.
+func numberOutsideFloat64Range(s string) bool {
+	s = strings.TrimPrefix(s, "-")
+	mantissa, exponent := s, ""
+	if i := strings.IndexAny(s, "eE"); i >= 0 {
+		mantissa, exponent = s[:i], s[i+1:]
+	}
+	point := strings.IndexByte(mantissa, '.')
+	if point < 0 {
+		point = len(mantissa)
+	}
+	digits := strings.Replace(mantissa, ".", "", 1)
+	significant := strings.TrimLeft(digits, "0")
+	if significant == "" {
+		return false
+	}
+	point -= len(digits) - len(significant)
+	digits = significant
+	if exponent != "" {
+		negative := exponent[0] == '-'
+		if negative || exponent[0] == '+' {
+			exponent = exponent[1:]
+		}
+		e, limit := 0, len(s)+400
+		for i := 0; i < len(exponent) && e < limit; i++ {
+			e = e*10 + int(exponent[i]-'0')
+		}
+		if negative {
+			e = -e
+		}
+		point += e
+	}
+	switch {
+	case point > len(float64OverflowDigits):
+		return true
+	case point < len(float64OverflowDigits):
+		return false
+	}
+	for i := 0; i < len(float64OverflowDigits); i++ {
+		d := byte('0')
+		if i < len(digits) {
+			d = digits[i]
+		}
+		if d != float64OverflowDigits[i] {
+			return d > float64OverflowDigits[i]
+		}
+	}
+	return true
 }
 
 // purposeNumbersV11 returns each number the declaredPurpose of a writes, as
