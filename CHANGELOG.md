@@ -1090,11 +1090,10 @@ they should not.
   `verify.py` changes in two docstrings and a comment alone. Built with
   Go 1.26.3 and run under Python 3.14.3. `go run .` in `verifiers/go` with
   no argument reports `36 pass, 0 fail`, as `docs/captures/go-verifier.txt`
-  records; `docs/captures/go-verifier.json` records a
-  `verifiers/go/verifier` tree id other than the one the commit this
-  change starts from holds, so `scripts/capture_go_verifier.py --check`
-  fails on `inputTrees` before this change and after it, and the capture
-  is not re-taken here. No fixture changes.
+  records; that capture is unchanged byte for byte, and its sidecar,
+  `docs/captures/go-verifier.json`, records the new tree id of
+  `verifiers/go/verifier`, so `scripts/capture_go_verifier.py --check`
+  passes. No fixture changes.
 - Four comments limit what they say Go does with a number outside the
   float64 range to a number `strconv.ParseFloat` refuses as out of range,
   such as `1e400` or an integer of 401 digits (#294). The docstring of
