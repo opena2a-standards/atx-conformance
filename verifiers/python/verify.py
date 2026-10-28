@@ -21,8 +21,11 @@ Spec coverage:
     section 2.2), rejects as SIGNATURE_INVALID. The Go verifier's JCS library
     reads each number as an IEEE 754 double, which does not hold every such
     integer, and writes 9007199254740993 as 9007199254740992, so a signature
-    over those bytes does not tell the two apart
-    (_integer_outside_exact_range).
+    over those bytes does not tell the two apart. The same check rejects a
+    number the v1.1 declaredPurpose writes with a fraction or an exponent
+    part as SIGNATURE_INVALID, with a reason that quotes the number as
+    written; the first number declaredPurpose writes outside the integer
+    form or the exact range decides (_integer_outside_exact_range).
   - Ed25519 and ML-DSA-65 (FIPS 204) hybrid signature verification over the
     same canonical payload (every declared signature must verify and at
     least one must be present; an ML-DSA-65 signature needs a verifying
@@ -99,8 +102,8 @@ lesson and scoped to the whole body because ATX signs it all):
     section 3.2.2.2) and rejects as VERIFIER_CONFIG_ERROR, as it does in the
     Go reference verifier, which refuses it before its JCS library reads the
     escape. This verifier refuses it before it canonicalizes the payload too,
-    so a number beside it that the serializer cannot write (1.5) does not
-    make the credential a signature failure. A number in it outside the
+    so a number beside it written with a fraction part (1.5) does not make
+    the credential a signature failure. A number in it outside the
     float64 range (1e400, an integer of 401 digits, or 1 followed by 1000
     zeros and e-650) rejects as VERIFIER_CONFIG_ERROR too, with the reason
     the Go reference verifier gives such a number, which it refuses before
@@ -112,13 +115,13 @@ lesson and scoped to the whole body because ATX signs it all):
     where float() returns inf.
     An integer in it inside that range but outside the I-JSON exact range
     rejects after these two checks, as SIGNATURE_INVALID (Spec coverage).
-    A number in it written with a fraction or an exponent part, which
-    json.loads reads as a float, leaves the payload with no bytes, since the
-    serializer writes no float (rfc8785.py): each declared signature fails
-    to verify under any configured key, as it does in the Go reference
-    verifier, whose JCS library would write 1e3 and 1000.0 as 1000 (core.md
-    section 1.3a.2 rule 3 keeps that number serialization out of
-    cross-language scope).
+    So does a number in it written with a fraction or an exponent part,
+    which json.loads reads as a float and the serializer does not write
+    (rfc8785.py), with a reason that quotes the number as written, as the Go
+    reference verifier refuses it, whose JCS library would write 1e3 and
+    1000.0 as 1000 (core.md section 1.3a.2 rule 3 keeps that number
+    serialization out of cross-language scope). The first number in it
+    outside the integer form or the exact range decides.
   - NaN, Infinity and -Infinity are not JSON, so a file carrying one fails to
     load with the reason the Go reference verifier gives a file that is not
     JSON, fixture is not valid JSON, unless arrays and objects nest deeper
@@ -608,15 +611,18 @@ def canonical_payload_v11(atx: dict[str, Any]) -> bytes:
 _MAX_EXACT_INTEGER = 2**53 - 1
 
 
-def _integer_outside_exact_range(tbs: dict[str, Any]) -> tuple[str, int] | None:
-    """The first integer of the v1.1 TBS (as _tbs_v11 projects it) whose
-    magnitude is above 2**53 - 1, with its member, as the Go reference
-    verifier's integerOutsideExactRangeV11 names it: the members
-    behavioralProfile.observationDays, declaredPurpose,
-    scanSummary.criticalFindings, scanSummary.highFindings and trustLevel, in
-    the order JCS writes them, and in declaredPurpose, which enters the TBS
-    as written, the first such integer the credential writes. None when the
-    TBS holds none. Walked with a stack, as _first_unpaired_surrogate is."""
+def _integer_outside_exact_range(tbs: dict[str, Any]) -> tuple[str, str, bool] | None:
+    """The first number of the v1.1 TBS (as _tbs_v11 projects it) that no
+    signature covers, as the Go reference verifier's
+    integerOutsideExactRangeV11 names it: an integer whose magnitude is above
+    2**53 - 1, or a declaredPurpose number written with a fraction or an
+    exponent part. It gives the member, behavioralProfile.observationDays,
+    declaredPurpose, scanSummary.criticalFindings, scanSummary.highFindings
+    or trustLevel, in the order JCS writes them; the number as the credential
+    writes it; and whether it is written with a fraction or an exponent part.
+    In declaredPurpose, which enters the TBS as written, it is the first such
+    number the credential writes. None when the TBS holds none. Walked with a
+    stack, as _first_unpaired_surrogate is."""
 
     def outside(n: Any) -> bool:
         return (
@@ -627,7 +633,7 @@ def _integer_outside_exact_range(tbs: dict[str, Any]) -> tuple[str, int] | None:
 
     profile = tbs["behavioralProfile"]
     if profile is not None and outside(profile["observationDays"]):
-        return "behavioralProfile.observationDays", profile["observationDays"]
+        return "behavioralProfile.observationDays", str(profile["observationDays"]), False
     stack = [tbs.get("declaredPurpose")]
     while stack:
         item = stack.pop()
@@ -635,13 +641,18 @@ def _integer_outside_exact_range(tbs: dict[str, Any]) -> tuple[str, int] | None:
             stack.extend(reversed(list(item.values())))
         elif isinstance(item, list):
             stack.extend(reversed(item))
+        elif isinstance(item, float) and not isinstance(item, _LongInteger):
+            # The form is decided from the number as written, whatever its
+            # value. load_fixture keeps the text (_FloatLiteral); a float
+            # that did not come from it is written as json.dumps writes it.
+            return "declaredPurpose", getattr(item, "literal", None) or float.__repr__(item), True
         elif outside(item):
-            return "declaredPurpose", item
+            return "declaredPurpose", str(item), False
     for name in ("criticalFindings", "highFindings"):
         if outside(tbs["scanSummary"][name]):
-            return f"scanSummary.{name}", tbs["scanSummary"][name]
+            return f"scanSummary.{name}", str(tbs["scanSummary"][name]), False
     if outside(tbs["trustLevel"]):
-        return "trustLevel", tbs["trustLevel"]
+        return "trustLevel", str(tbs["trustLevel"]), False
     return None
 
 
@@ -957,6 +968,23 @@ class _LongInteger(float):
 
     def __repr__(self) -> str:
         return self.literal
+
+
+class _FloatLiteral(float):
+    """A JSON number written with a fraction or an exponent part, as
+    load_fixture marks it: json.loads passes the number's text to parse_float
+    as written (1000.0, 1e3, 1E3), and this keeps that text beside the float
+    float() reads it as. The reason for such a number in a v1.1
+    declaredPurpose quotes the text, as the Go reference verifier quotes its
+    json.Number (_integer_outside_exact_range); every other reader takes the
+    float, as before."""
+
+    __slots__ = ("literal",)
+
+    def __new__(cls, literal: str) -> "_FloatLiteral":
+        number = super().__new__(cls, literal)
+        number.literal = literal
+        return number
 
 
 # The levels of arrays and objects a decode error writes out. On Python 3.11,
@@ -1378,11 +1406,11 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
             # declaredPurpose enters the TBS as written, and RFC 8785
             # §3.2.2.2 refuses a string holding a lone surrogate. The Go
             # reference verifier refuses the escape before it canonicalizes
-            # the TBS, and so does this one: a number beside it that this
-            # serializer cannot write (1.5) would otherwise leave no payload,
-            # and the credential would reject as SIGNATURE_INVALID. The
-            # reason is the Go verifier's, which repeats the escape as
-            # written; this one writes its hex digits in lower case.
+            # the TBS, and so does this one: a number beside it written with
+            # a fraction part (1.5) would otherwise be refused first, and the
+            # credential would reject as SIGNATURE_INVALID. The reason is the
+            # Go verifier's, which repeats the escape as written; this one
+            # writes its hex digits in lower case.
             return VerifyResult(
                 reject_category="VERIFIER_CONFIG_ERROR",
                 reason="v1.1 canonicalization failed: declaredPurpose holds an unpaired "
@@ -1410,32 +1438,25 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
             # as the IEEE 754 double nearest it, which other integers can
             # share (9007199254740993 and 9007199254740992 are written
             # alike), so a signature over those bytes does not tell them
-            # apart; this serializer refuses it. The Go verifier refuses it
-            # once its canonicalization succeeds, which is after the two
-            # checks above, and the reason is its.
-            where, integer = outside
-            return VerifyResult(
-                reject_category="SIGNATURE_INVALID",
-                reason=f"no signature covers {where}: the integer {integer} is outside the I-JSON exact range, -(2^53-1) to 2^53-1",
-            )
+            # apart; this serializer refuses it. The library writes a number
+            # declaredPurpose writes with a fraction or an exponent part as
+            # the double nearest it too, 1e3 as the 1000 a signer signed,
+            # and this serializer writes no such number (rfc8785.py), which
+            # json.loads reads as a float; it reaches the TBS only through
+            # declaredPurpose, which enters it verbatim. The Go verifier
+            # refuses each once its canonicalization succeeds, which is after
+            # the two checks above, and the reasons are its.
+            where, literal, fraction_or_exponent = outside
+            if fraction_or_exponent:
+                reason = (
+                    f"no signature covers {where}: the number {literal} is written with a "
+                    "fraction or an exponent part, not as an integer"
+                )
+            else:
+                reason = f"no signature covers {where}: the integer {literal} is outside the I-JSON exact range, -(2^53-1) to 2^53-1"
+            return VerifyResult(reject_category="SIGNATURE_INVALID", reason=reason)
         try:
             payload = _jcs_canonicalize(tbs)
-        except NotImplementedError:
-            # The vendored JCS serializer refuses a number written with a
-            # fraction or an exponent part, which json.loads reads as a float
-            # (rfc8785.py); a schema-valid v1.1 TBS carries none. One can still
-            # arrive in declaredPurpose, which enters the TBS verbatim, signed
-            # or injected after signing
-            # (fixtures/v1_1-declared-purpose-number-injected.json). Without
-            # the canonical bytes no declared signature can verify, so the
-            # loop below runs with no key to verify against, instead of
-            # raising out of the run. Each signature then fails with the
-            # reason the Go reference verifier writes: it verifies no
-            # signature over a declaredPurpose number written with a fraction
-            # or an exponent part either, signed or not, where its JCS
-            # library would write 1e3 as the 1000 a signer signed
-            # (atx-conformance#283).
-            payload = None
         except UnicodeEncodeError as exc:
             # Every decoded member holds U+FFFD where an unpaired surrogate
             # was escaped, so this is declaredPurpose, which enters the TBS as
@@ -1449,9 +1470,6 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
     else:
         payload = canonical_payload(atx)
     eds, pqs = index_public_keys(vs["publicKeys"], _authority_set_for(atx, vs["trustedIssuers"]))
-    if payload is None:
-        # No key verifies a signature over bytes the serializer cannot write.
-        eds, pqs = [], []
     result = VerifyResult(sigs_expected=len(atx["signatures"]))
     # The raw bytes of each Ed25519 key a declared signature verified under,
     # for the requiredSignatures count below.
@@ -1753,6 +1771,7 @@ def load_fixture(path: str | os.PathLike[str]) -> dict[str, Any]:
             object_pairs_hook=_dup_marking_pairs,
             parse_constant=_reject_constant,
             parse_int=_parse_int,
+            parse_float=_FloatLiteral,
         )
     except (json.JSONDecodeError, _NonJSONConstant):
         # The Go reference verifier's wording for a syntax error, a NaN,

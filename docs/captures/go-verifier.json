@@ -15,23 +15,23 @@
   ],
   "inputTrees": {
     "cmd/atx-verify": "8b2f9f0ff195e77490a4a892d4e6054a1c8f5a72",
-    "verifiers/go/verifier": "acd5026e2b475ad4e8898701bf6cfd5fc4b81acd",
+    "verifiers/go/verifier": "bfe1012c37f702f0ed6ed1812ca1fb7730ca5315",
     "go.mod": "667011a74ec65d88b16a2c7093b6e62bb4b97690",
     "go.sum": "436e141fa3870ee84f73fe087c3929df8948c07c",
     "fixtures.go": "6b2be479eaa48b5d81d87df1840e6bd0de4238c9",
-    "fixtures": "122b2312916d04a7b1735940a26d98d89c4f08a5"
+    "fixtures": "921a6355f08d3dd870a44e750d17e8ffbd8aeed5"
   },
   "inputsUncommitted": [],
-  "ranAtUtc": "2026-10-26T04:36:33Z",
+  "ranAtUtc": "2026-10-28T22:24:22Z",
   "exitCode": 0,
   "stderrLines": 0,
-  "summary": "summary: 36 pass, 0 fail (36 fixtures)",
+  "summary": "summary: 41 pass, 0 fail (41 fixtures)",
   "outputs": {
     "capture": {
       "path": "docs/captures/go-verifier.txt",
-      "sha256": "599cec2f4a8bd6ee16a522fb8b0dd3297e8b59a9c3f68320fba31b7d86c3ec45",
-      "bytes": 9029,
-      "lines": 126
+      "sha256": "a88526f53ea3d94d4b041773b109c3e8737498389c71d508031788783e8787f0",
+      "bytes": 10405,
+      "lines": 143
     }
   }
 }

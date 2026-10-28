@@ -38,7 +38,14 @@ Contract:
   `additionalProperties` error naming that member, and
 - the four behavioralProfile fixtures (atx-conformance#277), which each carry
   a behavioralProfile outside its form by design and MUST fail validation on
-  exactly the errors BEHAVIORAL_PROFILE_PINS lists for that fixture.
+  exactly the errors BEHAVIORAL_PROFILE_PINS lists for that fixture, and
+- the five declaredPurpose number fixtures (atx-conformance#283), which each
+  carry a declaredPurpose of one member, n, holding a number, a member the
+  closed declaredPurpose schema does not define, and MUST fail validation on
+  exactly one `oneOf` error at declaredPurpose carrying the object
+  DECLARED_PURPOSE_NUMBERS lists for that fixture. The verifiers decide the
+  number's form and range, not the schema's members, so the one written as
+  signed is accepted.
 
 Any other schema error means fixture and schema have drifted apart.
 Exit 0 only if the whole contract holds.
@@ -96,6 +103,18 @@ PROFILE_FORMAT = "schemas/conformance-profile-v1.schema.json"
 NON_ASCII_MEMBERS = {
     "v1_1-dotted-capital-i-member.json": chr(0x0130) + "d",
     "v1_1-dotless-i-member.json": chr(0x0131) + "ssuedAt",
+}
+
+# The declaredPurpose number fixtures (atx-conformance#283) and the
+# declaredPurpose each carries, as json.loads reads it and the `oneOf` error
+# message writes it: 1000 as signed, 1000.0, 1e3 and 1E3 each read as 1000.0,
+# and 9007199254740993.
+DECLARED_PURPOSE_NUMBERS = {
+    "v1_1-declared-purpose-integer-signed.json": "{'n': 1000}",
+    "v1_1-declared-purpose-integer-respelled-fraction.json": "{'n': 1000.0}",
+    "v1_1-declared-purpose-integer-respelled-exponent.json": "{'n': 1000.0}",
+    "v1_1-declared-purpose-integer-respelled-upper-exponent.json": "{'n': 1000.0}",
+    "v1_1-declared-purpose-integer-outside-range.json": "{'n': 9007199254740993}",
 }
 
 # The members every v1 fixture carries, as the generator writes them. Listed
@@ -448,6 +467,8 @@ def check_credentials() -> int:
         # U+0131 followed by ssuedAt.
         added_member = NON_ASCII_MEMBERS.get(path.name)
         expect_profile_errors = BEHAVIORAL_PROFILE_PINS.get(path.name)
+        # The declaredPurpose each number fixture carries, {'n': <number>}.
+        purpose_number = DECLARED_PURPOSE_NUMBERS.get(path.name)
         if expect_version_invalid:
             only_version_enum = len(errors) == 1 and list(errors[0].absolute_path) == ["atcVersion"]
             if only_version_enum:
@@ -550,6 +571,25 @@ def check_credentials() -> int:
                     print(f"      {err.json_path}: {err.message}")
                 if not errors:
                     print("      (validated cleanly - fixture no longer carries a malformed behavioralProfile)")
+                failures += 1
+        elif purpose_number is not None:
+            # The closed declaredPurpose schema defines no member n: exactly
+            # one error, at declaredPurpose, from oneOf, and its message
+            # carries the declaredPurpose the fixture writes.
+            only_purpose_number = (
+                len(errors) == 1
+                and errors[0].validator == "oneOf"
+                and list(errors[0].absolute_path) == ["declaredPurpose"]
+                and errors[0].message.startswith(purpose_number + " ")
+            )
+            if only_purpose_number:
+                print(f"PASS  {path.name}: schema-invalid on exactly declaredPurpose (oneOf, as pinned)")
+            else:
+                print(f"FAIL  {path.name}: expected exactly one oneOf error at declaredPurpose carrying {purpose_number}, got:")
+                for err in errors or []:
+                    print(f"      {err.json_path}: {err.message}")
+                if not errors:
+                    print("      (validated cleanly - fixture no longer carries a declaredPurpose number)")
                 failures += 1
         elif errors:
             print(f"FAIL  {path.name}:")

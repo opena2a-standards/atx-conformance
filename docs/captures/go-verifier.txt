@@ -73,9 +73,26 @@ PASS  fixtures/v1_1-declared-purpose-empty-whitespace.json
        observed: ACCEPT
        signatures: 1/1 valid (ed25519=true mldsa65=false)
        trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+PASS  fixtures/v1_1-declared-purpose-integer-outside-range.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: no signature covers declaredPurpose: the integer 9007199254740993 is outside the I-JSON exact range, -(2^53-1) to 2^53-1]
+PASS  fixtures/v1_1-declared-purpose-integer-respelled-exponent.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: no signature covers declaredPurpose: the number 1e3 is written with a fraction or an exponent part, not as an integer]
+PASS  fixtures/v1_1-declared-purpose-integer-respelled-fraction.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: no signature covers declaredPurpose: the number 1000.0 is written with a fraction or an exponent part, not as an integer]
+PASS  fixtures/v1_1-declared-purpose-integer-respelled-upper-exponent.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: no signature covers declaredPurpose: the number 1E3 is written with a fraction or an exponent part, not as an integer]
+PASS  fixtures/v1_1-declared-purpose-integer-signed.json
+       expected: ACCEPT
+       observed: ACCEPT
+       signatures: 1/1 valid (ed25519=true mldsa65=false)
+       trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
 PASS  fixtures/v1_1-declared-purpose-number-injected.json
        expected: REJECT [SIGNATURE_INVALID]
-       observed: REJECT[SIGNATURE_INVALID: Ed25519 signature did:opena2a:authority:opena2a.org#key-1 did not verify against any configured public key]
+       observed: REJECT[SIGNATURE_INVALID: no signature covers declaredPurpose: the number 1.5 is written with a fraction or an exponent part, not as an integer]
 PASS  fixtures/v1_1-declared-purpose-string-injected.json
        expected: REJECT [SIGNATURE_INVALID]
        observed: REJECT[SIGNATURE_INVALID: Ed25519 signature did:opena2a:authority:opena2a.org#key-1 did not verify against any configured public key]
@@ -123,4 +140,4 @@ PASS  fixtures/wrong-issuer.json
        expected: REJECT [UNTRUSTED_ISSUER]
        observed: REJECT[UNTRUSTED_ISSUER: issuer DID did:opena2a:authority:attacker.example is not in the verifier's trusted set (untrusted issuer)]
 
-summary: 36 pass, 0 fail (36 fixtures)
+summary: 41 pass, 0 fail (41 fixtures)
