@@ -132,18 +132,23 @@ they should not.
   `declaredPurpose`, carrying `"declaredPurpose": 1.5` added after signing.
   §1.3a.2 rule 5 puts a present non-object value into the TBS verbatim, so
   it expects `REJECT [SIGNATURE_INVALID]` with a reason containing
-  `signature`. The Go verifier canonicalizes the number and its Ed25519
-  signature does not verify. The Python verifier's serializer refuses a
-  number that is not an integer, so it has no bytes to verify a signature
-  over; it now runs its signature loop with no key to verify against and
-  writes the reason the Go verifier writes, `Ed25519 signature
+  `signature`. Both verifiers refuse a `declaredPurpose` number written
+  with a fraction or an exponent part before any signature is checked, and
+  write `no signature covers declaredPurpose: the number 1.5 is written
+  with a fraction or an exponent part, not as an integer` (the change that
+  closes #283). At #130 the Go verifier canonicalized the number and its
+  Ed25519 signature did not verify, and the Python verifier, whose
+  serializer refuses a number that is not an integer and so had no bytes
+  to verify a signature over, ran its signature loop with no key to verify
+  against and wrote the reason the Go verifier wrote, `Ed25519 signature
   did:opena2a:authority:opena2a.org#key-1 did not verify against any
-  configured public key`, where it wrote `no signature can be verified: the
-  to-be-signed object cannot be canonicalized (...)`. The category is
-  `SIGNATURE_INVALID` either way, and `test_verify.GoReportText` holds the
-  Python report over `fixtures/` to the Go capture byte for byte, so with
-  the old reason it failed on this fixture. `InjectedNumberPurpose` pins
-  the reason for `1.5`, `{"autonomy": 0.5}` and `["billing:inquiry", 0.25]`.
+  configured public key`, where it had written `no signature can be
+  verified: the to-be-signed object cannot be canonicalized (...)`. The
+  category is `SIGNATURE_INVALID` in each case, and
+  `test_verify.GoReportText` holds the Python report over `fixtures/` to
+  the Go capture byte for byte, so with the old reason it failed on this
+  fixture. `InjectedNumberPurpose` pins the reason for `1.5`,
+  `{"autonomy": 0.5}` and `["billing:inquiry", 0.25]`.
   The Python verifier of `b0e094b`, the commit before its fix for #130,
   ends with `TypeError: not enough arguments for format string` on this
   fixture. None of the 25 fixtures before it carried a number that is not
@@ -279,6 +284,59 @@ they should not.
 
 ### Changed
 
+- Both reference verifiers refuse a v1.1 `declaredPurpose` number written
+  with a fraction or an exponent part as `SIGNATURE_INVALID`, with a
+  reason that names `declaredPurpose` and the number as written (#283):
+  `no signature covers declaredPurpose: the number <literal> is written
+  with a fraction or an exponent part, not as an integer`, where
+  `<literal>` is the number as the credential writes it.
+  Two entries under `v0.1.0` are amended: the #130 entry under Added and
+  the earlier #283 entry under Fixed now name `no signature covers
+  declaredPurpose: the number <literal> is written with a fraction or an
+  exponent part, not as an integer` in place of the `Ed25519 signature`
+  line both verifiers wrote for these credentials before this change.
+  atx-spec core.md §1.3a.2 rule 3 (`da5d2c9`) has a verifier decide the
+  form of a number in `declaredPurpose` from the credential's JSON text.
+  Both verifiers make the refusal in the scan that refuses an integer
+  outside the I-JSON exact range, before any signature is checked, and
+  the first number in `declaredPurpose`'s text that is written with `.`,
+  `e` or `E`, or is an integer outside the exact range, decides:
+  `{"b": 1.5, "a": 9007199254740993}` gets this reason, and
+  `{"a": 9007199254740993, "b": 1.5}` the exact-range reason, which is
+  unchanged. The unpaired-surrogate and float64-range refusals still run
+  before that scan. The Go verifier takes the number as written from its
+  `json.Number`, and the Python verifier keeps it at decode with a
+  `parse_float` hook. The paths that checked each declared signature of
+  such a credential against no key, the Go verifier's
+  `hasNumberWithFractionOrExponentV11` and the Python verifier's
+  `NotImplementedError` fallback, are removed. Five fixtures written by
+  the generator pin the rule: the v1.1 baseline signed over
+  `declaredPurpose` `{"n": 1000}`, carrying it as signed
+  (`fixtures/v1_1-declared-purpose-integer-signed.json`, `ACCEPT`) or as
+  `{"n": 1000.0}`, `{"n": 1e3}` or `{"n": 1E3}`
+  (`...-integer-respelled-fraction.json`,
+  `...-integer-respelled-exponent.json` and
+  `...-integer-respelled-upper-exponent.json`), and the baseline signed
+  over the bytes the JCS library writes for `{"n": 9007199254740993}`,
+  carrying it (`fixtures/v1_1-declared-purpose-integer-outside-range.json`).
+  The four that reject expect `REJECT [SIGNATURE_INVALID]` with a reason
+  containing `declaredPurpose`. On the commit before this change both
+  verifiers rejected the three respelled fixtures with the
+  `Ed25519 signature` line, which does not contain `declaredPurpose`, and
+  gave the other two the outcomes they expect.
+  `fixtures/v1_1-declared-purpose-number-injected.json` keeps its verdict,
+  its category and a reason containing `signature`. The 36 existing
+  fixtures and their `MANIFEST.sha256` lines are byte-identical; the
+  manifest gains five lines. `conformance.json` and the capture under
+  `docs/captures/` are regenerated, and `scripts/schema_validation.py`
+  holds each new fixture to one `oneOf` error at `declaredPurpose`. The
+  fixture counts in README.md, COSIGNERS.md, CONTRIBUTING.md,
+  `docs/continuous-verification.md` and `docs/sibling-repositories.md` go
+  from 36 to 41 (the sibling row's v1.1 count from 24 to 29, its
+  declaredPurpose count from 7 to 12), and `docs/scope.md` counts 32 of
+  41 fixtures that reach signature verification, where it counted 27 of
+  36, and 7 of its 9 ACCEPT fixtures that carry Ed25519 signatures only.
+  `docs/fixtures.md` and `docs/scope.md` list the fixtures.
 - Both reference verifiers reject a v1.1 credential whose
   `behavioralProfile` is present and is not an object of exactly
   `checksum` (a string), `generatedAt` (a timestamp) and `observationDays`
@@ -1251,32 +1309,41 @@ they should not.
   `{"n": 1000}` and carrying `{"n": 1000.0}`, `{"n": 1e3}` or `{"n": 1E3}`,
   and signed over the bytes the library writes for `{"n":
   9007199254740993}` and carrying `{"n": 9007199254740993.0}` or `{"n":
-  9.007199254740993e15}`, which the exact-range check (#278) skips because
-  their text holds `.`, `e` or `E`. The Python verifier, whose serializer
-  writes no such number, rejected each: core.md §1.3a.2 rule 3 keeps RFC
-  8785 number serialization out of cross-language scope. The Go verifier
-  now checks each declared signature of such a credential against no key,
-  as the Python verifier does, so both reject it as `SIGNATURE_INVALID`, on
-  the v1.1 baseline with `Ed25519 signature
-  did:opena2a:authority:opena2a.org#key-1 did not verify against any
-  configured public key`. The exact-range refusal still runs first, so
-  `{"n": 9007199254740993}` keeps its reason, and an integer written as its
-  digits in the exact range, or a `.` or `e` inside a string or a member
-  name, is verified over the bytes JCS writes, as before.
-  `TestDeclaredPurposeNumberWithFractionOrExponent` in the Go verifier and
-  `GoPurposeNumberSpellings` in the Python verifier each sign 12 such
-  spellings over the bytes the library writes for them and expect that
-  rejection, and 5 controls written as signed, which they expect accepted.
-  The Go verifier of the commit before this change accepts each of the 12.
-  On the 21 files the Python tests' helpers write for the 12 spellings, the
-  5 controls, the exact-range control and the 3 numbers of
-  `InjectedNumberPurpose`, the two verifiers now print the same verdict,
-  reason and summary lines. The shipped fixtures' verdicts and reasons do
-  not change:
-  `fixtures/v1_1-declared-purpose-number-injected.json` rejects with the
-  reason above, as before, `docs/captures/go-verifier.txt` is unchanged and
-  the capture sidecar records the verifier's new tree id. No fixture
-  changes.
+  9.007199254740993e15}`, which the exact-range check (#278) skipped
+  because their text holds `.`, `e` or `E`. The Python verifier, whose
+  serializer writes no such number, rejected each: core.md §1.3a.2 rule 3
+  keeps RFC 8785 number serialization out of cross-language scope. Both
+  verifiers now refuse such a number in the scan that refuses an integer
+  outside the exact range, before any signature is checked, and reject the
+  credential as `SIGNATURE_INVALID` with `no signature covers
+  declaredPurpose: the number <literal> is written with a fraction or an
+  exponent part, not as an integer`, where `<literal>` is the number as
+  the credential writes it, `1000.0`, `1e3` or `1E3` above (the change
+  that closes #283). The first number in `declaredPurpose`'s text that is
+  written with `.`, `e` or `E`, or is an integer outside the exact range,
+  decides and gets its own reason, so `{"n": 9007199254740993}` keeps its
+  reason; an integer written as its digits in the exact range, or a `.` or
+  `e` inside a string or a member name, is verified over the bytes JCS
+  writes, as before. `TestDeclaredPurposeNumberWithFractionOrExponent` in
+  the Go verifier and `GoPurposeNumberSpellings` in the Python verifier
+  each sign 12 such spellings over the bytes the library writes for them
+  and expect that rejection, and 5 controls written as signed, which they
+  expect accepted. The Go verifier of the commit before this change
+  accepts each of the 12. On the 21 files the Python tests' helpers write
+  for the 12 spellings, the 5 controls, the exact-range control and the 3
+  numbers of `InjectedNumberPurpose`, the two verifiers print the same
+  verdict, reason and summary lines. Until the change that closes #283,
+  the Go verifier checked each declared signature of such a credential
+  against no key, as the Python verifier did, and both wrote `Ed25519
+  signature did:opena2a:authority:opena2a.org#key-1 did not verify against
+  any configured public key`; at this change the shipped fixtures'
+  verdicts and reasons did not change:
+  `fixtures/v1_1-declared-purpose-number-injected.json` rejected with that
+  line, as before, `docs/captures/go-verifier.txt` was unchanged and the
+  capture sidecar recorded the verifier's new tree id. The change that
+  closes #283 gives that fixture the `declaredPurpose` reason above, keeps
+  its verdict, its category and a reason containing `signature`, and
+  regenerates the capture. No fixture changes.
 - The Python reference verifier fails to load a file that writes a value as
   `NaN`, `Infinity` or `-Infinity`, its arrays and objects nested no deeper
   than 10000 levels, with the reason the Go reference verifier gives,

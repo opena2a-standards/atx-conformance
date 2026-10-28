@@ -2652,7 +2652,7 @@ func TestIntegerOutsideExactRange(t *testing.T) {
 		{"declaredPurpose 2^53+1", "declaredPurpose", "9007199254740993", withMembers(t, base, map[string]string{"declaredPurpose": "9007199254740993"})},
 		{"declaredPurpose nested", "declaredPurpose", "18014398509481985", withMembers(t, base, map[string]string{"declaredPurpose": `{"limits": {"refund": 18014398509481985}}`})},
 		{"declaredPurpose, the first integer written", "declaredPurpose", "9007199254740993",
-			withMembers(t, base, map[string]string{"declaredPurpose": `[1.5, "18014398509481985", 1e21, 9007199254740993, -9007199254740993]`})},
+			withMembers(t, base, map[string]string{"declaredPurpose": `["18014398509481985", 9007199254740993, -9007199254740993]`})},
 		{"declaredPurpose integer beyond int64", "declaredPurpose", "100000000000000000000", withMembers(t, base, map[string]string{"declaredPurpose": `[100000000000000000000]`})},
 		// Several: the first in the order JCS writes the members.
 		{"observationDays and trustLevel", "behavioralProfile.observationDays", "9007199254740992",
@@ -2671,11 +2671,8 @@ func TestIntegerOutsideExactRange(t *testing.T) {
 		}
 	}
 
-	// Inside the range, and numbers in declaredPurpose written with an
-	// exponent or a fraction part, are not refused as outside it: the
-	// baseline does not sign them, and such a number leaves no bytes to
-	// verify a signature over (TestDeclaredPurposeNumberWithFractionOrExponent),
-	// so a signature fails.
+	// Inside the range, an integer is not refused: the baseline does not
+	// sign it, so a signature fails.
 	for _, tc := range []struct {
 		label string
 		f     fixture
@@ -2683,11 +2680,18 @@ func TestIntegerOutsideExactRange(t *testing.T) {
 		{"criticalFindings 2^53-1", count(base, "9007199254740991")},
 		{"criticalFindings -(2^53-1)", count(base, "-9007199254740991")},
 		{"trustLevel 2^53-1", withMembers(t, base, map[string]string{"trustLevel": "9007199254740991"})},
-		{"declaredPurpose 1e21", withMembers(t, base, map[string]string{"declaredPurpose": "1e21"})},
-		{"declaredPurpose 9007199254740993.0", withMembers(t, base, map[string]string{"declaredPurpose": "9007199254740993.0"})},
 	} {
 		if got := verify(tc.f); got.RejectCategory != "SIGNATURE_INVALID" || strings.Contains(got.Reason, "I-JSON") {
 			t.Errorf("%s on the v1.1 baseline: %s, want REJECT[SIGNATURE_INVALID] from the signature itself", tc.label, got)
+		}
+	}
+	// A number in declaredPurpose written with an exponent or a fraction
+	// part is refused for its form, not as outside the range, whatever its
+	// value (TestDeclaredPurposeNumberWithFractionOrExponent).
+	for _, literal := range []string{"1e21", "9007199254740993.0"} {
+		got := verify(withMembers(t, base, map[string]string{"declaredPurpose": literal}))
+		if want := fractionOrExponentReason(literal); got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != want {
+			t.Errorf("declaredPurpose %s on the v1.1 baseline: %s, want REJECT[SIGNATURE_INVALID: %s]", literal, got, want)
 		}
 	}
 	for _, raw := range []string{"9007199254740991", "-9007199254740991"} {
@@ -2798,21 +2802,30 @@ func signaturesVerifyOverTBS(t *testing.T, f fixture) bool {
 	return len(a.Signatures) > 0
 }
 
-// TestDeclaredPurposeNumberWithFractionOrExponent pins the verdict on a v1.1
-// credential whose declaredPurpose writes a number with a fraction or an
-// exponent part. The JCS library writes such a number as the double nearest
-// it, so this verifier accepted a credential signed over {"n": 1000} that
-// carried 1000.0, 1e3 or 1E3, and one signed over the bytes the library writes
-// for 9007199254740993, those of 9007199254740992, that carried
+// fractionOrExponentReason is the reason both reference verifiers write for a
+// v1.1 credential whose declaredPurpose writes a number with a fraction or an
+// exponent part, literal as the credential writes it.
+func fractionOrExponentReason(literal string) string {
+	return "no signature covers declaredPurpose: the number " + literal + " is written with a fraction or an exponent part, not as an integer"
+}
+
+// TestDeclaredPurposeNumberWithFractionOrExponent pins the verdict and reason
+// on a v1.1 credential whose declaredPurpose writes a number with a fraction
+// or an exponent part. The JCS library writes such a number as the double
+// nearest it, so this verifier accepted a credential signed over {"n": 1000}
+// that carried 1000.0, 1e3 or 1E3, and one signed over the bytes the library
+// writes for 9007199254740993, those of 9007199254740992, that carried
 // 9007199254740993.0 or 9.007199254740993e15, which the exact-range check
-// does not read as integers. The Python reference verifier, whose serializer
-// writes no such number, rejected each. Both now verify no signature over
-// such a TBS, so each declared signature fails, with one reason
-// (GO_PURPOSE_NUMBER_SPELLINGS in verifiers/python/test_verify.py).
-// atx-conformance#283.
+// did not read as integers. The Python reference verifier, whose serializer
+// writes no such number, rejected each. Both verified no signature over such
+// a TBS, and each declared signature failed with the key's reason, which
+// named no cause in the credential; both now refuse the number in the scan
+// that refuses an integer outside the exact range, with a reason that quotes
+// it as written (GO_PURPOSE_NUMBER_SPELLINGS in
+// verifiers/python/test_verify.py). The first such number, or integer outside
+// the range, that declaredPurpose writes decides. atx-conformance#283.
 func TestDeclaredPurposeNumberWithFractionOrExponent(t *testing.T) {
 	base := v11Baseline(t)
-	const notVerified = "Ed25519 signature did:opena2a:authority:opena2a.org#key-1 did not verify against any configured public key"
 	// signedOver is the v1.1 baseline with declaredPurpose written as
 	// presented, under one Ed25519 signature over its JCS(TBS) with
 	// declaredPurpose written as signed.
@@ -2822,19 +2835,19 @@ func TestDeclaredPurposeNumberWithFractionOrExponent(t *testing.T) {
 		return withMembers(t, f, map[string]string{"declaredPurpose": presented})
 	}
 
-	for _, tc := range []struct{ signed, presented string }{
-		{`{"n": 1000}`, `{"n": 1000.0}`},
-		{`{"n": 1000}`, `{"n": 1e3}`},
-		{`{"n": 1000}`, `{"n": 1E3}`},
-		{`{"n": 1000}`, `{"n": 1e+3}`},
-		{`{"n": 1000}`, `{"n": 10000e-1}`},
-		{`{"n": 9007199254740993}`, `{"n": 9007199254740993.0}`},
-		{`{"n": 9007199254740993}`, `{"n": 9.007199254740993e15}`},
-		{`{"n": 1.5}`, `{"n": 1.5}`},
-		{`{"n": 0}`, `{"n": -0.0}`},
-		{`[1000]`, `[1000.0]`},
-		{`1000`, `1e3`},
-		{`{"limits": {"refund": [1, 2.5e1]}}`, `{"limits": {"refund": [1, 2.5e1]}}`},
+	for _, tc := range []struct{ signed, presented, literal string }{
+		{`{"n": 1000}`, `{"n": 1000.0}`, `1000.0`},
+		{`{"n": 1000}`, `{"n": 1e3}`, `1e3`},
+		{`{"n": 1000}`, `{"n": 1E3}`, `1E3`},
+		{`{"n": 1000}`, `{"n": 1e+3}`, `1e+3`},
+		{`{"n": 1000}`, `{"n": 10000e-1}`, `10000e-1`},
+		{`{"n": 9007199254740993}`, `{"n": 9007199254740993.0}`, `9007199254740993.0`},
+		{`{"n": 9007199254740993}`, `{"n": 9.007199254740993e15}`, `9.007199254740993e15`},
+		{`{"n": 1.5}`, `{"n": 1.5}`, `1.5`},
+		{`{"n": 0}`, `{"n": -0.0}`, `-0.0`},
+		{`[1000]`, `[1000.0]`, `1000.0`},
+		{`1000`, `1e3`, `1e3`},
+		{`{"limits": {"refund": [1, 2.5e1]}}`, `{"limits": {"refund": [1, 2.5e1]}}`, `2.5e1`},
 	} {
 		f := signedOver(tc.signed, tc.presented)
 		// The JCS library writes the number as presented with the bytes it
@@ -2843,8 +2856,28 @@ func TestDeclaredPurposeNumberWithFractionOrExponent(t *testing.T) {
 		if !signaturesVerifyOverTBS(t, f) {
 			t.Fatalf("declaredPurpose %s signed as %s: the signature does not verify over JCS(TBS)", tc.presented, tc.signed)
 		}
-		if got := verify(f); got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != notVerified {
-			t.Errorf("declaredPurpose %s signed as %s: %s, want REJECT[SIGNATURE_INVALID: %s]", tc.presented, tc.signed, got, notVerified)
+		if got, want := verify(f), fractionOrExponentReason(tc.literal); got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != want {
+			t.Errorf("declaredPurpose %s signed as %s: %s, want REJECT[SIGNATURE_INVALID: %s]", tc.presented, tc.signed, got, want)
+		}
+	}
+
+	// The first number declaredPurpose writes that is outside the integer
+	// form or the exact range decides, whichever defect it has, in the order
+	// the credential writes the numbers and not the order JCS writes the
+	// members in. A digit string is no number.
+	outsideRange := func(literal string) string {
+		return "no signature covers declaredPurpose: the integer " + literal + " is outside the I-JSON exact range, -(2^53-1) to 2^53-1"
+	}
+	for _, tc := range []struct{ purpose, want string }{
+		{`{"b": 1.5, "a": 9007199254740993}`, fractionOrExponentReason("1.5")},
+		{`{"a": 9007199254740993, "b": 1.5}`, outsideRange("9007199254740993")},
+		{`[1.5, "18014398509481985", 1e21, 9007199254740993, -9007199254740993]`, fractionOrExponentReason("1.5")},
+		{`["18014398509481985", 9007199254740993, 1.5]`, outsideRange("9007199254740993")},
+		{`{"n": [7, {"m": 2.5E-3}], "k": 1e1}`, fractionOrExponentReason("2.5E-3")},
+	} {
+		got := verify(withMembers(t, base, map[string]string{"declaredPurpose": tc.purpose}))
+		if got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != tc.want {
+			t.Errorf("declaredPurpose %s: %s, want REJECT[SIGNATURE_INVALID: %s]", tc.purpose, got, tc.want)
 		}
 	}
 
@@ -2857,7 +2890,7 @@ func TestDeclaredPurposeNumberWithFractionOrExponent(t *testing.T) {
 			t.Errorf("declaredPurpose %s, signed: %s, want ACCEPT", signed, got)
 		}
 	}
-	outside := "no signature covers declaredPurpose: the integer 9007199254740993 is outside the I-JSON exact range, -(2^53-1) to 2^53-1"
+	outside := outsideRange("9007199254740993")
 	if got := verify(signedOver(`{"n": 9007199254740993}`, `{"n": 9007199254740993}`)); got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != outside {
 		t.Errorf(`declaredPurpose {"n": 9007199254740993}, signed: %s, want REJECT[SIGNATURE_INVALID: %s]`, got, outside)
 	}
@@ -2870,6 +2903,41 @@ func TestDeclaredPurposeNumberWithFractionOrExponent(t *testing.T) {
 	}
 	if got := verify(withMembers(t, v10, map[string]string{"declaredPurpose": `{"n": 1e3}`})); !got.Accepted {
 		t.Errorf(`declaredPurpose {"n": 1e3} on the v1.0 baseline: %s, want ACCEPT`, got)
+	}
+}
+
+// TestDeclaredPurposeNumberFixtures pins the five shipped fixtures of a
+// declaredPurpose number (atx-conformance#283). The signature of each
+// verifies over JCS(TBS) as the JCS library writes it, so a verifier that
+// canonicalizes the number as the library does accepts each; this verifier
+// accepts the one written as signed and rejects the others with the reason
+// that names the number as the credential writes it.
+func TestDeclaredPurposeNumberFixtures(t *testing.T) {
+	outsideRange := "no signature covers declaredPurpose: the integer 9007199254740993 is outside the I-JSON exact range, -(2^53-1) to 2^53-1"
+	for _, tc := range []struct{ file, reason string }{
+		{"v1_1-declared-purpose-integer-signed.json", ""},
+		{"v1_1-declared-purpose-integer-respelled-fraction.json", fractionOrExponentReason("1000.0")},
+		{"v1_1-declared-purpose-integer-respelled-exponent.json", fractionOrExponentReason("1e3")},
+		{"v1_1-declared-purpose-integer-respelled-upper-exponent.json", fractionOrExponentReason("1E3")},
+		{"v1_1-declared-purpose-integer-outside-range.json", outsideRange},
+	} {
+		f, err := loadFixture(repoRoot + "/fixtures/" + tc.file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !signaturesVerifyOverTBS(t, f) {
+			t.Errorf("fixtures/%s: its signature does not verify over JCS(TBS)", tc.file)
+		}
+		got := verify(f)
+		if tc.reason == "" {
+			if !got.Accepted {
+				t.Errorf("fixtures/%s: %s, want ACCEPT", tc.file, got)
+			}
+			continue
+		}
+		if got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != tc.reason {
+			t.Errorf("fixtures/%s: %s, want REJECT[SIGNATURE_INVALID: %s]", tc.file, got, tc.reason)
+		}
 	}
 }
 
@@ -2943,22 +3011,25 @@ func TestDeclaredPurposeNumberOutsideFloat64Range(t *testing.T) {
 		}
 	}
 
-	// Controls: a number in the float64 range keeps its verdict and reason,
-	// written with more than 800 digits and an exponent part included (10^308,
-	// 10^300, 10^307 and 2^1024 - 2^970 - 1), and 1e400 written in a string
-	// or as a member name is no number. The baseline signs no declaredPurpose.
+	// Controls: a number in the float64 range keeps its category,
+	// SIGNATURE_INVALID. One written with a fraction or an exponent part is
+	// refused for its form, with the number as written, more than 800 digits
+	// and an exponent part included (10^308, 10^300, 10^307 and
+	// 2^1024 - 2^970 - 1); an integer outside the exact range is refused for
+	// its range; and 1e400 written in a string or as a member name is no
+	// number, so the signature fails. The baseline signs no declaredPurpose.
 	const notVerified = "Ed25519 signature did:opena2a:authority:opena2a.org#key-1 did not verify against any configured public key"
 	below := new(big.Int).Sub(edge, big.NewInt(1)).String()
 	for _, tc := range []struct{ purpose, want string }{
-		{`1.7976931348623158e308`, notVerified},
-		{`1e-400`, notVerified},
+		{`1.7976931348623158e308`, fractionOrExponentReason(`1.7976931348623158e308`)},
+		{`1e-400`, fractionOrExponentReason(`1e-400`)},
 		{below, "no signature covers declaredPurpose: the integer " + below + " is outside the I-JSON exact range, -(2^53-1) to 2^53-1"},
 		{`{"n": "1e400"}`, notVerified},
 		{`{"1e400": 1}`, notVerified},
-		{"1" + strings.Repeat("0", 1000) + "e-692", notVerified},
-		{"1" + strings.Repeat("0", 1000) + "e-700", notVerified},
-		{"0." + strings.Repeat("0", 30000) + "1e30308", notVerified},
-		{below + strings.Repeat("0", 1000) + "e-1000", notVerified},
+		{"1" + strings.Repeat("0", 1000) + "e-692", fractionOrExponentReason("1" + strings.Repeat("0", 1000) + "e-692")},
+		{"1" + strings.Repeat("0", 1000) + "e-700", fractionOrExponentReason("1" + strings.Repeat("0", 1000) + "e-700")},
+		{"0." + strings.Repeat("0", 30000) + "1e30308", fractionOrExponentReason("0." + strings.Repeat("0", 30000) + "1e30308")},
+		{below + strings.Repeat("0", 1000) + "e-1000", fractionOrExponentReason(below + strings.Repeat("0", 1000) + "e-1000")},
 	} {
 		got := verify(withMembers(t, base, map[string]string{"declaredPurpose": tc.purpose}))
 		if got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != tc.want {

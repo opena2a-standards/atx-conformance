@@ -1075,6 +1075,74 @@ func main() {
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
 				atx)
 		}},
+		// ---- declaredPurpose number form (§1.3a.2 rule 3, atx-conformance#283) ----
+		// declaredPurpose enters the TBS as written (§1.3a.2 rule 5), so a
+		// number in it does too. The JCS library reads each number as an
+		// IEEE 754 double and writes 1000.0, 1e3 and 1E3 as 1000, so a
+		// signature over {"n": 1000} verifies over the bytes it writes for
+		// each spelling, and it writes 9007199254740993 as 9007199254740992.
+		// The verifier decides the form and the exact range of the number
+		// as the credential writes it, so each of these credentials but the
+		// first is a signature failure that a verifier canonicalizing the
+		// number as the library does accepts.
+		{"fixtures/v1_1-declared-purpose-integer-signed.json", func() Fixture {
+			atx := newBaselineV11ATX()
+			atx.DeclaredPurpose = json.RawMessage(`{"n": 1000}`)
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/declared-purpose-integer-signed",
+				"An ATX v1.1 credential signed over declaredPurpose {\"n\": 1000}, which it carries as signed. declaredPurpose enters the TBS as written (atx-spec §1.3a.2 rule 5), and so does the number 1000: an integer written with no fraction part and no exponent part, inside the I-JSON exact range, -(2^53-1) to 2^53-1, which RFC 8785 writes as its decimal digits, so the signature covers it. Verifier MUST ACCEPT. A verifier that refuses every number in declaredPurpose, where it should decide each number's form from the credential's JSON text, wrongly REJECTs.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "ACCEPT"},
+				atx)
+		}},
+		{"fixtures/v1_1-declared-purpose-integer-respelled-fraction.json", func() Fixture {
+			atx := newBaselineV11ATX()
+			atx.DeclaredPurpose = json.RawMessage(`{"n": 1000}`)
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			atx.DeclaredPurpose = json.RawMessage(`{"n": 1000.0}`)
+			return wrap("atx-v1_1/declared-purpose-integer-respelled-fraction",
+				"An ATX v1.1 credential signed over declaredPurpose {\"n\": 1000}, carrying {\"n\": 1000.0}: the same value written with a fraction part. declaredPurpose enters the TBS as written (atx-spec §1.3a.2 rule 5), and §1.3a.2 rule 3 keeps RFC 8785 number serialization out of cross-language scope, so no signature covers a number there written with a fraction part or an exponent part. Its form is decided from the credential's JSON text, not from the value a JSON parser returns for it. The verifier MUST REJECT as SIGNATURE_INVALID with a reason that names declaredPurpose. An RFC 8785 serializer that reads each number as an IEEE 754 double writes 1000.0 as 1000, the bytes the signature covers, so a verifier that canonicalizes the number that way verifies the signature and wrongly ACCEPTs.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "declaredPurpose"},
+				atx)
+		}},
+		{"fixtures/v1_1-declared-purpose-integer-respelled-exponent.json", func() Fixture {
+			atx := newBaselineV11ATX()
+			atx.DeclaredPurpose = json.RawMessage(`{"n": 1000}`)
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			atx.DeclaredPurpose = json.RawMessage(`{"n": 1e3}`)
+			return wrap("atx-v1_1/declared-purpose-integer-respelled-exponent",
+				"An ATX v1.1 credential signed over declaredPurpose {\"n\": 1000}, carrying {\"n\": 1e3}: the same value written with an exponent part. declaredPurpose enters the TBS as written (atx-spec §1.3a.2 rule 5), and §1.3a.2 rule 3 keeps RFC 8785 number serialization out of cross-language scope, so no signature covers a number there written with a fraction part or an exponent part. Its form is decided from the credential's JSON text, not from the value a JSON parser returns for it. The verifier MUST REJECT as SIGNATURE_INVALID with a reason that names declaredPurpose. An RFC 8785 serializer that reads each number as an IEEE 754 double writes 1e3 as 1000, the bytes the signature covers, so a verifier that canonicalizes the number that way verifies the signature and wrongly ACCEPTs.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "declaredPurpose"},
+				atx)
+		}},
+		{"fixtures/v1_1-declared-purpose-integer-respelled-upper-exponent.json", func() Fixture {
+			atx := newBaselineV11ATX()
+			atx.DeclaredPurpose = json.RawMessage(`{"n": 1000}`)
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			atx.DeclaredPurpose = json.RawMessage(`{"n": 1E3}`)
+			return wrap("atx-v1_1/declared-purpose-integer-respelled-upper-exponent",
+				"An ATX v1.1 credential signed over declaredPurpose {\"n\": 1000}, carrying {\"n\": 1E3}: the same value written with an exponent part that opens with an upper-case E. declaredPurpose enters the TBS as written (atx-spec §1.3a.2 rule 5), and §1.3a.2 rule 3 keeps RFC 8785 number serialization out of cross-language scope, so no signature covers a number there written with a fraction part or an exponent part. Its form is decided from the credential's JSON text, not from the value a JSON parser returns for it. The verifier MUST REJECT as SIGNATURE_INVALID with a reason that names declaredPurpose. An RFC 8785 serializer that reads each number as an IEEE 754 double writes 1E3 as 1000, the bytes the signature covers, so a verifier that canonicalizes the number that way, or that finds an exponent part by a lower-case e alone, verifies the signature and wrongly ACCEPTs.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "declaredPurpose"},
+				atx)
+		}},
+		{"fixtures/v1_1-declared-purpose-integer-outside-range.json", func() Fixture {
+			atx := newBaselineV11ATX()
+			atx.DeclaredPurpose = json.RawMessage(`{"n": 9007199254740993}`)
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/declared-purpose-integer-outside-range",
+				"An ATX v1.1 credential carrying declaredPurpose {\"n\": 9007199254740993}: the integer 2^53+1, written as its digits, outside the I-JSON exact range, -(2^53-1) to 2^53-1 (RFC 7493 §2.2). Its Ed25519 signature covers JCS(TBS) as an RFC 8785 serializer that reads each number as an IEEE 754 double writes it, with n 9007199254740992: the bytes that serializer writes for a credential carrying 9007199254740992 too. declaredPurpose enters the TBS as written (atx-spec §1.3a.2 rule 5), and §1.3a.2 rule 3 keeps RFC 8785 number serialization out of cross-language scope, so the signature does not cover the number this credential carries. The verifier MUST REJECT as SIGNATURE_INVALID with a reason that names declaredPurpose. A verifier that canonicalizes the number as that serializer does verifies the signature and wrongly ACCEPTs.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "declaredPurpose"},
+				atx)
+		}},
 		// ---- duplicate-member strict parse (issue opena2a-registry#305) ----
 		{"fixtures/v1_1-duplicate-purpose-member.json", func() Fixture {
 			// DUPLICATE-MEMBER SMUGGLING. Sign the honest purpose (category
@@ -1468,6 +1536,13 @@ var fixtureSections = map[string][]string{
 	"atx-v1_1/declared-purpose-string-injected":  {secDeclaredPurpose},
 	"atx-v1_1/declared-purpose-number-injected":  {secDeclaredPurpose},
 	"atx-v1_1/duplicate-purpose-member":          {secDeclaredPurpose},
+
+	// declaredPurpose number form (atx-conformance#283).
+	"atx-v1_1/declared-purpose-integer-signed":                   {secDeclaredPurpose},
+	"atx-v1_1/declared-purpose-integer-respelled-fraction":       {secDeclaredPurpose},
+	"atx-v1_1/declared-purpose-integer-respelled-exponent":       {secDeclaredPurpose},
+	"atx-v1_1/declared-purpose-integer-respelled-upper-exponent": {secDeclaredPurpose},
+	"atx-v1_1/declared-purpose-integer-outside-range":            {secDeclaredPurpose},
 }
 
 // fixtureSectionsUsed records which fixtureSections entries wrap consumed.
@@ -1518,6 +1593,13 @@ var fixtureRequirements = map[string]string{
 	"atx-v1_1/behavioral-profile-case-variant-member": "§1.1: behavioralProfile member names are compared exactly, so observationDays renamed OBSERVATIONDAYS after signing leaves a profile the TBS has no value for, a signature failure",
 	"atx-v1_1/behavioral-profile-not-object":          "§1.3a.2 rule 1: the TBS holds null for a credential with no behavioralProfile and otherwise an object of its three members, so a string added as the profile after signing is a signature failure",
 	"atx-v1_1/behavioral-profile-member-outside-type": "§1.3a.2 rule 1: a behavioralProfile added after signing whose observationDays is a string has no value in the TBS, where a credential with no profile holds null, so it is a signature failure",
+
+	// declaredPurpose number form (atx-conformance#283).
+	"atx-v1_1/declared-purpose-integer-signed":                   "§1.3a.2 rule 5: declaredPurpose enters the TBS as written, and so does an integer in it written as its digits inside the I-JSON exact range, so a credential signed over {\"n\": 1000} that carries it as signed is accepted",
+	"atx-v1_1/declared-purpose-integer-respelled-fraction":       "§1.3a.2 rule 3: RFC 8785 number serialization is kept out of cross-language scope, so a declaredPurpose number written with a fraction part, 1000.0 where the signature covers 1000, has no bytes the signature covers and is a signature failure",
+	"atx-v1_1/declared-purpose-integer-respelled-exponent":       "§1.3a.2 rule 3: RFC 8785 number serialization is kept out of cross-language scope, so a declaredPurpose number written with an exponent part, 1e3 where the signature covers 1000, has no bytes the signature covers and is a signature failure",
+	"atx-v1_1/declared-purpose-integer-respelled-upper-exponent": "§1.3a.2 rule 3: RFC 8785 number serialization is kept out of cross-language scope, so a declaredPurpose number written with an exponent part that opens with an upper-case E, 1E3 where the signature covers 1000, has no bytes the signature covers and is a signature failure",
+	"atx-v1_1/declared-purpose-integer-outside-range":            "§1.3a.2 rule 3: RFC 8785 number serialization is kept out of cross-language scope, and outside the I-JSON exact range it does not write every integer as its digits, so declaredPurpose n 9007199254740993, which it writes as 9007199254740992, has no value the signature covers and is a signature failure",
 }
 
 // fixtureRequirementsUsed records which fixtureRequirements entries wrap consumed.
@@ -1528,6 +1610,19 @@ var fixtureRequirementsUsed = map[string]bool{}
 // entry that names no fixture.
 var fixtureOtherRefs = map[string][]SpecRef{
 	"atx-v1_1/integer-outside-exact-range": {
+		{ID: "RFC 7493", Ref: "https://datatracker.ietf.org/doc/html/rfc7493", Section: "§2.2 Numbers (the I-JSON exact integer range, -(2^53-1) to 2^53-1)"},
+		{ID: "RFC 8785", Ref: "https://datatracker.ietf.org/doc/html/rfc8785", Section: "§3.2.2.3 Serialization of Numbers"},
+	},
+	"atx-v1_1/declared-purpose-integer-respelled-fraction": {
+		{ID: "RFC 8785", Ref: "https://datatracker.ietf.org/doc/html/rfc8785", Section: "§3.2.2.3 Serialization of Numbers"},
+	},
+	"atx-v1_1/declared-purpose-integer-respelled-exponent": {
+		{ID: "RFC 8785", Ref: "https://datatracker.ietf.org/doc/html/rfc8785", Section: "§3.2.2.3 Serialization of Numbers"},
+	},
+	"atx-v1_1/declared-purpose-integer-respelled-upper-exponent": {
+		{ID: "RFC 8785", Ref: "https://datatracker.ietf.org/doc/html/rfc8785", Section: "§3.2.2.3 Serialization of Numbers"},
+	},
+	"atx-v1_1/declared-purpose-integer-outside-range": {
 		{ID: "RFC 7493", Ref: "https://datatracker.ietf.org/doc/html/rfc7493", Section: "§2.2 Numbers (the I-JSON exact integer range, -(2^53-1) to 2^53-1)"},
 		{ID: "RFC 8785", Ref: "https://datatracker.ietf.org/doc/html/rfc8785", Section: "§3.2.2.3 Serialization of Numbers"},
 	},

@@ -445,18 +445,15 @@ class InjectedNumberPurpose(unittest.TestCase):
     def test_reason_is_the_go_verifier_reason(self):
         # Neither reference verifier verifies a signature over a number
         # written with a fraction or an exponent part (GoPurposeNumberSpellings):
-        # each checks every declared signature against no key, and the reason
-        # names it in the Go verifier's words, read from its run over these
-        # values. GoReportText holds the report over fixtures/, which holds
+        # each refuses the number before it checks a signature, and the
+        # reason quotes it as written, in the Go verifier's words, read from
+        # its run over these values. GoReportText holds the report over
+        # fixtures/, which holds
         # fixtures/v1_1-declared-purpose-number-injected.json, to the Go
         # capture.
-        for purpose in (1.5, {"autonomy": 0.5}, ["billing:inquiry", 0.25]):
+        for purpose, literal in ((1.5, "1.5"), ({"autonomy": 0.5}, "0.5"), (["billing:inquiry", 0.25], "0.25")):
             with self.subTest(purpose=purpose):
-                self.assertEqual(
-                    _verdict(purpose).reason,
-                    "Ed25519 signature did:opena2a:authority:opena2a.org#key-1 "
-                    "did not verify against any configured public key",
-                )
+                self.assertEqual(_verdict(purpose).reason, _fraction_or_exponent_reason(literal))
 
     def test_integer_and_boolean_reject_in_the_same_category(self):
         # Controls: values the serializer does canonicalize reach the verdict
@@ -1986,6 +1983,16 @@ def _exact_range_reason(where: str, literal: str) -> str:
     return f"no signature covers {where}: the integer {literal} is outside the I-JSON exact range, -(2^53-1) to 2^53-1"
 
 
+def _fraction_or_exponent_reason(literal: str) -> str:
+    # The reason both reference verifiers write for a v1.1 declaredPurpose
+    # number written with a fraction or an exponent part, literal as the
+    # credential writes it.
+    return (
+        f"no signature covers declaredPurpose: the number {literal} is written with a "
+        "fraction or an exponent part, not as an integer"
+    )
+
+
 CRITICAL = ("scanSummary", "criticalFindings")
 HIGH = ("scanSummary", "highFindings")
 OBSERVATION_DAYS = ("behavioralProfile", "observationDays")
@@ -2008,7 +2015,7 @@ GO_INTEGER_OUTSIDE_EXACT_RANGE = (
     ({TRUST_LEVEL: "-9007199254740993"}, "trustLevel", "-9007199254740993"),
     ({PURPOSE: "9007199254740993"}, "declaredPurpose", "9007199254740993"),
     ({PURPOSE: '{"limits": {"refund": 18014398509481985}}'}, "declaredPurpose", "18014398509481985"),
-    ({PURPOSE: '[1.5, "18014398509481985", 1e21, 9007199254740993, -9007199254740993]'}, "declaredPurpose", "9007199254740993"),
+    ({PURPOSE: '["18014398509481985", 9007199254740993, -9007199254740993]'}, "declaredPurpose", "9007199254740993"),
     ({PURPOSE: "[100000000000000000000]"}, "declaredPurpose", "100000000000000000000"),
     ({OBSERVATION_DAYS: "9007199254740992", TRUST_LEVEL: "9007199254740993"}, "behavioralProfile.observationDays", "9007199254740992"),
     ({CRITICAL: "9007199254740993", PURPOSE: '{"a": -9007199254740992}'}, "declaredPurpose", "-9007199254740992"),
@@ -2040,13 +2047,19 @@ class GoIntegerOutsideExactRange(unittest.TestCase):
             {CRITICAL: "9007199254740991"},
             {CRITICAL: "-9007199254740991"},
             {TRUST_LEVEL: "9007199254740991"},
-            {PURPOSE: "1e21"},
-            {PURPOSE: "9007199254740993.0"},
         ):
             with self.subTest(edits=edits):
                 got = _with_verdict(BASELINE_V11, edits)
                 self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
                 self.assertNotIn("I-JSON", got.reason)
+        # A number in declaredPurpose written with an exponent or a fraction
+        # part is refused for its form, not as outside the range, whatever
+        # its value (GoPurposeNumberSpellings).
+        for literal in ("1e21", "9007199254740993.0"):
+            with self.subTest(purpose=literal):
+                got = _with_verdict(BASELINE_V11, {PURPOSE: literal})
+                self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+                self.assertEqual(got.reason, _fraction_or_exponent_reason(literal))
         fixture = json.loads(BASELINE_V11.read_text())
         with tempfile.TemporaryDirectory() as tmp:
             for count in (2**53 - 1, -(2**53 - 1)):
@@ -2141,36 +2154,45 @@ def _write_signed_purpose(directory: Path, name: str, written: str, signed: byte
     return path
 
 
-# The reason both reference verifiers write when no configured key verifies
-# the Ed25519 signature of the v1.1 baseline.
-ED25519_NOT_VERIFIED = (
-    "Ed25519 signature did:opena2a:authority:opena2a.org#key-1 "
-    "did not verify against any configured public key"
+# The tables below were recorded from `go run .` in ../go, built with
+# Go 1.26.3, on the files _write_signed_purpose writes and the files
+# _with_verdict writes from the v1.1 baseline.
+#
+# A declaredPurpose number written with a fraction or an exponent part, the
+# bytes the Go reference verifier's JCS library writes for it, which the
+# signature covers, and the number as written: 1000.0, 1e3 and 1E3 are
+# written as 1000, and 9007199254740993.0 and 9.007199254740993e15 as
+# 9007199254740992. The Go verifier accepted each under that signature
+# before atx-conformance#283, and this verifier, whose serializer writes no
+# such number, rejected each. Both then checked each declared signature
+# against no key; both now refuse the number as SIGNATURE_INVALID with
+# _fraction_or_exponent_reason of the number as written.
+GO_PURPOSE_NUMBER_SPELLINGS = (
+    ('{"n": 1000.0}', b'{"n":1000}', "1000.0"),
+    ('{"n": 1e3}', b'{"n":1000}', "1e3"),
+    ('{"n": 1E3}', b'{"n":1000}', "1E3"),
+    ('{"n": 1e+3}', b'{"n":1000}', "1e+3"),
+    ('{"n": 10000e-1}', b'{"n":1000}', "10000e-1"),
+    ('{"n": 9007199254740993.0}', b'{"n":9007199254740992}', "9007199254740993.0"),
+    ('{"n": 9.007199254740993e15}', b'{"n":9007199254740992}', "9.007199254740993e15"),
+    ('{"n": 1.5}', b'{"n":1.5}', "1.5"),
+    ('{"n": -0.0}', b'{"n":0}', "-0.0"),
+    ("[1000.0]", b"[1000]", "1000.0"),
+    ("1e3", b"1000", "1e3"),
+    ('{"limits": {"refund": [1, 2.5e1]}}', b'{"limits":{"refund":[1,25]}}', "2.5e1"),
 )
 
-# The two tables below were recorded from `go run .` in ../go, built with
-# Go 1.26.3, on the files _write_signed_purpose writes.
-#
-# A declaredPurpose number written with a fraction or an exponent part, and
-# the bytes the Go reference verifier's JCS library writes for it, which the
-# signature covers: 1000.0, 1e3 and 1E3 as 1000, and 9007199254740993.0 and
-# 9.007199254740993e15 as 9007199254740992. The Go verifier accepted each
-# under that signature before atx-conformance#283, and this verifier, whose
-# serializer writes no such number, rejected each. Both now reject each as
-# SIGNATURE_INVALID, with ED25519_NOT_VERIFIED.
-GO_PURPOSE_NUMBER_SPELLINGS = (
-    ('{"n": 1000.0}', b'{"n":1000}'),
-    ('{"n": 1e3}', b'{"n":1000}'),
-    ('{"n": 1E3}', b'{"n":1000}'),
-    ('{"n": 1e+3}', b'{"n":1000}'),
-    ('{"n": 10000e-1}', b'{"n":1000}'),
-    ('{"n": 9007199254740993.0}', b'{"n":9007199254740992}'),
-    ('{"n": 9.007199254740993e15}', b'{"n":9007199254740992}'),
-    ('{"n": 1.5}', b'{"n":1.5}'),
-    ('{"n": -0.0}', b'{"n":0}'),
-    ("[1000.0]", b"[1000]"),
-    ("1e3", b"1000"),
-    ('{"limits": {"refund": [1, 2.5e1]}}', b'{"limits":{"refund":[1,25]}}'),
+# A declaredPurpose holding more than one number outside the integer form or
+# the exact range, unsigned on the v1.1 baseline, and the reason each verifier
+# gives: the first such number the credential writes decides, in the order it
+# writes them and not the order JCS writes the members in, whichever defect
+# it has. A digit string is no number.
+GO_PURPOSE_FIRST_NUMBER_DECIDES = (
+    ('{"b": 1.5, "a": 9007199254740993}', _fraction_or_exponent_reason("1.5")),
+    ('{"a": 9007199254740993, "b": 1.5}', _exact_range_reason("declaredPurpose", "9007199254740993")),
+    ('[1.5, "18014398509481985", 1e21, 9007199254740993, -9007199254740993]', _fraction_or_exponent_reason("1.5")),
+    ('["18014398509481985", 9007199254740993, 1.5]', _exact_range_reason("declaredPurpose", "9007199254740993")),
+    ('{"n": [7, {"m": 2.5E-3}], "k": 1e1}', _fraction_or_exponent_reason("2.5E-3")),
 )
 
 # declaredPurpose written as the bytes the signature covers: integers in the
@@ -2191,8 +2213,9 @@ class GoPurposeNumberSpellings(unittest.TestCase):
     writes for it. That library writes such a number as the double nearest
     it, so the Go verifier accepted a credential signed over 1000 that
     carried 1e3, while this verifier's serializer writes no such number and
-    rejected it. Neither verifies a signature over such a number now, so
-    both reject it with one reason. atx-conformance#283."""
+    rejected it. Neither verifies a signature over such a number now: both
+    refuse it in the scan that refuses an integer outside the exact range,
+    with one reason that quotes it as written. atx-conformance#283."""
 
     def _verdict(self, written: str, signed: bytes) -> verify.VerifyResult:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2200,11 +2223,18 @@ class GoPurposeNumberSpellings(unittest.TestCase):
             return verify.verify_fixture(verify.load_fixture(path))
 
     def test_number_with_a_fraction_or_exponent_rejects_with_the_go_reason(self):
-        for written, signed in GO_PURPOSE_NUMBER_SPELLINGS:
+        for written, signed, literal in GO_PURPOSE_NUMBER_SPELLINGS:
             with self.subTest(written=written):
                 got = self._verdict(written, signed)
                 self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
-                self.assertEqual(got.reason, ED25519_NOT_VERIFIED)
+                self.assertEqual(got.reason, _fraction_or_exponent_reason(literal))
+
+    def test_first_number_outside_the_form_or_the_range_decides(self):
+        for written, reason in GO_PURPOSE_FIRST_NUMBER_DECIDES:
+            with self.subTest(written=written):
+                got = _with_verdict(BASELINE_V11, {PURPOSE: written})
+                self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+                self.assertEqual(got.reason, reason)
 
     def test_written_as_signed_is_accepted(self):
         # The signature _write_signed_purpose makes verifies wherever
@@ -2218,6 +2248,45 @@ class GoPurposeNumberSpellings(unittest.TestCase):
         got = self._verdict('{"n": 9007199254740993}', b'{"n":9007199254740992}')
         self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
         self.assertEqual(got.reason, _exact_range_reason("declaredPurpose", "9007199254740993"))
+
+    def test_shipped_fixtures(self):
+        # The five fixtures of a declaredPurpose number. The signature of
+        # each verifies over the bytes the Go reference verifier's JCS library
+        # writes for the number it carries, {"n":1000} or
+        # {"n":9007199254740992}, so a verifier that canonicalizes the number
+        # as that library does accepts each. This verifier accepts the one
+        # written as signed and rejects the others with the reason that names
+        # the number as the credential writes it.
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+        shipped = (
+            ("v1_1-declared-purpose-integer-signed.json", b'{"n":1000}', None),
+            ("v1_1-declared-purpose-integer-respelled-fraction.json", b'{"n":1000}', _fraction_or_exponent_reason("1000.0")),
+            ("v1_1-declared-purpose-integer-respelled-exponent.json", b'{"n":1000}', _fraction_or_exponent_reason("1e3")),
+            ("v1_1-declared-purpose-integer-respelled-upper-exponent.json", b'{"n":1000}', _fraction_or_exponent_reason("1E3")),
+            (
+                "v1_1-declared-purpose-integer-outside-range.json",
+                b'{"n":9007199254740992}',
+                _exact_range_reason("declaredPurpose", "9007199254740993"),
+            ),
+        )
+        for name, signed, reason in shipped:
+            with self.subTest(fixture=name):
+                fixture = verify.load_fixture(ROOT / "fixtures" / name)
+                got = verify.verify_fixture(fixture)
+                if reason is None:
+                    self.assertTrue(got.accepted, got.reason)
+                else:
+                    self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+                    self.assertEqual(got.reason, reason)
+                credential = verify._decode_credential(fixture["atx"])
+                credential["declaredPurpose"] = {"n": 0}
+                zero = verify.canonical_payload_v11(credential)
+                self.assertEqual(zero.count(b'"declaredPurpose":{"n":0}'), 1)
+                payload = zero.replace(b'"declaredPurpose":{"n":0}', b'"declaredPurpose":' + signed)
+                key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(fixture["verifierState"]["publicKeys"][0]["publicKeyHex"]))
+                (signature,) = fixture["atx"]["signatures"]
+                key.verify(base64.b64decode(signature["value"]), payload)
 
     def test_v1_0_declared_purpose_is_not_signed(self):
         # The legacy form signs no declaredPurpose, so a number in it leaves
