@@ -336,7 +336,11 @@ func TestUnknownOptionIsNamed(t *testing.T) {
 // the module path and version the binary records and the Go release that
 // built it, and exits 0 without reading a fixture. Neither verifier had a
 // --version, and no line of the report named the commit a `go run
-// <module>/verifiers/go@latest` binary was built from.
+// <module>/verifiers/go@latest` binary was built from. When the version is
+// (devel), the line names the commit the binary's vcs.revision records, and
+// whether vcs.modified records uncommitted changes, or says that it records
+// no commit: `go run` from a checkout wrote (devel) alone, which named no
+// commit and did not say that it recorded none.
 func TestVersionNamesTheModuleVersion(t *testing.T) {
 	info, ok := debug.ReadBuildInfo()
 	want := versionLine(info, ok)
@@ -359,10 +363,20 @@ func TestVersionNamesTheModuleVersion(t *testing.T) {
 		ok   bool
 		want string
 	}{
-		{&debug.BuildInfo{GoVersion: "go1.22.12", Main: debug.Module{Path: module, Version: "v0.0.0-20261018005751-ea4b48544534"}}, true,
+		{&debug.BuildInfo{GoVersion: "go1.22.12", Main: debug.Module{Path: module, Version: "v0.0.0-20261018005751-ea4b48544534"},
+			Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: "ea4b48544534961828675b4651422c5bec2ba3cd"}, {Key: "vcs.modified", Value: "true"}}}, true,
 			"atx-verify: " + module + " v0.0.0-20261018005751-ea4b48544534, built with go1.22.12\n"},
 		{&debug.BuildInfo{GoVersion: "go1.26.3", Main: debug.Module{Path: module, Version: "(devel)"}}, true,
-			"atx-verify: " + module + " (devel), built with go1.26.3\n"},
+			"atx-verify: " + module + " (devel), no commit recorded, built with go1.26.3\n"},
+		{&debug.BuildInfo{GoVersion: "go1.22.12", Main: debug.Module{Path: module, Version: "(devel)"},
+			Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: "579e811083513dfcdb4d4db3d3fb75f9a3c5fe56"}, {Key: "vcs.modified", Value: "false"}}}, true,
+			"atx-verify: " + module + " (devel), commit 579e811083513dfcdb4d4db3d3fb75f9a3c5fe56, built with go1.22.12\n"},
+		{&debug.BuildInfo{GoVersion: "go1.22.12", Main: debug.Module{Path: module, Version: "(devel)"},
+			Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: "579e811083513dfcdb4d4db3d3fb75f9a3c5fe56"}, {Key: "vcs.modified", Value: "true"}}}, true,
+			"atx-verify: " + module + " (devel), commit 579e811083513dfcdb4d4db3d3fb75f9a3c5fe56, with uncommitted changes, built with go1.22.12\n"},
+		{&debug.BuildInfo{GoVersion: "go1.26.3", Main: debug.Module{Path: module, Version: "(devel)"},
+			Settings: []debug.BuildSetting{{Key: "vcs.modified", Value: "false"}}}, true,
+			"atx-verify: " + module + " (devel), no commit recorded, built with go1.26.3\n"},
 		{&debug.BuildInfo{GoVersion: "go1.26.3"}, true, "atx-verify: this binary records no module version\n"},
 		{nil, false, "atx-verify: this binary records no module version\n"},
 	}

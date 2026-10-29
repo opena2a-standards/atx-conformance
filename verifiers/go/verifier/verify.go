@@ -56,7 +56,7 @@
 //	go run . ../../fixtures              (directory; walks *.json)
 //	go run . ../..                       (repo root; walks fixtures/*.json)
 //	go run . --help                      (prints the usage lines and exits 0)
-//	go run . --version                   (prints the module version and exits 0)
+//	go run . --version                   (prints "(devel), no commit recorded", as go run records no commit, and exits 0)
 //
 // Exit 0 iff every fixture's observed result matches expected.verifyResult.
 // A file that is not a fixture, one with no expected.verifyResult of ACCEPT
@@ -1444,12 +1444,36 @@ const usage = `usage: atx-verify [fixture.json|dir]...
 // the highest release tag for @latest, and for @<commit> the commit's release
 // tag, or a pseudo-version naming the commit when it has no tag. A build from
 // a checkout or a source archive can record (devel) instead;
-// docs/running-the-verifiers.md says which builds do.
+// docs/running-the-verifiers.md says which builds do. After (devel) the line
+// names the commit the vcs.revision build setting records, adding "with
+// uncommitted changes" when vcs.modified is true, or writes "no commit
+// recorded" when the binary records none, the case for every `go run` from a
+// checkout.
 func versionLine(info *debug.BuildInfo, ok bool) string {
 	if !ok || info.Main.Path == "" {
 		return "atx-verify: this binary records no module version\n"
 	}
-	return fmt.Sprintf("atx-verify: %s %s, built with %s\n", info.Main.Path, info.Main.Version, info.GoVersion)
+	version := info.Main.Version
+	if version == "(devel)" {
+		revision, modified := "", false
+		for _, s := range info.Settings {
+			switch s.Key {
+			case "vcs.revision":
+				revision = s.Value
+			case "vcs.modified":
+				modified = s.Value == "true"
+			}
+		}
+		switch {
+		case revision == "":
+			version += ", no commit recorded"
+		case modified:
+			version += ", commit " + revision + ", with uncommitted changes"
+		default:
+			version += ", commit " + revision
+		}
+	}
+	return fmt.Sprintf("atx-verify: %s %s, built with %s\n", info.Main.Path, version, info.GoVersion)
 }
 
 // source is one fixture to verify: the name the report writes for it and how
