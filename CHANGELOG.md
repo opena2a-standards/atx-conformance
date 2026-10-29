@@ -284,6 +284,40 @@ they should not.
 
 ### Changed
 
+- `docs/demo/record-atx-verify.sh` builds its render image from pinned
+  inputs and runs it with the container's privileges dropped.
+  `docs/demo/docker/Dockerfile` names its two images by the digest of
+  their image index,
+  `golang:1.26-trixie@sha256:a050dcceee6eb9bf110151662dfac7662f3bec40927c7dee48731e3d92083d42`
+  (Go 1.26.10) and
+  `ghcr.io/charmbracelet/vhs@sha256:ea49a6a1c529be83153e88321892b5585964418f0b9055e8c1e0d732194234a3`
+  (VHS v0.12.1, revision `24fa2254a9806091e6ee6a980e9f3bcfe0a9ba53`),
+  where it named `golang:1.26-trixie` and
+  `ghcr.io/charmbracelet/vhs:latest`; it fetches the VHS source at
+  `db96d7374f7d7a3774f69a43f4fcc5c5a1fd74e3`, the commit tag `v0.12.0`
+  points to, where it cloned the tag; it builds VHS with
+  `GOTOOLCHAIN=local` where it set `auto`, so a `go` directive newer than
+  Go 1.26.10 fails the build; and it runs `apt-get upgrade` before
+  installing `ca-certificates` and `gifsicle`. The render stage sets
+  `GOPROXY=https://proxy.golang.org`, with no `,direct`, and
+  `GOSUMDB=sum.golang.org`. The container runs with `--cap-drop ALL`,
+  `--security-opt no-new-privileges` and `--pids-limit 256`. `docs/demo`
+  is mounted into it read-only and the render writes into a new empty
+  directory; after a render that wrote the sidecar, the script copies the
+  files the tape names, the capture, the narration and the sidecar from
+  that directory into `docs/demo`, the sidecar last, and it copies nothing
+  from a directory that holds a link. The sidecar's `recorder` gains
+  `baseImage` and `builderImage`, each image's reference and digest as the
+  Dockerfile writes them, with the base image's version and revision
+  labels and the builder's Go release; `source`, the VHS repository, tag
+  and commit; `runFlags`, the three flags as they ran; and
+  `droppedFlags`. The render keeps the network: `droppedFlags` lists
+  `--network none` with its reason, that README.md's first command, which
+  the tape types, resolves the module through the module proxy that
+  `environment.goproxy` names. The script, `--dry-run` included, exits 1
+  on a Dockerfile that names a base image by tag alone or the VHS source
+  by no commit. The committed GIF, frames, capture and sidecar are not
+  re-rendered.
 - The Go verifier's `--version` line names the commit a `(devel)` binary
   records, or says that it records none. It wrote
   `atx-verify: <module> (devel), built with <Go release>`, which named no
