@@ -135,8 +135,9 @@ version is `(devel)`, the commit the binary records after it, or
   it names the version `go run` resolved, a pseudo-version naming the commit
   while the repository has no tags: at `20799e3`,
   `v0.0.0-20261018142916-20799e3db50c`.
-- Run with `go run` from a checkout, the form of every Go checkout command
-  the README and this page give, it names `(devel), no commit recorded` under
+- Run with `go run` from a checkout without `-buildvcs=true`, the form of
+  the commands the README and this page give for running the Go verifier on
+  fixtures from a checkout, it names `(devel), no commit recorded` under
   every Go release (measured with 1.22.12 and 1.26.3): by default `go run`
   records no version-control information.
 - Built with `go build` or `go install` from a git clone, it names the

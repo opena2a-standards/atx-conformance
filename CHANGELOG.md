@@ -287,9 +287,10 @@ they should not.
 - The Go verifier's `--version` line names the commit a `(devel)` binary
   records, or says that it records none. It wrote
   `atx-verify: <module> (devel), built with <Go release>`, which named no
-  commit, for every `go run` from a checkout, the form of each Go checkout
-  command README.md and `docs/running-the-verifiers.md` give, and for a
-  `go build` of a git clone under Go 1.22 and 1.23. After `(devel)` it now
+  commit, for `go run` from a checkout without `-buildvcs=true`, the form of
+  the commands README.md and `docs/running-the-verifiers.md` give for
+  running the Go verifier on fixtures from a checkout, and for a `go build`
+  of a git clone under Go 1.22 and 1.23. After `(devel)` it now
   reads the binary's `vcs.revision` and `vcs.modified` build settings and
   writes `atx-verify: <module> (devel), commit <sha>, built with <Go release>`,
   `atx-verify: <module> (devel), commit <sha>, with uncommitted changes, built with <Go release>`
@@ -299,12 +300,12 @@ they should not.
   recorded, in full, and nothing runs `git`. A tag or pseudo-version is
   written as before, with no commit added. `docs/running-the-verifiers.md`
   says under "Which commit a run verified" that `go run` from a checkout
-  names `(devel), no commit recorded` under every Go release, that
-  `go build` and `go install` of a git clone name the commit, and which
-  commands trace a result to its commit: the module proxy at that commit,
-  `go build -o atx-verify ./cmd/atx-verify` in a git clone, the Python
-  verifier run from a git clone, and `go run -buildvcs=true` from a git
-  clone. No fixture changes.
+  without `-buildvcs=true` names `(devel), no commit recorded` under every
+  Go release, that `go build` and `go install` of a git clone name the
+  commit, and which commands trace a result to its commit: the module proxy
+  at that commit, `go build -o atx-verify ./cmd/atx-verify` in a git clone,
+  the Python verifier run from a git clone, and `go run -buildvcs=true` from
+  a git clone. No fixture changes.
 - Both reference verifiers refuse a v1.1 `declaredPurpose` number written
   with a fraction or an exponent part as `SIGNATURE_INVALID`, with a
   reason that names `declaredPurpose` and the number as written (#283):

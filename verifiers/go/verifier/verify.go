@@ -56,7 +56,7 @@
 //	go run . ../../fixtures              (directory; walks *.json)
 //	go run . ../..                       (repo root; walks fixtures/*.json)
 //	go run . --help                      (prints the usage lines and exits 0)
-//	go run . --version                   (prints "(devel), no commit recorded", as go run records no commit, and exits 0)
+//	go run . --version                   (prints "(devel), no commit recorded", as go run without -buildvcs=true records no commit, and exits 0)
 //
 // Exit 0 iff every fixture's observed result matches expected.verifyResult.
 // A file that is not a fixture, one with no expected.verifyResult of ACCEPT
@@ -1447,8 +1447,8 @@ const usage = `usage: atx-verify [fixture.json|dir]...
 // docs/running-the-verifiers.md says which builds do. After (devel) the line
 // names the commit the vcs.revision build setting records, adding "with
 // uncommitted changes" when vcs.modified is true, or writes "no commit
-// recorded" when the binary records none, the case for every `go run` from a
-// checkout.
+// recorded" when the binary records none, the case for `go run` from a
+// checkout without -buildvcs=true.
 func versionLine(info *debug.BuildInfo, ok bool) string {
 	if !ok || info.Main.Path == "" {
 		return "atx-verify: this binary records no module version\n"

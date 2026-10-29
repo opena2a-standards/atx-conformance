@@ -339,8 +339,8 @@ func TestUnknownOptionIsNamed(t *testing.T) {
 // <module>/verifiers/go@latest` binary was built from. When the version is
 // (devel), the line names the commit the binary's vcs.revision records, and
 // whether vcs.modified records uncommitted changes, or says that it records
-// no commit: `go run` from a checkout wrote (devel) alone, which named no
-// commit and did not say that it recorded none.
+// no commit: `go run` from a checkout without -buildvcs=true wrote (devel)
+// alone, which named no commit and did not say that it recorded none.
 func TestVersionNamesTheModuleVersion(t *testing.T) {
 	info, ok := debug.ReadBuildInfo()
 	want := versionLine(info, ok)
