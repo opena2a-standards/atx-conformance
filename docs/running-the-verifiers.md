@@ -126,25 +126,49 @@ and `--` alone included, which it holds to this difference
 ## Which commit a run verified
 
 `--version` prints one line naming what the verifier was built from. The Go
-verifier's line names the module version its binary records:
+verifier's line names the module version its binary records, and when that
+version is `(devel)`, the commit the binary records after it, or
+`no commit recorded`:
 
 - Run through the module proxy, as
   `go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@<version> --version`,
   it names the version `go run` resolved, a pseudo-version naming the commit
   while the repository has no tags: at `20799e3`,
   `v0.0.0-20261018142916-20799e3db50c`.
-- Built from a git clone, it names the commit's pseudo-version under Go 1.24
-  and later (measured with 1.24.0 and 1.26.3) and `(devel)` under Go 1.22 and
-  1.23 (measured with 1.22.12 and 1.23.0). A build in a linked
-  `git worktree` named `(devel)` under 1.26.3.
+- Run with `go run` from a checkout without `-buildvcs=true`, the form of
+  the commands the README and this page give for running the Go verifier on
+  fixtures from a checkout, it names `(devel), no commit recorded` under
+  every Go release (measured with 1.22.12 and 1.26.3): by default `go run`
+  records no version-control information.
+- Built with `go build` or `go install` from a git clone, it names the
+  commit's pseudo-version under Go 1.24 and later (measured with 1.24.0 and
+  1.26.3). Under Go 1.22 and 1.23 the module version is `(devel)` (measured
+  with 1.22.12 and 1.23.0) and the line names the commit after it,
+  `(devel), commit <sha>`, adding `, with uncommitted changes` when the
+  build recorded any (measured with 1.22.12). A build in a linked
+  `git worktree` names `(devel), no commit recorded` under 1.26.3.
 - Built from a source archive, a `git archive` copy with no `.git`, it names
-  `(devel)` (measured with 1.22.12 and 1.26.3): the archive holds no commit.
+  `(devel), no commit recorded` (measured with 1.22.12 and 1.26.3): the
+  archive holds no commit.
 
 The Python verifier's line names the commit git reports for the checkout it
 runs from, and `no commit recorded (not run from a git checkout)` when it
-runs from a source archive. To trace a result to its commit, run the Go
-verifier through the module proxy at that version, or either verifier from a
-git clone, the Go verifier built with Go 1.24 or later.
+runs from a source archive. These trace a result to its commit:
+
+- the Go verifier through the module proxy at that commit, one that has
+  `cmd/atx-verify`,
+  `go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@<commit> --version`;
+- the Go verifier built in a git clone, `go build -o atx-verify ./cmd/atx-verify`
+  at the repository root, then `./atx-verify --version`;
+- the Go verifier run from a git clone with `-buildvcs=true`,
+  `go run -buildvcs=true ./cmd/atx-verify --version` at the repository root,
+  which named the commit's pseudo-version with Go 1.26.3 and
+  `(devel), commit <sha>` with Go 1.22.12;
+- the Python verifier run from a git clone, `python3 verify.py --version` in
+  `verifiers/python`.
+
+`go run` from a checkout without `-buildvcs=true` traces no commit: its
+line says `no commit recorded`.
 
 ## Dependencies
 
