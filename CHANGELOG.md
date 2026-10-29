@@ -305,7 +305,10 @@ they should not.
   commit, and which commands trace a result to its commit: the module proxy
   at that commit, `go build -o atx-verify ./cmd/atx-verify` in a git clone,
   the Python verifier run from a git clone, and `go run -buildvcs=true` from
-  a git clone. No fixture changes.
+  a git clone. `docs/captures/go-verifier.txt` is unchanged byte for byte;
+  its sidecar, `docs/captures/go-verifier.json`, records the new tree id of
+  `verifiers/go/verifier`, so `scripts/capture_go_verifier.py --check`
+  passes. No fixture changes.
 - Both reference verifiers refuse a v1.1 `declaredPurpose` number written
   with a fraction or an exponent part as `SIGNATURE_INVALID`, with a
   reason that names `declaredPurpose` and the number as written (#283):
