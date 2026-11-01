@@ -1950,6 +1950,33 @@ def _rel_path(path: str) -> str:
 # byte 0xff as \udcff.
 _SURROGATE_ESCAPES = re.compile("([\udc80-\udcff]+)")
 
+# The text _escape_controls writes for each character it escapes: a C0
+# control (U+0000 to U+001F) and DEL (U+007F) as \xHH, a C1 control (U+0080
+# to U+009F) as \u00HH, and the surrogate escape of a byte 0x80 to 0x9F that
+# is not UTF-8 (U+DC80 to U+DC9F) as \xHH, the byte it stands for.
+_CONTROL_ESCAPES = {
+    **{code: f"\\x{code:02x}" for code in [*range(0x20), 0x7F]},
+    **{code: f"\\u{code:04x}" for code in range(0x80, 0xA0)},
+    **{0xDC00 + byte: f"\\x{byte:02x}" for byte in range(0x80, 0xA0)},
+}
+
+
+def _escape_controls(text: str) -> str:
+    """text as a line of the report writes it, as the Go reference verifier's
+    escapeControls writes it: each control character as a visible escape and
+    every other character as itself. A C0 control (U+0000 to U+001F), the
+    line feed and the tab among them, and DEL (U+007F) are written \\xHH, and
+    a C1 control (U+0080 to U+009F) \\u00HH, with lower-case hex digits. A
+    byte of a path that is not UTF-8, which os.fsdecode holds as a surrogate
+    escape, is written \\xHH when it is 0x80 to 0x9F, a C1 control to a
+    terminal that reads 8-bit codes, and is left as its surrogate escape
+    otherwise, which _say and _say_err write as the byte. main passes each
+    string a fixture, a file name or a path supplies through it and writes
+    the line feed that ends each line itself, so a line of the report is one
+    line on a terminal, and a fixture's controls are shown, never acted on
+    and never dropped: a note can quote what a credential carried."""
+    return text.translate(_CONTROL_ESCAPES)
+
 
 def _say(text: str, end: str = "\n") -> None:
     """print() for a line that quotes a fixture or its path. A character
@@ -2068,7 +2095,7 @@ def main(argv: list[str]) -> int:
     # is no path, and is named rather than reported as a missing file.
     for arg in options:
         if len(arg) > 1 and arg.startswith("-") and arg != "--version":
-            _say_err(f"unknown option: {arg}\n{_USAGE}")
+            _say_err(f"unknown option: {_escape_controls(arg)}\n{_USAGE}")
             return 2
     if "--version" in options:
         sys.stdout.write(_version_line())
@@ -2085,17 +2112,19 @@ def main(argv: list[str]) -> int:
     try:
         paths, dirs = expand_fixture_dirs(args)
     except OSError as exc:
-        _say_err(f"error: {exc}\n")
+        _say_err(f"error: {_escape_controls(str(exc))}\n")
         return 2
     if not paths:
         # Every argument was a directory, each listed one level deep.
-        _say_err(f"no fixture *.json files found in {', '.join(dirs)} (subdirectories are not walked)\n")
+        _say_err(
+            f"no fixture *.json files found in {_escape_controls(', '.join(dirs))} (subdirectories are not walked)\n"
+        )
         return 2
 
     _write_surrogate_escapes_as_bytes(sys.stdout)
     total_pass = total_fail = 0
     for path in paths:
-        name = _rel_path(path)
+        name = _escape_controls(_rel_path(path))
         # A fixture the Go reference verifier's fixture struct cannot hold
         # fails to load, as it does there. path is read as spelled, so the
         # error of a file that cannot be read names it as Go's does.
@@ -2103,7 +2132,7 @@ def main(argv: list[str]) -> int:
             fixture = load_fixture(path)
             expected = _expected_outcome(fixture)
         except Exception as exc:
-            _say(f"FAIL  {name}  (load error: {exc})")
+            _say(f"FAIL  {name}  (load error: {_escape_controls(str(exc))})")
             total_fail += 1
             continue
 
@@ -2112,7 +2141,7 @@ def main(argv: list[str]) -> int:
         try:
             got = verify_fixture(fixture)
         except Exception as exc:
-            _say(f"FAIL  {name}  (verify error: {type(exc).__name__}: {exc})")
+            _say(f"FAIL  {name}  (verify error: {type(exc).__name__}: {_escape_controls(str(exc))})")
             total_fail += 1
             continue
         want_accept = expected["verifyResult"].upper() == "ACCEPT"
@@ -2135,12 +2164,12 @@ def main(argv: list[str]) -> int:
             total_fail += 1
 
         _say(f"{status}  {name}")
-        _say(f"       expected: {expected['verifyResult']}", end="")
+        _say(f"       expected: {_escape_controls(expected['verifyResult'])}", end="")
         if expected["rejectCategory"]:
-            _say(f" [{expected['rejectCategory']}]")
+            _say(f" [{_escape_controls(expected['rejectCategory'])}]")
         else:
             print()
-        _say(f"       observed: {got}")
+        _say(f"       observed: {_escape_controls(str(got))}")
         if reason_missing:
             _say(f"       reason does not contain {_go_quote(expected['reasonContains'])}")
         if got.sigs_expected:

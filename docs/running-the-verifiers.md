@@ -86,14 +86,22 @@ being the directory argument as spelled or, for a repository root, its
 000 holding a fixture, and `error: open r/fixtures: permission denied` for
 `r`, whose `fixtures` directory has mode 000. The line naming an unknown
 option and an error line write an argument that is not UTF-8 as the bytes
-it was given: for the one byte 0xff, which names no file, both verifiers
-write `error: `, that byte, then `: no such file or directory`, with exit
-2, and for `-` followed by that byte, `unknown option: -` and that byte.
+it was given, a byte 0x80 to 0x9f aside (see below): for the one byte
+0xff, which names no file, both verifiers write `error: `, that byte, then
+`: no such file or directory`, with exit 2, and for `-` followed by that
+byte, `unknown option: -` and that byte.
 A fixture whose path is not UTF-8 is named in its report line by the path's
 bytes too, where the file system takes such a name (APFS refuses it): for
 `d`, a directory holding a copy of `fixtures/baseline-valid.json` named by
 the byte 0xff then `.json`, and for that file named as an argument, both
 verifiers write `PASS  d/`, that byte, then `.json`.
+Each string a fixture, a file name or a path supplies is written with its
+control characters escaped, so a line of the report is one line on a
+terminal: a C0 control (U+0000 to U+001F, the line feed and the tab among
+them) and DEL (U+007F) as `\xHH`, a C1 control (U+0080 to U+009F) as
+`\u00HH`, and a byte 0x80 to 0x9f that is not UTF-8 as `\xHH`. For a copy of
+`fixtures/baseline-valid.json` named `a`, a tab, then `b.json`, both
+verifiers write `PASS  a\x09b.json`.
 A fixture file that cannot be read is a load error worded as the error Go's
 `os.ReadFile` returns, which names the step that failed and the path as
 spelled. Run as a user other than root, with `d/x.json` a copy of
