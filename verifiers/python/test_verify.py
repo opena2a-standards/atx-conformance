@@ -69,6 +69,7 @@ import io
 import json
 import os
 import re
+import shutil
 import string
 import subprocess
 import sys
@@ -78,6 +79,7 @@ import types
 import unittest
 from datetime import date
 from pathlib import Path
+from typing import NamedTuple
 from unittest import mock
 
 HERE = Path(__file__).resolve().parent
@@ -4209,6 +4211,447 @@ class ReportWording(unittest.TestCase):
             code, out, _ = _run_main("fixtures/wrong-issuer.json")
         self.assertEqual(code, 0, out)
         self.assertNotIn("reason does not contain", out)
+
+
+# --- control characters in the report -------------------------------------
+# Each string a fixture, a file name or a path supplies is written with every
+# C0 control, DEL and C1 control in it escaped (verify._escape_controls),
+# never as the control and never dropped, so a line of the report is one line
+# on a terminal and shows what the input carried. The inputs, the lines and
+# the table below are those of verifiers/go/verifier/escape_test.go and
+# escape_mutants_test.go, which hold the Go reference verifier to the same
+# text.
+
+# An issuer DID holding one character of each kind the report escapes, each
+# after a letter: NUL, a tab, a line feed, a carriage return, BEL, ESC, DEL
+# and the C1 control U+009B (controlDID in the Go suite), and the text the
+# report writes for it.
+CONTROL_DID = "did:opena2a:authority:a\x00b\tc\nd\re\x07f\x1bg\x7fh" + chr(0x9B) + "i"
+CONTROL_DID_ESCAPED = r"did:opena2a:authority:a\x00b\x09c\x0ad\x0de\x07f\x1bg\x7fh\u009bi"
+# A name holding each of those a file name can hold, each after a letter (a
+# tab, a line feed, a carriage return, BEL, ESC, DEL and U+009B), and its text.
+CONTROL_NAME = "a\tb\nc\rd\x07e\x1bf\x7fg" + chr(0x9B) + "h"
+CONTROL_NAME_ESCAPED = r"a\x09b\x0ac\x0dd\x07e\x1bf\x7fg\u009bh"
+# A file name holding the byte 0x9b, a C1 control to a terminal that reads
+# 8-bit codes, and the byte 0xff, neither of them UTF-8, read as os.fsdecode
+# reads it, and its text. A file system that takes only UTF-8 names, as APFS
+# does, refuses it.
+NON_UTF8_NAME = b"b\x9b\xff.json".decode("utf-8", "surrogateescape")
+NON_UTF8_NAME_ESCAPED = b"b\\x9b\xff.json"
+
+# _escape_controls in bytes and out bytes, each byte that is not UTF-8 read
+# as the surrogate escape os.fsdecode reads it as: the table TestEscapeControls
+# holds escapeControls to in verifiers/go/verifier/escape_mutants_test.go. A
+# C0 control, DEL and a C1 control are escaped, a byte that is not UTF-8 is
+# escaped when it is 0x80 to 0x9f and written as it is otherwise, and every
+# other character is written as it is, a backslash among them.
+ESCAPE_CONTROLS_TABLE: list[tuple[bytes, bytes]] = [
+    (b"", b""),
+    (b"did:opena2a:authority:x", b"did:opena2a:authority:x"),
+    (b"\x00", b"\\x00"),
+    (b"\t", b"\\x09"),
+    (b"\n", b"\\x0a"),
+    (b"\r", b"\\x0d"),
+    (b"\x07", b"\\x07"),
+    (b"\x1b", b"\\x1b"),
+    (b"\x1f", b"\\x1f"),
+    (b" ~", b" ~"),
+    (b"\x7f", b"\\x7f"),
+    (chr(0x80).encode(), b"\\u0080"),
+    (chr(0x9B).encode(), b"\\u009b"),
+    (chr(0x9F).encode(), b"\\u009f"),
+    (chr(0xA0).encode(), chr(0xA0).encode()),
+    (chr(0xE9).encode(), chr(0xE9).encode()),
+    (chr(0xFFFD).encode(), chr(0xFFFD).encode()),
+    (b"\\x1b", b"\\x1b"),
+    (b"\x80", b"\\x80"),
+    (b"\x9b", b"\\x9b"),
+    (b"\x9f", b"\\x9f"),
+    (b"\xa0", b"\xa0"),
+    (b"\xff", b"\xff"),
+    (b"\xe2\x80", b"\xe2\\x80"),
+    (b"\xc0\x80", b"\xc0\\x80"),
+    (b"\xed\xa0\x80", b"\xed\xa0\\x80"),
+    (b"a\x1bb" + chr(0x9B).encode() + b"c\x9bd", b"a\\x1bb\\u009bc\\x9bd"),
+]
+
+
+class ControlCase(NamedTuple):
+    """One input the escaping is checked on, as controlCase is in the Go
+    suite: the arguments it runs with, a string the input carries (raw)
+    with the text the report writes for it (escaped), the line of the report
+    that holds that text, which the Go reference verifier writes the same,
+    the number of line feeds the report holds, that of the same input with
+    no control in it, and the files and directories it lays out in an empty
+    working directory. needs_non_utf8 is set where a file name is not UTF-8:
+    the case is skipped where the file system refuses that name."""
+
+    name: str
+    args: tuple[str, ...]
+    raw: bytes
+    escaped: bytes
+    line: bytes
+    line_feeds: int
+    files: tuple[tuple[str, bytes], ...] = ()
+    dirs: tuple[str, ...] = ()
+    needs_non_utf8: bool = False
+
+
+def _utf8(text: str) -> bytes:
+    return text.encode("utf-8", "surrogateescape")
+
+
+def _control_cases() -> list[ControlCase]:
+    """Every input the escaping is checked on (controlCases in the Go
+    suite). The first is fixtures/wrong-issuer.json with its credential's
+    issuerDid set to CONTROL_DID, which still rejects as the fixture
+    expects, UNTRUSTED_ISSUER, so the report writes it in its observed
+    line."""
+    shipped = WRONG_ISSUER.read_bytes()
+    doc = json.loads(shipped)
+    doc["atx"]["issuerDid"] = CONTROL_DID
+    issuer = json.dumps(doc).encode()
+    name, escaped = CONTROL_NAME + ".json", CONTROL_NAME_ESCAPED + ".json"
+    return [
+        ControlCase(
+            "an issuer DID", ("issuer.json",), _utf8(CONTROL_DID), _utf8(CONTROL_DID_ESCAPED),
+            _utf8(
+                "       observed: REJECT[UNTRUSTED_ISSUER: issuer DID "
+                + CONTROL_DID_ESCAPED
+                + " is not in the verifier's trusted set (untrusted issuer)]"
+            ),
+            5, files=(("issuer.json", issuer),),
+        ),
+        ControlCase(
+            "a file name", (name,), _utf8(CONTROL_NAME), _utf8(CONTROL_NAME_ESCAPED),
+            _utf8("PASS  " + escaped), 5, files=((name, shipped),),
+        ),
+        ControlCase(
+            "a path that does not exist", (name,), _utf8(CONTROL_NAME), _utf8(CONTROL_NAME_ESCAPED),
+            _utf8("error: " + escaped + ": no such file or directory"), 1,
+        ),
+        ControlCase(
+            "an unknown option", ("-" + CONTROL_NAME,), _utf8(CONTROL_NAME), _utf8(CONTROL_NAME_ESCAPED),
+            _utf8("unknown option: -" + CONTROL_NAME_ESCAPED), 1 + verify._USAGE.count("\n"),
+        ),
+        ControlCase(
+            "a directory holding no fixture", (CONTROL_NAME,), _utf8(CONTROL_NAME), _utf8(CONTROL_NAME_ESCAPED),
+            _utf8("no fixture *.json files found in " + CONTROL_NAME_ESCAPED + " (subdirectories are not walked)"),
+            1, dirs=(CONTROL_NAME,),
+        ),
+        ControlCase(
+            "a path that is not UTF-8 and does not exist", (NON_UTF8_NAME,), b"\x9b", NON_UTF8_NAME_ESCAPED,
+            b"error: " + NON_UTF8_NAME_ESCAPED + b": no such file or directory", 1,
+        ),
+        ControlCase(
+            "a file name that is not UTF-8", (NON_UTF8_NAME,), b"\x9b", NON_UTF8_NAME_ESCAPED,
+            b"PASS  " + NON_UTF8_NAME_ESCAPED, 5, files=((NON_UTF8_NAME, shipped),), needs_non_utf8=True,
+        ),
+    ]
+
+
+def _lay_out(case: ControlCase, tmp: Path) -> None:
+    """Write case's directories and files in tmp, or skip the test where the
+    file system refuses a name that is not UTF-8: APFS refuses it with
+    EILSEQ, and exFAT on macOS with EINVAL."""
+    for directory in case.dirs:
+        (tmp / directory).mkdir()
+    for name, body in case.files:
+        try:
+            (tmp / name).write_bytes(body)
+        except OSError as exc:
+            if case.needs_non_utf8 and exc.errno in (errno.EILSEQ, errno.EINVAL):
+                raise unittest.SkipTest(f"the file system refuses the name {name!r}: {exc.strerror}") from exc
+            raise
+
+
+def _report_in_process(case: ControlCase, tmp: Path) -> tuple[bytes, int]:
+    """verify.main run in tmp with case's arguments, standard output a strict
+    UTF-8 stream over bytes, as a pipe gives it, and standard error one that
+    writes a character it cannot encode as a backslash escape, as sys.stderr
+    writes it: what it wrote to standard output followed by what it wrote to
+    standard error, and its exit code."""
+    out_raw, err_raw = io.BytesIO(), io.BytesIO()
+    out = io.TextIOWrapper(out_raw, encoding="utf-8", newline="\n")
+    err = io.TextIOWrapper(err_raw, encoding="utf-8", errors="backslashreplace", newline="\n")
+    with contextlib.chdir(tmp), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = verify.main(["verify.py", *case.args])
+        out.flush()
+        err.flush()
+    return out_raw.getvalue() + err_raw.getvalue(), code
+
+
+def _report_as_a_process(argv: list[str], case: ControlCase, tmp: Path) -> tuple[bytes, int]:
+    """argv run as a process in tmp with case's arguments, PWD naming tmp:
+    what it wrote to standard output followed by what it wrote to standard
+    error, and its exit code."""
+    proc = subprocess.run(
+        [*argv, *case.args], cwd=tmp, capture_output=True, env={**os.environ, "PWD": str(tmp)}, timeout=300
+    )
+    return proc.stdout + proc.stderr, proc.returncode
+
+
+def _raw_controls(out: bytes) -> tuple[int, int, int, int]:
+    """What no report may hold, counted in out: C0 controls other than the
+    line feed, DEL, C1 controls written as UTF-8, and bytes 0x80 to 0x9f
+    that are not UTF-8 (countRawControls in the Go suite)."""
+    text = out.decode("utf-8", "surrogateescape")
+    return (
+        sum(1 for ch in text if ch < " " and ch != "\n"),
+        text.count("\x7f"),
+        sum(1 for ch in text if "\x80" <= ch <= "\x9f"),
+        sum(1 for ch in text if "\udc80" <= ch <= "\udc9f"),
+    )
+
+
+def _check_no_raw_control(case: ControlCase, out: bytes) -> str | None:
+    """A failure when out, a report's standard output and standard error,
+    holds a raw control, or another number of line feeds than case's: a
+    line feed the input carries, written as it is, splits a line."""
+    counts = _raw_controls(out)
+    if counts != (0, 0, 0, 0):
+        return "the report holds raw controls ({} C0, {} DEL, {} C1, {} C1 bytes not UTF-8)".format(*counts)
+    line_feeds = out.count(b"\n")
+    if line_feeds != case.line_feeds:
+        return f"the report holds {line_feeds} line feeds, want {case.line_feeds}"
+    return None
+
+
+def _check_shows_escaped(case: ControlCase, out: bytes) -> str | None:
+    """A failure when out does not hold the escaped text of the string case's
+    input carries, or holds the string itself."""
+    if case.escaped not in out:
+        return f"the report does not show {case.escaped!r}"
+    if case.raw in out:
+        return f"the report holds {case.raw!r} as it is"
+    return None
+
+
+def _check_c1_escaped(case: ControlCase, out: bytes) -> str | None:
+    """A failure when out holds U+009B written as UTF-8, or case's input
+    carries U+009B and out does not show its escape."""
+    c1 = chr(0x9B).encode()
+    if c1 in out:
+        return "the report holds U+009B as it is"
+    if c1 in case.raw and b"\\u009b" not in out:
+        return "the report does not show U+009B as \\u009b"
+    return None
+
+
+def _check_line(case: ControlCase, out: bytes) -> str | None:
+    """A failure when no line of out is case's line, the line the Go
+    reference verifier writes for the same input."""
+    if case.line not in out.split(b"\n"):
+        return f"no line of the report is {case.line!r}"
+    return None
+
+
+# Every check a report of a ControlCase passes (controlChecks in the Go suite).
+CONTROL_CHECKS = (
+    ("no raw control", _check_no_raw_control),
+    ("escaped, not dropped", _check_shows_escaped),
+    ("C1 escaped", _check_c1_escaped),
+    ("the line the Go verifier writes", _check_line),
+)
+
+
+def _write_as_is(text: str) -> str:
+    """text as it is: the report of a verifier that escapes nothing, as
+    main's was before _escape_controls."""
+    return text
+
+
+def _escapers_that_write_less(real) -> dict:
+    """The escapers TestChecksFailOnEscapersThatWriteLess runs in the Go
+    suite, each writing less than real, _escape_controls: one that escapes
+    a string holding a DID and writes any other as it is, so an issuer DID
+    is escaped and a file name or a path is not, one that escapes C0 and DEL
+    and writes a C1 control as it is, one that drops each control instead of
+    escaping it, and one that writes each string as it is."""
+
+    def escape_did_only(text: str) -> str:
+        return real(text) if "did:" in text else text
+
+    def escape_c0_only(text: str) -> str:
+        return "".join(f"\\x{ord(ch):02x}" if ch < " " or ch == "\x7f" else ch for ch in text)
+
+    def drop_controls(text: str) -> str:
+        return "".join(ch for ch in text if not (ch < " " or ch == "\x7f" or "\x80" <= ch <= "\x9f"))
+
+    return {
+        "escape_did_only": escape_did_only,
+        "escape_c0_only": escape_c0_only,
+        "drop_controls": drop_controls,
+        "write_as_is": _write_as_is,
+    }
+
+
+class EscapeControls(unittest.TestCase):
+    """_escape_controls on ESCAPE_CONTROLS_TABLE, the table the Go suite
+    holds escapeControls to."""
+
+    def test_table(self):
+        for raw, want in ESCAPE_CONTROLS_TABLE:
+            with self.subTest(raw=raw):
+                self.assertEqual(_utf8(verify._escape_controls(raw.decode("utf-8", "surrogateescape"))), want)
+
+
+class ReportEscapesControls(unittest.TestCase):
+    """main on each ControlCase passes each check: each control the input
+    carries is written as its escape, in the line the Go reference verifier
+    writes, and the report has as many lines as that of the same input with
+    no control in it (TestReportEscapesControls in the Go suite)."""
+
+    def _assert_checks(self, case: ControlCase, out: bytes) -> None:
+        # Every check is run, and each that fails is named.
+        failures = [f"{name}: {failure}" for name, check in CONTROL_CHECKS if (failure := check(case, out))]
+        self.assertEqual(failures, [], f"report: {out!r}")
+
+    def test_in_process(self):
+        for case in _control_cases():
+            with self.subTest(case=case.name), tempfile.TemporaryDirectory() as tmp:
+                _lay_out(case, Path(tmp))
+                out, _ = _report_in_process(case, Path(tmp))
+                self._assert_checks(case, out)
+
+    def test_as_a_process(self):
+        # verify.py run as a process: its standard output and standard
+        # error are the pipes a terminal or a log reads.
+        for case in _control_cases():
+            with self.subTest(case=case.name), tempfile.TemporaryDirectory() as tmp:
+                _lay_out(case, Path(tmp))
+                out, _ = _report_as_a_process([sys.executable, str(HERE / "verify.py")], case, Path(tmp))
+                self._assert_checks(case, out)
+
+    def test_verdict_is_kept(self):
+        # A fixture whose issuer DID or file name carries controls is
+        # verified as the shipped fixture is: it rejects as UNTRUSTED_ISSUER,
+        # as it expects, and passes (TestReportOfControlsKeepsTheVerdict).
+        for case in _control_cases()[:2]:
+            with self.subTest(case=case.name), tempfile.TemporaryDirectory() as tmp:
+                _lay_out(case, Path(tmp))
+                out, code = _report_in_process(case, Path(tmp))
+                self.assertEqual(code, 0, out)
+                self.assertTrue(out.endswith(b"\nsummary: 1 pass, 0 fail (1 fixture)\n"), out)
+
+    def test_shipped_fixture_report_holds_no_control(self):
+        # So escaping leaves the report of the shipped fixture set as it was
+        # (TestShippedFixtureReportHoldsNoControl).
+        case = ControlCase("the shipped fixtures", (str(ROOT / "fixtures"),), b"", b"", b"", 0)
+        with tempfile.TemporaryDirectory() as tmp:
+            out, code = _report_in_process(case, Path(tmp))
+        self.assertEqual(code, 0, out)
+        self.assertEqual(_raw_controls(out), (0, 0, 0, 0))
+
+
+class ChecksFailOnEscapersThatWriteLess(unittest.TestCase):
+    """The checks of ReportEscapesControls run with _escape_controls replaced
+    by escapers that write less, each beside _escape_controls itself: each
+    such escaper fails the check named for it while _escape_controls passes
+    it (TestChecksFailOnEscapersThatWriteLess in the Go suite). Escaping the
+    issuer DID but not a file name fails "no raw control" on a file name,
+    escaping C0 but not C1 fails "C1 escaped", dropping controls fails
+    "escaped, not dropped", and escaping in the Go verifier alone, as
+    _write_as_is does here, fails "the line the Go verifier writes"."""
+
+    # (escaper, input, the check it fails, checks it passes on that input,
+    # an input it passes every check on)
+    MUTANTS = (
+        ("escape_did_only", "a file name", "no raw control", (), "an issuer DID"),
+        ("escape_c0_only", "an issuer DID", "C1 escaped", (), None),
+        ("drop_controls", "an issuer DID", "escaped, not dropped", ("no raw control",), None),
+        ("write_as_is", "an issuer DID", "the line the Go verifier writes", (), None),
+    )
+
+    def _report_with(self, escaper, case: ControlCase) -> bytes:
+        with tempfile.TemporaryDirectory() as tmp:
+            _lay_out(case, Path(tmp))
+            with mock.patch.object(verify, "_escape_controls", escaper):
+                out, _ = _report_in_process(case, Path(tmp))
+        return out
+
+    def test_each_escaper_fails_its_check(self):
+        real = verify._escape_controls
+        escapers = _escapers_that_write_less(real)
+        cases = {case.name: case for case in _control_cases()}
+        checks = dict(CONTROL_CHECKS)
+        for escaper, given, fails, passes_too, passes_input in self.MUTANTS:
+            with self.subTest(escaper=escaper):
+                case, check = cases[given], checks[fails]
+                self.assertIsNone(check(case, self._report_with(real, case)))
+                out = self._report_with(escapers[escaper], case)
+                self.assertIsNotNone(check(case, out), f"{escaper} passes {fails!r} on {given}\nreport: {out!r}")
+                for name in passes_too:
+                    self.assertIsNone(checks[name](case, out), f"{escaper} fails {name!r} too")
+                if passes_input:
+                    other = cases[passes_input]
+                    out = self._report_with(escapers[escaper], other)
+                    for name, other_check in CONTROL_CHECKS:
+                        self.assertIsNone(other_check(other, out), f"{escaper} fails {name!r} on {passes_input}")
+
+    def test_shipped_fixture_report_is_the_same_written_as_it_is(self):
+        # The report of the shipped fixture set written through
+        # _escape_controls is the one written as it is
+        # (TestEscapingLeavesTheShippedFixtureReport).
+        case = ControlCase("the shipped fixtures", (str(ROOT / "fixtures"),), b"", b"", b"", 0)
+        escaped = self._report_with(verify._escape_controls, case)
+        self.assertEqual(escaped, self._report_with(_write_as_is, case))
+
+
+class BothVerifiersWriteTheSameReport(unittest.TestCase):
+    """The Go reference verifier, built from cmd/atx-verify, and this
+    verifier, each run as a process on each ControlCase, write the same
+    standard output and standard error, the unknown option's compared on its
+    first line, where each names its own usage, and that report holds the
+    case's escaped line. With _escape_controls writing each string as it is,
+    this verifier's report of the issuer DID case differs from the Go
+    verifier's: escaping in one verifier alone fails the check. Skipped with
+    no go on PATH."""
+
+    @classmethod
+    def setUpClass(cls):
+        go = shutil.which("go")
+        if go is None:
+            raise unittest.SkipTest("no go on PATH to build the Go reference verifier with")
+        cls._bin_dir = tempfile.TemporaryDirectory()
+        cls.go_verifier = str(Path(cls._bin_dir.name) / "atx-verify")
+        build = subprocess.run(
+            [go, "build", "-trimpath", "-o", cls.go_verifier, "./cmd/atx-verify"],
+            cwd=ROOT, capture_output=True, text=True, timeout=600,
+        )
+        if build.returncode != 0:
+            cls._bin_dir.cleanup()
+            raise AssertionError(f"go build exited {build.returncode}: {build.stderr[-2000:]}")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._bin_dir.cleanup()
+
+    @staticmethod
+    def _compared(case: ControlCase, out: bytes) -> bytes:
+        return out.split(b"\n", 1)[0] if case.name == "an unknown option" else out
+
+    def test_same_report(self):
+        for case in _control_cases():
+            with self.subTest(case=case.name), tempfile.TemporaryDirectory() as tmp:
+                _lay_out(case, Path(tmp))
+                go_out, go_code = _report_as_a_process([self.go_verifier], case, Path(tmp))
+                py_out, py_code = _report_as_a_process([sys.executable, str(HERE / "verify.py")], case, Path(tmp))
+                self.assertEqual(
+                    (self._compared(case, py_out), py_code), (self._compared(case, go_out), go_code)
+                )
+                self.assertIn(case.line, go_out.split(b"\n"), go_out)
+
+    def test_escaping_in_one_verifier_alone_differs(self):
+        case = _control_cases()[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            _lay_out(case, Path(tmp))
+            go_out, _ = _report_as_a_process([self.go_verifier], case, Path(tmp))
+            escaped, _ = _report_in_process(case, Path(tmp))
+            with mock.patch.object(verify, "_escape_controls", _write_as_is):
+                as_is, _ = _report_in_process(case, Path(tmp))
+        self.assertEqual(escaped, go_out)
+        self.assertNotEqual(as_is, go_out)
 
 
 if __name__ == "__main__":

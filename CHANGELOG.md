@@ -9,6 +9,12 @@ listed here whenever one lands;
 [`docs/versioning.md`](docs/versioning.md) "Versioning and stability" says
 they should not.
 
+## [Unreleased]
+
+### Changed
+
+- Both reference verifiers print fixture fields and file names with control characters escaped.
+
 ## v0.1.0
 
 ### Added

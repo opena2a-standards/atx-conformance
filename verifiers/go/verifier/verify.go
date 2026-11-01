@@ -83,6 +83,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	"github.com/gowebpki/jcs"
@@ -1526,8 +1527,17 @@ func embeddedSources() ([]source, error) {
 // answers no argument with its usage and exit 2; scripts/parity/parity.py
 // runs both on each argument list of its ARGUMENT_CASES.
 // TestCaptureIsVerifierOutput holds docs/captures/go-verifier.txt to what
-// it writes.
+// it writes. Each string a fixture, a file name or a path supplies is
+// written as escapeControls writes it.
 func Run(args []string, stdout, stderr io.Writer) int {
+	return run(args, stdout, stderr, escapeControls)
+}
+
+// run is Run with esc as the function each string a fixture, a file name or
+// a path supplies is passed through before it is written. Run passes
+// escapeControls. The tests pass it escapers that write less too, and show
+// that the tests of the report fail on each.
+func run(args []string, stdout, stderr io.Writer, esc func(string) string) int {
 	options, operands := args, []string(nil)
 	if i := slices.Index(args, "--"); i >= 0 {
 		options, operands = args[:i], args[i+1:]
@@ -1544,7 +1554,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		case a == "--version":
 			printVersion = true
 		case len(a) > 1 && a[0] == '-':
-			fmt.Fprintf(stderr, "unknown option: %s\n", a)
+			fmt.Fprintf(stderr, "unknown option: %s\n", esc(a))
 			fmt.Fprint(stderr, usage)
 			return 2
 		}
@@ -1569,19 +1579,19 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if len(paths) == 0 {
 		var err error
 		if sources, err = embeddedSources(); err != nil {
-			fmt.Fprintln(stderr, "error:", err)
+			fmt.Fprintln(stderr, "error:", esc(err.Error()))
 			return 2
 		}
 	} else {
 		files, dirs, err := expandFixtureDirs(paths)
 		if err != nil {
-			fmt.Fprintln(stderr, "error:", err)
+			fmt.Fprintln(stderr, "error:", esc(err.Error()))
 			return 2
 		}
 		if len(files) == 0 {
 			// Every argument was a directory, each listed one level deep.
 			fmt.Fprintf(stderr, "no fixture *.json files found in %s (subdirectories are not walked)\n",
-				strings.Join(dirs, ", "))
+				esc(strings.Join(dirs, ", ")))
 			return 2
 		}
 		for _, f := range files {
@@ -1591,9 +1601,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 	totalPass, totalFail := 0, 0
 	for _, s := range sources {
+		name := esc(s.name)
 		f, err := s.load()
 		if err != nil {
-			fmt.Fprintf(stdout, "FAIL  %s  (load error: %v)\n", s.name, err)
+			fmt.Fprintf(stdout, "FAIL  %s  (load error: %s)\n", name, esc(err.Error()))
 			totalFail++
 			continue
 		}
@@ -1607,13 +1618,13 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		} else {
 			totalPass++
 		}
-		fmt.Fprintf(stdout, "%s  %s\n", status, s.name)
-		fmt.Fprintf(stdout, "       expected: %s", f.Expected.VerifyResult)
+		fmt.Fprintf(stdout, "%s  %s\n", status, name)
+		fmt.Fprintf(stdout, "       expected: %s", esc(f.Expected.VerifyResult))
 		if f.Expected.RejectCategory != "" {
-			fmt.Fprintf(stdout, " [%s]", f.Expected.RejectCategory)
+			fmt.Fprintf(stdout, " [%s]", esc(f.Expected.RejectCategory))
 		}
 		fmt.Fprintln(stdout)
-		fmt.Fprintf(stdout, "       observed: %s\n", got)
+		fmt.Fprintf(stdout, "       observed: %s\n", esc(got.String()))
 		if reasonMismatch(f.Expected, got) {
 			// The expected and observed lines above agree on the verdict
 			// and category; the substring is what failed.
@@ -1643,6 +1654,40 @@ func fixtureCount(n int) string {
 		return "1 fixture"
 	}
 	return fmt.Sprintf("%d fixtures", n)
+}
+
+// escapeControls is s as a line of the report writes it: each control
+// character as a visible escape and every other character as itself. A C0
+// control (U+0000 to U+001F), the line feed and the tab among them, and DEL
+// (U+007F) are written \xHH, and a C1 control (U+0080 to U+009F) \u00HH,
+// with lower-case hex digits, as %q writes them. A byte of s that is not
+// UTF-8 is written \xHH when it is 0x80 to 0x9F, a C1 control to a terminal
+// that reads 8-bit codes, and as itself otherwise, as a path that is not
+// UTF-8 is written. Run passes each string a fixture, a file name or a path
+// supplies through it and writes the line feed that ends each line itself,
+// so a line of the report is one line on a terminal, and a fixture's
+// controls are shown, never acted on and never dropped: a note can quote
+// what a credential carried. The Python reference verifier's
+// _escape_controls writes the same text for the same string
+// (TestEscapeControls here, EscapeControls in
+// verifiers/python/test_verify.py).
+func escapeControls(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r < 0x20 || r == 0x7f:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		case 0x80 <= r && r <= 0x9f:
+			fmt.Fprintf(&b, `\u%04x`, r)
+		case r == utf8.RuneError && size == 1 && 0x80 <= s[i] && s[i] <= 0x9f:
+			fmt.Fprintf(&b, `\x%02x`, s[i])
+		default:
+			b.WriteString(s[i : i+size])
+		}
+		i += size
+	}
+	return b.String()
 }
 
 // reasonMismatch reports whether a REJECT fixture failed on its
