@@ -1,0 +1,21 @@
+The Python verifier, offline
+============================
+
+verifiers/python/wheels holds every package the Python verifier needs, as
+wheels for macOS, Linux and Windows on arm64 and amd64, for CPython 3.11 to
+3.15. verifiers/python/requirements.lock pins each one by exact version and
+SHA-256, so pip installs these files and nothing else.
+
+From this folder, on macOS or Linux:
+
+    python3 -m venv .venv
+    .venv/bin/python -m pip install --no-index --find-links verifiers/python/wheels --only-binary=:all: --require-hashes -r verifiers/python/requirements.lock
+    .venv/bin/python verifiers/python/verify.py fixtures
+
+On Windows, from this folder in cmd:
+
+    py -m venv .venv
+    .venv\Scripts\python -m pip install --no-index --find-links verifiers\python\wheels --only-binary=:all: --require-hashes -r verifiers\python\requirements.lock
+    .venv\Scripts\python verifiers\python\verify.py fixtures
+
+Expected last line: <python expected last line>

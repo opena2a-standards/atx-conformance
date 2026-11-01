@@ -19,6 +19,9 @@ they should not.
 
 ### Added
 
+- A tag-triggered release workflow builds the interop day kit on hosted
+  runners, attests every file, writes one SHA256SUMS, publishes an
+  immutable release and verifies what it published.
 - Four MUST-REJECT fixtures built by the generator hold both reference
   verifiers to the form of a present v1.1 `behavioralProfile` (#277):
   `fixtures/v1_1-behavioral-profile-extra-member.json`, the v1.1 baseline
