@@ -60,9 +60,17 @@ outside_checkout() {
   case "$p/" in "$r/"*) die "$1 is inside the checkout; the kit is written outside it" ;; esac
 }
 version_line() { # <module> <commit>
-  local line
+  # Go stamps a build from a clean clone of an untagged commit with the version
+  # v0.0.0-<committer time, UTC, %Y%m%d%H%M%S>-<first 12 hex of the commit>.
+  # The time is the commit's, read with git; never this machine's clock.
+  local line ct date
+  ct=$(git -C "$here" show -s --format=%ct "$2") || die "cannot read the committer time of $2 with git in $here"
+  [[ "$ct" =~ ^[0-9]+$ ]] || die "the committer time of $2 reads '$ct', not a count of seconds"
+  date=$("$py" -I -c 'import datetime, sys; print(datetime.datetime.fromtimestamp(int(sys.argv[1]), datetime.timezone.utc).strftime("%Y%m%d%H%M%S"))' "$ct")
+  [[ "$date" =~ ^[0-9]{14}$ ]] || die "the committer time $ct of $2 renders as '$date'"
   line=$(cat "$here/version-line.txt.in")
-  line=${line//<module>/$1}; line=${line//<sha>/$2}; line=${line//<go version>/$KIT_GO_VERSION}
+  line=${line//<module>/$1}; line=${line//<date>/$date}; line=${line//<sha12>/${2:0:12}}
+  line=${line//<go version>/$KIT_GO_VERSION}
   printf '%s\n' "$line"
 }
 
@@ -115,7 +123,7 @@ stage() {
 }
 
 check_capture() {
-  local kit=$1 capture=$2 rc_file=$3 target=$4 out=$5 os n expected bin module version rc path
+  local kit=$1 capture=$2 rc_file=$3 target=$4 out=$5 os n expected bin module version want rc path
   need_env KIT_COMMIT KIT_GO_VERSION
   check_commit "$KIT_COMMIT"
   os=${target%-*}
@@ -134,7 +142,8 @@ check_capture() {
   bin="$kit/bin/$target/atx-verify$(ext_of "$os")"
   module=$(awk '$1 == "module" { print $2; exit }' "$kit/go.mod")
   version=$("$bin" --version | tr -d '\r')
-  [ "$version" = "$(version_line "$module" "$KIT_COMMIT")" ] || die "$target: --version prints '$version', not '$(version_line "$module" "$KIT_COMMIT")'"
+  want=$(version_line "$module" "$KIT_COMMIT")
+  [ "$version" = "$want" ] || die "$target: --version prints '$version', not '$want'"
   mkdir -p "$out"
   cp "$capture" "$out/$target.txt"
   printf '%s\n' "$version" >"$out/$target.version"

@@ -1,1 +1,1 @@
-atx-verify: <module> (devel), commit <sha>, built with go<go version>
+atx-verify: <module> v0.0.0-<date>-<sha12>, built with go<go version>

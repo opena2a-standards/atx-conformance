@@ -29,7 +29,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  KIT_GO_VERSION: '1.22.12'
+  KIT_GO_VERSION: '1.27.3'
   GOTOOLCHAIN: local
   GOFLAGS: -mod=readonly
   PYTHONDONTWRITEBYTECODE: '1'

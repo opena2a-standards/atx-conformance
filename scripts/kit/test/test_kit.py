@@ -37,6 +37,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 KIT = Path(__file__).resolve().parent.parent
@@ -192,7 +193,7 @@ WORKFLOW_MUTANTS = [
      ("      id-token: write\n      attestations: write\n      contents: read\n", "      id-token: write\n      contents: read\n"),
      "job attest holds"),
     ("Go pinned to a minor version only",
-     ("KIT_GO_VERSION: '1.22.12'", "KIT_GO_VERSION: '1.22'"),
+     ("KIT_GO_VERSION: '1.27.3'", "KIT_GO_VERSION: '1.27'"),
      "not an exact Go version"),
     ("the stage job writes README-START-HERE.md",
      ("        run: bash scripts/kit/assemble.sh stage \"$RUNNER_TEMP/stage\"\n",
@@ -353,14 +354,47 @@ def cells_claims() -> None:
     notes = d / "release-notes.md"
     notes.write_text(f"`atx-verify --version` prints `v0.0.0-20261029200411-{sha[:12]}`.\n")
     devel = d / "linux-amd64.version"
-    devel.write_text(f"atx-verify: github.com/opena2a-standards/atx-conformance (devel), commit {sha}, built with go1.22.12\n")
+    devel.write_text(f"atx-verify: github.com/opena2a-standards/atx-conformance (devel), commit {sha}, built with go1.27.3\n")
     pseudo = d / "linux-arm64.version"
-    pseudo.write_text(f"atx-verify: github.com/opena2a-standards/atx-conformance v0.0.0-20261029200411-{sha[:12]}, built with go1.26.3\n")
+    pseudo.write_text(f"atx-verify: github.com/opena2a-standards/atx-conformance v0.0.0-20261029200411-{sha[:12]}, built with go1.27.3\n")
     r = run([PY, "-I", KIT / "render.py", "check-claims", notes, pseudo])
     cell("i1 notes' --version claim matching what the binary prints passes", r.returncode == 0, r.stdout.strip())
     r = run([PY, "-I", KIT / "render.py", "check-claims", notes, devel])
     cell("i2 notes naming a pseudo-version a (devel) binary does not print refuse", r.returncode == 1,
          r.stderr.strip().split("\n")[0])
+
+    # The notes as render.py writes them for HEAD, against the line a binary
+    # built at HEAD prints: check-capture must take that line (it compares the
+    # whole --version line with the one version-line.txt.in gives for HEAD),
+    # check-claims must pass on the version file check-capture writes, and it
+    # must refuse a (devel) line.
+    d = scratch("i3")
+    facts = head_facts()
+    kit = scratch_kit(d, facts)
+    notes = d / "dist" / "release-notes.md"
+    module = re.search(r"^module (\S+)$", (kit / "go.mod").read_text(), re.M).group(1)
+    pseudo = f"v0.0.0-{time.strftime('%Y%m%d%H%M%S', time.gmtime(facts['commitTime']))}-{facts['sha'][:12]}"
+    stand_in = kit / "bin" / "linux-amd64" / "atx-verify"
+    stand_in.parent.mkdir(parents=True)
+    stand_in.write_text(f"#!/bin/sh\nprintf '%s\\n' 'atx-verify: {module} {pseudo}, built with go1.27.3'\n")
+    stand_in.chmod(0o755)
+    (d / "capture.txt").write_text(facts["expected"] + "\n")
+    (d / "capture.rc").write_text("0\n")
+    taken = run(["bash", KIT / "assemble.sh", "check-capture", kit, d / "capture.txt", d / "capture.rc",
+                 "linux-amd64", d / "captures"],
+                env=dict(os.environ, KIT_COMMIT=facts["sha"], KIT_GO_VERSION="1.27.3"))
+    taken_line = d / "captures" / "linux-amd64.version"
+    devel = d / "devel" / "linux-amd64.version"
+    devel.parent.mkdir()
+    devel.write_text(f"atx-verify: {module} (devel), commit {facts['sha']}, built with go1.27.3\n")
+    passed = run([PY, "-I", KIT / "render.py", "check-claims", notes, taken_line]) if taken_line.exists() else None
+    refused = run([PY, "-I", KIT / "render.py", "check-claims", notes, devel])
+    last = (taken.stdout + taken.stderr).strip().split("\n")[-1][:160]
+    cell("i3 notes rendered for HEAD: the line check-capture takes passes check-claims; a (devel) line refuses",
+         taken.returncode == 0 and pseudo in notes.read_text() and passed is not None and passed.returncode == 0
+         and refused.returncode == 1 and "do not print" in refused.stderr,
+         f"check-capture exit {taken.returncode} ({last}); check-claims exit "
+         f"{passed.returncode if passed else 'not run'}, on the (devel) line exit {refused.returncode}")
 
 
 # ---------------------------------------------------------- --sandboxed cells
@@ -599,7 +633,7 @@ def cells_stick() -> None:
 
 def cell_reproducible() -> None:
     goroot = subprocess.run(["go", "env", "GOROOT"], capture_output=True, text=True,
-                            env=dict(os.environ, GOTOOLCHAIN="go1.22.12"), check=True).stdout.strip()
+                            env=dict(os.environ, GOTOOLCHAIN="go1.27.3"), check=True).stdout.strip()
     runs = []
     for side in ("one", "two"):
         base = scratch(f"g-{side}")
@@ -607,7 +641,7 @@ def cell_reproducible() -> None:
         subprocess.run(["git", "clone", "-q", "--no-hardlinks", str(REPO), str(clone)], check=True)
         subprocess.run(["git", "-C", str(clone), "checkout", "-q", git("rev-parse", "HEAD")], check=True)
         env = dict(os.environ, KIT_COMMIT=git("rev-parse", "HEAD"), KIT_TAG="kit-2026-11-05",
-                   KIT_REPO="opena2a-standards/atx-conformance", KIT_GO_VERSION="1.22.12",
+                   KIT_REPO="opena2a-standards/atx-conformance", KIT_GO_VERSION="1.27.3",
                    GOCACHE=str(base / "gocache"), GOMODCACHE=str(base / "gomodcache"),
                    PIP_CACHE_DIR=str(base / "pipcache"), TMPDIR=str(scratch(f"g-{side}-tmp")),
                    GOTOOLCHAIN="local", PATH=f"{goroot}/bin:" + os.environ["PATH"])
