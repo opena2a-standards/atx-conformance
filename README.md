@@ -12,6 +12,10 @@ report PASS or FAIL per vector. Fixture bytes are pinned in
 License: Apache 2.0. All keypairs, seeds, and credential identifiers in this
 repository are TEST-ONLY.
 
+The command below needs Go 1.22 or later ([go.dev/dl](https://go.dev/dl/));
+the Python verifier needs Python 3.11 or later
+([python.org/downloads](https://www.python.org/downloads/)).
+
 ```bash
 go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@latest
 ```
@@ -33,19 +37,14 @@ summary: 41 pass, 0 fail (41 fixtures)
 With no argument the verifier walks the fixture set built into the module
 version `go run` fetched, `fixtures/*.json` of that commit, with nothing
 cloned. The command exits 1 when any fixture's result differs from its
-expected outcome. This repository has no release tag, so `@latest` resolves
-to a pseudo-version of a commit on `main`, the one the Go module proxy reports
-as latest. `@<commit>` in its place runs
-the verifier and fixtures of that commit: `cmd/atx-verify@<commit>` for a
-commit that has `cmd/atx-verify`, and `verifiers/go@<commit>` for `ea4b485`
-or a later commit on `main`; `go run` resolves the commit to its release tag,
-or to a pseudo-version when the commit has no tag. `ea4b485`
-is the first commit with `go.mod` at the repository root. Before it,
-`verifiers/go` was a module of its own; the module proxy answers
-`verifiers/go@latest` with a version of that module, and
-`go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest`
-exits 1, so `@latest` goes with `cmd/atx-verify`. On its first run, `go run`
-downloads the module and the modules listed in [`go.mod`](go.mod).
+expected outcome. On its first run, `go run` downloads the module and the
+modules listed in [`go.mod`](go.mod).
+
+This repository has no release tag, so `@latest` resolves to a
+pseudo-version (a version Go builds from a commit's time and hash) of the
+commit on `main` that the Go module proxy reports as latest.
+[Which version `go run` fetches](docs/running-the-verifiers.md#which-version-go-run-fetches)
+says how to run the verifier and fixtures of one commit instead.
 
 The suite does not check `contentHash` against an agent binary, transparency
 log inclusion, build attestations or the content of behavioral profiles;
@@ -75,15 +74,18 @@ The Python verifier, from the repository root:
 cd verifiers/python
 python3 -m venv .venv
 . .venv/bin/activate
-python3 -m pip install -r requirements.txt
+python3 -m pip install --disable-pip-version-check -r requirements.txt
 python3 verify.py ../../fixtures
 ```
 
 The commands expect a virtual environment: the second and third lines
 create one in `verifiers/python/.venv` and activate it, and
 `python3 -m pip install` downloads the packages `requirements.txt` names,
-and their dependencies, into it. Outside a virtual environment a system may
-provide `python3` and `pip3` only, with no `python` or `pip` on `PATH`.
+and their dependencies, into it. `--disable-pip-version-check` stops pip
+from looking up whether a newer release of pip exists; without it, pip
+writes a notice to standard error suggesting an upgrade of pip when there is
+one. Outside a virtual environment a system may provide `python3` and
+`pip3` only, with no `python` or `pip` on `PATH`.
 
 Each verifier needs a minimum toolchain release,
 and the release can change a result on inputs no fixture carries:
@@ -135,8 +137,8 @@ The cosignature itself is recorded by pull request, as
 - [Fixtures](docs/fixtures.md): the issuer, agent, verifier clock and keys
   every fixture shares, and what each fixture exercises.
 - [Running the verifiers](docs/running-the-verifiers.md): the exit code,
-  toolchain minimums, pinned modules and packages, and results that depend on
-  the toolchain release.
+  the module version `go run` fetches, toolchain minimums, pinned modules and
+  packages, and results that depend on the toolchain release.
 - [Continuous verification](docs/continuous-verification.md): the gates CI
   runs on every pull request.
 - [Reproducing the fixtures](docs/reproducing-the-fixtures.md): what the

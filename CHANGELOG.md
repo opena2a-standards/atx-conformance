@@ -14,6 +14,22 @@ they should not.
 ### Changed
 
 - Both reference verifiers print fixture fields and file names with control characters escaped.
+- README.md states above its first command the toolchain each verifier
+  needs, Go 1.22 or later and Python 3.11 or later, the minimums the
+  dependency lists of `docs/running-the-verifiers.md` state (#305). Its
+  paragraph on how `@latest` and the `@<commit>` forms resolve through the
+  Go module proxy moved to that page, under "Which version `go run`
+  fetches", which also says what a pseudo-version is; README.md keeps a
+  sentence on what `@latest` resolves to and a link to that section. The
+  Python verifier's install line in README.md, that page and COSIGNERS.md
+  passes `--disable-pip-version-check`: in a new virtual environment with
+  pip 26.0, the line without it wrote two `[notice]` lines to standard
+  error, that pip 26.3 was available and how to upgrade, and with it wrote
+  nothing there. `scripts/check_readme_counts.py` holds the text above
+  README.md's first command to the minimums those lists state, and each
+  `pip install` line in a fenced block of the README, its pages and
+  COSIGNERS.md to the flag. Its self-test adds 21 cases (293 cases green,
+  from 272). No fixture or verifier changes.
 
 ### Fixed
 
