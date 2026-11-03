@@ -20,19 +20,21 @@
 //     v1.1 signs JCS(TBS), the RFC 8785 form of the to-be-signed projection
 //     (core.md §1.3a.2). See docs/scope.md
 //     §"Canonicalization: v1.0 signs 11 fields; v1.1 signs JCS(TBS)".
-//   - Integers in the v1.1 signed payload: once the payload canonicalizes,
-//     one whose magnitude is above 2^53-1, outside the I-JSON exact range
-//     (RFC 7493 §2.2), is a signature failure, because JCS reads each number
-//     as an IEEE 754 double, which does not hold every integer outside that
-//     range: it writes 9007199254740993 as 9007199254740992
+//   - Integers in the v1.1 signed payload: before the payload is
+//     canonicalized, one whose magnitude is above 2^53-1, outside the I-JSON
+//     exact range (RFC 7493 §2.2), is a signature failure, because JCS reads
+//     each number as an IEEE 754 double, which does not hold every integer
+//     outside that range: it writes 9007199254740993 as 9007199254740992
 //     (integerOutsideExactRangeV11).
 //   - Numbers in the v1.1 declaredPurpose: the same check refuses a number
 //     declaredPurpose writes with a fraction or an exponent part as a
 //     signature failure, with a reason that quotes the number as written.
 //     JCS writes such a number as the double nearest it, 1e3 as 1000, and
 //     core.md §1.3a.2 rule 3 keeps that number serialization out of
-//     cross-language scope. The first number declaredPurpose writes that is
-//     outside the integer form or the exact range decides
+//     cross-language scope. The check refuses a number outside the float64
+//     range the same way: 1e400 for its exponent part, an integer of 401
+//     digits for its magnitude. The first number declaredPurpose writes that
+//     is outside the integer form or the exact range decides
 //     (integerOutsideExactRangeV11).
 //   - Signature threshold (core.md §3.1 step 8, cosignatures from 2 of 3 key
 //     holders): when the verifier state sets requiredSignatures, the declared
@@ -74,7 +76,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"math/big"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -377,7 +378,10 @@ type tbsV11 struct {
 // JCS (RFC 8785) canonicalization. Unlike canonicalPayload, this covers
 // capabilities, scanSummary, issuerChain, publisher, and behavioralProfile. A
 // behavioralProfile the TBS has no value for returns errBehavioralProfileForm
-// (projectBehavioralProfileV11).
+// (projectBehavioralProfileV11). verifySignatures refuses, before it calls
+// this, the declaredPurpose the JCS library misreads or refuses: one holding
+// an unpaired surrogate escape (unpairedSurrogateEscape) or a number outside
+// the integer form or the exact range (integerOutsideExactRangeV11).
 func canonicalPayloadV11(a *atx) ([]byte, error) {
 	caps := a.Capabilities
 	if caps == nil {
@@ -386,13 +390,6 @@ func canonicalPayloadV11(a *atx) ([]byte, error) {
 	chain := a.IssuerChain
 	if chain == nil {
 		chain = []string{}
-	}
-	purpose := projectDeclaredPurposeV11(a.DeclaredPurpose)
-	if escape := unpairedSurrogateEscape(purpose); escape != "" {
-		return nil, fmt.Errorf("declaredPurpose holds an unpaired UTF-16 surrogate escape (%s)", escape)
-	}
-	if hasNumberOutsideFloat64RangeV11(a) {
-		return nil, errors.New("declaredPurpose holds a number outside the float64 range")
 	}
 	profile, err := projectBehavioralProfileV11(a.BehavioralProfile)
 	if err != nil {
@@ -408,7 +405,7 @@ func canonicalPayloadV11(a *atx) ([]byte, error) {
 		ContentHash:       a.ContentHash,
 		BuildAttestation:  a.BuildAttestation,
 		Capabilities:      caps,
-		DeclaredPurpose:   purpose,
+		DeclaredPurpose:   projectDeclaredPurposeV11(a.DeclaredPurpose),
 		BehavioralProfile: profile,
 		ScanSummary:       projectScanSummaryV11(a.ScanSummary),
 		TrustScore:        fmt.Sprintf("%.6f", a.TrustScore),
@@ -632,7 +629,9 @@ const maxExactInteger int64 = 1<<53 - 1
 // 1000.0, 1e3 and 1E3 as 1000, and 9.007199254740993e15 as 9007199254740992.
 // core.md §1.3a.2 rule 3 keeps that number serialization out of
 // cross-language scope, and the Python reference verifier's serializer writes
-// no such number (verifiers/python/rfc8785.py). It returns "" for where and
+// no such number (verifiers/python/rfc8785.py). A number outside the float64
+// range is one of the two: 1e400 is written with an exponent part, and an
+// integer of 401 digits is above maxExactInteger. It returns "" for where and
 // literal when the TBS holds no such number.
 func integerOutsideExactRangeV11(a *atx) (where, literal string, fractionOrExponent bool) {
 	exact := func(n int64) bool { return -maxExactInteger <= n && n <= maxExactInteger }
@@ -660,99 +659,6 @@ func integerOutsideExactRangeV11(a *atx) (where, literal string, fractionOrExpon
 		return "trustLevel", strconv.Itoa(a.TrustLevel), false
 	}
 	return "", "", false
-}
-
-// hasNumberOutsideFloat64RangeV11 reports whether the declaredPurpose of a
-// writes a number outside the float64 range (numberOutsideFloat64Range):
-// 1e400, -1e400, an integer of 401 digits, or 1 followed by 1000 zeros and
-// e-650. declaredPurpose enters the TBS as written, so no typed decode
-// refuses such a number first, and the JCS library reads each number with
-// strconv.ParseFloat, which refuses 1e400 with an error whose text the Go
-// release sets and reads 1 followed by 1000 zeros and e-650 as 1e+149.
-// canonicalPayloadV11 refuses the number before the library reads it, with
-// the reason the Python reference verifier writes, whose float() decides the
-// range on every digit written.
-func hasNumberOutsideFloat64RangeV11(a *atx) bool {
-	for _, number := range purposeNumbersV11(a) {
-		if numberOutsideFloat64Range(string(number)) {
-			return true
-		}
-	}
-	return false
-}
-
-// float64OverflowDigits is 2^1024 - 2^970 in decimal digits: the largest
-// float64 plus half a unit in its last place, the least magnitude IEEE 754
-// round-to-nearest-even takes to infinity, since the tie rounds to the even
-// significand, 2^1024. It has 309 digits.
-var float64OverflowDigits = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 1024), new(big.Int).Lsh(big.NewInt(1), 970)).String()
-
-// numberOutsideFloat64Range reports whether the JSON number literal s, as
-// json.Unmarshal has read it (an optional minus sign, an integer part, an
-// optional fraction and an optional exponent part), has a magnitude of
-// 2^1024 - 2^970 or more, which rounds to infinity as a float64
-// (float64OverflowDigits): Python's float() returns inf for such a literal.
-// It decides on the digits as written, whatever their count and whatever
-// the exponent. strconv.ParseFloat keeps at most 800 digits of a literal,
-// places the decimal point by the digits it kept and caps the exponent it
-// reads, so it reads 1 followed by 1000 zeros and e-650, whose value is
-// 10^350, as 1e+149 with no error, and 0. followed by 200000 zeros, 1 and
-// e200400, whose value is 10^399, as 0. A literal with no nonzero digit is
-// zero. Any other is 0.d1d2d3... × 10^point, with d1 its first nonzero digit
-// and point the count of digits before the decimal point from d1 on, plus
-// the exponent: it is outside the range when point is above 309, and when
-// point is 309 and its digits, those past the last written being zero, are
-// those of 2^1024 - 2^970 or above them. An exponent that reaches 400 past
-// the length of s decides on its own, since point is within that length of
-// zero, so the digits of an exponent of any length are read without
-// overflow.
-func numberOutsideFloat64Range(s string) bool {
-	s = strings.TrimPrefix(s, "-")
-	mantissa, exponent := s, ""
-	if i := strings.IndexAny(s, "eE"); i >= 0 {
-		mantissa, exponent = s[:i], s[i+1:]
-	}
-	point := strings.IndexByte(mantissa, '.')
-	if point < 0 {
-		point = len(mantissa)
-	}
-	digits := strings.Replace(mantissa, ".", "", 1)
-	significant := strings.TrimLeft(digits, "0")
-	if significant == "" {
-		return false
-	}
-	point -= len(digits) - len(significant)
-	digits = significant
-	if exponent != "" {
-		negative := exponent[0] == '-'
-		if negative || exponent[0] == '+' {
-			exponent = exponent[1:]
-		}
-		e, limit := 0, len(s)+400
-		for i := 0; i < len(exponent) && e < limit; i++ {
-			e = e*10 + int(exponent[i]-'0')
-		}
-		if negative {
-			e = -e
-		}
-		point += e
-	}
-	switch {
-	case point > len(float64OverflowDigits):
-		return true
-	case point < len(float64OverflowDigits):
-		return false
-	}
-	for i := 0; i < len(float64OverflowDigits); i++ {
-		d := byte('0')
-		if i < len(digits) {
-			d = digits[i]
-		}
-		if d != float64OverflowDigits[i] {
-			return d > float64OverflowDigits[i]
-		}
-	}
-	return true
 }
 
 // purposeNumbersV11 returns each number the declaredPurpose of a writes, as
@@ -1212,27 +1118,38 @@ func verifySignatures(a *atx, state verifierState) result {
 				Reason:         "no signature covers behavioralProfile, which is not an object of exactly checksum (a string), generatedAt (a timestamp) and observationDays (an integer)",
 			}
 		}
-		pb, err := canonicalPayloadV11(a)
-		if err != nil {
-			return result{RejectCategory: "VERIFIER_CONFIG_ERROR", Reason: "v1.1 canonicalization failed: " + err.Error()}
+		// RFC 8785 §3.2.2.2 refuses a string holding an unpaired surrogate
+		// (unpairedSurrogateEscape). The Python reference verifier refuses
+		// the escape at this point too, before a number beside it.
+		if escape := unpairedSurrogateEscape(projectDeclaredPurposeV11(a.DeclaredPurpose)); escape != "" {
+			return result{
+				RejectCategory: "VERIFIER_CONFIG_ERROR",
+				Reason:         fmt.Sprintf("v1.1 canonicalization failed: declaredPurpose holds an unpaired UTF-16 surrogate escape (%s)", escape),
+			}
 		}
 		// Outside the I-JSON exact range, JCS writes an integer of the TBS
-		// as the double nearest it, which other integers can share: pb is
-		// the same for 9007199254740993 as for 9007199254740992, so a
-		// signature over pb does not tell them apart. It writes a number
+		// as the double nearest it, which other integers can share: JCS(TBS)
+		// is the same for 9007199254740993 as for 9007199254740992, so a
+		// signature over it does not tell them apart. It writes a number
 		// declaredPurpose writes with a fraction or an exponent part as the
-		// double nearest it too, so a signature over pb verified a
+		// double nearest it too, so a signature over it verified a
 		// credential that writes 1e3 where the signer wrote 1000. Each such
 		// number of the TBS is refused here, in declaredPurpose the first
-		// the credential writes (integerOutsideExactRangeV11). The Python
-		// reference verifier refuses it at this point too, with these
-		// reasons.
+		// the credential writes (integerOutsideExactRangeV11). That is before
+		// the JCS library reads any of them, because it refuses 1e400 and an
+		// integer of 401 digits and writes 1 followed by 1000 zeros and
+		// e-650, whose value is 10^350, as 1e+149. The Python reference
+		// verifier refuses it at this point too, with these reasons.
 		if where, literal, fractionOrExponent := integerOutsideExactRangeV11(a); where != "" {
 			reason := fmt.Sprintf("no signature covers %s: the integer %s is outside the I-JSON exact range, -(2^53-1) to 2^53-1", where, literal)
 			if fractionOrExponent {
 				reason = fmt.Sprintf("no signature covers %s: the number %s is written with a fraction or an exponent part, not as an integer", where, literal)
 			}
 			return result{RejectCategory: "SIGNATURE_INVALID", Reason: reason}
+		}
+		pb, err := canonicalPayloadV11(a)
+		if err != nil {
+			return result{RejectCategory: "VERIFIER_CONFIG_ERROR", Reason: "v1.1 canonicalization failed: " + err.Error()}
 		}
 		payload = pb
 	} else {

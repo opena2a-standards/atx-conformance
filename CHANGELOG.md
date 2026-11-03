@@ -17,6 +17,45 @@ they should not.
 
 ### Fixed
 
+- Both reference verifiers reject a v1.1 credential whose `declaredPurpose`
+  holds a number outside the float64 range as `SIGNATURE_INVALID`, with a
+  reason that quotes the number as written (#302). They rejected it as
+  `VERIFIER_CONFIG_ERROR`, with the reason `v1.1 canonicalization failed:
+  declaredPurpose holds a number outside the float64 range`, where they
+  reject `1e3` and `2.5` as `SIGNATURE_INVALID`:
+  `fixtures/v1_1-declared-purpose-number-injected.json` with its `1.5`
+  replaced by `1e400`, or by `1` followed by 400 zeros, counted as a failure
+  in each verifier, and a run over either copy exited 1. Each copy now counts
+  as a pass, and that run exits 0. Such a number is written with a fraction
+  or an exponent part, or is an integer outside the I-JSON exact range, so
+  the scan that refuses each of those (`integerOutsideExactRangeV11` in the
+  Go verifier, `_integer_outside_exact_range` in the Python one) refuses it
+  too, with the reason it gives them: `no signature covers declaredPurpose:
+  the number 1e400 is written with a fraction or an exponent part, not as an
+  integer`, and, for an integer, `no signature covers declaredPurpose: the
+  integer <digits> is outside the I-JSON exact range, -(2^53-1) to 2^53-1`.
+  The first such number the credential writes decides, so `[1.5, 1e400]`
+  quotes `1.5`. In the Go verifier the scan now runs before the JCS library
+  reads the payload, which it ran after: the library refuses `1e400` and an
+  integer of 401 digits, and writes `1` followed by 1000 zeros and `e-650`
+  as `1e+149`. An unpaired surrogate escape in `declaredPurpose` is still
+  refused first, as `VERIFIER_CONFIG_ERROR`. Neither verifier decides the
+  float64 range now, so `numberOutsideFloat64Range`,
+  `float64OverflowDigits`, `hasNumberOutsideFloat64RangeV11` and
+  `_holds_number_outside_float64` are removed, and the Python scan now
+  refuses an integer with more digits than `int()` converts, which the
+  removed check refused before it. This replaces the category the `v0.1.0`
+  entries for #151, #289 and #293 give such a number.
+  `TestDeclaredPurposeNumberOutsideFloat64Range` in the Go verifier and
+  `GO_PURPOSE_FORM_BESIDE_FLOAT64_EDGE` and
+  `GO_PURPOSE_INTEGERS_BESIDE_FLOAT64_EDGE` in the Python one pin the verdict
+  and reason on either side of 2^1024 - 2^970; built with Go 1.26.3 and run
+  under Python 3.14.3, the two verifiers print the same lines over those
+  tables' rows. Their reports over `fixtures/` are unchanged byte for byte,
+  and no fixture carries such a number. `docs/captures/go-verifier.txt` is
+  unchanged, and its sidecar, `docs/captures/go-verifier.json`, records the
+  new tree id of `verifiers/go/verifier`, so
+  `scripts/capture_go_verifier.py --check` passes. No fixture changes.
 - `docs/demo/record-atx-verify.sh`, `--dry-run` included, reads
   `docs/demo/docker/Dockerfile` one instruction at a time and exits 1 on an
   image reference other than the FROM lines of the build stage and the

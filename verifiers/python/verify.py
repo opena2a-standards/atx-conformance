@@ -15,17 +15,19 @@ Spec coverage:
     v1.1 signs JCS(TBS), the RFC 8785 form of the to-be-signed projection
     (core.md section 1.3a.2). See docs/scope.md
     §"Canonicalization: v1.0 signs 11 fields; v1.1 signs JCS(TBS)".
-  - Integers in the v1.1 signed payload: once the checks that refuse a
-    payload the Go reference verifier cannot canonicalize pass, one whose
-    magnitude is above 2**53 - 1, outside the I-JSON exact range (RFC 7493
-    section 2.2), rejects as SIGNATURE_INVALID. The Go verifier's JCS library
-    reads each number as an IEEE 754 double, which does not hold every such
+  - Integers in the v1.1 signed payload: once the check that refuses an
+    unpaired surrogate escape in declaredPurpose passes, one whose magnitude
+    is above 2**53 - 1, outside the I-JSON exact range (RFC 7493 section
+    2.2), rejects as SIGNATURE_INVALID. The Go verifier's JCS library reads
+    each number as an IEEE 754 double, which does not hold every such
     integer, and writes 9007199254740993 as 9007199254740992, so a signature
     over those bytes does not tell the two apart. The same check rejects a
     number the v1.1 declaredPurpose writes with a fraction or an exponent
     part as SIGNATURE_INVALID, with a reason that quotes the number as
-    written; the first number declaredPurpose writes outside the integer
-    form or the exact range decides (_integer_outside_exact_range).
+    written; a number outside the float64 range is refused the same way, 1e400
+    for its exponent part and an integer of 401 digits for its magnitude; and
+    the first number declaredPurpose writes outside the integer form or the
+    exact range decides (_integer_outside_exact_range).
   - Ed25519 and ML-DSA-65 (FIPS 204) hybrid signature verification over the
     same canonical payload (every declared signature must verify and at
     least one must be present; an ML-DSA-65 signature needs a verifying
@@ -103,25 +105,20 @@ lesson and scoped to the whole body because ATX signs it all):
     Go reference verifier, which refuses it before its JCS library reads the
     escape. This verifier refuses it before it canonicalizes the payload too,
     so a number beside it written with a fraction part (1.5) does not make
-    the credential a signature failure. A number in it outside the
-    float64 range (1e400, an integer of 401 digits, or 1 followed by 1000
-    zeros and e-650) rejects as VERIFIER_CONFIG_ERROR too, with the reason
-    the Go reference verifier gives such a number, which it refuses before
-    its JCS library reads it: that library parses every number as a float64
-    with strconv.ParseFloat, which can read a number written with more than
-    800 digits and an exponent part as finite when its value is outside the
-    range (it reads 1 followed by 1000 zeros and e-650 as 1e+149), so the Go
-    verifier decides the range on the digits as written, at 2^1024 - 2^970,
-    where float() returns inf.
-    An integer in it inside that range but outside the I-JSON exact range
-    rejects after these two checks, as SIGNATURE_INVALID (Spec coverage).
-    So does a number in it written with a fraction or an exponent part,
-    which json.loads reads as a float and the serializer does not write
+    the credential a signature failure. An integer in it outside the I-JSON
+    exact range rejects after that check, as SIGNATURE_INVALID (Spec
+    coverage). So does a number in it written with a fraction or an exponent
+    part, which json.loads reads as a float and the serializer does not write
     (rfc8785.py), with a reason that quotes the number as written, as the Go
     reference verifier refuses it, whose JCS library would write 1e3 and
     1000.0 as 1000 (core.md section 1.3a.2 rule 3 keeps that number
-    serialization out of cross-language scope). The first number in it
-    outside the integer form or the exact range decides.
+    serialization out of cross-language scope). A number outside the float64
+    range is one of these two, so its value decides nothing: 1e400, and 1
+    followed by 1000 zeros and e-650, are written with an exponent part, and
+    an integer of 401 digits is outside the exact range. The Go verifier
+    refuses each before its JCS library reads it, which refuses the first and
+    the third and parses the second, with strconv.ParseFloat, as 1e+149. The
+    first number in it outside the integer form or the exact range decides.
   - NaN, Infinity and -Infinity are not JSON, so a file carrying one fails to
     load with the reason the Go reference verifier gives a file that is not
     JSON, fixture is not valid JSON, unless arrays and objects nest deeper
@@ -621,8 +618,11 @@ def _integer_outside_exact_range(tbs: dict[str, Any]) -> tuple[str, str, bool] |
     or trustLevel, in the order JCS writes them; the number as the credential
     writes it; and whether it is written with a fraction or an exponent part.
     In declaredPurpose, which enters the TBS as written, it is the first such
-    number the credential writes. None when the TBS holds none. Walked with a
-    stack, as _first_unpaired_surrogate is."""
+    number the credential writes. A number outside the float64 range is one
+    of the two: 1e400 is written with an exponent part, and an integer of 401
+    digits is above 2**53 - 1. None when the TBS holds none. Walked with a
+    stack, not by recursion, so a value nested as deep as load_fixture allows
+    is read whole."""
 
     def outside(n: Any) -> bool:
         return (
@@ -641,7 +641,11 @@ def _integer_outside_exact_range(tbs: dict[str, Any]) -> tuple[str, str, bool] |
             stack.extend(reversed(list(item.values())))
         elif isinstance(item, list):
             stack.extend(reversed(item))
-        elif isinstance(item, float) and not isinstance(item, _LongInteger):
+        elif isinstance(item, _LongInteger):
+            # An integer with more digits than int() converts, written as its
+            # literal, which is above 2**53 - 1.
+            return "declaredPurpose", item.literal, False
+        elif isinstance(item, float):
             # The form is decided from the number as written, whatever its
             # value. load_fixture keeps the text (_FloatLiteral); a float
             # that did not come from it is written as json.dumps writes it.
@@ -776,28 +780,6 @@ def _finite_number(value: Any) -> bool:
         return False
 
 
-def _holds_number_outside_float64(value: Any) -> bool:
-    """True if the raw JSON value holds, at any depth, a number that is not
-    finite as a float64: one whose magnitude is 2^1024 - 2^970 or more,
-    which float() rounds to inf. The Go reference verifier decides the same
-    edge on the digits as written (numberOutsideFloat64Range), since its JCS
-    library parses each number it canonicalizes with strconv.ParseFloat,
-    which refuses 1e400 and an integer of 401 digits as out of range and
-    reads 1 followed by 1000 zeros and e-650, whose value is 10^350, as
-    1e+149. Walked with a stack, not by recursion, so a value nested as deep
-    as load_fixture allows is read whole."""
-    stack = [value]
-    while stack:
-        item = stack.pop()
-        if isinstance(item, dict):
-            stack.extend(item.values())
-        elif isinstance(item, list):
-            stack.extend(item)
-        elif isinstance(item, (int, float)) and not isinstance(item, bool) and not _finite_number(item):
-            return True
-    return False
-
-
 def _first_unpaired_surrogate(value: Any) -> str | None:
     """The first unpaired UTF-16 surrogate in a string or member name of the
     raw JSON value, in the order the text writes them, or None. json.loads
@@ -806,7 +788,7 @@ def _first_unpaired_surrogate(value: Any) -> str | None:
     each one found is an escape the Go reference verifier's
     unpairedSurrogateEscape finds; a byte of the file outside UTF-8 loads as
     U+FFFD (_go_replace), never as a surrogate. Walked with a stack, not by
-    recursion, as _holds_number_outside_float64 is."""
+    recursion, as _integer_outside_exact_range is."""
     stack = [value]
     while stack:
         item = stack.pop()
@@ -1416,21 +1398,6 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
                 reason="v1.1 canonicalization failed: declaredPurpose holds an unpaired "
                 f"UTF-16 surrogate escape (\\u{ord(surrogate):04x})",
             )
-        if _holds_number_outside_float64(atx.get("declaredPurpose")):
-            # declaredPurpose enters the TBS as written, so no typed decode
-            # refuses the number first. The Go reference verifier's JCS
-            # library parses each number with strconv.ParseFloat, which
-            # refuses 1e400 as out of range and reads a number written with
-            # more than 800 digits and an exponent part, 1 followed by 1000
-            # zeros and e-650, as finite; the verifier decides the range on
-            # the digits as written and refuses the number before the
-            # library reads it, with the category and reason below, where
-            # this serializer would refuse it as a float (1e400) or write it
-            # out (an integer of 401 digits).
-            return VerifyResult(
-                reject_category="VERIFIER_CONFIG_ERROR",
-                reason="v1.1 canonicalization failed: declaredPurpose holds a number outside the float64 range",
-            )
         tbs = _tbs_v11(atx)
         outside = _integer_outside_exact_range(tbs)
         if outside is not None:
@@ -1443,9 +1410,11 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
             # the double nearest it too, 1e3 as the 1000 a signer signed,
             # and this serializer writes no such number (rfc8785.py), which
             # json.loads reads as a float; it reaches the TBS only through
-            # declaredPurpose, which enters it verbatim. The Go verifier
-            # refuses each once its canonicalization succeeds, which is after
-            # the two checks above, and the reasons are its.
+            # declaredPurpose, which enters it verbatim. The library refuses
+            # 1e400 and an integer of 401 digits and parses 1 followed by 1000
+            # zeros and e-650 as 1e+149. The Go verifier refuses each before
+            # its library reads it, which is after the check above, and the
+            # reasons are its.
             where, literal, fraction_or_exponent = outside
             if fraction_or_exponent:
                 reason = (
