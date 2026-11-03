@@ -168,6 +168,24 @@ they should not.
   `declaredPurpose` check they served; they stay for `trustScore`, and
   `TestNumberOutsideFloat64Range` pins them at 2^1024 - 2^970 again. No
   fixture changes.
+- `docs/demo/record-atx-verify.sh` gives the render container a
+  `--pids-limit` of 512 plus 32 for each CPU `docker info` counts on the
+  docker host, 768 with 8 CPUs and 1024 with 16, where it gave 256 whatever
+  the CPU count (#311). The pids cgroup counts threads as well as processes,
+  and the render's peak grows with the CPU count: read from the render
+  container's `pids.peak` on Docker Desktop (linux/arm64), it was 254 tasks
+  with 16 CPUs, 2 under the limit, and 211 with the render held to 8 of them
+  by `--cpuset-cpus 0-7`. A render runs `docker info` before the build and
+  stops there, with exit code 1, when it exits non-zero or prints no CPU
+  count; `--dry-run` prints the rule in place of the number. The check
+  inside the container counts `--pids-limit` as run when `RUN_FLAGS` gives
+  it a positive whole number in digits with no leading zero (`4096` is
+  taken; `0`, `-1` and no number are not), where it required
+  `--pids-limit 256`. `docs/demo/test_record_atx_verify.py` runs the script
+  with a stub in place of docker and holds the limit to at least twice each
+  measured peak, and its growth a CPU to at least twice the peak's from 8
+  CPUs to 16. The committed GIF, frames, capture and sidecar are not
+  re-rendered.
 
 ## v0.1.0
 

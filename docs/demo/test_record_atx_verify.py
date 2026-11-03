@@ -1,27 +1,45 @@
 #!/usr/bin/env python3
-"""record-atx-verify.sh refuses a Dockerfile that references an image it does not read.
+"""Tests of record-atx-verify.sh: the images it reads from the Dockerfile, and the --pids-limit it
+gives its render container.
 
-The script reads the images of two FROM lines of docs/demo/docker/Dockerfile, the build stage
+DockerfileImages: the script refuses a Dockerfile that references an image it does not read. It
+reads the images of two FROM lines of docs/demo/docker/Dockerfile, the build stage
 (`AS vhsbuild`) and the render stage, and the sidecar's `recorder` records them as
-`builderImage` and `baseImage`. Before the change this test came with, it read no other line:
+`builderImage` and `baseImage`. Before the change these cases came with, it read no other line:
 `--dry-run` exited 0 on a Dockerfile with a third FROM line, upper or lower case, or with a
 `COPY --from` or a `RUN --mount` that names an image.
 
-Each case writes one Dockerfile into a scratch copy of docs/demo and runs the scratch copy of
-the script, with and without `--dry-run`, with DOCKER set to a stub that logs its arguments and
-exits 1. On a Dockerfile it refuses, the script must exit 1 with one line on standard error,
-which names the Dockerfile line it refuses except for a NUL byte and a base image named by tag
-alone, and must run no docker command. Needs bash and git; no docker, network or image is used.
+Each of these cases writes one Dockerfile into a scratch copy of docs/demo and runs the scratch
+copy of the script, with and without `--dry-run`, with DOCKER set to DOCKER_STUB, a stub that logs
+its arguments and exits 1. On a Dockerfile it refuses, the script must exit 1 with one line on
+standard error, which names the Dockerfile line it refuses except for a NUL byte and a base image
+named by tag alone, and must run no docker command.
+
+PidsLimit: the pids cgroup counts threads as well as processes, and the render's peak grows with
+the CPU count: read from the render container's pids.peak on Docker Desktop (linux/arm64), it was
+254 tasks with 16 CPUs, and 211 with the render held to 8 of them by --cpuset-cpus 0-7. Before the
+change these cases came with, the script set --pids-limit 256 whatever the CPU count.
+
+Each of these cases copies the script, the tape and docs/demo/docker into a scratch git checkout
+and runs the script there with DOCKER naming RENDER_DOCKER_STUB, a stub that prints a CPU count
+for `docker info`, records the arguments of `docker run` and exits 7 in its place, so no image is
+built, no container starts and this checkout is not written to. The check the script's
+in-container program makes of the limits it is told is read out of the script and run on its own,
+as the rest of that program needs the container.
+
+Needs bash and git; no docker, network or image is used.
 
     python3 docs/demo/test_record_atx_verify.py
 """
 
 import os
 import pathlib
+import re
 import shutil
 import stat
 import subprocess
 import tempfile
+import types
 import unittest
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -205,6 +223,163 @@ class DockerfileImages(unittest.TestCase):
                 code, out, err, docker = self.run_script(dockerfile, "--dry-run")
                 self.assertEqual((code, err, docker), (0, "", ""), out)
                 self.assertIn(f"\n  bases     {BUILDER_REF} {BASE_REF}\n", out)
+
+
+# What the script reads on the host side before `docker run`, by its path under docs/demo.
+INPUTS = ("record-atx-verify.sh", "atx-verify.tape", "docker/Dockerfile",
+          "docker/vhs-0.12.0-render-context.patch")
+# The render's peak task count, read from its container's pids.peak, by the CPUs it ran on.
+MEASURED_PEAKS = {8: 211, 16: 254}
+# The limit is held to at least this many times the measured peak, and to growing at least
+# this many times as fast a CPU as the peak grew from 8 CPUs to 16.
+HEADROOM = 2
+# The exit code of RENDER_DOCKER_STUB's `docker run`.
+RUN_EXIT = 7
+
+RENDER_DOCKER_STUB = r"""#!/bin/sh
+# docker, as record-atx-verify.sh calls it. Each call's first argument goes to $STUB_LOG.
+# `info` prints $STUB_CPUS and exits $STUB_INFO_EXIT; `run` writes its arguments to
+# $STUB_RUN_ARGS, one a line, and exits 7.
+echo "$1" >> "$STUB_LOG"
+case "$1" in
+  info) printf '%s\n' "$STUB_CPUS"; exit "$STUB_INFO_EXIT" ;;
+  build) exit 0 ;;
+  image) echo stub; exit 0 ;;
+  run) shift; printf '%s\n' "$@" > "$STUB_RUN_ARGS"; exit 7 ;;
+esac
+echo "docker stub: unexpected call: $*" >&2
+exit 64
+"""
+
+
+def container_unaccounted(run_flags):
+    """The limits the in-container program finds neither run nor dropped with a reason, told RUN_FLAGS.
+
+    Its LIMITS and DROPPED and the lines of its check are read out of the script and run here.
+    """
+    script = SCRIPT.read_text(encoding="utf-8")
+    program = script.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+    lines = (program[program.index("LIMITS = ("):program.index("PACE = {")]
+             + program[program.index("ran_flags = re.findall("):program.index("if unaccounted:")])
+    scope = {"re": re, "os": types.SimpleNamespace(environ={"RUN_FLAGS": run_flags}),
+             "NAME": "atx-verify", "MODULE": "github.com/opena2a-standards/atx-conformance"}
+    exec(lines, scope)
+    return scope["unaccounted"]
+
+
+class PidsLimit(unittest.TestCase):
+    def setUp(self):
+        self.root = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root)
+        demo = self.root / "docs" / "demo"
+        for name in INPUTS:
+            (demo / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(HERE / name, demo / name)
+        self.script = demo / "record-atx-verify.sh"
+        for name in ("home", "tmp", "bin"):
+            (self.root / name).mkdir()
+        self.stub = self.root / "bin" / "docker"
+        self.stub.write_text(RENDER_DOCKER_STUB)
+        self.stub.chmod(self.stub.stat().st_mode | stat.S_IXUSR)
+        self.env = {
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": str(self.root / "home"),
+            "TMPDIR": str(self.root / "tmp"),
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+        }
+        author = {"GIT_AUTHOR_NAME": "scratch", "GIT_AUTHOR_EMAIL": "scratch@example.invalid",
+                  "GIT_COMMITTER_NAME": "scratch", "GIT_COMMITTER_EMAIL": "scratch@example.invalid"}
+        for args in (["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "scratch"]):
+            subprocess.run(["git", "-C", str(self.root), *args], env={**self.env, **author},
+                           stdin=subprocess.DEVNULL, capture_output=True, check=True, timeout=60)
+
+    def render(self, *args, cpus="16", info_exit="0"):
+        """Runs the script; returns the process, the stub's calls and `docker run`'s arguments."""
+        log, run_args = self.root / "stub.log", self.root / "run-args"
+        for path in (log, run_args):
+            path.unlink(missing_ok=True)
+        env = dict(self.env, DOCKER=str(self.stub), DOCKER_HOST="unix:///nonexistent/docker.sock",
+                   STUB_LOG=str(log), STUB_RUN_ARGS=str(run_args), STUB_CPUS=cpus,
+                   STUB_INFO_EXIT=info_exit)
+        proc = subprocess.run(["bash", str(self.script), *args], env=env, stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, timeout=120)
+        calls = log.read_text().split() if log.exists() else []
+        flags = run_args.read_text().split("\n")[:-1] if run_args.exists() else None
+        # A render the stub stopped leaves the directory the script made for the render's files with
+        # mktemp -d, which macOS's mktemp places outside TMPDIR. The stub writes nothing into it, so it
+        # is removed here as an empty directory.
+        for flag in flags or []:
+            render_dir = flag.removesuffix(":/work/docs/demo")
+            if render_dir != flag and os.path.isdir(render_dir):
+                os.rmdir(render_dir)
+        return proc, calls, flags
+
+    def limit(self, cpus):
+        """The --pids-limit `docker run` is given when `docker info` counts this many CPUs."""
+        proc, _calls, flags = self.render(cpus=str(cpus))
+        self.assertEqual(proc.returncode, RUN_EXIT, proc.stderr)
+        self.assertIsNotNone(flags, f"no `docker run` call with {cpus} CPUs: {proc.stderr}")
+        self.assertEqual(flags.count("--pids-limit"), 1, flags)
+        return int(flags[flags.index("--pids-limit") + 1])
+
+    def test_limit_leaves_headroom_over_the_measured_peaks(self):
+        for cpus, peak in MEASURED_PEAKS.items():
+            with self.subTest(cpus=cpus):
+                self.assertGreaterEqual(self.limit(cpus), HEADROOM * peak,
+                                        f"the render peaked at {peak} tasks with {cpus} CPUs")
+
+    def test_limit_grows_with_the_cpu_count(self):
+        (low, low_peak), (high, high_peak) = sorted(MEASURED_PEAKS.items())
+        growth = (high_peak - low_peak) / (high - low)
+        counts = (high, 64, 256)
+        limits = {cpus: self.limit(cpus) for cpus in counts}
+        for a, b in zip(counts, counts[1:]):
+            with self.subTest(cpus=(a, b)):
+                self.assertGreaterEqual((limits[b] - limits[a]) / (b - a), HEADROOM * growth,
+                                        f"limits {limits}; the peak grew {growth} tasks a CPU "
+                                        f"from {low} CPUs to {high}")
+
+    def test_dry_run_names_the_rule_a_render_applies(self):
+        proc, calls, _flags = self.render("--dry-run")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(calls, [], "--dry-run ran a docker command")
+        line = next((line for line in proc.stdout.splitlines()
+                     if line.lstrip().startswith("container ")), "")
+        rule = re.search(r"--pids-limit (\d+) plus (\d+) for each CPU", line)
+        self.assertIsNotNone(rule, proc.stdout)
+        base, per_cpu = int(rule[1]), int(rule[2])
+        for cpus in (1, 16, 256):
+            with self.subTest(cpus=cpus):
+                self.assertEqual(self.limit(cpus), base + per_cpu * cpus, line)
+
+    def test_container_is_told_the_limit_it_runs_with(self):
+        proc, _calls, flags = self.render(cpus="16")
+        self.assertIsNotNone(flags, proc.stderr)
+        limit = flags[flags.index("--pids-limit") + 1]
+        told = next((flag.removeprefix("RUN_FLAGS=") for flag in flags
+                     if flag.startswith("RUN_FLAGS=")), "")
+        words = told.split()
+        self.assertIn("--pids-limit", words, flags)
+        self.assertEqual(words[words.index("--pids-limit") + 1], limit, flags)
+        self.assertEqual(container_unaccounted(told), [], told)
+
+    def test_container_check_needs_a_pids_limit_with_a_number(self):
+        others = "--cap-drop ALL --security-opt no-new-privileges"
+        self.assertEqual(container_unaccounted(f"{others} --pids-limit 4096"), [])
+        for run_flags in (others, f"{others} --pids-limit", f"{others} --pids-limit 0",
+                          f"{others} --pids-limit -1"):
+            with self.subTest(run_flags=run_flags):
+                self.assertEqual(container_unaccounted(run_flags), ["--pids-limit"])
+
+    def test_no_cpu_count_stops_before_the_build(self):
+        for cpus, info_exit in (("", "1"), ("16", "1"), ("0", "0"), ("sixteen", "0"), ("", "0")):
+            with self.subTest(cpus=cpus, info_exit=info_exit):
+                proc, calls, flags = self.render(cpus=cpus, info_exit=info_exit)
+                self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+                self.assertIn("not the docker host's CPU count", proc.stderr)
+                self.assertNotIn("build", calls)
+                self.assertIsNone(flags)
 
 
 if __name__ == "__main__":
