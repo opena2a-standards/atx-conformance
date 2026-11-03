@@ -4934,6 +4934,21 @@ def _whole_script_case(tree):
             f"exit {child.returncode} and {child.stderr.strip()[-300:]!r}")
 
 
+def _cpu_time_cases(scans):
+    """One case per (label, scan, bound, why) in `scans`: green when scan()
+    takes under `bound` seconds of this process's CPU time, read from
+    time.process_time(). Wall-clock time also counts the time the process
+    waits for a CPU, so on a loaded machine a scan went over its bound with
+    no change to the README, the tree or the patterns."""
+    cases = []
+    for label, scan, bound, why in scans:
+        started = time.process_time()
+        scan()
+        took = time.process_time() - started
+        cases.append((took < bound, label, f"took {took:.1f} s of CPU time; {why}"))
+    return cases
+
+
 def self_test(tree, verbose):
     readme, cosigners, fixtures, vectors, signing = (
         tree.readme, tree.cosigners, tree.fixtures, tree.vectors, tree.signing)
@@ -5132,32 +5147,33 @@ def self_test(tree, verbose):
                       f"{name} citing closed A2A#1885 with no `(closed` note",
                       f"appending the citation to {name} still passes: {new}"))
 
-    # Linear in the run: about 0.2 s. Unbounded link text took 3.5 s or more.
-    started = time.perf_counter()
-    closed_tracker_mentions("README.md", "[" * 40000)
-    took = time.perf_counter() - started
-    cases.append((took < 1.5, "closed-tracker scan over a 40,000-character run of `[`",
-                  f"took {took:.1f} s; the link-text match backtracks over the run"))
-    # Each of these took 1.5 s or more while its pattern rescanned the run from
-    # every position in it; bounded, each takes under 0.05 s.
+    # Unbounded link text took 3.5 s or more, and each of the other five took
+    # 1.5 s or more while its pattern rescanned the run from every position in
+    # it. Bounded, in ten runs on a 16-CPU machine at load averages of 20 to
+    # 23, each took 0.08 s of CPU time or less.
     blank = "\n" * 20000
-    for label, scan in (
-            ("line-leading comment markers stripped from 20,000 blank lines (_flat_prose)",
-             lambda: _flat_prose(blank)),
-            ("line-leading comment markers stripped from 20,000 blank lines (_prose)",
-             lambda: _prose(blank)),
-            ("requirements.txt package names read from 20,000 blank lines",
-             lambda: python_requirements(blank)),
-            ("only-number claim scan over one 16,000-character word",
-             lambda: list(ONLY_NUMBER_CLAIM.finditer("a" * 16000))),
-            ("only-number claim scan over 40,000 unclosed parentheses",
-             lambda: list(ONLY_NUMBER_CLAIM.finditer("a (" * 40000)))):
-        started = time.perf_counter()
-        scan()
-        took = time.perf_counter() - started
-        cases.append((took < 0.5, label,
-                      f"took {took:.1f} s; the pattern rescans the run from every "
-                      f"position in it"))
+    rescans = "the pattern rescans the run from every position in it"
+    cases.extend(_cpu_time_cases((
+        ("closed-tracker scan over a 40,000-character run of `[`",
+         lambda: closed_tracker_mentions("README.md", "[" * 40000), 1.5,
+         "the link-text match backtracks over the run"),
+        ("line-leading comment markers stripped from 20,000 blank lines (_flat_prose)",
+         lambda: _flat_prose(blank), 0.5, rescans),
+        ("line-leading comment markers stripped from 20,000 blank lines (_prose)",
+         lambda: _prose(blank), 0.5, rescans),
+        ("requirements.txt package names read from 20,000 blank lines",
+         lambda: python_requirements(blank), 0.5, rescans),
+        ("only-number claim scan over one 16,000-character word",
+         lambda: list(ONLY_NUMBER_CLAIM.finditer("a" * 16000)), 0.5, rescans),
+        ("only-number claim scan over 40,000 unclosed parentheses",
+         lambda: list(ONLY_NUMBER_CLAIM.finditer("a (" * 40000)), 0.5, rescans))))
+    # A loaded machine holds this process off the CPU while a scan runs. A
+    # sleep stands for that wait: 0.6 s, more than the 0.5 s bound, in which
+    # the process does not run, so the case it is timed in must be green.
+    cases.extend(_cpu_time_cases((
+        ("a scan held off the CPU for 0.6 s, under a 0.5 s bound",
+         lambda: time.sleep(0.6), 0.5,
+         "the bound counts the time the process waits for a CPU"),)))
     cases.extend(_tbs_number_cases(tree.tbs_sites, tree.tbs_canonical))
     cases.extend(_front_page_cases(tree.front_page))
     cases.extend(_prerequisite_cases(tree))

@@ -111,6 +111,19 @@ they should not.
   `docs/demo/test_record_atx_verify.py` holds the script to each of these,
   with and without `--dry-run`. The committed outputs and sidecar are not
   re-rendered.
+- `scripts/check_readme_counts.py` holds each of the six scans its
+  self-test times to its bound in its own process's CPU time, read from
+  `time.process_time()`, where it read wall-clock time, which also counts
+  the time the process waits for a CPU (#307). The bounds are unchanged:
+  1.5 s for the closed-tracker scan and 0.5 s for each of the other five.
+  On a 16-CPU machine at a load average above 20, the script exited 1 at
+  the commit before this change, with no change to the tree, on
+  `only-number claim scan over one 16,000-character word`, which took
+  0.5 s. In ten runs there at load averages of 20 to 23, each of the six
+  took 0.08 s of CPU time or less. The self-test adds one case (273
+  altered count sites, from 272): a 0.6 s sleep, in which the process
+  does not run, held to a 0.5 s bound, which the wall-clock reading
+  fails. No fixture changes.
 
 ## v0.1.0
 
