@@ -111,6 +111,34 @@ they should not.
   `docs/demo/test_record_atx_verify.py` holds the script to each of these,
   with and without `--dry-run`. The committed outputs and sidecar are not
   re-rendered.
+- The module docstring of `verifiers/python/verify.py` and the docstrings
+  of `_say`, `_say_err` and `_write_surrogate_escapes_as_bytes` name a byte
+  0x80 to 0x9f as the exception where they say a line writes an argument
+  or a path that is not UTF-8 as its bytes, as
+  `docs/running-the-verifiers.md` names it (#317). They said such an
+  argument or path is written as its bytes, the module docstring "and not
+  as a backslash escape", while `_escape_controls` writes a byte 0x80 to
+  0x9f that is not UTF-8 as `\xHH` before the line is written: run in
+  `verifiers/python`, `python3 verify.py "$(printf 'x\x9by.json')"` writes
+  `error: x\x9by.json: no such file or directory`, the four characters
+  `\x9b` where the docstrings said the byte is written. The module
+  docstring now also names `_escape_controls` and says it writes each
+  control character as a visible escape. With the byte between `x` and
+  `y.json` each of the 128 bytes 0x80 to 0xff in turn, the Go verifier
+  built with Go 1.26.3 writes the same error line as the Python verifier
+  under Python 3.14.3: `\xHH` for the 32 bytes 0x80 to 0x9f and the byte
+  itself for the 96 bytes 0xa0 to 0xff. On a Linux file system, which
+  takes such a name, both verifiers write `PASS  d/\x9b.json` for `d`, a
+  directory holding a copy of `fixtures/baseline-valid.json` named by the
+  byte 0x9b then `.json`, and for that file named as an argument, and
+  `FAIL  d/\x9b.json  (load error: open d/\x9b.json: permission denied)`
+  for both once the file has mode 000, run as a user other than root.
+  `DocstringsNameTheEscapedBytes` in `verifiers/python/test_verify.py`
+  holds each of the four docstrings to name the bytes `_escape_controls`
+  writes as an escape, each line they quote for the byte 0x9b to the line
+  the verifier writes, and the load error of a fixture listed under that
+  byte to write it as `\x9b`. `verify.py` changes in its docstrings alone,
+  and no fixture changes.
 - `scripts/check_readme_counts.py` holds each of the six scans its
   self-test times to its bound in its own process's CPU time, read from
   `time.process_time()`, where it read wall-clock time, which also counts

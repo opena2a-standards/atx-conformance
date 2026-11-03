@@ -37,7 +37,8 @@ directory entered through a symbolic link, a .. after a symbolic link,
 which is read and named where the link leads, an argument that is not
 UTF-8, which a line on stderr writes as its bytes, and a fixture path that
 is not UTF-8, which the report line naming it, and the load error of such a
-file that cannot be read, write as its bytes.
+file that cannot be read, write as its bytes, a byte 0x80 to 0x9f aside in
+each, which those lines write as \\xHH.
 They pin the requiredSignatures threshold of the verifier state: the
 distinct Ed25519 keys a credential's signatures verify under, each counted
 once whatever keyId names it and no ML-DSA-65 signature counted, against
@@ -50,6 +51,11 @@ read verify.py itself: it imports no name it does not use, and its module
 docstring lists only the checks the verifier runs. Another test reads the
 "Arguments" section of docs/running-the-verifiers.md, which must quote
 d/link/.. and d/link/../ and the PASS line the verifier prints for each.
+Two more read the docstrings of verify.py that say a line writes an
+argument or a path that is not UTF-8 as its bytes: each must name the
+bytes 0x80 to 0x9f, which _escape_controls writes as \\xHH where they are
+not UTF-8, as that section names them, and each line one of them quotes
+for the byte 0x9b must be the line the verifier writes.
 One test imports this file with an os whose name is "nt" and which has no
 geteuid, as Python's os is on Windows: it must import, with NonUTF8Argument
 and ArgumentContract's test of a directory that cannot be listed skipped.
@@ -4665,6 +4671,91 @@ class BothVerifiersWriteTheSameReport(unittest.TestCase):
                 as_is, _ = _report_in_process(case, Path(tmp))
         self.assertEqual(escaped, go_out)
         self.assertNotEqual(as_is, go_out)
+
+
+class DocstringsNameTheEscapedBytes(unittest.TestCase):
+    """The docstrings of verify.py that say a line writes an argument or a
+    path that is not UTF-8 as its bytes: the module docstring's paragraph on
+    how the report names a fixture, and those of _say, _say_err and
+    _write_surrogate_escapes_as_bytes. None of them named the bytes main
+    writes otherwise, and the module docstring said such an argument is
+    written "and not as a backslash escape", while main passes each argument
+    and path a line quotes through _escape_controls first, which writes a
+    byte 0x80 to 0x9f that is not UTF-8 as \\xHH, as the "Arguments" section
+    of docs/running-the-verifiers.md says: for the byte 0x9b between x and
+    y.json, `error: x\\x9by.json: no such file or directory`. Each must name
+    the bytes _escape_controls writes as an escape, as that section names
+    them, each line one of them quotes for the byte 0x9b must be the line
+    main writes, and the load error the module docstring describes must
+    write that byte as \\x9b too."""
+
+    @staticmethod
+    def _docstrings() -> dict[str, str]:
+        # Each line break and the indentation around it read as one space,
+        # so a phrase split across two lines reads as one and the two spaces
+        # after PASS are kept.
+        module = verify.__doc__
+        start = module.index("A fixture named as a file is named in the report")
+        docs = {
+            "the module docstring": module[start : module.index("\n\n", start)],
+            "_say": verify._say.__doc__,
+            "_say_err": verify._say_err.__doc__,
+            "_write_surrogate_escapes_as_bytes": verify._write_surrogate_escapes_as_bytes.__doc__,
+        }
+        return {name: re.sub(r"[ \t]*\n[ \t]*", " ", doc) for name, doc in docs.items()}
+
+    def test_each_names_the_bytes_written_as_an_escape(self):
+        # The bytes, none of them UTF-8 alone, that _escape_controls writes
+        # as an escape where it reads the surrogate escape os.fsdecode reads
+        # each as, named as the Arguments section names them.
+        def read(byte: int) -> str:
+            return bytes([byte]).decode("utf-8", "surrogateescape")
+
+        escaped = [byte for byte in range(0x80, 0x100) if verify._escape_controls(read(byte)) != read(byte)]
+        self.assertTrue(escaped, "_escape_controls writes no byte that is not UTF-8 as an escape")
+        self.assertEqual(escaped, list(range(escaped[0], escaped[-1] + 1)))
+        aside = f"a byte 0x{escaped[0]:02x} to 0x{escaped[-1]:02x} aside"
+        self.assertIn(aside, _doc_section("docs/running-the-verifiers.md", "Arguments"))
+        for name, doc in self._docstrings().items():
+            with self.subTest(docstring=name):
+                self.assertIn(aside, doc)
+
+    @unittest.skipIf(os.name != "posix", "an argument of bytes that are not UTF-8 is a POSIX argument")
+    def test_each_quoted_line_is_the_line_main_writes(self):
+        # The error line of an argument naming no file, x then the byte 0x9b
+        # then y.json in the module docstring and that byte alone in
+        # _say_err's, and in _say's the PASS line of a fixture listed in d
+        # under that byte then .json. _json_names gives the name os.scandir
+        # gives such a file, so this runs where the file system refuses the
+        # name, as APFS does. d holds no file of that name, so without
+        # load_fixture replaced the fixture fails to load, and the module
+        # docstring's load error, which it does not quote, writes the byte
+        # as the PASS line does.
+        real_load = verify.load_fixture
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            Path("d").mkdir()
+            written = {
+                "the module docstring": _run_main_stderr_bytes(os.fsdecode(b"x\x9by.json"))[2],
+                "_say_err": _run_main_stderr_bytes(os.fsdecode(b"\x9b"))[2],
+            }
+            with mock.patch.object(verify, "_json_names", return_value=[os.fsdecode(b"\x9b.json")]):
+                load_error = _run_main_stdout_bytes("d")[1]
+                with mock.patch.object(verify, "load_fixture", lambda path: real_load(BASELINE_V10)):
+                    written["_say"] = _run_main_stdout_bytes("d")[1]
+        self.assertEqual(
+            load_error.splitlines()[0],
+            b"FAIL  d/\\x9b.json  (load error: open d/\\x9b.json: no such file or directory)",
+            load_error,
+        )
+        docs = self._docstrings()
+        for name, line in (
+            ("the module docstring", "error: x\\x9by.json: no such file or directory"),
+            ("_say_err", "error: \\x9b: no such file or directory"),
+            ("_say", "PASS  d/\\x9b.json"),
+        ):
+            with self.subTest(docstring=name):
+                self.assertEqual(written[name].splitlines()[0], line.encode("ascii"), written[name])
+                self.assertIn(f"`{line}`", docs[name])
 
 
 if __name__ == "__main__":
