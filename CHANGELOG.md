@@ -30,6 +30,16 @@ they should not.
   `pip install` line in a fenced block of the README, its pages and
   COSIGNERS.md to the flag. Its self-test adds 21 cases (293 cases green,
   from 272). No fixture or verifier changes.
+- README.md says each fixture bundles an ATX, the name the vendored
+  specification text `schemas/vendor/atx-spec/core.md` gives the
+  credential, where it said an Agent Trust Credential, a name core.md does
+  not use (#315). The wire names `atcVersion` and the
+  `Agent-Trust-Credential` header are unchanged.
+  `scripts/check_readme_counts.py` holds each `Agent Trust <word>` name in
+  the README and its pages to the names core.md uses, Agent Trust
+  eXtension and Agent Trust Protocol; a name written with hyphens is not
+  held. Its self-test adds 9 cases (302 cases green, from 293). No fixture
+  or verifier changes.
 
 ### Fixed
 

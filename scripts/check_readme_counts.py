@@ -265,6 +265,13 @@ environment whose pip was older than the newest release, the install line
 README.md gave wrote a notice to standard error that a new release of pip was
 available, the only text on its first-time path a reader did not ask for.
 
+It also holds each `Agent Trust <word>` name in the README text to the names
+the vendored specification text, schemas/vendor/atx-spec/core.md, uses.
+README.md said each fixture bundles "an Agent Trust Credential", a name
+core.md does not use: it calls the credential the Agent Trust eXtension
+(ATX), the name conformance.json gives the specification. A name whose words
+are joined by hyphens, as in the Agent-Trust-Credential header, is not held.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
 declares, each signature-verification Scope row that claims a set of fixtures
@@ -297,7 +304,8 @@ numbers matches the vectors, the jcs-vectors README scopes signing to the
 TBS projection, the Ed25519-only ACCEPT count matches the fixtures, the
 workflow runs every script the layout calls a CI gate, README.md states no
 version or date and states each toolchain minimum above its first command,
-and every fenced `pip install` command passes --disable-pip-version-check, 1
+every fenced `pip install` command passes --disable-pip-version-check, and
+each `Agent Trust <word>` name in the README text is one core.md uses, 1
 otherwise, 2 on an unknown argument.
 """
 
@@ -2779,6 +2787,41 @@ def pip_notice_failures(readme, cosigners):
     return failures
 
 
+# README.md said each fixture bundles "an Agent Trust Credential", a name the
+# specification does not give the credential: conformance.json names the
+# specification the Agent Trust eXtension, and the vendored copy of its
+# core.md calls the credential the Agent Trust eXtension (ATX) and the
+# protocol the Agent Trust Protocol. The words of a name are separated by
+# whitespace, a line break included, so the HTTP header core.md names,
+# Agent-Trust-Credential, written with hyphens, is not a name here.
+SPEC_TEXT_NAME = "schemas/vendor/atx-spec/core.md"
+SPEC_TEXT = ROOT / SPEC_TEXT_NAME
+AGENT_TRUST_NAME = re.compile(r"\bAgent\s+Trust\s+[A-Za-z]+")
+RETRACTED_CREDENTIAL_NAME = "Agent Trust Credential"
+
+
+def agent_trust_names(text):
+    """Each `Agent Trust <word>` name in `text`, its whitespace collapsed."""
+    return {" ".join(m.group(0).split()) for m in AGENT_TRUST_NAME.finditer(text or "")}
+
+
+def spec_name_failures(readme, spec_text):
+    """Each `Agent Trust <word>` name in the README text must be one the
+    vendored specification text (None when the file is missing) uses. With
+    no such name in that text the check fails rather than pass having read
+    none."""
+    if spec_text is None:
+        return [f"{SPEC_TEXT_NAME} not found; the names the README text gives "
+                f"the credential cannot be checked"]
+    names = agent_trust_names(spec_text)
+    if not names:
+        return [f"{SPEC_TEXT_NAME} uses no `Agent Trust <word>` name; refusing "
+                f"to pass the names in the README text vacuously"]
+    return [f"README names `{name}`, a name {SPEC_TEXT_NAME} does not use; it "
+            f"calls the credential the ATX and uses {' and '.join(sorted(names))}"
+            for name in sorted(agent_trust_names(readme) - names)]
+
+
 def count_vectors(root):
     return len(sorted((root / "jcs-vectors" / "vectors").glob("*.json")))
 
@@ -2950,7 +2993,8 @@ Tree = collections.namedtuple("Tree", (
     "key_vectors used_key_ids versions go_mod verify_go py_requirements "
     "py_dependency_texts jcs_sites tbs_sites tbs_canonical jcs_readme "
     "gate_sites gate_libraries profile outcomes suites scripts front_page "
-    "module_start nested_modules changelog release_tags verify_go_test"))
+    "module_start nested_modules changelog release_tags verify_go_test "
+    "spec_text"))
 
 # One check tree_failures() runs: its name, the call (`run(tree)` returns
 # failures) and the alteration the self-test makes to prove the call is still
@@ -4467,6 +4511,47 @@ def _pip_notice_cases(tree):
     return cases
 
 
+def _spec_name_cases(tree):
+    """The README text with the credential name README.md published added,
+    on one line and wrapped across two, adds a failure naming it; the header
+    name Agent-Trust-Credential and a name the specification text uses add
+    none. A missing specification text, or one using no `Agent Trust <word>`
+    name, adds the failure saying so."""
+    readme, spec_text = tree.readme, tree.spec_text
+    baseline = set(spec_name_failures(readme, spec_text))
+    cases = [(not baseline, f"the README text using only names {SPEC_TEXT_NAME} uses",
+              f"the published text fails: {sorted(baseline)}")]
+
+    def case(label, needle, text=readme, spec=spec_text):
+        new = [f for f in spec_name_failures(text, spec) if f not in baseline]
+        if needle is None:
+            cases.append((not new, label, f"expected no new failure, got {new}"))
+        else:
+            cases.append((any(needle in f for f in new), label,
+                          f"expected a failure naming {needle!r}, got {new}"))
+
+    named = f"README names `{RETRACTED_CREDENTIAL_NAME}`"
+    case(f"the README text calling the credential an {RETRACTED_CREDENTIAL_NAME}, "
+         f"as README.md published it", named,
+         text=readme + f"\nEach fixture bundles an {RETRACTED_CREDENTIAL_NAME}.\n")
+    case(f"the README text with `{RETRACTED_CREDENTIAL_NAME}` wrapped across a "
+         f"line break", named,
+         text=readme + "\nEach fixture bundles an Agent Trust\nCredential.\n")
+    case("the README text naming the Agent-Trust-Credential header", None,
+         text=readme + "\nThe ATX travels in the Agent-Trust-Credential header.\n")
+    used = sorted(agent_trust_names(spec_text))
+    if not used:
+        cases.append((False, f"a name {SPEC_TEXT_NAME} uses, added to the README text",
+                      f"{SPEC_TEXT_NAME} is missing or uses no `Agent Trust <word>` name"))
+    else:
+        case(f"the README text naming the {used[0]}, a name {SPEC_TEXT_NAME} uses",
+             None, text=readme + f"\nThe {used[0]} is named here.\n")
+    case(f"a missing {SPEC_TEXT_NAME}", f"{SPEC_TEXT_NAME} not found", spec=None)
+    case(f"a {SPEC_TEXT_NAME} using no `Agent Trust <word>` name",
+         "refusing to pass", spec=AGENT_TRUST_NAME.sub("ATX", spec_text or ""))
+    return cases
+
+
 def _wire_count(tree):
     row = FIXTURE_ROW.search(tree.readme)
     if row is None:
@@ -4654,6 +4739,11 @@ def _wire_pip_notice(tree):
             {"readme": (tree.readme or "") + f"\n```bash\n{RETRACTED_PIP_INSTALL}\n```\n"})
 
 
+def _wire_spec_name(tree):
+    return (f"README names `{RETRACTED_CREDENTIAL_NAME}`",
+            {"readme": (tree.readme or "") + f"\n{RETRACTED_CREDENTIAL_NAME}\n"})
+
+
 CHECKS = (
     Check("count",
           lambda t: check(t.readme, t.cosigners, t.fixtures, t.vectors, t.signing),
@@ -4717,6 +4807,8 @@ CHECKS = (
           _wire_prerequisite),
     Check("pip version check", lambda t: pip_notice_failures(t.readme, t.cosigners),
           _wire_pip_notice),
+    Check("specification name", lambda t: spec_name_failures(t.readme, t.spec_text),
+          _wire_spec_name),
     Check("README.md version or date", lambda t: front_page_failures(t.front_page),
           _wire_front_page),
 )
@@ -5070,6 +5162,7 @@ def self_test(tree, verbose):
     cases.extend(_front_page_cases(tree.front_page))
     cases.extend(_prerequisite_cases(tree))
     cases.extend(_pip_notice_cases(tree))
+    cases.extend(_spec_name_cases(tree))
 
     jcs_readme = tree.jcs_readme
     jcs_text = jcs_readme or ""
@@ -5163,6 +5256,7 @@ def main():
         release_tags=version_tags(ROOT),
         verify_go_test=(VERIFY_GO_TEST.read_text(encoding="utf-8")
                         if VERIFY_GO_TEST.exists() else None),
+        spec_text=SPEC_TEXT.read_text(encoding="utf-8") if SPEC_TEXT.exists() else None,
     )
 
     failed, total = self_test(tree, only_self_test)
@@ -5247,7 +5341,8 @@ def main():
           f"README.md states no version or date; "
           f"README.md states {' and '.join(toolchain_minimums(tree.readme))} above "
           f"its first command; each {PIP_SITE} in the README and COSIGNERS.md "
-          f"passes {PIP_VERSION_CHECK}")
+          f"passes {PIP_VERSION_CHECK}; each `Agent Trust <word>` name in the "
+          f"README is one {SPEC_TEXT_NAME} uses")
     return 0
 
 

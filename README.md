@@ -3,7 +3,7 @@
 Conformance fixtures and reference verifiers for the
 [ATX v1.0 and v1.1 credential schema](https://github.com/opena2a-standards/atx-spec).
 
-Each fixture is a byte-stable JSON file that bundles an Agent Trust Credential
+Each fixture is a byte-stable JSON file that bundles an ATX
 with verifier configuration and an expected outcome (ACCEPT or REJECT). Two
 SDK-independent reference verifiers (Go and Python) walk the fixture set and
 report PASS or FAIL per vector. Fixture bytes are pinned in
