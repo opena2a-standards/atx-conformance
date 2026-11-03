@@ -221,6 +221,26 @@ they should not.
   no test. The self-test adds six cases (322 altered count sites, from
   316): `DISCOVER` and `Discover` must count as a run, and those three
   spellings and a module named `UNITTEST` must not. No fixture changes.
+- `docs/demo/record-atx-verify.sh` has the render write its output into the
+  container's own file system instead of a bind-mounted directory of the
+  caller's (#312). The container runs as root with `--cap-drop ALL`, so root
+  has no `CAP_DAC_OVERRIDE` and gets the ordinary permission checks, and a
+  rootful Linux Docker Engine without user-namespace remapping keeps a bind
+  mount's host owner and mode. In the directory `mktemp -d` made (owned by
+  the caller, mode 0700) and mounted at `/work/docs/demo`, the render's first
+  write, `os.makedirs('docs/demo/out')`, was refused with
+  `Permission denied`. The render now writes into `/work/docs/demo` in the
+  container, where root owns `/work`. The script makes the container with
+  `docker create`, runs it with `docker start --attach`, copies
+  `/work/docs/demo` out with `docker cp` once it stops, the copies made as
+  the caller's files, and removes the container with `docker rm --force`
+  when it ends. `--cap-drop ALL`, `--security-opt no-new-privileges` and
+  the `--pids-limit` the #311 entry above derives from the docker host's
+  CPU count are unchanged, as are the sidecar's `runFlags`. `RenderOutput`
+  in `docs/demo/test_record_atx_verify.py` runs the script against a
+  stand-in for `docker` that refuses the render's calls as the kernel of
+  such an engine refuses them, and the stub of its `PidsLimit` cases reads
+  the limit from the arguments of `docker create` in place of `docker run`.
 
 ## v0.1.0
 
