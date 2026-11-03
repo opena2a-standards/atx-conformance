@@ -15,6 +15,38 @@ they should not.
 
 - Both reference verifiers print fixture fields and file names with control characters escaped.
 
+### Fixed
+
+- `docs/demo/record-atx-verify.sh`, `--dry-run` included, reads
+  `docs/demo/docker/Dockerfile` one instruction at a time and exits 1 on an
+  image reference other than the FROM lines of the build stage and the
+  render stage, the two images the sidecar's `recorder` records as
+  `builderImage` and `baseImage` (#314). It read those two lines,
+  `FROM <image> AS vhsbuild` and `FROM <image>`, and no other, so
+  `--dry-run` exited 0 with a third FROM line
+  (`FROM busybox:latest AS helper`, the same in lower case, or with
+  `--platform=linux/amd64`), and with
+  `COPY --from=busybox:latest /bin/busybox /bin/busybox` or
+  `RUN --mount=type=bind,from=busybox:latest,target=/bb true` in the
+  render stage, that COPY split over continuation lines included; a second
+  FROM line of either form was refused as an image not named by digest,
+  with both references in one message. The script joins a line that ends
+  in a backslash to the next, skips comment and blank lines, and refuses: a
+  FROM line in another form (`from` and `From` lines, and lines with
+  `--platform`, among them), or either form twice; a `COPY --from` value,
+  or a `from=` key of a `RUN --mount` value, other than `vhsbuild`; a
+  flag of `COPY` or `RUN` written with a quote or a backslash; `ONBUILD`;
+  a word that is not a Dockerfile instruction; `<<`, the form of a
+  heredoc; a byte other than printable ASCII or a tab outside a comment; a
+  NUL byte; and, above the first instruction, a comment in the form of a
+  parser directive (`# syntax=` names an image of its own). Each of these
+  refusals but the NUL byte's names its line. The two images it reads are
+  still refused unless written as `<name>@sha256:<64 hex digits>`. On the
+  committed Dockerfile, `--dry-run` prints what it printed before.
+  `docs/demo/test_record_atx_verify.py` holds the script to each of these,
+  with and without `--dry-run`. The committed outputs and sidecar are not
+  re-rendered.
+
 ## v0.1.0
 
 ### Added
