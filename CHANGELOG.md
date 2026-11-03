@@ -152,6 +152,22 @@ they should not.
   altered count sites, from 272): a 0.6 s sleep, in which the process
   does not run, held to a 0.5 s bound, which the wall-clock reading
   fails. No fixture changes.
+- The Go reference verifier builds the v1.0 and v1.1 signed payloads from
+  the `trustScore` value the credential writes, decided on every digit
+  written, as the Python reference verifier's `float()` reads it (#308).
+  It read `trustScore` with `strconv.ParseFloat`, which keeps at most 800
+  digits of a literal and places the decimal point by the digits it kept:
+  it read `875` followed by 900 zeros and `e-901`, whose value is 87.5, as
+  8.75e-102, and refused the v1.0 and v1.1 baselines carrying it as
+  `SIGNATURE_INVALID`, where the Python verifier accepts them. It read `1`
+  followed by 1000 zeros and `e-650`, whose value is 10^350, as 1e+149,
+  where the Python verifier refuses it as `PARSE_ERROR`; the Go verifier now
+  refuses it as `PARSE_ERROR` too, with the reason it gives for `1e400`. It
+  decides that range with `numberOutsideFloat64Range` and
+  `float64OverflowDigits`, which the #302 entry above removes with the
+  `declaredPurpose` check they served; they stay for `trustScore`, and
+  `TestNumberOutsideFloat64Range` pins them at 2^1024 - 2^970 again. No
+  fixture changes.
 
 ## v0.1.0
 
