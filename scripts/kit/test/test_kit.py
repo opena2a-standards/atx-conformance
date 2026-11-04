@@ -7,8 +7,10 @@ check fail.
   test_kit.py --ci
       Cells that need no network and no gh: the action pins, the release
       workflow's shape, SHA256SUMS and the file-list check, the label census,
-      the data protection kit check, the first-run screen's form and the
-      release notes' --version claim.
+      the data protection kit check, the first-run screen's form, the
+      release notes' --version claim, and check-capture as the release
+      workflow's test job runs it: the kit's own copy, unpacked outside any
+      repository, with no Python to call.
   test_kit.py --sandboxed
       Cells that run the scripts naming gh (candidate_equal.sh,
       verify_release.sh, write_stick.sh) with test doubles for gh, git and
@@ -31,6 +33,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -397,6 +400,92 @@ def cells_claims() -> None:
          f"{passed.returncode if passed else 'not run'}, on the (devel) line exit {refused.returncode}")
 
 
+def cells_capture_in_the_unpacked_kit() -> None:
+    """check-capture as the release workflow's test job runs it: the kit's own
+    copy of assemble.sh (git archive HEAD, unpacked in a scratch folder outside
+    any repository), never the repository's, with KIT_PYTHON naming a file that
+    does not exist, so any Python call fails the cell."""
+    parent = scratch("j")
+    copy = parent / "interop-day-kit"
+    tree_into(copy)
+    sha = git("rev-parse", "HEAD")
+    commit_time = int(git("show", "-s", "--format=%ct", "HEAD"))
+    stamp = time.strftime("%Y%m%d%H%M%S", time.gmtime(commit_time))
+    go_version = "1.27.3"
+    module = re.search(r"^module (\S+)$", (copy / "go.mod").read_text(), re.M).group(1)
+    n = len(list((copy / "fixtures").glob("*.json")))
+    (parent / "capture.txt").write_text(f"summary: {n} pass, 0 fail ({n} fixtures)\n")
+    (parent / "capture.rc").write_text("0\n")
+    no_python = parent / "no-python" / "python3"
+    env = {"KIT_COMMIT": sha, "KIT_GO_VERSION": go_version, "PATH": os.environ.get("PATH", ""),
+           "HOME": os.environ.get("HOME", ""), "KIT_PYTHON": str(no_python)}
+    stand_in = copy / "bin" / "linux-amd64" / "atx-verify"
+    stand_in.parent.mkdir(parents=True)
+
+    def line(t: str = stamp, sha12: str = sha[:12], go: str = go_version) -> str:
+        return f"atx-verify: {module} v0.0.0-{t}-{sha12}, built with go{go}"
+
+    def check_capture(printed: str, out: str):
+        # The precondition witness first: git finds no repository from the
+        # copy's scripts/kit, and KIT_PYTHON names nothing. A witness that does
+        # not hold fails the cell; it is never a skip.
+        witness = run(["git", "-C", copy / "scripts" / "kit", "rev-parse", "--git-dir"], env=env)
+        stand_in.write_text(f"#!/bin/sh\nprintf '%s\\n' {shlex.quote(printed)}\n")
+        stand_in.chmod(0o755)
+        r = run(["bash", "interop-day-kit/scripts/kit/assemble.sh", "check-capture", "interop-day-kit",
+                 "capture.txt", "capture.rc", "linux-amd64", out], cwd=parent, env=env)
+        detail = (f"git rev-parse --git-dir exit {witness.returncode}; check-capture exit {r.returncode}: "
+                  + (r.stdout + r.stderr).strip().split("\n")[-1][:160])
+        return witness.returncode != 0 and not no_python.exists(), r, detail
+
+    held, r, detail = check_capture(line(), "out-head")
+    wrote = [parent / "out-head" / f"linux-amd64{ext}" for ext in (".txt", ".version", ".sha256")]
+    cell("j1 the kit's own check-capture, unpacked outside any repository, with no Python: "
+         "the line for HEAD passes and linux-amd64.version holds it",
+         held and r.returncode == 0 and all(p.exists() for p in wrote)
+         and wrote[0].read_text() == (parent / "capture.txt").read_text()
+         and wrote[1].read_text() == line() + "\n"
+         and wrote[2].read_text().strip() == hashlib.sha256(stand_in.read_bytes()).hexdigest(),
+         detail)
+
+    parent_commit = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--verify", "-q", "HEAD^"],
+                                   capture_output=True, text=True).stdout.strip()
+    refusals = [
+        ("a +dirty build", f"atx-verify: {module} v0.0.0-{stamp}-{sha[:12]}+dirty, built with go{go_version}"),
+        ("a (devel), commit <sha> line", f"atx-verify: {module} (devel), commit {sha}, built with go{go_version}"),
+        ("another commit's 12 hex (HEAD's parent)", line(sha12=parent_commit[:12]) if parent_commit else None),
+        ("HEAD's 12 hex with the twelfth changed", line(sha12=sha[:11] + ("1" if sha[11] == "0" else "0"))),
+        ("another Go version (go1.27.2)", line(go="1.27.2")),
+        ("a 13-digit time", line(t=stamp[:13])),
+        ("a 15-digit time", line(t=stamp + "0")),
+        ("text before the line", "x" + line()),
+        ("text after the line", line() + " "),
+    ]
+    for i, (what, printed) in enumerate(refusals, 2):
+        name = f"j{i} the kit's own check-capture refuses {what} with its own line"
+        if printed is None:
+            cell(name, False, "HEAD^ is not in this clone")
+            continue
+        held, r, detail = check_capture(printed, f"out-{i}")
+        cell(name, held and r.returncode == 1 and f"linux-amd64: --version prints '{printed}', not '" in r.stderr
+             and not (parent / f"out-{i}").exists(), detail)
+
+    # A 14-digit time that is not the commit's: check-capture takes the form,
+    # and kit(), run from the repository, compares the whole line and refuses.
+    held, taken, _ = check_capture(line(t=time.strftime("%Y%m%d%H%M%S", time.gmtime(commit_time + 1))), "out-later")
+    stage_tar = parent / "kit-stage.tar"
+    archived = run([PY, "-I", KIT / "kit_files.py", "archive", copy, stage_tar, "--mtime", "0", "--plain"])
+    r = run(["bash", KIT / "assemble.sh", "kit", stage_tar, parent / "out-later", scratch("j-kit")],
+            env=dict(os.environ, KIT_TAG="kit-2026-11-05", KIT_REPO="opena2a-standards/atx-conformance",
+                     KIT_COMMIT=sha, KIT_GO_VERSION=go_version, KIT_PYTHON=PY))
+    cell(f"j{len(refusals) + 2} a capture whose 14-digit time is not HEAD's: the kit's check-capture takes "
+         "its form, kit() from the repository refuses it",
+         held and taken.returncode == 0 and archived.returncode == 0 and r.returncode == 1
+         and "the version line is not" in r.stderr,
+         f"check-capture exit {taken.returncode}; kit exit {r.returncode}: "
+         + (r.stdout + r.stderr).strip().split("\n")[-1][:160])
+
+
 # ---------------------------------------------------------- --sandboxed cells
 
 def write_stub(directory: Path, name: str, body: str) -> None:
@@ -670,6 +759,7 @@ def main(argv: list[str]) -> int:
             cells_kit_check()
             cells_readme()
             cells_claims()
+            cells_capture_in_the_unpacked_kit()
         if "--sandboxed" in modes:
             reason = sandbox_setup()
             if reason:

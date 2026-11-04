@@ -123,7 +123,7 @@ stage() {
 }
 
 check_capture() {
-  local kit=$1 capture=$2 rc_file=$3 target=$4 out=$5 os n expected bin module version want rc path
+  local kit=$1 capture=$2 rc_file=$3 target=$4 out=$5 os n expected bin module version prefix suffix stamp rc path
   need_env KIT_COMMIT KIT_GO_VERSION
   check_commit "$KIT_COMMIT"
   os=${target%-*}
@@ -142,8 +142,18 @@ check_capture() {
   bin="$kit/bin/$target/atx-verify$(ext_of "$os")"
   module=$(awk '$1 == "module" { print $2; exit }' "$kit/go.mod")
   version=$("$bin" --version | tr -d '\r')
-  want=$(version_line "$module" "$KIT_COMMIT")
-  [ "$version" = "$want" ] || die "$target: --version prints '$version', not '$want'"
+  # check-capture runs in the unpacked kit, which is not a repository, and runs
+  # no Python, so it does not read the commit's time: the line must be the one
+  # Go stamps for a clean build of KIT_COMMIT with go$KIT_GO_VERSION, with 14
+  # ASCII digits where the time goes and every other character compared as a
+  # fixed string. kit() compares the whole line, the time included, where the
+  # checkout is.
+  prefix="atx-verify: $module v0.0.0-"
+  suffix="-${KIT_COMMIT:0:12}, built with go$KIT_GO_VERSION"
+  stamp=${version#"$prefix"}
+  stamp=${stamp%"$suffix"}
+  [[ "$stamp" =~ ^[0123456789]{14}$ ]] && [ "$prefix$stamp$suffix" = "$version" ] ||
+    die "$target: --version prints '$version', not '${prefix}<14 digits>${suffix}'"
   mkdir -p "$out"
   cp "$capture" "$out/$target.txt"
   printf '%s\n' "$version" >"$out/$target.version"
