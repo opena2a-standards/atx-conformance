@@ -19,3 +19,5 @@ repository is in [versioning.md](versioning.md).
 | cryptography (Python Ed25519) | >= 42.0.0 | [pyca/cryptography](https://github.com/pyca/cryptography) |
 | dilithium-py (Python ML-DSA-65) | >= 1.1.0 | [GiacomoPope/dilithium-py](https://github.com/GiacomoPope/dilithium-py) |
 | Conformance fixture format | v1 (this repo) | [`schemas/fixture-v1.schema.json`](../schemas/fixture-v1.schema.json) |
+
+Until this suite re-pins, atx-spec `main` governs where the two differ, and `core.md` §12 (Coverage) lists the differences. A verifier that follows `main` rejects the five `atcVersion` 1.1 fixtures §12 names; §12 excepts them from the pinned-verdict requirement, so that rejection is not a conformance failure. On a revocation response in the ATP-SPEC v1.0.0-rc1 §8.1 shape, a verifier looks the agent up by `agentDid`, as §1.3 step 6 says, whatever key the suite's fixture lists carry.

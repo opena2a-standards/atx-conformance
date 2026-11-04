@@ -1303,6 +1303,8 @@ they should not.
   count for the commit, and the closing line says so. The kit release's
   count names no tag and is not held. Its self-test adds 24 cases. No
   fixture or verifier changes.
+- `docs/version-pinning.md` notes where atx-spec `main` governs until this
+  suite re-pins.
 
 ## v0.1.0
 
