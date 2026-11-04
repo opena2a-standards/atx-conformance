@@ -35,6 +35,26 @@
 set -euo pipefail
 export LC_ALL=C PYTHONDONTWRITEBYTECODE=1
 
+usage='usage: assemble.sh stage <out-dir>
+       assemble.sh check-capture <kit-dir> <capture> <exit-code-file> <os>-<arch> <out-dir>
+       assemble.sh kit <kit-stage.tar> <captures-dir> <out-dir>
+       assemble.sh claims <out-dir> <captures-dir>
+       assemble.sh local <out-dir>
+       assemble.sh -h | --help'
+# -h or --help prints the usage on stdout. An option other than those, or a
+# first argument that names no command, is named on stderr above the usage,
+# and the script exits 2 before it reads or writes anything.
+want_help=0 unknown=
+case "${1:-}" in ''|-?*|stage|check-capture|kit|claims|local) ;; *) unknown=$1 ;; esac
+for opt in "$@"; do
+  case "$opt" in
+    -h|--help) want_help=1 ;;
+    -?*) unknown="${unknown:+$unknown }$opt" ;;
+  esac
+done
+if [ -n "$unknown" ]; then printf 'unknown argument(s): %s\n%s\n' "$unknown" "$usage" >&2; exit 2; fi
+if [ "$want_help" = 1 ]; then printf '%s\n' "$usage"; exit 0; fi
+
 here=$(cd "$(dirname "$0")" && pwd)
 py=${KIT_PYTHON:-python3}
 workflow_file=.github/workflows/kit-release.yml
