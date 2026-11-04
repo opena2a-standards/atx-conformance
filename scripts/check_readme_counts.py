@@ -171,7 +171,16 @@ workflow file counted, so a YAML comment naming a script made it pass. A
 `python3 -m unittest discover` run over scripts/ in such a command counts as
 running each scripts/*.py its pattern matches: the layout called
 scripts/test_script_options.py run by hand while the workflow's Python unit
-tests step discovered and ran it.
+tests step discovered and ran it. The arguments after `discover` are read as
+unittest reads them, by argparse with unittest's discover options. The check
+had read the value of -k or --durations as a positional argument, so as the
+start directory or the pattern, ignored -s or -p joined to its value with no
+`=` (`-sscripts`), and kept a start directory or pattern given by position
+over a later -s or -p, where unittest keeps the last value given. With
+`--durations 5` added to the workflow's discover line it reported
+scripts/test_script_options.py as not run, and with that line changed to
+`discover -v scripts -s verifiers/python`, which discovers in
+verifiers/python, it counted the script as run.
 
 The criterion (c) claim is matched in more wordings than the one the README
 used ("fulfils criterion (c)", "closes criterion c"), and a failure is
@@ -309,6 +318,7 @@ each `Agent Trust <word>` name in the README text is one core.md uses, 1
 otherwise, 2 on an unknown argument.
 """
 
+import argparse
 import collections
 import fnmatch
 import json
@@ -2095,15 +2105,55 @@ UNITTEST_DISCOVER = re.compile(
 TEST_MODULE_NAME = re.compile(r"[_a-z]\w*\.py$", re.I)
 
 
+class UnittestUsageError(Exception):
+    """Arguments unittest's discover parser refuses: unittest prints its
+    usage, exits 2 and runs no test."""
+
+
+class UnittestDiscoverParser(argparse.ArgumentParser):
+    """Reads the arguments of `python3 -m unittest discover` as unittest does
+    in Python 3.12, the version the workflow sets up. unittest builds its
+    discover parser with argparse from these option strings, each taking a
+    value or not as here, and also takes the start directory, the pattern
+    and the top-level directory by position, in that order. So a later -s,
+    -p or -t value replaces an earlier one given by option or by position,
+    an option that takes a value consumes the argument after it, `-sDIR`
+    reads as `-s DIR`, and a long option may be shortened to a prefix only
+    it has. Where unittest stops with a usage error, this parser raises
+    UnittestUsageError. -h and --help, on which unittest prints its usage
+    and runs no test, are read here as a flag."""
+
+    def __init__(self):
+        super().__init__(prog="python3 -m unittest discover", add_help=False)
+        for flags in (("-h", "--help"), ("-v", "--verbose"), ("-q", "--quiet"),
+                      ("--locals",), ("-f", "--failfast"), ("-c", "--catch"),
+                      ("-b", "--buffer")):
+            self.add_argument(*flags, action="store_true")
+        self.add_argument("--durations", type=int)
+        self.add_argument("-k", action="append")
+        self.add_argument("-s", "--start-directory", dest="start")
+        self.add_argument("-p", "--pattern", dest="pattern")
+        self.add_argument("-t", "--top-level-directory", dest="top")
+        for dest in ("start", "pattern", "top"):
+            self.add_argument(dest, nargs="?", default=argparse.SUPPRESS)
+
+    def error(self, message):
+        raise UnittestUsageError(message)
+
+
 def unittest_discover_scripts(command, scripts):
     """The scripts/*.py names a `python3 -m unittest discover` run in the
     command text imports: the start directory, given by -s or
     --start-directory or as the first positional argument, must be scripts/,
     and each name must match the pattern, given by -p or --pattern or as the
     second positional argument (unittest's default `test*.py`), and be a name
-    unittest imports as a module. The arguments end at the first shell
-    operator; a file-descriptor number before a redirection (`2>&1`) is not
-    an argument. A discovery run from another directory counts no script."""
+    unittest imports as a module. UnittestDiscoverParser reads the arguments
+    as unittest reads them: a later -s or -p value replaces a start
+    directory or pattern given before it, by option or by position, and a
+    run with arguments unittest refuses, or with -h or --help, counts no
+    script. The arguments end at the first shell operator; a file-descriptor
+    number before a redirection (`2>&1`) is not an argument. A discovery run
+    from another directory counts no script."""
     found = set()
     for match in UNITTEST_DISCOVER.finditer(command):
         lexer = shlex.shlex(match.group(1), posix=True, punctuation_chars=True)
@@ -2119,35 +2169,17 @@ def unittest_discover_scripts(command, scripts):
                     args.pop()
                 break
             args.append(token)
-        start, pattern, positional = ".", "test*.py", []
-        i = 0
-        while i < len(args):
-            arg = args[i]
-            option, equals, inline = arg.partition("=")
-            if option in ("-s", "--start-directory", "-p", "--pattern",
-                          "-t", "--top-level-directory"):
-                if equals:
-                    value, i = inline, i + 1
-                else:
-                    value = args[i + 1] if i + 1 < len(args) else ""
-                    i += 2
-                if option in ("-s", "--start-directory"):
-                    start = value
-                elif option in ("-p", "--pattern"):
-                    pattern = value
-                continue
-            if not arg.startswith("-"):
-                positional.append(arg)
-            i += 1
-        if positional:
-            start = positional[0]
-        if len(positional) > 1:
-            pattern = positional[1]
-        if os.path.normpath(start) != "scripts":
+        # unittest sets these before its parser reads the arguments.
+        read = argparse.Namespace(start=".", pattern="test*.py", top=None)
+        try:
+            UnittestDiscoverParser().parse_args(args, read)
+        except UnittestUsageError:
+            continue
+        if read.help or os.path.normpath(read.start) != "scripts":
             continue
         found.update(name for name in scripts
                      if TEST_MODULE_NAME.match(name)
-                     and fnmatch.fnmatchcase(name, pattern))
+                     and fnmatch.fnmatchcase(name, read.pattern))
     return found
 
 
@@ -4255,11 +4287,17 @@ def _ci_gate_label_cases(readme, workflow, scripts):
     failure. Last, name
     it under the single-quoted key `'ru''n'`, which reads as `ru'n`: that
     must add a failure. Then give an invented script a layout line calling
-    it a CI gate and run `python3 -m unittest discover` from an added step:
-    over scripts/ with -s and -p, and over scripts/ with the directory and
-    pattern given by position, neither may add a failure; over another
-    directory, and over scripts/ with a pattern that does not match the
-    script, each must."""
+    it a CI gate and run `python3 -m unittest discover` from an added step.
+    Over scripts/ with -s and -p; over scripts/ with the directory and
+    pattern given by position; with -s and -p after -k NAME, and after
+    --durations N; with -s and -p written with their values attached; with
+    -s scripts after another directory given by position; and with
+    --start=scripts and --pat, two shortened long options: none may add a
+    failure. Over another directory; over scripts/ with a pattern that does
+    not match the script; with scripts/ and the pattern given by position,
+    then -s naming another directory; with them given by position, then -p
+    naming a pattern that does not match; with an option unittest refuses;
+    and with -h: each must."""
     labels = (
         "scripts/*.py script that no workflow step runs",
         "script the workflow stops naming",
@@ -4285,6 +4323,15 @@ def _ci_gate_label_cases(readme, workflow, scripts):
         "script run by a unittest discover step over scripts/ by position",
         "script matched by a unittest discover step over another directory",
         "script a unittest discover step over scripts/ does not match",
+        "script run by a unittest discover step with -k NAME before -s and -p",
+        "script run by a unittest discover step with --durations N before -s and -p",
+        "script run by a unittest discover step with -s and -p values attached",
+        "script run by a unittest discover step whose -s follows another directory",
+        "script matched by position in a unittest discover step, then -s elsewhere",
+        "script matched by position in a unittest discover step, then not by -p",
+        "script run by a unittest discover step with abbreviated long options",
+        "script a unittest discover step with an option unittest refuses does not run",
+        "script a unittest discover step with -h does not run",
     )
     if not CI_GATE_GLOB.search(readme):
         why = ("no `scripts/*.py  CI gates` layout line found in README.md or its "
@@ -4374,7 +4421,16 @@ def _ci_gate_label_cases(readme, workflow, scripts):
              False),
             (labels[21], "scripts invented_*.py", False),
             (labels[22], "-s verifiers/python -p 'invented_*.py'", True),
-            (labels[23], "-s scripts -p 'test_*.py'", True)):
+            (labels[23], "-s scripts -p 'test_*.py'", True),
+            (labels[24], "-k invented -s scripts -p 'invented_*.py'", False),
+            (labels[25], "-v --durations 5 -s scripts -p 'invented_*.py'", False),
+            (labels[26], "-sscripts '-pinvented_*.py'", False),
+            (labels[27], "verifiers/python -s scripts -p 'invented_*.py'", False),
+            (labels[28], "scripts 'invented_*.py' -s verifiers/python", True),
+            (labels[29], "scripts 'invented_*.py' -p 'test_*.py'", True),
+            (labels[30], "--start=scripts --pat 'invented_*.py'", False),
+            (labels[31], "-s scripts -p 'invented_*.py' --bogus", True),
+            (labels[32], "-h -s scripts -p 'invented_*.py'", True)):
         flow = (workflow or "") + f"\n      - run: python3 -m unittest discover {step}\n"
         got = new(readme + line, flow, files)
         cases.append((any(want in f for f in got) == reported, label,
