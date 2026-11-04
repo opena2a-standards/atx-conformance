@@ -192,7 +192,50 @@ def cmd_flip(src: Path, out: Path) -> None:
     out.write_bytes(bytes(data))
 
 
+# -h or --help prints USAGE on stdout. An option this script does not take, or
+# a first argument that names no command, is named on stderr above USAGE, and
+# main exits 2 before it reads or writes a file.
+USAGE = """\
+usage: kit_files.py sums <kit-dir>
+       kit_files.py listcheck <kit-dir> <SHA256SUMS>
+       kit_files.py archive <kit-dir> <out> --mtime <unix-time> [--plain]
+       kit_files.py extract <archive> <dest-dir>
+       kit_files.py flip <file> <out>
+       kit_files.py -h | --help
+"""
+COMMANDS = ("sums", "listcheck", "archive", "extract", "flip")
+OPTIONS = {"--mtime": 1, "--plain": 0}  # each option this script takes, and how many values follow it
+
+
+def is_option(arg: str) -> bool:
+    return arg.startswith("-") and arg != "-"
+
+
+def read_options(argv: list[str]) -> tuple[bool, list[str]]:
+    """Whether -h or --help is given, and the arguments this script does not know."""
+    unknown = [argv[0]] if argv and argv[0] and argv[0] not in COMMANDS and not is_option(argv[0]) else []
+    wants_help, values = False, 0
+    for arg in argv:
+        if values:
+            values -= 1
+        elif arg in ("-h", "--help"):
+            wants_help = True
+        elif arg in OPTIONS:
+            values = OPTIONS[arg]
+        elif is_option(arg):
+            unknown.append(arg)
+    return wants_help, unknown
+
+
 def main(argv: list[str]) -> None:
+    wants_help, unknown = read_options(argv)
+    if unknown:
+        print(f"unknown argument(s): {' '.join(unknown)}", file=sys.stderr)
+        print(USAGE, end="", file=sys.stderr)
+        sys.exit(2)
+    if wants_help:
+        print(USAGE, end="")
+        sys.exit(0)
     if len(argv) >= 2 and argv[0] == "sums" and len(argv) == 2:
         cmd_sums(Path(argv[1]))
     elif len(argv) == 3 and argv[0] == "listcheck":

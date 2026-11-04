@@ -199,7 +199,38 @@ def cmd_check_claims(notes_path: Path, version_files: list[Path]) -> None:
     print(f"render: the notes' {len(claims)} --version claim(s) match all {len(version_files)} binaries")
 
 
+# -h or --help prints USAGE on stdout. An option, or a first argument that
+# names no command, is named on stderr above USAGE, and main exits 2 before it
+# reads or writes a file.
+USAGE = """\
+usage: render.py texts <facts.json> <templates-dir> <kit-dir> <dist-dir>
+       render.py check-readme <README-START-HERE.md> <expected-last-line>
+       render.py check-claims <release-notes.md> <version-line-file>...
+       render.py -h | --help
+"""
+COMMANDS = ("texts", "check-readme", "check-claims")
+
+
+def is_option(arg: str) -> bool:
+    return arg.startswith("-") and arg != "-"
+
+
+def read_options(argv: list[str]) -> tuple[bool, list[str]]:
+    """Whether -h or --help is given, and the arguments this script does not know."""
+    unknown = [argv[0]] if argv and argv[0] and argv[0] not in COMMANDS and not is_option(argv[0]) else []
+    unknown += [arg for arg in argv if is_option(arg) and arg not in ("-h", "--help")]
+    return "-h" in argv or "--help" in argv, unknown
+
+
 def main(argv: list[str]) -> None:
+    wants_help, unknown = read_options(argv)
+    if unknown:
+        print(f"unknown argument(s): {' '.join(unknown)}", file=sys.stderr)
+        print(USAGE, end="", file=sys.stderr)
+        sys.exit(2)
+    if wants_help:
+        print(USAGE, end="")
+        sys.exit(0)
     if len(argv) == 5 and argv[0] == "texts":
         cmd_texts(Path(argv[1]), Path(argv[2]), Path(argv[3]), Path(argv[4]))
     elif len(argv) == 3 and argv[0] == "check-readme":

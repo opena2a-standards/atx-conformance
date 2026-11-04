@@ -46,7 +46,29 @@ def seed_members(value, path="$"):
             yield from seed_members(inner, f"{path}[{i}]")
 
 
+# -h or --help prints USAGE on stdout. Any other option is named on stderr above
+# USAGE, and main returns 2 before it reads the folder.
+USAGE = """\
+usage: label_census.py <folder>
+       label_census.py -h | --help
+"""
+
+
+def read_options(argv: list[str]) -> tuple[bool, list[str]]:
+    """Whether -h or --help is given, and the options this script does not take."""
+    unknown = [arg for arg in argv if arg.startswith("-") and arg != "-" and arg not in ("-h", "--help")]
+    return "-h" in argv or "--help" in argv, unknown
+
+
 def main(argv: list[str]) -> int:
+    wants_help, unknown = read_options(argv)
+    if unknown:
+        print(f"unknown argument(s): {' '.join(unknown)}", file=sys.stderr)
+        print(USAGE, end="", file=sys.stderr)
+        return 2
+    if wants_help:
+        print(USAGE, end="")
+        return 0
     if len(argv) != 1:
         print(__doc__, file=sys.stderr)
         return 2

@@ -301,7 +301,47 @@ def cmd_release(path: Path) -> int:
     return 1 if problems else 0
 
 
+# -h or --help prints USAGE on stdout. An option this script does not take, or
+# a first argument that names no command, is named on stderr above USAGE, and
+# main returns 2 before it reads a workflow.
+USAGE = """\
+usage: check_workflow.py pins <workflow.yml> [--job <job-id>]
+       check_workflow.py release <kit-release.yml>
+       check_workflow.py -h | --help
+"""
+COMMANDS = ("pins", "release")
+OPTIONS = {"--job": 1}  # each option this script takes, and how many values follow it
+
+
+def is_option(arg: str) -> bool:
+    return arg.startswith("-") and arg != "-"
+
+
+def read_options(argv: list[str]) -> tuple[bool, list[str]]:
+    """Whether -h or --help is given, and the arguments this script does not know."""
+    unknown = [argv[0]] if argv and argv[0] and argv[0] not in COMMANDS and not is_option(argv[0]) else []
+    wants_help, values = False, 0
+    for arg in argv:
+        if values:
+            values -= 1
+        elif arg in ("-h", "--help"):
+            wants_help = True
+        elif arg in OPTIONS:
+            values = OPTIONS[arg]
+        elif is_option(arg):
+            unknown.append(arg)
+    return wants_help, unknown
+
+
 def main(argv: list[str]) -> int:
+    wants_help, unknown = read_options(argv)
+    if unknown:
+        print(f"unknown argument(s): {' '.join(unknown)}", file=sys.stderr)
+        print(USAGE, end="", file=sys.stderr)
+        return 2
+    if wants_help:
+        print(USAGE, end="")
+        return 0
     try:
         if len(argv) in (2, 4) and argv[0] == "pins":
             job = argv[3] if len(argv) == 4 and argv[2] == "--job" else None
