@@ -15,13 +15,13 @@ import (
 )
 
 // The fixture counts conformance.json holds at this commit, which the
-// self-tests' buckets follow: 41 fixtures, 9 that must be accepted and 32
+// self-tests' buckets follow: 43 fixtures, 10 that must be accepted and 33
 // that must be rejected. A change to the fixture set changes them here, in
 // the same commit as the README's counts.
 const (
-	fixturesAtThisCommit   = 41
-	mustAcceptAtThisCommit = 9
-	mustRejectAtThisCommit = 32
+	fixturesAtThisCommit   = 43
+	mustAcceptAtThisCommit = 10
+	mustRejectAtThisCommit = 33
 )
 
 // fixedEnv is a runEnv with a fixed clock and a pseudo-version build.
@@ -144,7 +144,7 @@ func TestSelfTest3AlwaysAcceptIsCaught(t *testing.T) {
 	if code != 1 {
 		t.Errorf("exit %d, want 1\n%s", code, out)
 	}
-	want := "Verifier always ACCEPT answered 41 of 41 ATX credentials and agreed with the answer key on 9; it accepted 32 that must fail and rejected 0 that must pass."
+	want := "Verifier always ACCEPT answered 43 of 43 ATX credentials and agreed with the answer key on 10; it accepted 33 that must fail and rejected 0 that must pass."
 	if rep.InteropNote != want {
 		t.Errorf("interop note = %q, want %q", rep.InteropNote, want)
 	}
@@ -168,11 +168,11 @@ func TestSelfTestAlwaysRejectIsCaught(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkSummary(t, rep.Summary, Summary{Agree: mustRejectAtThisCommit, RejectedMustPass: mustAcceptAtThisCommit})
-	want := "Verifier always REJECT answered 41 of 41 ATX credentials and agreed with the answer key on 32; it accepted 0 that must fail and rejected 9 that must pass."
+	want := "Verifier always REJECT answered 43 of 43 ATX credentials and agreed with the answer key on 33; it accepted 0 that must fail and rejected 10 that must pass."
 	if rep.InteropNote != want {
 		t.Errorf("interop note = %q, want %q", rep.InteropNote, want)
 	}
-	for _, line := range []string{" 32  agree\n", "  0  accepted what must fail\n", "  9  rejected what must pass\n", "  0  couldn't read\n"} {
+	for _, line := range []string{" 33  agree\n", "  0  accepted what must fail\n", " 10  rejected what must pass\n", "  0  couldn't read\n"} {
 		if !strings.Contains(out, line) {
 			t.Errorf("stdout lacks %q", line)
 		}
@@ -181,7 +181,7 @@ func TestSelfTestAlwaysRejectIsCaught(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(md), "| Rejected what must pass | 9 |") {
+	if !strings.Contains(string(md), "| Rejected what must pass | 10 |") {
 		t.Errorf("the Markdown report's count is wrong:\n%s", md)
 	}
 	mustPass := 0
@@ -216,7 +216,7 @@ func TestSelfTest4JWTOnlyReadsNothing(t *testing.T) {
 		if len(rep.TopReasons) != 1 || rep.TopReasons[0] != (ReasonCount{Reason: wantReason, Count: fixturesAtThisCommit}) {
 			t.Errorf("%s: top reasons = %+v", command, rep.TopReasons)
 		}
-		if !strings.HasPrefix(rep.InteropNote, "Verifier JWT only read 0 of 41 ATX credentials; every one came back as couldn't read") {
+		if !strings.HasPrefix(rep.InteropNote, "Verifier JWT only read 0 of 43 ATX credentials; every one came back as couldn't read") {
 			t.Errorf("%s: interop note = %q", command, rep.InteropNote)
 		}
 	}
@@ -233,7 +233,7 @@ func TestReportRecordsTheRun(t *testing.T) {
 		"kitVersion":     {rep.KitVersion, "v0.0.0-20261104120000-7fec04045590"},
 		"suiteCommit":    {rep.SuiteCommit, "7fec04045590"},
 		"manifestSha256": {rep.ManifestSHA256, sha256Hex(manifest)},
-		"manifestCheck":  {rep.ManifestCheck, "41 of 41 fixtures match MANIFEST.sha256"},
+		"manifestCheck":  {rep.ManifestCheck, "43 of 43 fixtures match MANIFEST.sha256"},
 		"label":          {rep.Label, "acceptall 1.0"},
 		"adapter":        {rep.Adapter, "command"},
 		"form":           {rep.Form, "native"},
@@ -256,7 +256,7 @@ func TestReportRecordsTheRun(t *testing.T) {
 			t.Errorf("the limit %q is not said before the first fixture runs", limit)
 		}
 	}
-	for _, want := range []string{"  9  agree\n", " 32  accepted what must fail\n", "  0  rejected what must pass\n", "  0  couldn't read\n", "For the interop note: " + rep.InteropNote, "suite commit 7fec04045590"} {
+	for _, want := range []string{" 10  agree\n", " 33  accepted what must fail\n", "  0  rejected what must pass\n", "  0  couldn't read\n", "For the interop note: " + rep.InteropNote, "suite commit 7fec04045590"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q", want)
 		}
@@ -400,16 +400,16 @@ func TestMarkdownReportKeepsVerifierTextInCodeSpans(t *testing.T) {
 // what the kit measured: it counts answers, and says "read" only for none.
 func TestInteropNoteCountsAnswers(t *testing.T) {
 	top := []ReasonCount{{Reason: "exit status 2: not a JWT.", Count: fixturesAtThisCommit}}
-	some := []ReasonCount{{Reason: "exit status 2", Count: 40}, {Reason: "exit status 3", Count: 1}}
+	some := []ReasonCount{{Reason: "exit status 2", Count: 42}, {Reason: "exit status 3", Count: 1}}
 	cases := []struct {
 		s    Summary
 		top  []ReasonCount
 		want string
 	}{
-		{Summary{Agree: 41}, nil, "Verifier v answered 41 of 41 ATX credentials and agreed with the answer key on every one."},
-		{Summary{Agree: 28, AcceptedMustFail: 1, RejectedMustPass: 1, CouldNotRead: 11}, nil, "Verifier v answered 30 of 41 ATX credentials and agreed with the answer key on 28; it accepted 1 that must fail and rejected 1 that must pass, and 11 came back as couldn't read."},
-		{Summary{CouldNotRead: 41}, top, "Verifier v read 0 of 41 ATX credentials; every one came back as couldn't read, with: exit status 2: not a JWT."},
-		{Summary{CouldNotRead: 41}, some, "Verifier v read 0 of 41 ATX credentials; every one came back as couldn't read, most often with: exit status 2."},
+		{Summary{Agree: 43}, nil, "Verifier v answered 43 of 43 ATX credentials and agreed with the answer key on every one."},
+		{Summary{Agree: 30, AcceptedMustFail: 1, RejectedMustPass: 1, CouldNotRead: 11}, nil, "Verifier v answered 32 of 43 ATX credentials and agreed with the answer key on 30; it accepted 1 that must fail and rejected 1 that must pass, and 11 came back as couldn't read."},
+		{Summary{CouldNotRead: 43}, top, "Verifier v read 0 of 43 ATX credentials; every one came back as couldn't read, with: exit status 2: not a JWT."},
+		{Summary{CouldNotRead: 43}, some, "Verifier v read 0 of 43 ATX credentials; every one came back as couldn't read, most often with: exit status 2."},
 	}
 	for _, c := range cases {
 		if got := interopNote("v", fixturesAtThisCommit, c.s, c.top); got != c.want {
