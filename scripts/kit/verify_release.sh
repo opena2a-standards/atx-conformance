@@ -24,6 +24,23 @@
 set -euo pipefail
 export LC_ALL=C PYTHONDONTWRITEBYTECODE=1
 
+usage='usage: verify_release.sh release <tag> <work-dir>
+       verify_release.sh candidate <asset-dir> <work-dir>
+       verify_release.sh -h | --help'
+# -h or --help prints the usage on stdout. An option other than those, or a
+# first argument that names no mode, is named on stderr above the usage, and
+# the script exits 2 before it reads or writes anything.
+want_help=0 unknown=
+case "${1:-}" in ''|-?*|release|candidate) ;; *) unknown=$1 ;; esac
+for opt in "$@"; do
+  case "$opt" in
+    -h|--help) want_help=1 ;;
+    -?*) unknown="${unknown:+$unknown }$opt" ;;
+  esac
+done
+if [ -n "$unknown" ]; then printf 'unknown argument(s): %s\n%s\n' "$unknown" "$usage" >&2; exit 2; fi
+if [ "$want_help" = 1 ]; then printf '%s\n' "$usage"; exit 0; fi
+
 here=$(cd "$(dirname "$0")" && pwd)
 py=${KIT_PYTHON:-python3}
 workflow_file=.github/workflows/kit-release.yml

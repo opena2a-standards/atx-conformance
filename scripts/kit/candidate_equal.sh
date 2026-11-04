@@ -10,6 +10,20 @@
 # GITHUB_REPOSITORY, GITHUB_SHA, KIT_WORKFLOW_NAME (kit-release.yml).
 set -euo pipefail
 
+usage='usage: candidate_equal.sh <SHA256SUMS>
+       candidate_equal.sh -h | --help'
+# -h or --help prints the usage on stdout. Any other option is named on stderr
+# above the usage, and the script exits 2 before it reads anything else.
+want_help=0 unknown=
+for opt in "$@"; do
+  case "$opt" in
+    -h|--help) want_help=1 ;;
+    -?*) unknown="${unknown:+$unknown }$opt" ;;
+  esac
+done
+if [ -n "$unknown" ]; then printf 'unknown argument(s): %s\n%s\n' "$unknown" "$usage" >&2; exit 2; fi
+if [ "$want_help" = 1 ]; then printf '%s\n' "$usage"; exit 0; fi
+
 die() { echo "candidate: $*" >&2; exit 1; }
 [ $# -eq 1 ] || die "usage: candidate_equal.sh <SHA256SUMS>"
 mine=$1

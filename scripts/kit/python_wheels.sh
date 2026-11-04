@@ -15,6 +15,24 @@
 #       lock lists, each under the package its file name names.
 set -euo pipefail
 
+usage='usage: python_wheels.sh lock <out-lock> <name==version>...
+       python_wheels.sh fetch <lock> <dest-dir>
+       python_wheels.sh check <lock> <wheel-dir>
+       python_wheels.sh -h | --help'
+# -h or --help prints the usage on stdout. An option other than those, or a
+# first argument that names no command, is named on stderr above the usage,
+# and the script exits 2 before it runs Python or reads python-targets.txt.
+want_help=0 unknown=
+case "${1:-}" in ''|-?*|lock|fetch|check) ;; *) unknown=$1 ;; esac
+for opt in "$@"; do
+  case "$opt" in
+    -h|--help) want_help=1 ;;
+    -?*) unknown="${unknown:+$unknown }$opt" ;;
+  esac
+done
+if [ -n "$unknown" ]; then printf 'unknown argument(s): %s\n%s\n' "$unknown" "$usage" >&2; exit 2; fi
+if [ "$want_help" = 1 ]; then printf '%s\n' "$usage"; exit 0; fi
+
 here=$(cd "$(dirname "$0")" && pwd)
 targets="$here/python-targets.txt"
 py=${KIT_PYTHON:-python3}

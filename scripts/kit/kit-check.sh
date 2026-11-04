@@ -2,6 +2,19 @@
 # Data protection check for the interop day kit. Usage: kit-check.sh <path to interop-day-kit>
 # Run it on the machine that built the kit. Each line must print exactly 1: the witness's own hit.
 # More than 1 is a finding; 0 means the instrument is broken.
+usage='usage: kit-check.sh <path to interop-day-kit>
+       kit-check.sh -h | --help'
+# -h or --help prints the usage on stdout. Any other option is named on stderr
+# above the usage, and the script exits 2 before it reads anything else.
+want_help=0 unknown=
+for opt in "$@"; do
+  case "$opt" in
+    -h|--help) want_help=1 ;;
+    -?*) unknown="${unknown:+$unknown }$opt" ;;
+  esac
+done
+if [ -n "$unknown" ]; then printf 'unknown argument(s): %s\n%s\n' "$unknown" "$usage" >&2; exit 2; fi
+if [ "$want_help" = 1 ]; then printf '%s\n' "$usage"; exit 0; fi
 K="$1"; W=$(mktemp -d)
 mkdir "$W/.git"; printf '%s\n' "$HOME" > "$W/h.txt"
 printf 'witness@kit-check-control.org\nhttps://example.org/?witness=1\n' > "$W/w.txt"
