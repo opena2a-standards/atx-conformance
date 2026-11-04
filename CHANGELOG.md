@@ -14,7 +14,7 @@ they should not.
 ### Added
 
 - `atx-verify --verifier "<command>"` and `atx-verify --verifier-url <url>`
-  send each of the 41 embedded fixtures to an outside verifier and compare its
+  send each of the 43 embedded fixtures to an outside verifier and compare its
   verdicts with the answer key in `conformance.json`; `--report <dir>` writes
   `atx-interop-report.json` and `atx-interop-report.md`. With none of the new
   options, atx-verify's output is unchanged. On macOS 26, a binary built with
@@ -35,6 +35,32 @@ they should not.
   agent threat matrix; each is hidden with its reason when the checkout is not ready.
   The demo's launcher runs outside the tour's sandbox; the steps check its
   connection log.
+- Two fixtures built by the generator name the credential subject under
+  the `did:web` DID method. `fixtures/foreign-did-method-valid.json` is the
+  `baseline-valid-hybrid.json` credential (ATX v1.0) with `agentDid`
+  `did:web:platform.example:agents:billing-agent` and `publisherDid`
+  `did:web:platform.example`, signed with both suites by the trusted
+  issuer `did:opena2a:authority:opena2a.org`, and expects `ACCEPT`.
+  `fixtures/foreign-did-method-altered-after-signing.json` is the same
+  credential with `agentDid` changed after signing to
+  `did:web:platform.example:agents:other-agent`, and expects
+  `REJECT [SIGNATURE_INVALID]` with a reason containing `signature`. Both
+  reference verifiers report the expected outcome on each with no change to
+  them. The 41 existing fixtures and their `MANIFEST.sha256` lines are
+  byte-identical; the manifest gains two lines. `conformance.json` and the
+  capture under `docs/captures/` are regenerated; the capture gains the
+  fixtures' eight lines, and its summary line counts 43. The fixture counts
+  in README.md (the first command's summary line, the expected output and
+  the implementation table), COSIGNERS.md, CONTRIBUTING.md,
+  `docs/continuous-verification.md` and `docs/sibling-repositories.md` go
+  from 41 to 43 (the sibling row's v1.0 count from 12 to 14),
+  `docs/scope.md` counts 34 of 43 fixtures reaching signature verification
+  and 10 ACCEPT fixtures, and `docs/fixtures.md` gains a row for each. The
+  kit's self-tests in `interop/run_test.go` count 43 fixtures, 10 to accept
+  and 33 to reject, where they counted 41, 9 and 32, and the kit entry above
+  counts 43 embedded fixtures. README.md's kit section keeps 41 fixtures,
+  9 agree and 32 accepted what must fail: those are the counts of the kit at
+  commit `9740950`, which its install line pins.
 
 ### Changed
 
