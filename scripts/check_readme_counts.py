@@ -167,7 +167,11 @@ gate while no workflow step ran it. A script the workflow runs neither by
 name nor through a script it runs that imports it must have its own layout
 line, and that line must not call it a CI gate. Only a name in the command of
 a `run:` step, outside a shell comment, counts as run: a name anywhere in the
-workflow file counted, so a YAML comment naming a script made it pass.
+workflow file counted, so a YAML comment naming a script made it pass. A
+`python3 -m unittest discover` run over scripts/ in such a command counts as
+running each scripts/*.py its pattern matches: the layout called
+scripts/test_script_options.py run by hand while the workflow's Python unit
+tests step discovered and ran it.
 
 The criterion (c) claim is matched in more wordings than the one the README
 used ("fulfils criterion (c)", "closes criterion c"), and a failure is
@@ -281,10 +285,12 @@ unknown argument.
 """
 
 import collections
+import fnmatch
 import json
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1862,7 +1868,8 @@ def ed25519_only_failures(readme, suites):
 
 
 # The repository layout labels the scripts/*.py glob "CI gates". A script the
-# workflow does not run, either by name in the command of a `run:` step or
+# workflow does not run, either by name in the command of a `run:` step, by a
+# `python3 -m unittest discover` run over scripts/ in such a command, or
 # through a script it runs that imports it, must have its own layout line, and
 # that line must not call it a CI gate. The layout called
 # check_fixture_immutability.py a CI gate while no workflow step ran it, and a
@@ -2056,13 +2063,81 @@ def workflow_run_commands(workflow):
     return commands
 
 
+# `python3 -m unittest discover` and the arguments after it on its line.
+UNITTEST_DISCOVER = re.compile(
+    r"\bpython[\d.]*[ \t]+-m[ \t]+unittest[ \t]+discover\b([^\n]*)")
+# The file name unittest's discovery imports as a test module.
+TEST_MODULE_NAME = re.compile(r"[_a-z]\w*\.py$", re.I)
+
+
+def unittest_discover_scripts(command, scripts):
+    """The scripts/*.py names a `python3 -m unittest discover` run in the
+    command text imports: the start directory, given by -s or
+    --start-directory or as the first positional argument, must be scripts/,
+    and each name must match the pattern, given by -p or --pattern or as the
+    second positional argument (unittest's default `test*.py`), and be a name
+    unittest imports as a module. The arguments end at the first shell
+    operator; a file-descriptor number before a redirection (`2>&1`) is not
+    an argument. A discovery run from another directory counts no script."""
+    found = set()
+    for match in UNITTEST_DISCOVER.finditer(command):
+        lexer = shlex.shlex(match.group(1), posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        try:
+            tokens = list(lexer)
+        except ValueError:
+            continue
+        args = []
+        for token in tokens:
+            if all(c in lexer.punctuation_chars for c in token):
+                if token[0] in "<>" and args and args[-1].isdigit():
+                    args.pop()
+                break
+            args.append(token)
+        start, pattern, positional = ".", "test*.py", []
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            option, equals, inline = arg.partition("=")
+            if option in ("-s", "--start-directory", "-p", "--pattern",
+                          "-t", "--top-level-directory"):
+                if equals:
+                    value, i = inline, i + 1
+                else:
+                    value = args[i + 1] if i + 1 < len(args) else ""
+                    i += 2
+                if option in ("-s", "--start-directory"):
+                    start = value
+                elif option in ("-p", "--pattern"):
+                    pattern = value
+                continue
+            if not arg.startswith("-"):
+                positional.append(arg)
+            i += 1
+        if positional:
+            start = positional[0]
+        if len(positional) > 1:
+            pattern = positional[1]
+        if os.path.normpath(start) != "scripts":
+            continue
+        found.update(name for name in scripts
+                     if TEST_MODULE_NAME.match(name)
+                     and fnmatch.fnmatchcase(name, pattern))
+    return found
+
+
 def ci_run_scripts(workflow, scripts):
     """The scripts/*.py names the workflow runs: those named in the command of
-    a `run:` step, and those a script it runs imports. `scripts` maps each
-    name to its source text."""
-    named = "\n".join(workflow_run_commands(workflow))
+    a `run:` step, those a `python3 -m unittest discover` run over scripts/
+    in such a command imports as test modules (unittest_discover_scripts()),
+    and those a script it runs imports. `scripts` maps each name to its
+    source text."""
+    commands = workflow_run_commands(workflow)
+    named = "\n".join(commands)
     run = {name for name in re.findall(r"\bscripts/([\w-]+\.py)\b", named)
            if name in scripts}
+    for command in commands:
+        run |= unittest_discover_scripts(command, scripts)
     todo = list(run)
     while todo:
         source = scripts.get(todo.pop()) or ""
@@ -4022,7 +4097,12 @@ def _ci_gate_label_cases(readme, workflow, scripts):
     double-quoted, has a space before its `:`: none of the nine may add a
     failure. Last, name
     it under the single-quoted key `'ru''n'`, which reads as `ru'n`: that
-    must add a failure."""
+    must add a failure. Then give an invented script a layout line calling
+    it a CI gate and run `python3 -m unittest discover` from an added step:
+    over scripts/ with -s and -p, and over scripts/ with the directory and
+    pattern given by position, neither may add a failure; over another
+    directory, and over scripts/ with a pattern that does not match the
+    script, each must."""
     labels = (
         "scripts/*.py script that no workflow step runs",
         "script the workflow stops naming",
@@ -4044,6 +4124,10 @@ def _ci_gate_label_cases(readme, workflow, scripts):
         "script named only under a quoted key that reads as ru'n",
         "script run by a step with a space between its run key and the colon",
         "script run by a step with a space after its double-quoted run key",
+        "script run by a unittest discover step over scripts/ by -s and -p",
+        "script run by a unittest discover step over scripts/ by position",
+        "script matched by a unittest discover step over another directory",
+        "script a unittest discover step over scripts/ does not match",
     )
     if not CI_GATE_GLOB.search(readme):
         why = ("no `scripts/*.py  CI gates` layout line found in README.md or its "
@@ -4121,6 +4205,24 @@ def _ci_gate_label_cases(readme, workflow, scripts):
     line = f"\nscripts/{INVENTED_SCRIPT}\n                       an invented check (run by hand)\n"
     got = new(readme + line, workflow, {**scripts, INVENTED_SCRIPT: ""})
     cases.append((not got, labels[7], f"the line still fails: {got}"))
+
+    # A script the workflow runs only through a unittest discovery run, named
+    # so that no pattern the workflow already discovers matches it.
+    name = "invented_discovered_case.py"
+    line = f"\nscripts/{name}       CI gate: an invented discovered test\n"
+    files = {**scripts, name: ""}
+    want = f"calls scripts/{name} a CI gate"
+    for label, step, reported in (
+            (labels[20], "-v -s scripts -t scripts -p 'invented_*.py' 2>&1 | tee x.log",
+             False),
+            (labels[21], "scripts invented_*.py", False),
+            (labels[22], "-s verifiers/python -p 'invented_*.py'", True),
+            (labels[23], "-s scripts -p 'test_*.py'", True)):
+        flow = (workflow or "") + f"\n      - run: python3 -m unittest discover {step}\n"
+        got = new(readme + line, flow, files)
+        cases.append((any(want in f for f in got) == reported, label,
+                      f"expected {'a' if reported else 'no'} failure containing "
+                      f"{want!r}, got {got}"))
     return cases
 
 
