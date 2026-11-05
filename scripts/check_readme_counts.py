@@ -187,6 +187,11 @@ line, so a run whose arguments a trailing backslash put on the next line
 counted no script, and a second run on a line, after `&&` or `;`, was not
 read: the Python unit tests step, with its discover run continued that way
 or placed second after `&&`, failed the check on test_script_options.py.
+An empty argument, written `''` or `""`, is read as an argument, as
+unittest reads it. The check had read it as a shell operator and stopped
+with an IndexError traceback, printing no verdict: with the workflow's
+discover line given `-p ''`, on which unittest runs no test, it raised
+IndexError where it now reports scripts/test_script_options.py as not run.
 
 The criterion (c) claim is matched in more wordings than the one the README
 used ("fulfils criterion (c)", "closes criterion c"), and a failure is
@@ -2182,10 +2187,11 @@ def unittest_discover_scripts(command, scripts):
     directory or pattern given before it, by option or by position, and a
     run with arguments unittest refuses, or with -h or --help, counts no
     script. The arguments end at the first shell operator or at the newline
-    that ends the command; a line ending in a backslash continues on the
-    next (join_continued_lines()), and a run after another on the same
-    line, past `&&` or `;`, is read as well. A file-descriptor number before
-    a redirection (`2>&1`) is not an argument. A discovery run from another
+    that ends the command; an empty argument, written `''` or `""`, is not
+    an operator; a line ending in a backslash continues on the next
+    (join_continued_lines()), and a run after another on the same line,
+    past `&&` or `;`, is read as well. A file-descriptor number before a
+    redirection (`2>&1`) is not an argument. A discovery run from another
     directory counts no script. The command text comes from
     workflow_run_commands(), its comments removed, so a `#` the arguments
     still hold is part of a word, as bash reads it."""
@@ -2201,7 +2207,9 @@ def unittest_discover_scripts(command, scripts):
         args = []
         try:
             for token in lexer:
-                if all(c in lexer.punctuation_chars for c in token):
+                # all() holds for an empty token, written '' or "", with no
+                # character to test; it is an argument, not an operator.
+                if token and all(c in lexer.punctuation_chars for c in token):
                     if token[0] in "<>" and args and args[-1].isdigit():
                         args.pop()
                     break
@@ -4330,18 +4338,22 @@ def _ci_gate_label_cases(readme, workflow, scripts):
     Over scripts/ with -s and -p; over scripts/ with the directory and
     pattern given by position; with -s and -p after -k NAME, and after
     --durations N; with -s and -p written with their values attached; with
-    -s scripts after another directory given by position; and with
-    --start=scripts and --pat, two shortened long options: none may add a
-    failure. Over another directory; over scripts/ with a pattern that does
-    not match the script; with scripts/ and the pattern given by position,
-    then -s naming another directory; with them given by position, then -p
-    naming a pattern that does not match; with an option unittest refuses;
-    and with -h: each must. Then run it from added `run: |` steps: a run
-    whose arguments a trailing backslash puts on the next line, a run
-    continued by a backslash before `discover`, and a run over scripts/
-    after another on the same line, past `&&` and past `;`, may add no
-    failure; a run whose arguments stand on the next line with no backslash
-    before them must."""
+    -s scripts after another directory given by position; with
+    --start=scripts and --pat, two shortened long options; and with an
+    empty argument, written `""`, before -s and -p, so that -s replaces it
+    as the start directory: none may add a failure. Over another
+    directory; over scripts/ with a pattern that does not match the script;
+    with scripts/ and the pattern given by position, then -s naming another
+    directory; with them given by position, then -p naming a pattern that
+    does not match; with an option unittest refuses; with -h; with the
+    empty pattern `-p ''`, which matches no file; and with -s and -p
+    followed by an empty argument, written `''`, which unittest reads as
+    the start directory, the directory it is run from: each must. Then run
+    it from added `run: |` steps: a run whose arguments a trailing backslash
+    puts on the next line, a run continued by a backslash before `discover`,
+    and a run over scripts/ after another on the same line, past `&&` and
+    past `;`, may add no failure; a run whose arguments stand on the next
+    line with no backslash before them must."""
     labels = (
         "scripts/*.py script that no workflow step runs",
         "script the workflow stops naming",
@@ -4381,6 +4393,9 @@ def _ci_gate_label_cases(readme, workflow, scripts):
         "script run by a second unittest discover run on its line, after &&",
         "script run by a second unittest discover run on its line, after ;",
         "script named on the line after a unittest discover run, with no backslash",
+        "script run by a unittest discover step with an empty argument before -s and -p",
+        "script a unittest discover step with the empty pattern -p '' does not run",
+        "script a unittest discover step ending in an empty start directory does not run",
     )
     if not CI_GATE_GLOB.search(readme):
         why = ("no `scripts/*.py  CI gates` layout line found in README.md or its "
@@ -4479,7 +4494,10 @@ def _ci_gate_label_cases(readme, workflow, scripts):
             (labels[29], "scripts 'invented_*.py' -p 'test_*.py'", True),
             (labels[30], "--start=scripts --pat 'invented_*.py'", False),
             (labels[31], "-s scripts -p 'invented_*.py' --bogus", True),
-            (labels[32], "-h -s scripts -p 'invented_*.py'", True)):
+            (labels[32], "-h -s scripts -p 'invented_*.py'", True),
+            (labels[38], "\"\" -s scripts -p 'invented_*.py'", False),
+            (labels[39], "-s scripts -p ''", True),
+            (labels[40], "-s scripts -p 'invented_*.py' ''", True)):
         flow = (workflow or "") + f"\n      - run: python3 -m unittest discover {step}\n"
         got = new(readme + line, flow, files)
         cases.append((any(want in f for f in got) == reported, label,

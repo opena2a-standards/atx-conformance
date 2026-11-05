@@ -194,6 +194,19 @@ they should not.
   measured peak, and its growth a CPU to at least twice the peak's from 8
   CPUs to 16. The committed GIF, frames, capture and sidecar are not
   re-rendered.
+- `scripts/check_readme_counts.py` reads an empty argument, written `''`
+  or `""`, on a `python3 -m unittest discover` line of the workflow as an
+  argument, as unittest reads it (#327). It had read such an argument as
+  a shell operator and stopped with an `IndexError` traceback, printing
+  no verdict. With the workflow's discover line given `-p ''`, on which
+  unittest runs no test, it now reports `scripts/test_script_options.py`
+  as not run and exits 1. The self-test adds three discover steps (319
+  altered count sites, from 316): an empty argument before `-s` and `-p`,
+  which `-s` replaces as the start directory; the empty pattern `-p ''`;
+  and an empty argument after `-s` and `-p`, which unittest reads as the
+  start directory, the directory it is run from. Given to the check as it
+  was before this change, each of the three raises `IndexError`. No
+  fixture changes.
 
 ## v0.1.0
 
