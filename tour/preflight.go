@@ -30,6 +30,7 @@ type State struct {
 	Repo      string      `json:"repo"`
 	Commit    string      `json:"commit"`
 	Demo      string      `json:"demo,omitempty"`
+	Matrix    string      `json:"matrix,omitempty"`
 	Seconds   float64     `json:"seconds"`
 	Steps     []StepState `json:"steps"`
 }
@@ -58,19 +59,27 @@ func (s *State) ReadyNumbers() map[int]bool {
 // command, prints one line per step and returns the state to save.
 func Preflight(ctx context.Context, e *Env, steps []Step, scr *Screen) *State {
 	start := time.Now()
-	st := &State{Tool: "atx-tour", Repo: e.Repo, Commit: e.Commit, Demo: e.Demo}
+	st := &State{Tool: "atx-tour", Repo: e.Repo, Commit: e.Commit, Demo: e.Demo, Matrix: e.Matrix}
 	scr.Title("Pre-flight: every step, run unattended with the network blocked")
 	scr.Printf("Clone: atx-conformance at %s", shortCommit(e.Commit))
 	scr.Labeled("Network: blocked by ", e.NetworkBlock(), "")
+	if e.Demo != "" && demoAfter(steps) {
+		scr.Labeled("Demo: ", "its launcher runs outside that sandbox, since it starts each part "+
+			"in a sandbox of its own; the steps that use it require those sandboxes and check "+
+			"that every connection the demo logged stayed on loopback.", "")
+	}
 	scr.Blank()
 	e.Log.Printf("pre-flight of %s at %s; network blocked by %s", e.Repo, e.Commit, e.NetworkBlock())
-	for _, s := range steps {
+	for i, s := range steps {
 		reason := ""
 		var limitErr error
 		if s.Limit != nil {
 			_, limitErr = s.Limit(e)
 		}
 		out := RunStep(ctx, e, s)
+		if s.UsesDemo && (out.Err != nil || !demoAfter(steps[i+1:])) {
+			e.StopDemo()
+		}
 		switch {
 		case out.Err != nil:
 			reason = Reason(out.Err, e.Timeout)
@@ -170,6 +179,8 @@ func StateMatches(st *State, e *Env) (bool, string) {
 			shortCommit(st.Commit), shortCommit(e.Commit))
 	case st.Demo != e.Demo:
 		return false, "The last pre-flight ran with a different --demo"
+	case st.Matrix != e.Matrix:
+		return false, "The last pre-flight ran with a different --matrix"
 	}
 	return true, ""
 }

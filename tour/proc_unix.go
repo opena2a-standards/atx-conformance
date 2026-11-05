@@ -7,6 +7,8 @@ package tour
 import (
 	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -43,3 +45,27 @@ func cbreak(stdin *os.File) (restore func(), ok bool) {
 		_ = back.Run()
 	}, true
 }
+
+// terminate sends SIGTERM to one process.
+func terminate(pid int) error { return syscall.Kill(pid, syscall.SIGTERM) }
+
+// killGroup sends SIGKILL to the process group pid leads.
+func killGroup(pid int) error { return syscall.Kill(-pid, syscall.SIGKILL) }
+
+// alive reports whether a process with this pid still exists and is not a
+// zombie waiting for its parent.
+func alive(pid int) bool {
+	if syscall.Kill(pid, 0) != nil {
+		return false
+	}
+	out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return false
+	}
+	stat := strings.TrimSpace(string(out))
+	return stat != "" && !strings.HasPrefix(stat, "Z")
+}
+
+// ownGroup starts cmd in a process group of its own, which the terminal's
+// Ctrl-C does not reach: the tour stops it itself.
+func ownGroup(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} }

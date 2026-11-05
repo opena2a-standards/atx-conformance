@@ -41,6 +41,20 @@ type Step struct {
 	// one-line result. An error means the output did not show what the step
 	// is for.
 	Trim func(e *Env, o *Output) (lines []string, result string, err error)
+	// UsesDemo marks a step that runs against the delegation demo. The demo
+	// is started before the first such step and stopped after the last one,
+	// and after any of them fails.
+	UsesDemo bool
+}
+
+// demoAfter reports whether any of steps runs against the demo.
+func demoAfter(steps []Step) bool {
+	for _, s := range steps {
+		if s.UsesDemo {
+			return true
+		}
+	}
+	return false
 }
 
 // Output is what a step's Run collected for its Trim.
