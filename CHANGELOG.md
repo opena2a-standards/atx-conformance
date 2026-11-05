@@ -207,6 +207,20 @@ they should not.
   start directory, the directory it is run from. Given to the check as it
   was before this change, each of the three raises `IndexError`. No
   fixture changes.
+- `scripts/check_readme_counts.py` reads the word `discover` of a
+  `python3 -m unittest discover` run in either case of each of its letters,
+  as unittest does: `unittest/main.py` in Python 3.12.12, 3.13.12 and 3.14.3
+  compares `argv[1].lower()` to `discover` (#328). The check matched the
+  lowercase word alone. With that word of the workflow's discover line
+  written `DISCOVER`, which ran the same three tests and exited 0, it
+  reported `README layout calls scripts/test_script_options.py a CI gate,
+  but .github/workflows/conformance.yml does not run it` and exited 1; it
+  now exits 0. The match holds to the word's ASCII letters, as `(?i)` alone
+  also reads the word written with U+0130, U+0131 or U+017F: given
+  `-s scripts -p 'test_*.py'` after such a word, unittest exits 2 and runs
+  no test. The self-test adds six cases (322 altered count sites, from
+  316): `DISCOVER` and `Discover` must count as a run, and those three
+  spellings and a module named `UNITTEST` must not. No fixture changes.
 
 ## v0.1.0
 
