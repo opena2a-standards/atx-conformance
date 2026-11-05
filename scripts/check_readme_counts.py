@@ -197,6 +197,24 @@ it. The check had matched the lowercase word alone: with the workflow's
 discover line written `DISCOVER`, which runs the same tests, it reported
 scripts/test_script_options.py as not run.
 
+A command written as a block scalar (`run: |` or `run: >`) is read as YAML
+reads it, with the block's indentation removed and a folded block's lines
+folded, and then as bash reads it: a line that ends in a backslash is
+joined to the next, so a `#` the join puts inside a word stays part of it,
+and a `#` that starts a word after a blank, a line break or one of
+`;&|()<>` begins a comment. The check kept the block's indentation and
+removed comments line by line before it joined the lines.
+With the Python unit tests step's discover line split inside its -s
+value, `-s "scr\\` on one line and `ipts"` on the next at the block's
+indentation, bash passes `-s scripts`, while the check read
+`-s "scr          ipts"`, the block's ten spaces inside the word, and
+reported test_script_options.py as not run. With `-s scripts\\` followed by
+a line `#x`, the check dropped `#x` as a comment and counted the script as
+run, while bash passes `-s scripts#x`, a directory that does not exist,
+and unittest stops with an ImportError. The check had also read a folded
+block's line breaks where YAML folds them into spaces, and a `#` right
+after `;` as part of a word.
+
 The criterion (c) claim is matched in more wordings than the one the README
 used ("fulfils criterion (c)", "closes criterion c"), and a failure is
 reported under a header that names claims as well as counts.
@@ -1946,7 +1964,10 @@ YAML_ESCAPES = {
 }
 WORKFLOW_ITEM = re.compile(r"^( *)-(?:[ ]+|$)")
 BLOCK_SCALAR = re.compile(r"^[|>][-+0-9]*[ \t]*(?:#.*)?$")
-SHELL_COMMENT = re.compile(r"(?:^|(?<=\s))#.*$", re.M)
+# The characters after which bash, outside quotes, starts a new word: a
+# blank, a line break and the characters of its operators. A `#` that
+# starts a word begins a comment.
+SHELL_WORD_BREAK = " \t\n;&|()<>"
 # Flow-style YAML: the spaces, line breaks and comments between tokens, and a
 # single-quoted, double-quoted or plain scalar. A plain scalar ends at a flow
 # indicator, at a `:` before a space or a flow indicator, and before a comment.
@@ -2044,13 +2065,15 @@ def flow_node_lines(lines, i, text):
 
 def workflow_run_commands(workflow):
     """The command text of each `run:` key of an item in a `steps:` sequence
-    of the workflow text, read as block-style YAML, with the text from a `#`
-    that starts a word to the end of its line removed, as the shell drops a
-    comment. The command may start on the key's line or on a later line
-    indented past it, and a step may be a flow mapping on one line or more
-    (`- {name: a, run: python3 scripts/a.py}`). A key may be quoted
-    (`- "run": python3 scripts/a.py`) and is read by yaml_key(), and spaces
-    may stand between a block-style key and its `:`
+    of the workflow text, read as block-style YAML and then as bash reads
+    it (bash_text()), with its lines that end in a backslash joined to the
+    next and its comments removed. The command may start on the key's line
+    or on a later line indented past it, and a step may be a flow mapping
+    on one line or more (`- {name: a, run: python3 scripts/a.py}`). A
+    command written as a block scalar (`run: |` or `run: >`) is read as
+    YAML reads it, its indentation removed (block_scalar()). A key may be
+    quoted (`- "run": python3 scripts/a.py`) and is read by yaml_key(), and
+    spaces may stand between a block-style key and its `:`
     (`- run : python3 scripts/a.py`). A script named in a YAML comment, a
     step `name:` or an action's `with:` input is in none of them."""
     lines = (workflow or "").splitlines()
@@ -2082,7 +2105,7 @@ def workflow_run_commands(workflow):
             # it takes to close.
             step, i = flow_node_lines(lines, i, line[item.end():])
             if is_step and isinstance(step, dict) and isinstance(step.get("run"), str):
-                commands.append(SHELL_COMMENT.sub("", step["run"]))
+                commands.append(bash_text(step["run"]))
             continue
         if not key:
             continue
@@ -2099,18 +2122,67 @@ def workflow_run_commands(workflow):
                 value, i = lines[j].strip(), j + 1
         # Lines indented past the key carry its value: a block scalar's body,
         # or the continuation of a value begun on the key's line.
-        body = []
+        body, header = [], None
         if value:
             while i < len(lines) and (not lines[i].strip()
                                       or len(lines[i]) - len(lines[i].lstrip(" ")) > column):
                 body.append(lines[i])
                 i += 1
             if BLOCK_SCALAR.match(value):
-                value = ""
+                header, value = value, ""
         stack.append((column, name))
         if name == "run" and is_step:
-            commands.append(SHELL_COMMENT.sub("", "\n".join([value] + body)))
+            command = (block_scalar(header, body, column) if header
+                       else "\n".join([value] + body))
+            commands.append(bash_text(command))
     return commands
+
+
+def block_scalar(header, body, column):
+    """The value YAML reads from a block scalar. `header` is the `|` or `>`
+    that opens it, with its indicators, `column` the column of its key, and
+    `body` the lines after the header's line that are blank or indented
+    past that column. The block's indentation is removed from each line. It
+    is the key's column plus the indentation indicator where the header
+    gives one (`|2`). Otherwise it is the indentation of the block's first
+    line that holds a character other than a space, or the length of a
+    line of spaces before that line where one is longer, as PyYAML and
+    LibYAML find it. A line that holds a character other than a space and
+    begins with fewer spaces than the block's indentation ends the block.
+    A folded block (`>`) joins with a space two lines that each start with
+    a character other than a space or tab, or, where empty lines stand
+    between them, with those lines' line breaks alone, and keeps its other
+    line breaks. The value ends with one line break after its last line that
+    holds text, none where the header strips it (`-`), and, where the header
+    keeps them (`+`), one more for each empty line after that line."""
+    indicator = re.search(r"[1-9]", header)
+    if indicator:
+        indent = column + int(indicator.group())
+    else:
+        indent = column + 1
+        for line in body:
+            indent = max(indent, len(line) - len(line.lstrip(" ")))
+            if line.strip(" "):
+                break
+    parts, last, empty = [], None, 0
+    for line in body:
+        if line.strip(" ") and len(line) - len(line.lstrip(" ")) < indent:
+            break
+        text = line[indent:]
+        if not text:
+            empty += 1
+            continue
+        if last is not None:
+            folds = (header[0] == ">" and last[0] not in " \t"
+                     and text[0] not in " \t")
+            parts.append(("" if empty else " ") if folds else "\n")
+        parts.append("\n" * empty + text)
+        last, empty = text, 0
+    if last is not None and "-" not in header:
+        parts.append("\n")
+    if "+" in header:
+        parts.append("\n" * empty)
+    return "".join(parts)
 
 
 # `python3 -m unittest discover`; its arguments follow it. The match ends
@@ -2162,27 +2234,40 @@ class UnittestDiscoverParser(argparse.ArgumentParser):
         raise UnittestUsageError(message)
 
 
-def join_continued_lines(command):
-    """The command text with each line that ends in a backslash joined to
-    the line after it, as bash joins them: the backslash and the newline
-    are dropped, outside quotes and inside double quotes. Inside single
-    quotes both are kept, and a line ending in an escaped backslash (`\\\\`)
-    is not continued."""
-    joined, quote, i = [], None, 0
+def bash_text(command):
+    """The command text as bash reads it, in one pass from its start, before
+    it splits the text into words. A line that ends in a backslash is
+    joined to the line after it: the backslash and the newline are dropped,
+    outside quotes and inside double quotes. Inside single quotes both are
+    kept, and a line ending in an escaped backslash (`\\\\`) is not
+    continued. A `#` that starts a word outside quotes, at the start of the
+    text or after a blank, a newline or one of `;&|()<>`, begins a comment,
+    which is removed up to the end of its line. Bash joins a line to the
+    next as it reaches the backslash, before it reads the `#` after it, so
+    a `#` a joined line puts inside a word is part of that word
+    (`-s scripts\\` then a line `#x` reads as `-s scripts#x`), and a
+    backslash that ends a comment joins no line."""
+    text, quote, word_start, i = [], None, True, 0
     while i < len(command):
         char = command[i]
+        if char == "#" and quote is None and word_start:
+            end = command.find("\n", i)
+            i = len(command) if end < 0 else end
+            continue
         if char == "\\" and quote != "'":
             if command.startswith("\n", i + 1):
                 i += 2
                 continue
-            joined.append(command[i:i + 2])
+            text.append(command[i:i + 2])
             i += 2
+            word_start = False
             continue
         if char in "'\"" and quote in (None, char):
             quote = None if quote else char
-        joined.append(char)
+        text.append(char)
+        word_start = quote is None and char in SHELL_WORD_BREAK
         i += 1
-    return "".join(joined)
+    return "".join(text)
 
 
 def unittest_discover_scripts(command, scripts):
@@ -2197,17 +2282,15 @@ def unittest_discover_scripts(command, scripts):
     run with arguments unittest refuses, or with -h or --help, counts no
     script. The arguments end at the first shell operator or at the newline
     that ends the command; an empty argument, written `''` or `""`, is not
-    an operator; a line ending in a backslash continues on the next
-    (join_continued_lines()), and a run after another on the same line,
-    past `&&` or `;`, is read as well. A file-descriptor number before a
-    redirection (`2>&1`) is not an argument. A discovery run from another
-    directory counts no script. The command text comes from
-    workflow_run_commands(), its comments removed, so a `#` the arguments
-    still hold is part of a word, as bash reads it. `discover` is read in
-    either case of each of its letters, as unittest reads it
-    (UNITTEST_DISCOVER)."""
+    an operator, and a run after another on the same line, past `&&` or
+    `;`, is read as well. A file-descriptor number before a redirection
+    (`2>&1`) is not an argument. A discovery run from another directory
+    counts no script. The command text comes from workflow_run_commands()
+    as bash reads it (bash_text()): each line that ends in a backslash is
+    already joined to the next and the comments are removed, so a `#` the
+    arguments still hold is part of a word. `discover` is read in either
+    case of each of its letters, as unittest reads it (UNITTEST_DISCOVER)."""
     found = set()
-    command = join_continued_lines(command)
     for match in UNITTEST_DISCOVER.finditer(command):
         # A newline outside quotes ends the command, as an operator does.
         lexer = shlex.shlex(command[match.end():], posix=True,
@@ -4330,9 +4413,10 @@ INVENTED_SCRIPT = "check_invented.py"
 def _ci_gate_label_cases(readme, workflow, scripts):
     """Add a script no workflow step runs, stop the workflow naming this
     script, then name it again only in a YAML comment, only in shell comments
-    of a `run:` step, only in a step name and an action input, only in the
-    name of a step written as a flow mapping, and only in a YAML comment
-    between a step's `run:` key and the command on the lines after it, run an
+    of a `run:` step, only in a shell comment that starts right after a `;`,
+    only in a step name and an action input, only in the name of a step
+    written as a flow mapping, and only in a YAML comment between a step's
+    `run:` key and the command on the lines after it, run an
     invented helper only through an import and then cut the import, and give
     a script that is not run its own layout line, once calling it a CI gate
     and once not. Each but the last must add a failure. Then run this script
@@ -4340,8 +4424,9 @@ def _ci_gate_label_cases(readme, workflow, scripts):
     written as a flow mapping on one line, from one whose command is on its
     second line, from steps whose `run:` key is double-quoted, single-quoted
     or double-quoted with a `\\x` escape, from a flow-mapping step whose
-    keys are double-quoted, and from steps whose `run` key, plain or
-    double-quoted, has a space before its `:`: none of the nine may add a
+    keys are double-quoted, from steps whose `run` key, plain or
+    double-quoted, has a space before its `:`, and from a `run: |` step
+    whose path a trailing backslash splits: none of the ten may add a
     failure. Last, name
     it under the single-quoted key `'ru''n'`, which reads as `ru'n`: that
     must add a failure. Then give an invented script a layout line calling
@@ -4368,7 +4453,12 @@ def _ci_gate_label_cases(readme, workflow, scripts):
     line, a run continued by a backslash before `discover`, and a run over
     scripts/ after another on the same line, past `&&` and past `;`, may
     add no failure; a run whose arguments stand on the next line with no
-    backslash before them must."""
+    backslash before them must. A run whose -s value a trailing backslash
+    splits, both lines at the block's indentation, may add no failure with
+    the value in double quotes or outside quotes, and neither may a run in
+    a folded `run: >` block whose arguments stand on its next line. A run
+    whose -s value a trailing backslash joins to a next line `#x`, and a
+    run whose split -s value a `run: |1` block leaves a space in, must."""
     labels = (
         "scripts/*.py script that no workflow step runs",
         "script the workflow stops naming",
@@ -4417,6 +4507,13 @@ def _ci_gate_label_cases(readme, workflow, scripts):
         "script a unittest step writing discover with U+0131 does not run",
         "script a unittest step writing discover with U+017F does not run",
         "script a step naming the unittest module UNITTEST does not run",
+        "script run by a run: | step whose path a trailing backslash splits",
+        "script named only in a shell comment that starts right after a ;",
+        "script run by a unittest discover step whose quoted -s value a backslash splits",
+        "script run by a unittest discover step whose -s value a backslash splits",
+        "script a unittest discover step does not run when a backslash joins #x to -s",
+        "script run by a unittest discover step in a folded run: > block on two lines",
+        "script a unittest discover step does not run when a |1 block keeps a space in -s",
     )
     if not CI_GATE_GLOB.search(readme):
         why = ("no `scripts/*.py  CI gates` layout line found in README.md or its "
@@ -4454,6 +4551,7 @@ def _ci_gate_label_cases(readme, workflow, scripts):
             (labels[9], f"\n      - run:\n          # python3 scripts/{this}\n"
                         f"          echo done\n"),
             (labels[17], f"\n      - 'ru''n': python3 scripts/{this}\n"),
+            (labels[48], f"\n      - run: echo done;# python3 scripts/{this}\n"),
         )
         for label, text in named_not_run:
             got = new(readme, renamed + text, scripts)
@@ -4470,6 +4568,8 @@ def _ci_gate_label_cases(readme, workflow, scripts):
             (labels[16], f"\n      - {{\"name\": a, \"run\": \"python3 scripts/{this}\"}}\n"),
             (labels[18], f"\n      - run : python3 scripts/{this}\n"),
             (labels[19], f"\n      - \"run\" : python3 scripts/{this}\n"),
+            (labels[47], f"\n      - run: |\n          python3 scripts/{this[:6]}\\\n"
+                         f"          {this[6:]}\n"),
         )
         for label, text in run:
             got = new(readme, renamed + text, scripts)
@@ -4538,20 +4638,29 @@ def _ci_gate_label_cases(readme, workflow, scripts):
         discover_case(label, f"python3 -m {words} -s scripts -p 'invented_*.py'",
                       reported)
 
-    # The same script, run from a `run: |` step whose command goes on past
-    # the end of a line or holds a second discovery run on a line.
+    # The same script, run from a block scalar step (`run: |` unless the
+    # header says otherwise) whose command goes on past the end of a line or
+    # holds a second discovery run on a line. YAML removes the block's
+    # indentation before bash joins a line that ends in a backslash.
     discover = "python3 -m unittest discover"
-    over_scripts = "-s scripts -t scripts -p 'invented_*.py' 2>&1 | tee x.log"
-    for label, command, reported in (
-            (labels[33], (f"{discover} -v \\", f"  {over_scripts}"), False),
-            (labels[34], ("python3 -m unittest \\", f"  discover -v {over_scripts}"),
+    rest = "-t scripts -p 'invented_*.py' 2>&1 | tee x.log"
+    over_scripts = f"-s scripts {rest}"
+    for label, header, command, reported in (
+            (labels[33], "|", (f"{discover} -v \\", f"  {over_scripts}"), False),
+            (labels[34], "|", ("python3 -m unittest \\", f"  discover -v {over_scripts}"),
              False),
-            (labels[35], (f"{discover} -s verifiers/python && {discover} -v {over_scripts}",),
-             False),
-            (labels[36], (f"{discover} -s verifiers/python; {discover} scripts invented_*.py",),
-             False),
-            (labels[37], (f"{discover} -v", f"  {over_scripts}"), True)):
-        flow = (workflow or "") + "\n      - run: |\n" + "".join(
+            (labels[35], "|",
+             (f"{discover} -s verifiers/python && {discover} -v {over_scripts}",), False),
+            (labels[36], "|",
+             (f"{discover} -s verifiers/python; {discover} scripts invented_*.py",), False),
+            (labels[37], "|", (f"{discover} -v", f"  {over_scripts}"), True),
+            (labels[49], "|", (f'{discover} -v -s "scr\\', f'ipts" {rest}'), False),
+            (labels[50], "|", (f"{discover} -v -s scr\\", f"ipts {rest}"), False),
+            (labels[51], "|", (f"{discover} -v -p 'invented_*.py' -s scripts\\", "#x"),
+             True),
+            (labels[52], ">", (f"{discover} -v", over_scripts), False),
+            (labels[53], "|1", (f"{discover} -v -s scr\\", f"ipts {rest}"), True)):
+        flow = (workflow or "") + f"\n      - run: {header}\n" + "".join(
             f"          {part}\n" for part in command)
         got = new(readme + line, flow, files)
         cases.append((any(want in f for f in got) == reported, label,
