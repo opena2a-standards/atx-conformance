@@ -149,6 +149,59 @@ func TestSelfTest3AlwaysAcceptIsCaught(t *testing.T) {
 	}
 }
 
+// A verifier that always answers REJECT agrees on the fixtures that must be
+// rejected and rejects every one that must be accepted. Nothing else reaches
+// this bucket, so the counts and the words of each report are read here.
+func TestSelfTestAlwaysRejectIsCaught(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "report")
+	code, out, errOut := kitRun(t, "--verifier", helperCommand("exit", "1"), "--label", "always REJECT", "--report", dir)
+	if code != 1 || errOut != "" {
+		t.Errorf("exit %d, stderr %q, want exit 1 and no stderr\n%s", code, errOut, out)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, reportJSONName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rep Report
+	if err := json.Unmarshal(b, &rep); err != nil {
+		t.Fatal(err)
+	}
+	checkSummary(t, rep.Summary, Summary{Agree: mustRejectAtThisCommit, RejectedMustPass: mustAcceptAtThisCommit})
+	want := "Verifier always REJECT answered 41 of 41 ATX credentials and agreed with the answer key on 32; it accepted 0 that must fail and rejected 9 that must pass."
+	if rep.InteropNote != want {
+		t.Errorf("interop note = %q, want %q", rep.InteropNote, want)
+	}
+	for _, line := range []string{" 32  agree\n", "  0  accepted what must fail\n", "  9  rejected what must pass\n", "  0  couldn't read\n"} {
+		if !strings.Contains(out, line) {
+			t.Errorf("stdout lacks %q", line)
+		}
+	}
+	md, err := os.ReadFile(filepath.Join(dir, reportMDName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(md), "| Rejected what must pass | 9 |") {
+		t.Errorf("the Markdown report's count is wrong:\n%s", md)
+	}
+	mustPass := 0
+	for _, r := range rep.Fixtures {
+		if r.Expected != "ACCEPT" {
+			continue
+		}
+		mustPass++
+		if r.Verdict != "REJECT" || r.Outcome != "rejectedMustPass" {
+			t.Errorf("%s: verdict %s, outcome %s", r.Fixture, r.Verdict, r.Outcome)
+		}
+		row := "`" + r.Fixture + "` | " + r.Level + " | ACCEPT | REJECT | rejected what must pass |"
+		if !strings.Contains(string(md), row) {
+			t.Errorf("the Markdown table lacks %q", row)
+		}
+	}
+	if mustPass != mustAcceptAtThisCommit {
+		t.Errorf("%d fixtures must pass, want %d", mustPass, mustAcceptAtThisCommit)
+	}
+}
+
 // Self-test 4: a verifier that reads JWTs only reads none of the fixtures,
 // whether it is given the credential on stdin or the fixture file.
 func TestSelfTest4JWTOnlyReadsNothing(t *testing.T) {
