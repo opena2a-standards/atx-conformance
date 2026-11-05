@@ -454,7 +454,7 @@ func TestHelp(t *testing.T) {
 // for a failed request prints the URL with its query.
 func TestFailedConnectionLeavesTheURLOut(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "report")
-	code, out, errOut := kitRun(t, "--verifier-url", "http://user:PASSVALUE@127.0.0.1:1/verify/PATHVALUE?apikey=QUERYVALUE",
+	code, out, errOut := kitRun(t, "--verifier-url", "http://user:FAKEPASSVALUE@127.0.0.1:1/verify/PATHVALUE?apikey=QUERYVALUE",
 		"--label", "url", "--timeout", "2", "--report", dir)
 	if code != 1 {
 		t.Errorf("exit %d, want 1\n%s", code, out)
