@@ -175,6 +175,9 @@ func run(ctx context.Context, opts *Options, e *Env, steps []Step, notes Notes, 
 		return Setup(ctx, e, scr)
 	case opts.Check:
 		st := Preflight(ctx, e, steps, scr)
+		if ctx.Err() != nil {
+			return 130 // Interrupted: the steps it stopped did not fail, so save nothing.
+		}
 		if err := SaveState(e.StateDir, st); err != nil {
 			e.Log.Printf("the state file could not be written: %v", err)
 			scr.Printf("The pre-flight result could not be saved in %s.", e.StateDir)
@@ -199,6 +202,9 @@ func run(ctx context.Context, opts *Options, e *Env, steps []Step, notes Notes, 
 		scr.Para("", stale+": running the pre-flight first.")
 		scr.Blank()
 		st = Preflight(ctx, e, steps, scr)
+		if ctx.Err() != nil {
+			return 130 // Interrupted: the steps it stopped did not fail, so save nothing.
+		}
 		if err := SaveState(e.StateDir, st); err != nil {
 			e.Log.Printf("the state file could not be written: %v", err)
 		}

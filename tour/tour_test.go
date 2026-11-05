@@ -372,6 +372,53 @@ func TestStateForAnotherCommitIsNotTrusted(t *testing.T) {
 	}
 }
 
+// TestInterruptedPreflightKeepsTheLastResult holds both ways into the pre-flight:
+// a Ctrl-C during it exits 130 and saves nothing, so steps it stopped are not
+// recorded as failed and the next tour does not show fewer of them.
+func TestInterruptedPreflightKeepsTheLastResult(t *testing.T) {
+	cases := []struct {
+		name   string
+		opts   *Options
+		commit string
+	}{
+		{"--check", &Options{Check: true}, ""},
+		{"a tour whose result is for another commit", &Options{}, "1111111111111111111111111111111111111111"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e, _ := testEnv(t)
+			e.StateDir = t.TempDir()
+			commit := e.Commit
+			if c.commit != "" {
+				commit = c.commit
+			}
+			saved := &State{Repo: e.Repo, Commit: commit, Steps: []StepState{{Number: 1, Title: "Works", Status: Ready}}}
+			if err := SaveState(e.StateDir, saved); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			step := okStep(1, "Works")
+			step.Run = func(context.Context, *Env) (*Output, error) {
+				cancel()
+				return &Output{}, context.Canceled
+			}
+			var screen bytes.Buffer
+			code := run(ctx, c.opts, e, []Step{step}, Notes{}, NewScreen(&screen, false), strings.NewReader("\n\n"), false)
+			if code != 130 {
+				t.Errorf("exit %d, want 130:\n%s", code, screen.String())
+			}
+			got, err := LoadState(e.StateDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Commit != commit || len(got.Steps) != 1 || got.Steps[0].Status != Ready {
+				t.Errorf("the saved result changed: %+v", got)
+			}
+		})
+	}
+}
+
 func TestOfflineCommandsCannotConnect(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not installed")
