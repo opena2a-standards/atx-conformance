@@ -58,23 +58,25 @@ type Adapter interface {
 // verdict the exit code or the HTTP status gave. When body is a JSON object
 // carrying "verdict" or "valid", that wins over fallback: "verdict" of
 // ACCEPT, REJECT or ERROR, or "valid" of true or false. An optional "reason"
-// string is recorded.
+// string is recorded. Each member is read on its own: a member of another
+// type counts as absent, and the others still count.
 func Classify(fallback Verdict, body []byte) Result {
 	r := Result{Verdict: fallback, Raw: firstChars(string(body), 200)}
 	var obj struct {
-		Verdict *string `json:"verdict"`
-		Valid   *bool   `json:"valid"`
-		Reason  *string `json:"reason"`
+		Verdict json.RawMessage `json:"verdict"`
+		Valid   json.RawMessage `json:"valid"`
+		Reason  json.RawMessage `json:"reason"`
 	}
 	if json.Unmarshal(bytes.TrimSpace(body), &obj) != nil {
 		return r
 	}
-	if obj.Reason != nil {
-		r.Reason = *obj.Reason
+	if reason := member[string](obj.Reason); reason != nil {
+		r.Reason = *reason
 	}
+	verdict, valid := member[string](obj.Verdict), member[bool](obj.Valid)
 	switch {
-	case obj.Verdict != nil:
-		switch strings.ToUpper(strings.TrimSpace(*obj.Verdict)) {
+	case verdict != nil:
+		switch strings.ToUpper(strings.TrimSpace(*verdict)) {
 		case "ACCEPT":
 			r.Verdict = Accept
 		case "REJECT":
@@ -82,14 +84,26 @@ func Classify(fallback Verdict, body []byte) Result {
 		case "ERROR":
 			r.Verdict = Unreadable
 		}
-	case obj.Valid != nil:
-		if *obj.Valid {
+	case valid != nil:
+		if *valid {
 			r.Verdict = Accept
 		} else {
 			r.Verdict = Reject
 		}
 	}
 	return r
+}
+
+// member decodes one member of a JSON answer, or returns nil when it is
+// absent, null or of another type. The nil on an error is needed: a failed
+// decode can leave the pointer allocated and holding the zero value, which
+// would read "valid": "true" as false.
+func member[T any](raw json.RawMessage) *T {
+	var v *T
+	if len(raw) == 0 || json.Unmarshal(raw, &v) != nil {
+		return nil
+	}
+	return v
 }
 
 func firstChars(s string, n int) string {

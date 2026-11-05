@@ -61,6 +61,14 @@ func TestCommandAdapterExitCodes(t *testing.T) {
 		{"JSON REJECT wins over exit 0", helperCommand("exit", "0", `{"verdict":"REJECT","reason":"expired"}`), Reject, `{"verdict":"REJECT","reason":"expired"}`},
 		{"JSON valid true wins over exit 2", helperCommand("exit", "2", `{"valid": true}`), Accept, `{"valid": true}`},
 		{"JSON ERROR is couldn't read", helperCommand("exit", "0", `{"verdict":"ERROR"}`), Unreadable, `{"verdict":"ERROR"}`},
+		{"JSON valid false with an object reason wins over exit 0", helperCommand("exit", "0", `{"valid":false,"reason":{"code":"expired"}}`), Reject, `{"valid":false,"reason":{"code":"expired"}}`},
+		{"JSON REJECT with a number reason wins over exit 0", helperCommand("exit", "0", `{"verdict":"REJECT","reason":42}`), Reject, `{"verdict":"REJECT","reason":42}`},
+		{"JSON REJECT with a list reason wins over exit 0", helperCommand("exit", "0", `{"verdict":"REJECT","reason":["expired"]}`), Reject, `{"verdict":"REJECT","reason":["expired"]}`},
+		{"JSON ERROR with an object reason at exit 0 is couldn't read", helperCommand("exit", "0", `{"verdict":"ERROR","reason":{"e":1}}`), Unreadable, `{"verdict":"ERROR","reason":{"e":1}}`},
+		{"JSON verdict of another type leaves valid to decide", helperCommand("exit", "0", `{"verdict":42,"valid":false}`), Reject, `{"verdict":42,"valid":false}`},
+		{"JSON valid text leaves exit 0 to decide", helperCommand("exit", "0", `{"valid":"false"}`), Accept, `{"valid":"false"}`},
+		{"JSON valid text leaves exit 1 to decide", helperCommand("exit", "1", `{"valid":"true"}`), Reject, `{"valid":"true"}`},
+		{"JSON valid number leaves exit 3 to decide", helperCommand("exit", "3", `{"valid":1}`), Unreadable, `exit status 3: {"valid":1}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

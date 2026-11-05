@@ -104,6 +104,18 @@ func TestURLAdapterContractTable(t *testing.T) {
 		{"JSON without verdict or valid keeps the status", 200, `{"status":"ok"}`, Accept, "", `{"status":"ok"}`},
 		{"JSON with an unknown verdict keeps the status", 400, `{"verdict":"MAYBE"}`, Reject, "", `{"verdict":"MAYBE"}`},
 		{"JSON that is not an object keeps the status", 500, `["ACCEPT"]`, Unreadable, "", `["ACCEPT"]`},
+		{"JSON valid false with an object reason wins over 200", 200, `{"valid":false,"reason":{"code":"expired"}}`, Reject, "", `{"valid":false,"reason":{"code":"expired"}}`},
+		{"JSON verdict REJECT with a number reason wins over 200", 200, `{"verdict":"REJECT","reason":42}`, Reject, "", `{"verdict":"REJECT","reason":42}`},
+		{"JSON verdict REJECT with a list reason wins over 200", 200, `{"verdict":"REJECT","reason":["expired"]}`, Reject, "", `{"verdict":"REJECT","reason":["expired"]}`},
+		{"JSON verdict ACCEPT with an object reason wins over 422", 422, `{"verdict":"ACCEPT","reason":{"e":1}}`, Accept, "", `{"verdict":"ACCEPT","reason":{"e":1}}`},
+		{"JSON verdict ERROR with an object reason wins over 200", 200, `{"verdict":"ERROR","reason":{"e":1}}`, Unreadable, "", `{"verdict":"ERROR","reason":{"e":1}}`},
+		{"JSON null reason is no reason", 200, `{"verdict":"REJECT","reason":null}`, Reject, "", `{"verdict":"REJECT","reason":null}`},
+		{"JSON verdict of another type leaves valid to decide", 200, `{"verdict":42,"valid":false}`, Reject, "", `{"verdict":42,"valid":false}`},
+		{"JSON verdict of another type keeps the status", 200, `{"verdict":{"x":1}}`, Accept, "", `{"verdict":{"x":1}}`},
+		{"JSON valid text is not false: 200 keeps ACCEPT", 200, `{"valid":"false"}`, Accept, "", `{"valid":"false"}`},
+		{"JSON valid text is not false: 200 with \"true\" keeps ACCEPT", 200, `{"valid":"true"}`, Accept, "", `{"valid":"true"}`},
+		{"JSON valid text is not true: 422 keeps REJECT", 422, `{"valid":"true"}`, Reject, "", `{"valid":"true"}`},
+		{"JSON valid number keeps the status", 500, `{"valid":1}`, Unreadable, "", `{"valid":1}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
