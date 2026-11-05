@@ -51,6 +51,54 @@ log inclusion, build attestations or the content of behavioral profiles;
 [docs/scope.md](docs/scope.md) lists what it covers and the notes to read
 before relying on a result.
 
+## Try your verifier in two minutes
+
+The kit sends each of the 41 fixtures to your verifier and compares its
+verdicts with the answer key in [`conformance.json`](conformance.json). Your
+verifier stays yours. The kit uploads nothing: the fixtures go to your
+verifier only, and the report stays on your laptop unless you share it.
+
+The fixtures are native ATX credentials. A verifier that reads JWT or W3C
+credentials cannot parse them; when it answers as in the "Couldn't read"
+column below, the kit records that as a result, not as a REJECT.
+`--form jws` and `--form vc` are reserved for JWS and VC forms.
+
+With Go 1.22 or later and a network connection, a verifier you run as a
+command, then one you run as a service (yours goes in the angle brackets):
+
+```bash
+go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@COMMIT --verifier "<your command> {file}" --label "<name and version>"
+```
+
+```bash
+go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@COMMIT --verifier-url "<your URL>" --label "<name and version>"
+```
+
+`{file}` becomes each fixture's path; the file holds the credential in `atx`
+and the settings to judge it by in `verifierState`. Without `{file}`, and
+through a URL (a JSON POST), your verifier gets the credential alone and
+judges it by its own settings.
+
+| Adapter | ACCEPT | REJECT | Couldn't read |
+|---|---|---|---|
+| Command | exit 0 | exit 1 | any other exit, a crash, or a timeout |
+| URL | 2xx | 4xx | 5xx, no answer, or a timeout |
+| Either, if it prints JSON | "verdict": "ACCEPT" or "valid": true | "verdict": "REJECT" or "valid": false | "verdict": "ERROR" |
+
+JSON wins over exit and status codes. An optional "reason" string is
+recorded, and the first 200 characters of each raw response are kept in the
+report, so a person can judge.
+
+The kit prints four numbers: agree, accepted what must fail, rejected what
+must pass, and couldn't read. It exits 0 only when all 41 agree.
+`--report <dir>` writes `atx-interop-report.md` and `atx-interop-report.json`.
+To share a result, open an issue on this repository titled
+`<verifier> fails <fixture>.json at <suite commit>`, or email info@opena2a.org.
+
+Wrappers for any verifier are in [`examples/`](examples/). The guided tour
+runs from a clone: `go run ./cmd/atx-tour --setup` once with the network on,
+then `go run ./cmd/atx-tour --check` and `go run ./cmd/atx-tour`.
+
 ## Running the verifiers
 
 Both verifiers walk every `*.json` file in the directory you point them at
