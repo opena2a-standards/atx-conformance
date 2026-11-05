@@ -262,6 +262,34 @@ they should not.
   as a line break, and a run whose first line ends in a backslash, which
   YAML keeps before the space it folds the line break into, must not. All
   but the empty-line case failed before the change. No fixture changes.
+- `scripts/check_readme_counts.py` reads a `run:` command written as a
+  single- or double-quoted YAML scalar as YAML reads it, in a block-style
+  step and in a step written as a flow mapping, before it reads the command
+  as bash does (#339): the quotes are removed, `''` in single quotes is read
+  as `'`, the escapes of double quotes are undone, and a line break is
+  folded into one space, or into one line break for each empty line after
+  it. It kept the quotes, so a closing quote that ended the arguments of a
+  `python3 -m unittest discover` run was read as an unbalanced quote, and
+  the run counted no script. A quoted scalar that does not close, holds an
+  escape YAML does not define, or has text other than a comment after its
+  closing quote is kept as it is written, as before. In a copy of the tree
+  whose discovery run over `scripts/` is moved into a step of its own,
+  written
+  `run: "python3 -m unittest discover -v -s scripts -t scripts -p 'test_*.py'"`,
+  which PyYAML 6.0.3 reads without the quotes, the check reported
+  `README layout calls scripts/test_demo_recording.py a CI gate, but
+  .github/workflows/conformance.yml does not run it`, the same for
+  `scripts/test_script_options.py`, and exited 1; it now exits 0. The
+  unaltered tree exits 0 before and after. The self-test adds nine cases
+  (351 altered count sites, from 342): a run double-quoted, single-quoted
+  with its `'` written `''`, double-quoted with its arguments on a second
+  line indented past the key in a block-style step and in a flow mapping,
+  double-quoted with a backslash ending its first line, double-quoted
+  with a `\t` escape before its arguments, and double-quoted with a comment
+  after the closing quote must each count as a run; a double-quoted run
+  whose arguments an empty line sets apart, and one holding the escape
+  `\q`, which YAML does not define, must not. All but those last two
+  failed before the change. No fixture changes.
 
 ## v0.1.0
 
