@@ -28,6 +28,8 @@ they should not.
 - `atx-tour --demo <path>` runs steps 6 and 7 against a checkout of the
   delegation demo, and `--matrix <path>` runs step 8 against a checkout of the
   agent threat matrix; each is hidden with its reason when the checkout is not ready.
+  The demo's launcher runs outside the tour's sandbox; the steps check its
+  connection log.
 
 ### Changed
 
