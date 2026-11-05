@@ -1,8 +1,10 @@
 # Compiled Go binaries (verifiers and generator are `go run`-only).
-# `go build ./verifiers/go` at the repository root writes `go` there, and
-# `go build ./cmd/atx-verify` writes `atx-verify`.
+# `go build ./verifiers/go` at the repository root writes `go` there,
+# `go build ./cmd/atx-verify` writes `atx-verify`, and
+# `go build ./cmd/atx-tour` writes `atx-tour`.
 /go
 /atx-verify
+/atx-tour
 cmd/atx-verify/atx-verify
 verifiers/go/go
 verifiers/go/verify

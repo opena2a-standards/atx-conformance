@@ -279,6 +279,51 @@ func TestPreflightStateDecidesWhatTheTourShows(t *testing.T) {
 	}
 }
 
+func TestPart2IsHiddenWithItsReasonAndNeverShown(t *testing.T) {
+	for _, c := range []struct {
+		demo, reason string
+	}{
+		{"", "no --demo path was given"},
+		{t.TempDir(), "this commit does not run the delegation demo"},
+	} {
+		e, _ := testEnv(t)
+		e.Demo = c.demo
+		steps := append([]Step{okStep(1, "Works")}, Part2()...)
+		var pre bytes.Buffer
+		st := Preflight(context.Background(), e, steps, NewScreen(&pre, false))
+		for _, s := range st.Steps[1:] {
+			if s.Status != Hidden || s.Reason != c.reason {
+				t.Errorf("demo %q: step %d is %q with reason %q, want hidden with %q", c.demo, s.Number, s.Status, s.Reason, c.reason)
+			}
+			if want := "step " + strconv.Itoa(s.Number) + "  hidden  " + s.Title; !strings.Contains(pre.String(), want) {
+				t.Errorf("the pre-flight lacks %q:\n%s", want, pre.String())
+			}
+		}
+		if !strings.Contains(pre.String(), "1 ready, 2 hidden") {
+			t.Errorf("the pre-flight's last line is wrong:\n%s", pre.String())
+		}
+		var screen bytes.Buffer
+		tour := &Tour{Env: e, Steps: steps, Notes: Notes{}, Screen: NewScreen(&screen, false),
+			Keys: NewKeys(strings.NewReader("\n\n\n"), false, false)}
+		tour.Show(context.Background(), st)
+		for _, s := range Part2() {
+			if strings.Contains(screen.String(), s.Title) {
+				t.Errorf("the tour shows hidden step %d:\n%s", s.Number, screen.String())
+			}
+		}
+	}
+}
+
+func TestTheFormLimitIsSaidBeforeTheFirstStep(t *testing.T) {
+	e, _ := testEnv(t)
+	out := showOne(t, e, []Step{okStep(1, "Works")}, "\n\n", false)
+	limit := strings.Index(out, "native ATX credentials")
+	first := strings.Index(out, "Step 1. Works")
+	if limit < 0 || first < 0 || limit > first {
+		t.Fatalf("the limit is not said before the first step:\n%s", out)
+	}
+}
+
 func TestTourWithoutStateRunsThePreflightFirst(t *testing.T) {
 	e, _ := testEnv(t)
 	e.StateDir = t.TempDir()

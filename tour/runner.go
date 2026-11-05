@@ -105,6 +105,12 @@ type Tour struct {
 // failLine is what the screen shows for a step that did not run.
 const failLine = "This step didn't run. Here's the command instead:"
 
+// formLimit is the limit said before the first step: what a verifier in the
+// room can read of these fixtures.
+const formLimit = "These fixtures are native ATX credentials. A verifier that reads JWT or " +
+	"W3C credentials cannot parse them; the kit in this repository records that as " +
+	"couldn't read, which is a result. The jws and vc forms are reserved for a later release."
+
 // Show runs the steps the state marks ready, in table order, one per key
 // press. It returns the process exit code.
 func (t *Tour) Show(ctx context.Context, st *State) int {
@@ -129,6 +135,8 @@ func (t *Tour) Show(ctx context.Context, st *State) int {
 	scr.Title("ATX conformance: a guided tour")
 	scr.Printf("Clone: atx-conformance at %s", shortCommit(t.Env.Commit))
 	scr.Printf("Steps: %s (the pre-flight of %s passed them)", strings.Join(numbers, " "), st.CheckedAt)
+	scr.Blank()
+	scr.Labeled("Said first: ", formLimit, "")
 	scr.Blank()
 	scr.Printf("Enter: next step    r: repeat a step    q: quit")
 	if t.Keys.Next(ctx) == KeyQuit {

@@ -18,10 +18,10 @@ import (
 	"time"
 )
 
-// Table is every step of the tour, in order. Part 2 (the delegation demo)
-// and the optional last step are later rows of this table.
+// Table is every step of the tour, in order. The optional last step is a
+// later row of this table.
 func Table() []Step {
-	return Part1()
+	return append(Part1(), Part2()...)
 }
 
 const usageHead = `atx-tour: a guided tour of the ATX conformance suite, run from a clone.
