@@ -53,8 +53,8 @@ they should not.
   nothing there. `scripts/check_readme_counts.py` holds the text above
   README.md's first command to the minimums those lists state, and each
   `pip install` line in a fenced block of the README, its pages and
-  COSIGNERS.md to the flag. Its self-test adds 21 cases (293 cases green,
-  from 272). No fixture or verifier changes.
+  COSIGNERS.md to the flag. Its self-test adds 21 cases. No fixture or
+  verifier changes.
 - README.md says each fixture bundles an ATX, the name the vendored
   specification text `schemas/vendor/atx-spec/core.md` gives the
   credential, where it said an Agent Trust Credential, a name core.md does
@@ -63,19 +63,19 @@ they should not.
   `scripts/check_readme_counts.py` holds each `Agent Trust <word>` name in
   the README and its pages to the names core.md uses, Agent Trust
   eXtension and Agent Trust Protocol; a name written with hyphens is not
-  held. Its self-test adds 9 cases (302 cases green, from 293). No fixture
-  or verifier changes.
+  held. Its self-test adds 9 cases. No fixture or verifier changes.
 
 ### Fixed
 
-- The Python unit tests step of `conformance.yml` runs the 2 tests of
-  `docs/demo/test_record_atx_verify.py`, which hold
+- The Python unit tests step of `conformance.yml` runs the tests of
+  `docs/demo/test_record_atx_verify.py`, among them the ones that hold
   `docs/demo/record-atx-verify.sh` to refusing a Dockerfile that references an
   image it does not read (#325). The step's `unittest discover` run reads
   `scripts/` and held 3 tests, none from `docs/demo`.
-  `scripts/test_demo_recording.py`, which that run matches, adds the 2 tests,
-  and that run now fails on a Dockerfile the script refuses and on a
-  `docs/demo/test_record_atx_verify.py` that is gone. No workflow file changes.
+  `scripts/test_demo_recording.py`, which that run matches, adds that file's
+  tests to the run, and that run now fails on a Dockerfile the script refuses
+  and on a `docs/demo/test_record_atx_verify.py` that is gone. No workflow file
+  changes.
 - Both reference verifiers reject a v1.1 credential whose `declaredPurpose`
   holds a number outside the float64 range as `SIGNATURE_INVALID`, with a
   reason that quotes the number as written (#302). They rejected it as
@@ -181,10 +181,9 @@ they should not.
   the commit before this change, with no change to the tree, on
   `only-number claim scan over one 16,000-character word`, which took
   0.5 s. In ten runs there at load averages of 20 to 23, each of the six
-  took 0.08 s of CPU time or less. The self-test adds one case (273
-  altered count sites, from 272): a 0.6 s sleep, in which the process
-  does not run, held to a 0.5 s bound, which the wall-clock reading
-  fails. No fixture changes.
+  took 0.08 s of CPU time or less. The self-test adds one case: a 0.6 s
+  sleep, in which the process does not run, held to a 0.5 s bound, which
+  the wall-clock reading fails. No fixture changes.
 - The Go reference verifier builds the v1.0 and v1.1 signed payloads from
   the `trustScore` value the credential writes, decided on every digit
   written, as the Python reference verifier's `float()` reads it (#308).
@@ -225,13 +224,12 @@ they should not.
   a shell operator and stopped with an `IndexError` traceback, printing
   no verdict. With the workflow's discover line given `-p ''`, on which
   unittest runs no test, it now reports `scripts/test_script_options.py`
-  as not run and exits 1. The self-test adds three discover steps (319
-  altered count sites, from 316): an empty argument before `-s` and `-p`,
-  which `-s` replaces as the start directory; the empty pattern `-p ''`;
-  and an empty argument after `-s` and `-p`, which unittest reads as the
-  start directory, the directory it is run from. Given to the check as it
-  was before this change, each of the three raises `IndexError`. No
-  fixture changes.
+  as not run and exits 1. The self-test adds three discover steps: an
+  empty argument before `-s` and `-p`, which `-s` replaces as the start
+  directory; the empty pattern `-p ''`; and an empty argument after `-s`
+  and `-p`, which unittest reads as the start directory, the directory it
+  is run from. Given to the check as it was before this change, each of
+  the three raises `IndexError`. No fixture changes.
 - `scripts/check_readme_counts.py` reads the word `discover` of a
   `python3 -m unittest discover` run in either case of each of its letters,
   as unittest does: `unittest/main.py` in Python 3.12.12, 3.13.12 and 3.14.3
@@ -243,9 +241,9 @@ they should not.
   now exits 0. The match holds to the word's ASCII letters, as `(?i)` alone
   also reads the word written with U+0130, U+0131 or U+017F: given
   `-s scripts -p 'test_*.py'` after such a word, unittest exits 2 and runs
-  no test. The self-test adds six cases (322 altered count sites, from
-  316): `DISCOVER` and `Discover` must count as a run, and those three
-  spellings and a module named `UNITTEST` must not. No fixture changes.
+  no test. The self-test adds six cases: `DISCOVER` and `Discover` must
+  count as a run, and those three spellings and a module named `UNITTEST`
+  must not. No fixture changes.
 - `docs/demo/record-atx-verify.sh` has the render write its output into the
   container's own file system instead of a bind-mounted directory of the
   caller's (#312). The container runs as root with `--cap-drop ALL`, so root
@@ -279,14 +277,14 @@ they should not.
   it reported `README layout calls scripts/test_demo_recording.py a CI
   gate, but .github/workflows/conformance.yml does not run it`, the same
   for `scripts/test_script_options.py`, and exited 1; it now exits 0. The
-  self-test adds five cases (342 altered count sites, from 337): the
-  arguments on the line after `run: python3 -m unittest discover`, on the
-  line after a command that starts on the line under `run:`, and on the
-  second line of a step written as a flow mapping must each count as a
-  run; arguments an empty line sets apart from the run, which YAML reads
-  as a line break, and a run whose first line ends in a backslash, which
-  YAML keeps before the space it folds the line break into, must not. All
-  but the empty-line case failed before the change. No fixture changes.
+  self-test adds five cases: the arguments on the line after
+  `run: python3 -m unittest discover`, on the line after a command that
+  starts on the line under `run:`, and on the second line of a step written
+  as a flow mapping must each count as a run; arguments an empty line sets
+  apart from the run, which YAML reads as a line break, and a run whose
+  first line ends in a backslash, which YAML keeps before the space it
+  folds the line break into, must not. All but the empty-line case failed
+  before the change. No fixture changes.
 - `scripts/check_readme_counts.py` reads a `run:` command written as a
   single- or double-quoted YAML scalar as YAML reads it, in a block-style
   step and in a step written as a flow mapping, before it reads the command
@@ -305,16 +303,29 @@ they should not.
   `README layout calls scripts/test_demo_recording.py a CI gate, but
   .github/workflows/conformance.yml does not run it`, the same for
   `scripts/test_script_options.py`, and exited 1; it now exits 0. The
-  unaltered tree exits 0 before and after. The self-test adds nine cases
-  (351 altered count sites, from 342): a run double-quoted, single-quoted
-  with its `'` written `''`, double-quoted with its arguments on a second
-  line indented past the key in a block-style step and in a flow mapping,
-  double-quoted with a backslash ending its first line, double-quoted
-  with a `\t` escape before its arguments, and double-quoted with a comment
-  after the closing quote must each count as a run; a double-quoted run
-  whose arguments an empty line sets apart, and one holding the escape
-  `\q`, which YAML does not define, must not. All but those last two
-  failed before the change. No fixture changes.
+  unaltered tree exits 0 before and after. The self-test adds nine cases: a
+  run double-quoted, single-quoted with its `'` written `''`, double-quoted
+  with its arguments on a second line indented past the key in a block-style
+  step and in a flow mapping, double-quoted with a backslash ending its
+  first line, double-quoted with a `\t` escape before its arguments, and
+  double-quoted with a comment after the closing quote must each count as a
+  run; a double-quoted run whose arguments an empty line sets apart, and one
+  holding the escape `\q`, which YAML does not define, must not. All but
+  those last two failed before the change. No fixture changes.
+- The entries of this section for #305, #307, #315, #325, #327, #328, #335
+  and #339 say what each change adds, with no running total, and
+  `scripts/check_readme_counts.py` holds the top section of this file to
+  that (#333). In a3ead8a, the commit that carried the #325 and #327
+  entries, the first gave `docs/demo/test_record_atx_verify.py` 2 tests
+  where `grep -c 'def test_'` printed 8, and the second gave the self-test
+  319 sites where the script printed 324. A sentence of the top section now
+  fails the check, which exits 1 and names the total, when it states how
+  many tests a file or a run holds (`the N tests`, `holds N tests`,
+  `runs N tests`, `Ran N tests`) or a self-test's total
+  (`N altered count sites`, `N cases green`, `N cases, from M`).
+  `adds 3 cases`, `held 3 tests`, `Ran 1 test`, `the N tests that` and a
+  section below the top one are not held. Its self-test adds 27 cases. No
+  fixture or verifier changes.
 
 ## v0.1.0
 
