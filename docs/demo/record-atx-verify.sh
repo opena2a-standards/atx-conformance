@@ -21,9 +21,16 @@
 # no-new-privileges and a --pids-limit derived from the docker host's CPU count (PIDS_BASE below),
 # and with the network: the tape's command resolves the module through the Go module proxy, so a
 # render with no network would record another command, and the sidecar lists --network none as
-# dropped, with that reason. docs/demo is mounted into it read-only, at /work/input/docs/demo, and
-# the render writes into a new empty directory mounted at /work/docs/demo. It receives no variable
-# of the calling environment other than the ones this script names. In the container the script:
+# dropped, with that reason. docs/demo is mounted into it read-only, at /work/input/docs/demo. The
+# container runs as root, and root with no capabilities gets the ordinary permission checks, so the
+# render writes into /work/docs/demo in the container's own file system, where root owns /work, and
+# into no bind mount: a rootful Linux Docker Engine without user-namespace remapping keeps a bind
+# mount's host owner and mode, and root without CAP_DAC_OVERRIDE cannot write into a directory the
+# caller owns with mode 0700, as `mktemp -d` makes it. The script makes the container with docker
+# create and runs it with docker start --attach; once it stops, docker cp copies /work/docs/demo
+# into a new empty directory, the copies made as the caller's files, and the script removes the
+# container when it ends. It receives no variable of the calling environment other than the ones
+# this script names. In the container the script:
 #   1. asks the module proxy which version @latest names (`go list -m -json`);
 #   2. renders the tape: atx-verify.gif, out/atx-verify.mp4 and one PNG per step;
 #   3. runs the typed commands once more with NO_COLOR=1 TERM=dumb COLUMNS=110 into
@@ -39,18 +46,18 @@
 # A render whose first command does not exit 0 with a `summary:` line last, or that breaks the pace
 # rule, writes no sidecar and exits 3. After a render that wrote the sidecar, this script copies the
 # files the tape names, the capture, the narration (when its version changed) and the sidecar from
-# the render's directory into docs/demo, the sidecar last; it copies nothing when that directory
-# holds a link or one of those is not a regular file. The outputs, the capture and the sidecar of an
-# earlier render are removed from docs/demo before the container starts, so a render that stops part
-# way leaves none of them there and copies nothing; the script then names the directory that holds
-# what the render wrote. The MP4 goes to docs/demo/out/, which is not committed.
+# the directory docker cp filled into docs/demo, the sidecar last; it copies nothing when that
+# directory holds a link or one of those is not a regular file. The outputs, the capture and the
+# sidecar of an earlier render are removed from docs/demo before the container starts, so a render
+# that stops part way leaves none of them there and copies nothing; the script then names the
+# directory that holds what the render wrote. The MP4 goes to docs/demo/out/, which is not committed.
 #
-# docker info, docker build and docker run use a configuration directory of this script's own,
-# removed when the script ends, which names no credential helper and holds no registry credentials;
-# the base images are public and are pulled by digest. The caller's configuration can name a helper
-# that reads the OS keychain. The endpoint of the docker context in use is carried over as
-# DOCKER_HOST, and the caller's plugin directory and Docker Desktop's (when present) as
-# cliPluginsExtraDirs, so buildx is still found.
+# docker info, build, image inspect, create, start, cp and rm use a configuration directory of this
+# script's own, removed when the script ends, which names no credential helper and holds no
+# registry credentials; the base images are public and are pulled by digest. The caller's
+# configuration can name a helper that reads the OS keychain. The endpoint of the docker context in
+# use is carried over as DOCKER_HOST, and the caller's plugin directory and Docker Desktop's (when
+# present) as cliPluginsExtraDirs, so buildx is still found.
 #
 # --dry-run prints the image, its base images, the VHS source, the container's flags (the pids limit
 # as the rule a render derives it by), the tape, the checkout and the files a render writes, then
@@ -73,9 +80,10 @@ import hashlib, json, math, os, re, socket, subprocess, sys, time
 
 NAME, MODULE, FRONT_DOOR = sys.argv[1:4]
 os.chdir('/work')
-# The paths are the checkout's. What the render writes goes to /work/docs/demo, the new empty directory
-# the host side copies into docs/demo; the checkout's docs/demo is mounted read-only at
-# /work/input/docs/demo, and mounted() names an input's copy there.
+# The paths are the checkout's. What the render writes goes to /work/docs/demo, a new directory in the
+# container's own file system that the host side copies out with docker cp and then into docs/demo;
+# the checkout's docs/demo is mounted read-only at /work/input/docs/demo, and mounted() names an
+# input's copy there.
 DEMO = 'docs/demo'
 TAPE = f'{DEMO}/{NAME}.tape'
 NARRATION = f'{DEMO}/{NAME}.narration.json'
@@ -744,7 +752,7 @@ if [ "$DRY_RUN" = 1 ]; then
   echo "  source    $SOURCE_REPOSITORY $SOURCE_TAG, commit $SOURCE_COMMIT"
   echo "  tape      $TAPE"
   echo "  runs      go run $MODULE/cmd/$NAME@latest, the version the Go module proxy names when it runs"
-  echo "  container ${RUN_FLAGS[*]} --pids-limit $PIDS_BASE plus $PIDS_PER_CPU for each CPU of the docker host, with the network; docs/demo mounted read-only, the render's files copied into it from a directory of its own"
+  echo "  container ${RUN_FLAGS[*]} --pids-limit $PIDS_BASE plus $PIDS_PER_CPU for each CPU of the docker host, with the network; docs/demo mounted read-only; the render's files copied out of the container with docker cp, then into docs/demo"
   echo "  checkout  $HEAD_SHA${HEAD_TAGS:+, tags $HEAD_TAGS}"
   echo "  writes    $(sed -n -E 's/^(Output|Screenshot) (.*)$/\2/p' "$REPO_ROOT/$TAPE" | paste -s -d " " -) docs/demo/$NAME-capture.txt docs/demo/$NAME.json, and the version in docs/demo/$NAME.narration.json"
   echo "  docker    a configuration of the script's own, with no credential helper and no registry credentials"
@@ -755,7 +763,12 @@ CONTEXT="$(mktemp -d)"
 OWN_DOCKER_CONFIG="$(mktemp -d)"
 RENDER_DIR="$(mktemp -d)"
 KEEP_RENDER_DIR=0
+CONTAINER=""
 cleanup() {
+  if [ -n "$CONTAINER" ]; then
+    "$DOCKER" rm --force "$CONTAINER" >/dev/null \
+      || echo "record-$NAME.sh: $DOCKER rm --force $CONTAINER failed; remove that container by hand." >&2
+  fi
   rm -rf "$CONTEXT" "$OWN_DOCKER_CONFIG"
   if [ "$KEEP_RENDER_DIR" = 0 ]; then rm -rf "$RENDER_DIR"; fi
 }
@@ -814,8 +827,10 @@ BASE_REVISION="$("$DOCKER" image inspect --format '{{index .Config.Labels "org.o
 rm -f "$REPO_ROOT/docs/demo/$NAME.json"
 for path in "${WRITES[@]}"; do rm -f "$REPO_ROOT/$path"; done
 
-STATUS=0
-"$DOCKER" run --rm --pull never --hostname laptop --shm-size=1g "${RUN_FLAGS[@]}" \
+# The render writes into /work/docs/demo in the container's own file system, where root owns /work,
+# and into no bind mount (see the header). Once the container stops, docker cp copies that directory
+# into RENDER_DIR, the copies made as the caller's files; cleanup removes the container.
+CONTAINER="$("$DOCKER" create --pull never --hostname laptop --shm-size=1g "${RUN_FLAGS[@]}" \
   -e HOME=/work/demo-user \
   -e HEAD_TAGS="$HEAD_TAGS" \
   -e IMAGE="$IMAGE" \
@@ -829,8 +844,11 @@ STATUS=0
   -e SOURCE_COMMIT="$SOURCE_COMMIT" \
   -e RUN_FLAGS="${RUN_FLAGS[*]}" \
   -v "$REPO_ROOT/docs/demo":/work/input/docs/demo:ro \
-  -v "$RENDER_DIR":/work/docs/demo \
-  --entrypoint bash "$IMAGE" "/work/input/docs/demo/record-$NAME.sh" --in-container || STATUS=$?
+  --entrypoint bash "$IMAGE" "/work/input/docs/demo/record-$NAME.sh" --in-container)"
+STATUS=0
+"$DOCKER" start --attach "$CONTAINER" || STATUS=$?
+COPY_STATUS=0
+"$DOCKER" cp "$CONTAINER:/work/docs/demo/." "$RENDER_DIR" || COPY_STATUS=$?
 
 # The render's files reach docs/demo only after it wrote the sidecar, and only as regular files from
 # a directory that holds no link, so a render places nothing there but its own files. The sidecar is
@@ -841,6 +859,11 @@ stop() {
   exit "$1"
 }
 [ "$STATUS" = 0 ] || stop "$STATUS" "the render exited $STATUS"
+if [ "$COPY_STATUS" != 0 ]; then
+  KEEP_RENDER_DIR=1
+  echo "record-$NAME.sh: $DOCKER cp exited $COPY_STATUS; nothing was copied into docs/demo, and what it copied of the render's files is in $RENDER_DIR." >&2
+  exit 1
+fi
 COPIES=("${WRITES[@]}")
 if [ -e "$RENDER_DIR/$NAME.narration.json" ] || [ -L "$RENDER_DIR/$NAME.narration.json" ]; then
   COPIES+=("docs/demo/$NAME.narration.json")
