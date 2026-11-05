@@ -122,8 +122,9 @@ you need.
 
 [`cmd/atx-tour`](cmd/atx-tour/) walks through the suite step by step from a
 clone: each step says what is about to happen, runs the real commands and shows
-the lines that matter. Steps that need Python or Node are left out when those
-are not installed. This line needs the network once:
+the lines that matter. The tour needs Go 1.22 or later; on macOS 26, Go 1.23 or
+later. Steps that need Python or Node are left out when those are not
+installed. This line needs the network once:
 
 ```bash
 git clone https://github.com/opena2a-standards/atx-conformance.git && cd atx-conformance && git checkout b10dedd8ba76f7d52e5d7d0d4442294bbea804f6 && go run ./cmd/atx-tour --setup

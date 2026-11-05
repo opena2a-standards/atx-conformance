@@ -218,7 +218,9 @@ go run . ../../fixtures
 
 Depends on:
 
-- Go 1.22 or later. A timestamp whose time zone offset has an hour above 24
+- Go 1.22 or later; on macOS 26, Go 1.23 or later for `cmd/atx-verify`,
+  whose kit links system frameworks (`verifiers/go` runs under Go 1.22 on
+  macOS 26 too). A timestamp whose time zone offset has an hour above 24
   or a minute above 60 (`+25:00`, `+23:61`) is refused under every release;
   no fixture carries one. Go 1.22's time package decodes such a timestamp, or
   refuses it for the day when its day is out of range

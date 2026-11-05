@@ -20,7 +20,9 @@ they should not.
   options, atx-verify's output is unchanged. On macOS 26, a binary built with
   Go 1.22 stops at start with a dyld error, also with none of the new options,
   because the kit's `net/http` import links system frameworks; built with
-  Go 1.23 or later it runs. `answerkey.go` embeds
+  Go 1.23 or later it runs. `atx-tour` stops the same way under Go 1.22 on
+  macOS 26, `go run ./cmd/atx-tour` included, and runs under Go 1.23 or later.
+  `answerkey.go` embeds
   `conformance.json` and `MANIFEST.sha256` in the module's root package. No
   fixture, expected verdict, verifier logic, schema or module dependency changed.
 - `examples/wrap-verifier.sh` and `examples/serve_verifier.py` put a verifier
