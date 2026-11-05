@@ -1979,6 +1979,13 @@ FLOW_SCALAR = re.compile(
     re.S)
 
 
+def yaml_unescape(match):
+    """The character a YAML_ESCAPE match names. Raises KeyError or
+    ValueError for an escape YAML does not define."""
+    code = match.group(1) or match.group(2) or match.group(3)
+    return chr(int(code, 16)) if code else YAML_ESCAPES[match.group(4)]
+
+
 def yaml_key(scalar):
     """The key a mapping key's scalar text names: a single-quoted key without
     its quotes and with each `''` read as `'`, a double-quoted key without
@@ -1989,13 +1996,8 @@ def yaml_key(scalar):
         return scalar[1:-1].replace("''", "'")
     if scalar[:1] != '"':
         return scalar
-
-    def unescape(match):
-        code = match.group(1) or match.group(2) or match.group(3)
-        return chr(int(code, 16)) if code else YAML_ESCAPES[match.group(4)]
-
     try:
-        return YAML_ESCAPE.sub(unescape, scalar[1:-1])
+        return YAML_ESCAPE.sub(yaml_unescape, scalar[1:-1])
     except (KeyError, ValueError):
         return scalar
 
@@ -2077,11 +2079,17 @@ def workflow_run_commands(workflow):
     (plain_scalar()): each line break into one space and each empty line
     into a line break, so arguments on the line after
     `run: python3 -m unittest discover`, indented past the key, follow it
-    on one line. A key may be quoted (`- "run": python3 scripts/a.py`) and
-    is read by yaml_key(), and spaces may stand between a block-style key
-    and its `:` (`- run : python3 scripts/a.py`). A script named in a YAML
-    comment, a step `name:` or an action's `with:` input is in none of
-    them."""
+    on one line. A command written as a single- or double-quoted scalar, on
+    one line or more, in a block-style step or a flow mapping, is read as
+    YAML reads it before bash reads it (quoted_scalar()): its quotes
+    removed, `''` in single quotes read as `'`, the escapes of double
+    quotes undone and its line breaks folded. One that does not close,
+    holds an escape YAML does not define, or has text other than a comment
+    after its closing quote is kept as it is written, quotes included. A
+    key may be quoted (`- "run": python3 scripts/a.py`) and is read by
+    yaml_key(), and spaces may stand between a block-style key and its `:`
+    (`- run : python3 scripts/a.py`). A script named in a YAML comment, a
+    step `name:` or an action's `with:` input is in none of them."""
     lines = (workflow or "").splitlines()
     commands = []
     # Open nodes, innermost last: (column, "-") for a sequence item and
@@ -2112,7 +2120,10 @@ def workflow_run_commands(workflow):
             step, i = flow_node_lines(lines, i, line[item.end():])
             if is_step and isinstance(step, dict) and isinstance(step.get("run"), str):
                 command = step["run"]
-                if command[:1] not in "'\"":
+                if command[:1] in ("'", '"'):
+                    read = quoted_scalar(command)
+                    command = command if read is None else read
+                else:
                     command = plain_scalar(command.splitlines())
                 commands.append(bash_text(command))
             continue
@@ -2143,8 +2154,10 @@ def workflow_run_commands(workflow):
         if name == "run" and is_step:
             if header:
                 command = block_scalar(header, body, column)
-            elif value[:1] in "'\"":
+            elif value[:1] in ("'", '"'):
                 command = "\n".join([value] + body)
+                read = quoted_scalar(command)
+                command = command if read is None else read
             else:
                 command = plain_scalar([value] + body)
             commands.append(bash_text(command))
@@ -2220,6 +2233,76 @@ def plain_scalar(lines):
         parts.append(text)
         empty = 0
     return "".join(parts)
+
+
+def quoted_scalar(text):
+    """The value YAML reads from the single- or double-quoted scalar that
+    opens `text`, whose lines are joined by line breaks with their
+    indentation kept; None where the scalar does not close, holds an escape
+    YAML does not define, or is followed by anything but spaces, tabs, line
+    breaks and comments. The quotes are no part of the value. In a
+    single-quoted scalar `''` is read as `'` and a backslash is a backslash;
+    in a double-quoted one each escape YAML_ESCAPE matches is undone
+    (yaml_unescape()). A line break, with the spaces and tabs that end the
+    line before it and start the line after it, is folded into one space,
+    or, where empty lines follow it, into one line break for each of them.
+    In a double-quoted scalar a backslash that ends a line removes that
+    line break and the next line's indentation, and each empty line after
+    it adds a line break."""
+    quote = text[:1]
+    if quote not in ("'", '"'):
+        return None
+    double = quote == '"'
+    parts, i = [], 1
+
+    def empty_lines(i):
+        # From text[i], the start of a line: the number of empty lines there
+        # and the index of the first character past them and the
+        # indentation of the line after them.
+        count = 0
+        while True:
+            while i < len(text) and text[i] in " \t":
+                i += 1
+            if not text.startswith("\n", i):
+                return count, i
+            count, i = count + 1, i + 1
+
+    while i < len(text):
+        char = text[i]
+        if char == quote and (double or not text.startswith("''", i)):
+            for line in text[i + 1:].split("\n"):
+                if line.strip(" \t") and not line.lstrip(" \t").startswith("#"):
+                    return None
+            return "".join(parts)
+        if char == quote:
+            parts.append("'")
+            i += 2
+        elif double and char == "\\" and text.startswith("\n", i + 1):
+            count, i = empty_lines(i + 2)
+            parts.append("\n" * count)
+        elif double and char == "\\":
+            escape = YAML_ESCAPE.match(text, i)
+            if not escape:
+                return None
+            try:
+                parts.append(yaml_unescape(escape))
+            except (KeyError, ValueError):
+                return None
+            i = escape.end()
+        elif char in " \t\n":
+            end = i
+            while end < len(text) and text[end] in " \t":
+                end += 1
+            if text.startswith("\n", end):
+                count, end = empty_lines(end + 1)
+                parts.append("\n" * count if count else " ")
+            else:
+                parts.append(text[i:end])
+            i = end
+        else:
+            parts.append(char)
+            i += 1
+    return None
 
 
 # `python3 -m unittest discover`; its arguments follow it. The match ends
@@ -4503,7 +4586,16 @@ def _ci_gate_label_cases(readme, workflow, scripts):
     flow-mapping step written so, none may add a failure; with an empty
     line between the run and its arguments, which YAML reads as a line
     break, and with a backslash ending the first line, which YAML keeps
-    before the space it folds the line break into, each must."""
+    before the space it folds the line break into, each must. Then run it
+    from steps whose `run:` scalar is quoted: double-quoted, single-quoted
+    with its `'` written `''`, double-quoted with the arguments on a second
+    line indented past the key, in a block-style step and in a flow
+    mapping, double-quoted with a backslash ending its first line,
+    double-quoted with a `\\t` escape between the run and its arguments,
+    and double-quoted with a comment after its closing quote: none may add
+    a failure. Double-quoted with an empty line between the run and its
+    arguments, which YAML reads as a line break, and double-quoted with
+    the escape `\\q`, which YAML does not define, each must."""
     labels = (
         "scripts/*.py script that no workflow step runs",
         "script the workflow stops naming",
@@ -4564,6 +4656,15 @@ def _ci_gate_label_cases(readme, workflow, scripts):
         "script a unittest discover step whose arguments an empty line sets apart does not run",
         "script run by a flow-mapping unittest discover step whose plain run: scalar spans two lines",
         "script a unittest discover step does not run when its plain run: scalar ends a line in a backslash",
+        "script run by a unittest discover step whose run: scalar is double-quoted",
+        "script run by a unittest discover step whose run: scalar is single-quoted",
+        "script run by a unittest discover step whose double-quoted run: scalar spans two lines",
+        "script run by a flow-mapping unittest discover step whose double-quoted run: scalar spans two lines",
+        "script run by a unittest discover step whose double-quoted run: scalar a backslash continues",
+        "script run by a unittest discover step whose double-quoted run: scalar holds a \\t escape",
+        "script run by a unittest discover step whose double-quoted run: scalar a comment follows",
+        "script a unittest discover step does not run when an empty line splits its double-quoted run: scalar",
+        "script a unittest discover step does not run when its double-quoted run: scalar holds an undefined escape",
     )
     if not CI_GATE_GLOB.search(readme):
         why = ("no `scripts/*.py  CI gates` layout line found in README.md or its "
@@ -4722,12 +4823,31 @@ def _ci_gate_label_cases(readme, workflow, scripts):
     # a space, and an empty line between the two into a line break, before
     # bash reads the command (plain_scalar()), so a backslash that ends the
     # first line stays a backslash before a space and joins no line.
+    # A quoted `run:` scalar is read as YAML reads it (quoted_scalar()): its
+    # quotes removed, `''` read as `'`, its escapes undone and its line breaks
+    # folded, before bash reads the command. Its arguments end the scalar, so
+    # a closing quote read as part of the command would follow them.
+    quoted = "-s scripts -t scripts -p 'invented_*.py'"
+    # Inside a single-quoted YAML scalar each `'` is written `''`.
+    single_quoted = quoted.replace("'", "''")
     for label, step, reported in (
             (labels[54], f"- run: {discover}\n          {over_scripts}", False),
             (labels[55], f"- run:\n          {discover}\n          {over_scripts}", False),
             (labels[56], f"- run: {discover} -v\n\n          {over_scripts}", True),
             (labels[57], f"- {{name: a, run: {discover}\n          {over_scripts}}}", False),
-            (labels[58], f"- run: {discover} \\\n          {over_scripts}", True)):
+            (labels[58], f"- run: {discover} \\\n          {over_scripts}", True),
+            (labels[59], f'- run: "{discover} {quoted}"', False),
+            (labels[60], f"- run: '{discover} {single_quoted}'", False),
+            (labels[61], f'- run: "{discover}\n          {quoted}"', False),
+            (labels[62], f'- {{name: a, run: "{discover}\n          {quoted}"}}', False),
+            (labels[63], f'- run: "{discover} -v \\\n          {quoted}"', False),
+            (labels[64], f'- run: "{discover}\\t{quoted}"', False),
+            (labels[65], f'- run: "{discover} {quoted}" # a comment', False),
+            (labels[66], f'- run: "{discover} -v\n\n          {quoted}"', True),
+            # YAML defines no `\q`, so the scalar is kept with its quotes and
+            # the closing one stands unbalanced after the run's arguments; read
+            # as `q`, it would be a start directory -s replaces.
+            (labels[67], f'- run: "{discover} \\q {quoted}"', True)):
         flow = (workflow or "") + f"\n      {step}\n"
         got = new(readme + line, flow, files)
         cases.append((any(want in f for f in got) == reported, label,
