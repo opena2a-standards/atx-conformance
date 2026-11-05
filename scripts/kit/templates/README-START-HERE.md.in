@@ -1,0 +1,48 @@
+@title atx-conformance interop day kit|pinned commit <sha7>, <date>
+================================================================================
+This kit carries atx-conformance at commit
+<sha>: <N> fixtures, and both reference
+verifiers pass all <N>.
+Running a verifier needs no network. Building one needs it once, to fetch
+dependencies, so this kit carries prebuilt Go binaries for <platforms>.
+
+Check before you run. This folder is a copy of the release at
+<release URL>
+Download SHA256SUMS from that page, not from this folder, and run
+shasum -a 256 -c SHA256SUMS here (Linux: sha256sum -c SHA256SUMS). Every line
+must say OK, and every file here must be listed in it. With the GitHub CLI:
+gh attestation verify <file> -R <owner/repo>
+
+Run the fixtures, one command, from this folder:
+  macOS or Linux:  open Terminal, type cd and a space, drag this folder onto
+                   the window, press Enter, then:                  ./verify
+  Windows:         open this folder, type cmd in the address bar, press
+                   Enter, then:                                    verify.cmd
+  Expected last line:  <expected last line>    exit code 0
+@nof5   A FAIL line is a bug in a verifier or a fixture: tell us, see CONTACT.txt.
+@f5 The verifiers print text from the files they read without escaping control
+@f5 characters. When you run a file someone else wrote, pipe the output through
+@f5 cat -v, or write it to a file and open that.
+
+Every private key in this kit is a published test key, so anyone can sign a
+credential these fixtures accept: a pass shows that a verifier agrees with a
+fixture, never that OpenA2A issued a credential.
+@nof5
+A credential of your own:  ./verify my-fixture.json
+To check a credential of your own, use one that is no longer live: an expired
+one, with the fixture's clock set inside its validity period, or one from a
+test issuer. An ATX works as a bearer credential until it expires. The
+verifier needs no private key; never give it one.
+A fixture is your credential plus the keys the verifier trusts and the verdict
+you expect: copy fixtures/baseline-valid.json, put your credential in its atx
+member, your issuer's DID in verifierState.trustedIssuers and its public key in
+verifierState.publicKeys, and set verifierState.clockRfc3339. Field by field:
+README.md and docs/fixtures.md.
+@nof5
+In this folder:
+  bin/<os>-<arch>/atx-verify  the Go verifier, one static binary per platform
+  fixtures/  MANIFEST.sha256  the fixtures and their SHA-256 pins
+  verifiers/python/           the Python verifier; offline install: PYTHON.md
+  conformance.json            what the suite covers; notCovered lists the rest
+  CONTACT.txt                 who to tell, and the release this copy came from
+  README.md                   the repository README at the pinned commit

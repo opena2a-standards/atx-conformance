@@ -1,0 +1,344 @@
+name: Interop day kit release
+
+# A push of a kit-* tag builds the interop day kit on GitHub-hosted runners,
+# runs every fixture with each Go binary on a runner of its own platform,
+# writes one SHA256SUMS over every kit file, attests every binary, the kit
+# archive and SHA256SUMS, publishes the release from a draft (never marked
+# Latest), and verifies what it published. The tag run publishes only a kit
+# whose SHA256SUMS is byte-equal to that of the newest successful
+# workflow_dispatch run at the same commit: the candidate the release test
+# passed. A dispatch run builds and tests that candidate; on main it also
+# attests it and checks the attestations in both directions.
+# The scripts this workflow runs are in scripts/kit.
+
+on:
+  push:
+    tags:
+      - 'kit-*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The kit tag this candidate is for: kit-YYYY-MM-DD, or kit-YYYY-MM-DD.N for a second cut'
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: kit-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  KIT_GO_VERSION: '1.27.3'
+  GOTOOLCHAIN: local
+  GOFLAGS: -mod=readonly
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  stage:
+    name: compile the six binaries in the clean checkout, then stage the kit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: The checkout is the commit that started the run
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: The kit tag (kit-YYYY-MM-DD or kit-YYYY-MM-DD.N, never a v prefix or a slash)
+        id: tag
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "$EVENT" = push ]; then
+            tag=$REF_NAME
+            [ "$REF" = "refs/tags/$tag" ] || { echo "not a tag push: $REF"; exit 1; }
+            git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "the tagged commit is not on main"; exit 1; }
+          else
+            tag=$INPUT_TAG
+          fi
+          printf '%s\n' "$tag" | grep -q -x -E 'kit-[0-9]{4}-[0-9]{2}-[0-9]{2}(\.[0-9]+)?' || { echo "not a kit tag: $tag"; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.KIT_GO_VERSION }}
+          cache: false
+
+      - name: The kit's checks refuse the inputs they exist to refuse
+        run: python3 -I scripts/kit/test/test_kit.py --ci
+
+      - name: Compile the six binaries first, then stage the tree, the launchers and the pinned wheels
+        env:
+          KIT_COMMIT: ${{ github.sha }}
+        run: bash scripts/kit/assemble.sh stage "$RUNNER_TEMP/stage"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-stage
+          path: ${{ runner.temp }}/stage/kit-stage.tar
+          if-no-files-found: error
+
+  test:
+    name: every fixture on ${{ matrix.target }}, on a runner of that platform
+    needs: stage
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64
+            runner: ubuntu-24.04
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+          - target: darwin-arm64
+            runner: macos-15
+          - target: darwin-amd64
+            runner: macos-15-intel
+          - target: windows-amd64
+            runner: windows-2025
+          - target: windows-arm64
+            runner: windows-11-arm
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: kit-stage
+          path: ${{ runner.temp }}/in
+
+      - name: Unpack the staged kit
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: tar -xf in/kit-stage.tar
+
+      - name: Run the launcher with no argument, as a reader would (macOS, Linux)
+        if: runner.os != 'Windows'
+        shell: bash
+        working-directory: ${{ runner.temp }}/interop-day-kit
+        run: |
+          set +e
+          ./verify > ../capture.txt
+          echo $? > ../capture.rc
+
+      - name: Run the launcher with no argument, as a reader would (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        working-directory: ${{ runner.temp }}\interop-day-kit
+        run: |
+          call verify.cmd > ..\capture.txt
+          echo %ERRORLEVEL%> ..\capture.rc
+
+      - name: Exit 0, every fixture passed, and --version names the commit
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        env:
+          KIT_COMMIT: ${{ github.sha }}
+          TARGET: ${{ matrix.target }}
+        run: bash interop-day-kit/scripts/kit/assemble.sh check-capture interop-day-kit capture.txt capture.rc "$TARGET" out
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: capture-${{ matrix.target }}
+          path: ${{ runner.temp }}/out
+          if-no-files-found: error
+
+  build:
+    name: write the kit, SHA256SUMS and the release notes
+    needs: [stage, test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      sums: ${{ steps.digests.outputs.sums }}
+      archive: ${{ steps.digests.outputs.archive }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: The checkout is the commit that started the run
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: kit-stage
+          path: ${{ runner.temp }}/in
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: capture-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/captures
+
+      - name: Write the kit, SHA256SUMS, the notes and the archive, and check each
+        env:
+          KIT_TAG: ${{ needs.stage.outputs.tag }}
+          KIT_REPO: ${{ github.repository }}
+          KIT_COMMIT: ${{ github.sha }}
+        run: bash scripts/kit/assemble.sh kit "$RUNNER_TEMP/in/kit-stage.tar" "$RUNNER_TEMP/captures" "$RUNNER_TEMP/dist"
+
+      - name: The release notes say what the binaries print
+        run: bash scripts/kit/assemble.sh claims "$RUNNER_TEMP/dist" "$RUNNER_TEMP/captures"
+
+      - name: A tag run publishes only the candidate the release test passed
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KIT_WORKFLOW_NAME: kit-release.yml
+        run: bash scripts/kit/candidate_equal.sh "$RUNNER_TEMP/dist/SHA256SUMS"
+
+      - name: Digests the later jobs check
+        id: digests
+        working-directory: ${{ runner.temp }}/dist
+        run: |
+          echo "sums=$(sha256sum SHA256SUMS | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "archive=$(sha256sum interop-day-kit.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-sha256sums
+          path: ${{ runner.temp }}/dist/SHA256SUMS
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-release
+          path: |
+            ${{ runner.temp }}/dist/interop-day-kit.tar.gz
+            ${{ runner.temp }}/dist/SHA256SUMS
+            ${{ runner.temp }}/dist/release-notes.md
+            ${{ runner.temp }}/dist/release-title.txt
+          if-no-files-found: error
+
+  attest:
+    name: attest every binary, the kit archive and SHA256SUMS
+    needs: build
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      id-token: write
+      attestations: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: kit-release
+          path: ${{ runner.temp }}/dist
+
+      - name: The files are the ones the build wrote, and the binaries the ones SHA256SUMS lists
+        working-directory: ${{ runner.temp }}
+        env:
+          SUMS: ${{ needs.build.outputs.sums }}
+          ARCHIVE: ${{ needs.build.outputs.archive }}
+        run: |
+          test "$(sha256sum dist/SHA256SUMS | cut -d' ' -f1)" = "$SUMS"
+          test "$(sha256sum dist/interop-day-kit.tar.gz | cut -d' ' -f1)" = "$ARCHIVE"
+          mkdir subjects
+          tar -xzf dist/interop-day-kit.tar.gz -C subjects interop-day-kit/bin
+          cd subjects/interop-day-kit
+          test "$(sha256sum -c --ignore-missing ../../dist/SHA256SUMS | grep -c ': OK$')" = 6
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            ${{ runner.temp }}/dist/interop-day-kit.tar.gz
+            ${{ runner.temp }}/dist/SHA256SUMS
+            ${{ runner.temp }}/subjects/interop-day-kit/bin/*/atx-verify*
+
+  publish:
+    name: publish the release from a draft, not marked Latest
+    needs: [stage, build, attest]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: kit-release
+          path: ${{ runner.temp }}/dist
+
+      - name: Create the release as a draft, upload every asset, then publish it
+        working-directory: ${{ runner.temp }}/dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.stage.outputs.tag }}
+          SUMS: ${{ needs.build.outputs.sums }}
+          ARCHIVE: ${{ needs.build.outputs.archive }}
+        run: |
+          test "$(sha256sum SHA256SUMS | cut -d' ' -f1)" = "$SUMS"
+          test "$(sha256sum interop-day-kit.tar.gz | cut -d' ' -f1)" = "$ARCHIVE"
+          gh release create "$TAG" --draft --verify-tag --latest=false --title "$(cat release-title.txt)" --notes-file release-notes.md
+          gh release upload "$TAG" interop-day-kit.tar.gz SHA256SUMS
+          gh release edit "$TAG" --draft=false --latest=false
+
+  verify:
+    name: verify the published release, in both directions
+    needs: [stage, publish]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: The checkout is the commit that started the run
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Download the release; every asset and binary attested, a one-byte copy refused, SHA256SUMS, gh release verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KIT_REPO: ${{ github.repository }}
+          KIT_COMMIT: ${{ github.sha }}
+          TAG: ${{ needs.stage.outputs.tag }}
+        run: bash scripts/kit/verify_release.sh release "$TAG" "$RUNNER_TEMP/verify"
+
+  verify-candidate:
+    name: verify the candidate's attestations, in both directions
+    needs: [build, attest]
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: The checkout is the commit that started the run
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: kit-release
+          path: ${{ runner.temp }}/dist
+
+      - name: Every asset and binary attested, and a one-byte copy of each refused
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KIT_REPO: ${{ github.repository }}
+          KIT_COMMIT: ${{ github.sha }}
+        run: bash scripts/kit/verify_release.sh candidate "$RUNNER_TEMP/dist" "$RUNNER_TEMP/verify"

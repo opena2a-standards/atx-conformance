@@ -1,0 +1,24 @@
+This release is atx-conformance at commit `<sha>`, with its Go verifier built for macOS, Linux and Windows, so the fixtures can be run without Go and without a network connection. It is not a version of the suite: `go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@latest` still runs the newest commit on `main`. `atx-verify --version` prints the version this kit was built from, `v0.0.0-<date>-<first 12 characters of the commit>`.
+
+Built by `<workflow file>` on GitHub-hosted runners, from the tag `<tag>` at commit `<sha>`. The kit is `interop-day-kit.tar.gz`; `SHA256SUMS` lists every file in it, and each of the two carries a build provenance attestation, as does each binary in `bin/`.
+
+Check before you run. This folder is a copy of the release at <release URL>. Download SHA256SUMS from that page, not from this folder, and run `shasum -a 256 -c SHA256SUMS` here (Linux: `sha256sum -c SHA256SUMS`). Every line must say OK, and every file here must be listed in it. With the GitHub CLI: `gh attestation verify <file> -R <owner/repo>`.
+
+The binaries are not notarized by Apple or signed with a Windows code-signing certificate. Check them with SHA256SUMS and `gh attestation verify` as above. Nothing in this kit asks you to turn off a protection your system provides.
+
+After publishing, the workflow runs this check on every asset, and on a copy of each with one byte changed, which must fail:
+
+    gh attestation verify <asset> -R <owner/repo> --signer-workflow <owner/repo>/<workflow file> --source-ref refs/tags/<tag> --source-digest <sha> --deny-self-hosted-runners
+
+Every private key in this kit is a published test key, so anyone can sign a credential these fixtures accept: a pass shows that a verifier agrees with a fixture, never that OpenA2A issued a credential. The fixtures name did:opena2a:authority:opena2a.org as their trusted issuer and sign with keys whose seeds are public: RFC 8032 section 7.1 test vectors and fixed seeds in each suite's vectors folder. Never copy a fixture's verifierState (its trusted issuers and public keys) into a verifier you use for anything else.
+
+To check a credential of your own, use one that is no longer live: an expired one, with the fixture's clock set inside its validity period, or one from a test issuer. An ATX works as a bearer credential until it expires. The verifier needs no private key; never give it one.
+@f5
+@f5 The verifiers print text from the files they read without escaping control characters. When you run a file someone else wrote, pipe the output through `cat -v`, or write it to a file and open that.
+
+Each binary passed every fixture on a GitHub-hosted runner of its own platform: <tested>.
+@nottested Not tested on a runner of its own platform: <not tested>.
+
+A recording of the verifier's run: [docs/demo/atx-verify.gif](https://github.com/<owner/repo>/blob/<sha>/docs/demo/atx-verify.gif).
+
+To report a security problem privately: https://github.com/<owner/repo>/security/advisories/new
