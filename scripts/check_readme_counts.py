@@ -314,6 +314,21 @@ core.md does not use: it calls the credential the Agent Trust eXtension
 (ATX), the name conformance.json gives the specification. A name whose words
 are joined by hyphens, as in the Agent-Trust-Credential header, is not held.
 
+It also holds CHANGELOG.md's top section to stating no running total. Its #325
+entry said the Python unit tests step runs the 2 tests of
+docs/demo/test_record_atx_verify.py, and its #327 entry said 319 altered count
+sites, where the commit that carried them held 8 tests in that file and printed
+324 sites: a total in a sentence goes stale when another change of the release
+adds to it. A sentence may say what its change adds (`adds 3 cases`) or what a
+run held before it (`held 3 tests`). It may not state how many tests a file or
+a run holds (`the 8 tests`, `holds 8 tests`, `runs 8 tests`, `Ran 8 tests`) or a
+self-test's total (`324 altered count sites`, `293 cases green`, `68 cases, from
+67`). A run of no test or of one test says what that run did and is not held,
+a set of tests named by what they did (`the three tests that held the old
+reading`) is not held, `the` being the one form `that` exempts (`holds 8 tests
+that check the script` still counts the file and is held), and the sections
+below the top one record past commits and are not held.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
 declares, each signature-verification Scope row that claims a set of fixtures
@@ -333,7 +348,8 @@ CHANGELOG.md names as README.md's first command is the one README.md opens
 with, each README and CHANGELOG.md opening-paragraph sentence on this
 repository's tags matches the version tags it carries (where they can be
 read), no sentence of CHANGELOG.md's top section saying a result can still
-differ by release quotes a timestamp verify_test.go writes, no Python
+differ by release quotes a timestamp verify_test.go writes, no sentence of that
+section states a running total of tests or of a self-test, no Python
 dependency site calls the Python verifier
 zero-dependency while requirements.txt names a package, each jcs-vectors
 file describing canonicalize cites RFC 8785 Appendix G, none calls an RFC
@@ -3115,6 +3131,54 @@ def spec_name_failures(readme, spec_text):
             for name in sorted(agent_trust_names(readme) - names)]
 
 
+# CHANGELOG.md's #325 entry said the Python unit tests step runs the 2 tests of
+# docs/demo/test_record_atx_verify.py, and its #327 entry said 319 altered count
+# sites, where a3ead8a, the commit that carried both, held 8 tests in that file
+# and printed 324 sites; its parent held 2 and printed 321. So a sentence of the
+# top section states no total another change of the release can add to. Saying
+# what a change adds (`adds 3 cases`) or what a run held before it (`held 3
+# tests`) stays true, a run of no test or of one (`Ran 0 tests`, `Ran 1 test`)
+# says what that run did, and `the three tests that held the old reading`, as
+# the `v0.1.0` section says, names a set of tests rather than counting a file.
+# That exemption is the `the` form's alone: `holds 8 tests that check the
+# script`, `runs 8 tests that ...` and `Ran 14 tests that ...` still count the
+# file or the run, so a `that` after those verbs exempts nothing.
+# top_section() puts a sentence on one line, so each blank here is one space.
+# `Ran` is the capital unittest prints.
+COUNTED_TESTS = rf"(?:[1-9]\d*|{'|'.join(COUNT_WORDS[2:])}) tests\b"
+RUNNING_TOTAL = re.compile(
+    rf"\b(?:[Tt]he {COUNTED_TESTS}(?! that\b)|(?:holds?|runs?|Ran) {COUNTED_TESTS})"
+    r"|\b\d+ (?:altered count sites\b|cases green\b|cases, from \d+)")
+TOTAL_SITE = f"{CHANGELOG_NAME} top-section sentence"
+# The sentences the check was written for, as they were wrapped.
+RETRACTED_TEST_TOTAL = (
+    "- The Python unit tests step of `conformance.yml` runs the 2 tests of\n"
+    "  `docs/demo/test_record_atx_verify.py`, which hold\n"
+    "  `docs/demo/record-atx-verify.sh` to refusing a Dockerfile that references an\n"
+    "  image it does not read (#325).")
+RETRACTED_SITE_TOTAL = (
+    "The self-test adds three discover steps (319\n"
+    "  altered count sites, from 316): an empty argument before `-s` and `-p`,\n"
+    "  which `-s` replaces as the start directory; the empty pattern `-p ''`;\n"
+    "  and an empty argument after `-s` and `-p`, which unittest reads as the\n"
+    "  start directory, the directory it is run from.")
+
+
+def changelog_total_failures(changelog):
+    """Each sentence of CHANGELOG.md's top section (top_section()) must state no
+    total RUNNING_TOTAL reads. A CHANGELOG.md that is missing or has no `## `
+    heading has no top section to hold here; the first-command check reports
+    it."""
+    top = top_section(changelog) if changelog is not None else None
+    if top is None:
+        return []
+    return [f"{TOTAL_SITE} states `{total}`, a total another change of the release "
+            f"can add to while this sentence stays as it is; say what the change adds, "
+            f"as `adds 3 cases` does: {sentence!r}"
+            for sentence in top[1]
+            for total in dict.fromkeys(RUNNING_TOTAL.findall(sentence))]
+
+
 def count_vectors(root):
     return len(sorted((root / "jcs-vectors" / "vectors").glob("*.json")))
 
@@ -4146,6 +4210,110 @@ def _release_difference_cases(tree):
     return cases
 
 
+# A total no CHANGELOG.md here states.
+INVENTED_TOTAL = "9999 altered count sites"
+# The sentences the check was written for, as CHANGELOG.md came to state them.
+AMENDED_TEST_TOTAL = (
+    "- The Python unit tests step of `conformance.yml` runs the tests of\n"
+    "  `docs/demo/test_record_atx_verify.py`, among them the ones that hold\n"
+    "  `docs/demo/record-atx-verify.sh` to refusing a Dockerfile that references an\n"
+    "  image it does not read (#325).")
+AMENDED_SITE_TOTAL = (
+    "The self-test adds three discover steps: an\n"
+    "  empty argument before `-s` and `-p`, which `-s` replaces as the start\n"
+    "  directory; the empty pattern `-p ''`; and an empty argument after `-s`\n"
+    "  and `-p`, which unittest reads as the start directory, the directory it\n"
+    "  is run from.")
+
+
+def _changelog_total_cases(tree):
+    """Sentences added to the top section of the published CHANGELOG.md, its
+    first `## ` section. The #325 and #327 sentences as they were wrapped each
+    add a failure naming the total they state, the second also once the top
+    section is retitled `## v9.9.9`, and so does each other form of total,
+    `holds 8 tests that ...`, `runs 8 tests that ...` and `Ran 14 tests that
+    ...` among them. The two sentences as amended, `adds 21 cases`, `adds 2
+    tests`, what a run held before a change, a run of no test or of one and a
+    set of tests named by what they did (`the three tests that ...`) add none,
+    nor do the retracted sentences in a section below the top one. A missing
+    CHANGELOG.md and one with no `## ` heading add none here; the
+    first-command check reports them. Each case counts only the failures the
+    text it adds brings, so over a published CHANGELOG.md the check fails each
+    case stays green."""
+    changelog = tree.changelog or ""
+    if top_heading_at(changelog.split("\n")) is None:
+        # As in the first-command cases: with a top section added, a sentence
+        # placed below that section stays below.
+        changelog = f"{SECTION_HEADING}Unreleased\n\n{changelog}"
+    cases = []
+
+    def case(label, text, want):
+        before = collections.Counter(changelog_total_failures(changelog))
+        after = collections.Counter(changelog_total_failures(text))
+        new = list((after - before).elements())
+        if want is None:
+            cases.append((not new, label, f"it adds {new}"))
+        else:
+            want = f"states `{want}`"
+            cases.append((any(f.startswith(TOTAL_SITE) and want in f for f in new),
+                          label, f"expected a {TOTAL_SITE} failure that {want}, got {new}"))
+
+    def opening(sentence):
+        return _top_section_with(changelog, sentence)
+
+    case("CHANGELOG.md restoring the #325 sentence on the tests of a file",
+         opening(RETRACTED_TEST_TOTAL), "the 2 tests")
+    case("CHANGELOG.md restoring the #327 sentence on the self-test's total",
+         opening(RETRACTED_SITE_TOTAL), "319 altered count sites")
+    lines = changelog.split("\n")
+    lines[top_heading_at(lines)] = f"{SECTION_HEADING}v9.9.9"
+    case("CHANGELOG.md whose top section is retitled `## v9.9.9`, restoring the #327 "
+         "sentence", _top_section_with("\n".join(lines), RETRACTED_SITE_TOTAL),
+         "319 altered count sites")
+    for total, sentence in (
+            ("the 2 tests", "`x.py`, which that run matches, adds the 2 tests."),
+            ("The 8 tests", "The 8 tests of `x.py` hold the script to it."),
+            ("the eight tests", "It reads the eight tests of `x.py`."),
+            ("holds 8 tests", "`x.py` holds 8 tests."),
+            ("hold 8 tests", "The two files hold 8 tests."),
+            ("runs 8 tests", "The step runs 8 tests."),
+            ("run 8 tests", "The two steps run 8 tests."),
+            ("Ran 14 tests", "The step prints `Ran 14 tests`."),
+            ("293 cases green", "Its self-test adds 21 cases (293 cases green, from 272)."),
+            ("68 cases, from 67", "It reads the module (self-test 68 cases, from 67).")):
+        case(f"CHANGELOG.md stating `{total}`", opening(sentence), total)
+    for total, sentence in (
+            ("holds 8 tests", "`x.py` holds 8 tests that check the script."),
+            ("runs 8 tests", "The step runs 8 tests that check the script."),
+            ("Ran 14 tests", "The step printed Ran 14 tests that morning.")):
+        case(f"CHANGELOG.md stating `{total}` with `that` after it, which exempts "
+             f"the `the` form alone", opening(sentence), total)
+    for label, sentence in (
+            ("the #325 sentence as amended", AMENDED_TEST_TOTAL),
+            ("the #327 sentence as amended", AMENDED_SITE_TOTAL),
+            ("`adds 21 cases`", "Its self-test adds 21 cases."),
+            ("`adds 2 tests`", "`x.py` adds 2 tests to that run."),
+            ("what a run held before the change, `held 3 tests`",
+             "The run held 3 tests, none from `docs/demo`."),
+            ("`Ran 0 tests`", "An empty pattern prints `Ran 0 tests`."),
+            ("`runs zero tests`", "An empty pattern runs zero tests."),
+            ("`Ran 1 test`", "A run narrowed by `-k` prints `Ran 1 test`."),
+            ("a set of tests, `the three tests that held the old reading`",
+             "The three tests that held the old reading hold the new one.")):
+        case(f"CHANGELOG.md stating {label}", opening(sentence), None)
+    case("the #325 and #327 sentences in a CHANGELOG.md section below the top one",
+         f"{changelog}\n## 0000000: a past commit\n\n{RETRACTED_TEST_TOTAL}\n\n"
+         f"{RETRACTED_SITE_TOTAL}\n", None)
+    missing = changelog_total_failures(None)
+    cases.append((not missing, "CHANGELOG.md missing, which the first-command check "
+                               "reports", f"got {missing}"))
+    demoted = re.sub(r"^## ", "### ", opening(RETRACTED_SITE_TOTAL), flags=re.M)
+    headless = changelog_total_failures(demoted)
+    cases.append((not headless, "CHANGELOG.md with each `## ` heading made `### `, which "
+                                "the first-command check reports", f"got {headless}"))
+    return cases
+
+
 # The two forms the zero-dependency claim was published in, with their
 # original line wraps: the jcs-vectors README row and the serializer docstring.
 RETRACTED_PY_CLAIMS = (
@@ -5134,6 +5302,12 @@ def _wire_release_difference(tree):
              "verify_go_test": (tree.verify_go_test or "") + f'\nvar _ = "{stamp}"\n'})
 
 
+def _wire_changelog_total(tree):
+    return (f"states `{INVENTED_TOTAL}`",
+            {"changelog": _top_section_with(
+                tree.changelog or "", f"The self-test stands at {INVENTED_TOTAL}.")})
+
+
 def _wire_python_dependency(tree):
     site = PY_DEPENDENCY_SITES[0]
     if tree.py_dependency_texts.get(site) is None:
@@ -5254,6 +5428,8 @@ CHECKS = (
     Check("Go release difference",
           lambda t: release_difference_failures(t.changelog, t.verify_go_test),
           _wire_release_difference),
+    Check("CHANGELOG.md running total", lambda t: changelog_total_failures(t.changelog),
+          _wire_changelog_total),
     Check("Python dependency",
           lambda t: python_dependency_failures(t.py_requirements, t.py_dependency_texts),
           _wire_python_dependency),
@@ -5520,6 +5696,7 @@ def self_test(tree, verbose):
     cases.extend(_changelog_first_command_cases(tree))
     cases.extend(_release_tag_cases(tree))
     cases.extend(_release_difference_cases(tree))
+    cases.extend(_changelog_total_cases(tree))
     cases.extend(_python_dependency_cases(tree.py_requirements, tree.py_dependency_texts))
     cases.extend(_jcs_library_cases(tree.jcs_sites))
     cases.extend(_outside_code_cases(tree.gate_sites, tree.gate_libraries))
@@ -5810,6 +5987,8 @@ def main():
              f"read in this checkout; ")
           + f"no {CHANGELOG_NAME} top-section sentence saying a result can still "
           f"differ by release quotes a timestamp {VERIFY_GO_TEST_NAME} writes; "
+          f"no {CHANGELOG_NAME} top-section sentence states a running total of tests "
+          f"or of a self-test; "
           f"no jcs-vectors README or RFC 8785 serializer docstring calls the "
           f"Python verifier zero-dependency; "
           f"each jcs-vectors file describing canonicalize cites "
