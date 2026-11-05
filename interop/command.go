@@ -108,7 +108,8 @@ func usesFile(argv []string) bool {
 // the current directory with the environment atx-verify was given. Exit 0
 // is ACCEPT, exit 1 is REJECT, and any other exit, a crash, a command that
 // cannot be started or no exit within timeout is couldn't read; then
-// Classify applies, so a JSON verdict on stdout wins over the exit code.
+// Classify applies: when stdout is one JSON object, a "verdict" of ACCEPT,
+// REJECT or ERROR decides, else a boolean "valid", else the exit code.
 // Raw keeps the first 200 characters of stdout, or of stderr when stdout is
 // blank; for couldn't read without a JSON verdict, Raw starts with what
 // happened, for example "exit status 2".

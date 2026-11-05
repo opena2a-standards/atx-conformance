@@ -89,11 +89,12 @@ the kit sends nothing anywhere except fixtures to the URL you pass with
                           a plain number is seconds (default 30s)
   -h, --help              print this help and exit 0
 
-JSON wins over exit and status codes when the whole answer is one JSON object
-(stdout, or the response body): "verdict": "ACCEPT" or "valid": true is ACCEPT,
-"verdict": "REJECT" or "valid": false is REJECT, and "verdict": "ERROR" is
-couldn't read. An optional "reason" string is recorded, and the first 200
-characters of each raw answer are kept.
+An answer is the command's stdout or the response body. When the whole answer
+is one JSON object, a "verdict" of ACCEPT, REJECT or ERROR in any letter case
+decides; without one of those words, a boolean "valid" decides; without
+either, the exit or status code decides. "valid": true is ACCEPT, "valid":
+false is REJECT, and "verdict": "ERROR" is couldn't read. An optional "reason"
+string is recorded, and the first 200 characters of each raw answer are kept.
 
 Exit status: 0 when every fixture agrees with the answer key, 1 when any
 does not, 2 for a usage error or when the kit could not run.

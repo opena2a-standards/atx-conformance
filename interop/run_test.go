@@ -482,8 +482,9 @@ func TestFailedConnectionLeavesTheURLOut(t *testing.T) {
 // of the rule the adapters apply; the adapter tables hold the rule itself, with
 // a log line before the JSON leaving the exit or status code to decide.
 func TestJSONWinsCarriesItsCondition(t *testing.T) {
-	const condition = "JSON wins over exit and status codes when the whole answer is one JSON object"
-	if !strings.Contains(usage, condition) {
+	const condition = `When the whole answer is one JSON object, a "verdict" of ACCEPT, REJECT or ERROR in any letter case decides; without one of those words, a boolean "valid" decides; without either, the exit or status code decides.`
+	oneLine := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	if !strings.Contains(oneLine(usage), condition) {
 		t.Errorf("--help lacks %q", condition)
 	}
 	for _, path := range []string{"../README.md", "../examples/README.md"} {
@@ -491,7 +492,7 @@ func TestJSONWinsCarriesItsCondition(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(b), condition) {
+		if !strings.Contains(oneLine(string(b)), condition) {
 			t.Errorf("%s lacks %q", path, condition)
 		}
 	}

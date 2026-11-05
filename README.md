@@ -101,7 +101,9 @@ pipes and `$VARIABLES` are not expanded.
 | URL | 2xx | 4xx | 5xx, no answer, or a timeout |
 | Either, if it prints JSON | "verdict": "ACCEPT" or "valid": true | "verdict": "REJECT" or "valid": false | "verdict": "ERROR" |
 
-JSON wins over exit and status codes when the whole answer is one JSON object.
+When the whole answer is one JSON object, a "verdict" of ACCEPT, REJECT or
+ERROR in any letter case decides; without one of those words, a boolean
+"valid" decides; without either, the exit or status code decides.
 An optional "reason" string is recorded, and the first 200 characters of each
 raw response are kept in the report, so a person can judge.
 

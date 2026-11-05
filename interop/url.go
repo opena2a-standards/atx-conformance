@@ -59,8 +59,9 @@ func CheckURL(raw string) error {
 // (Fixture.Credential, and nothing else) to rawURL with Content-Type
 // application/json, once per fixture, and names the fixture file in the
 // FixtureHeader request header. A 2xx status is ACCEPT, a 4xx status is
-// REJECT, and a 5xx status, no answer or a timeout is COULD_NOT_READ; a JSON
-// answer carrying "verdict" or "valid" wins over the status (see Classify).
+// REJECT, and a 5xx status, no answer or a timeout is COULD_NOT_READ; when the
+// body is one JSON object, a "verdict" of ACCEPT, REJECT or ERROR decides, else
+// a boolean "valid", else the status (see Classify).
 //
 // The adapter connects to rawURL directly, never through a proxy, sends no
 // header that identifies the person running it, retries nothing and opens a

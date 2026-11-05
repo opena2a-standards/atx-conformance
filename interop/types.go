@@ -55,11 +55,11 @@ type Adapter interface {
 }
 
 // Classify applies the adapter contract to one raw response. fallback is the
-// verdict the exit code or the HTTP status gave. When body is a JSON object
-// carrying "verdict" or "valid", that wins over fallback: "verdict" of
-// ACCEPT, REJECT or ERROR, or "valid" of true or false. An optional "reason"
-// string is recorded. Each member is read on its own: a member of another
-// type counts as absent, and the others still count.
+// verdict the exit code or the HTTP status gave. When body is a JSON object,
+// a "verdict" of ACCEPT, REJECT or ERROR decides; without one, a boolean
+// "valid" decides; without either, fallback stands. A "verdict" with any
+// other word, and a member of another type, count as absent. An optional
+// "reason" string is recorded.
 func Classify(fallback Verdict, body []byte) Result {
 	r := Result{Verdict: fallback, Raw: firstChars(string(body), 200)}
 	var obj struct {
@@ -74,16 +74,17 @@ func Classify(fallback Verdict, body []byte) Result {
 		r.Reason = *reason
 	}
 	verdict, valid := member[string](obj.Verdict), member[bool](obj.Valid)
+	word := ""
+	if verdict != nil {
+		word = strings.ToUpper(strings.TrimSpace(*verdict))
+	}
 	switch {
-	case verdict != nil:
-		switch strings.ToUpper(strings.TrimSpace(*verdict)) {
-		case "ACCEPT":
-			r.Verdict = Accept
-		case "REJECT":
-			r.Verdict = Reject
-		case "ERROR":
-			r.Verdict = Unreadable
-		}
+	case word == "ACCEPT":
+		r.Verdict = Accept
+	case word == "REJECT":
+		r.Verdict = Reject
+	case word == "ERROR":
+		r.Verdict = Unreadable
 	case valid != nil:
 		if *valid {
 			r.Verdict = Accept

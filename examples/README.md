@@ -13,7 +13,7 @@
 | URL | 2xx | 4xx | 5xx, no answer, or a timeout |
 | Either, if it prints JSON | `"verdict": "ACCEPT"` or `"valid": true` | `"verdict": "REJECT"` or `"valid": false` | `"verdict": "ERROR"` |
 
-JSON wins over exit and status codes when the whole answer is one JSON object. An optional `"reason"` string is recorded.
+When the whole answer is one JSON object, a "verdict" of ACCEPT, REJECT or ERROR in any letter case decides; without one of those words, a boolean "valid" decides; without either, the exit or status code decides. An optional `"reason"` string is recorded.
 
 ## A verifier that prints its verdict as text
 
