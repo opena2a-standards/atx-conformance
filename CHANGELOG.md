@@ -326,6 +326,30 @@ they should not.
   `adds 3 cases`, `held 3 tests`, `Ran 1 test`, `the N tests that` and a
   section below the top one are not held. Its self-test adds 30 cases. No
   fixture or verifier changes.
+- `scripts/check_readme_counts.py` reads a double-quoted `run:` scalar whose
+  first line ends in a backslash followed by a space or a tab as YAML reads
+  it (#341): the backslash escapes the space or tab, and the line break
+  after it is still folded into one space. It removed the white space that
+  ends the line before it read the scalar, so it read a backslash that ends
+  the line and joined the next line to the first with nothing between
+  them. Given the step
+  `- run: "python3 -m unittest discover -s scripts -t scripts -p 'test_*.py'\ `
+  with `-v"` on the next line, indented past the key, it read the command
+  as ending in `-p 'test_*.py'-v` and counted no script; it now reads
+  `-p 'test_*.py'  -v`, with two spaces, as PyYAML 6.0.3 does, and counts
+  `test_x.py`. The same holds for that step with the command starting on
+  the line under `run:`, and for it with a tab after the backslash, which
+  the check now reads, as PyYAML 6.0.3 does, as a tab followed by a space.
+  A step written as a flow mapping was read so before. In a copy of the tree whose discovery run over `scripts/` is
+  moved into a step of its own written so, the check reported
+  `README layout calls scripts/test_demo_recording.py a CI gate, but
+  .github/workflows/conformance.yml does not run it`, the same for
+  `scripts/test_script_options.py`, and exited 1; it now exits 0. The
+  unaltered tree exits 0 before and after. The self-test adds three cases:
+  a double-quoted run whose first line ends in a backslash and a space, on
+  the key's line and on the line under `run:`, and one whose first line
+  ends in a backslash and a tab, must each count as a run. Each failed
+  before the change. No fixture changes.
 
 ## v0.1.0
 
