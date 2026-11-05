@@ -498,10 +498,16 @@ func TestStep6ShowsTheMeasuredLinesAndRefusesAnythingElse(t *testing.T) {
 		"Grant path: Customer B approved the bill pay agent with three payees, per payment and monthly amount limits, and an end date.",
 		"Grant path, a normal bill: An approved payee, and $86.40 is inside every limit. The bank saw: Bill pay agent.",
 		"The grant path agent's directory holds: agent.log atx.json broker.token grant.json home stderr.log",
-		"Search for a password or the customer's sign-in name in that directory: no match",
+		"Search for the word password and the customers' sign-in names in that directory: no match",
 	}
-	if strings.Join(lines, "\n") != strings.Join(want, "\n") || result == "" {
+	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("lines:\n%s", strings.Join(lines, "\n"))
+	}
+	if want := "Neither the word password nor a customer sign-in name appears in the grant path agent's directory."; result != want {
+		t.Fatalf("result %q, want %q", result, want)
+	}
+	if s := stepSecret().Sentence(nil); !strings.Contains(s, "searches it for the word password and the customers' sign-in names.") {
+		t.Fatalf("the step's sentence: %s", s)
 	}
 	for name, d := range map[string]secretData{
 		"no sandbox": {Answer: answer(t, answerScenario1, func(a *demoAnswer) { a.Sandbox.Applied = false }), Listing: listing, Search: 1},

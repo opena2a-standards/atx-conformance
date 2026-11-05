@@ -154,7 +154,7 @@ func stepSecret() Step {
 		UsesDemo: true,
 		Sentence: Text("The mock bank pays the same bill once with the customer's password and once " +
 			"under a grant; then the tour lists the grant path agent's directory and searches it " +
-			"for a password or the customer's sign-in name."),
+			"for the word password and the customers' sign-in names."),
 		Limit: LimitText("The agent's directory holds the broker token; revoking a grant means " +
 			"restarting the broker."),
 		Command: Text(shown),
@@ -211,8 +211,8 @@ func stepSecret() Step {
 				"Grant path: " + approveB.Reason,
 				"Grant path, a normal bill: " + billB.Reason + " The bank saw: " + billB.BankSaw + ".",
 				"The grant path agent's directory holds: " + strings.Join(d.Listing, " "),
-				"Search for a password or the customer's sign-in name in that directory: no match",
-			}, "No password or customer sign-in name in the grant path agent's directory.", nil
+				"Search for the word password and the customers' sign-in names in that directory: no match",
+			}, "Neither the word password nor a customer sign-in name appears in the grant path agent's directory.", nil
 		},
 	}
 }
