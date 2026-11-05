@@ -143,7 +143,7 @@ func TestSelfTest3AlwaysAcceptIsCaught(t *testing.T) {
 	if code != 1 {
 		t.Errorf("exit %d, want 1\n%s", code, out)
 	}
-	want := "Verifier always ACCEPT read 41 of 41 ATX credentials and agreed with the answer key on 9; it accepted 32 that must fail and rejected 0 that must pass."
+	want := "Verifier always ACCEPT answered 41 of 41 ATX credentials and agreed with the answer key on 9; it accepted 32 that must fail and rejected 0 that must pass."
 	if rep.InteropNote != want {
 		t.Errorf("interop note = %q, want %q", rep.InteropNote, want)
 	}
@@ -339,6 +339,28 @@ func TestMarkdownReportKeepsVerifierTextInCodeSpans(t *testing.T) {
 				t.Errorf("the first row does not carry the text: %s", row)
 			}
 		})
+	}
+}
+
+// TestInteropNoteCountsAnswers holds the sentence offered for publication to
+// what the kit measured: it counts answers, and says "read" only for none.
+func TestInteropNoteCountsAnswers(t *testing.T) {
+	top := []ReasonCount{{Reason: "exit status 2: not a JWT.", Count: fixturesAtThisCommit}}
+	some := []ReasonCount{{Reason: "exit status 2", Count: 40}, {Reason: "exit status 3", Count: 1}}
+	cases := []struct {
+		s    Summary
+		top  []ReasonCount
+		want string
+	}{
+		{Summary{Agree: 41}, nil, "Verifier v answered 41 of 41 ATX credentials and agreed with the answer key on every one."},
+		{Summary{Agree: 28, AcceptedMustFail: 1, RejectedMustPass: 1, CouldNotRead: 11}, nil, "Verifier v answered 30 of 41 ATX credentials and agreed with the answer key on 28; it accepted 1 that must fail and rejected 1 that must pass, and 11 came back as couldn't read."},
+		{Summary{CouldNotRead: 41}, top, "Verifier v read 0 of 41 ATX credentials; every one came back as couldn't read, with: exit status 2: not a JWT."},
+		{Summary{CouldNotRead: 41}, some, "Verifier v read 0 of 41 ATX credentials; every one came back as couldn't read, most often with: exit status 2."},
+	}
+	for _, c := range cases {
+		if got := interopNote("v", fixturesAtThisCommit, c.s, c.top); got != c.want {
+			t.Errorf("interopNote(%+v) = %q, want %q", c.s, got, c.want)
+		}
 	}
 }
 

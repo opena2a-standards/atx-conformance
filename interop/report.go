@@ -165,17 +165,17 @@ func topReasons(rows []Row) []ReasonCount {
 
 // interopNote is the closing sentence, for the interop note.
 func interopNote(label string, total int, s Summary, top []ReasonCount) string {
-	read := total - s.CouldNotRead
+	answered := total - s.CouldNotRead
 	switch {
 	case s.Agree == total:
-		return fmt.Sprintf("Verifier %s read %d of %d ATX credentials and agreed with the answer key on every one.", label, read, total)
-	case read == 0 && len(top) > 0 && top[0].Count == total:
+		return fmt.Sprintf("Verifier %s answered %d of %d ATX credentials and agreed with the answer key on every one.", label, answered, total)
+	case answered == 0 && len(top) > 0 && top[0].Count == total:
 		return fmt.Sprintf("Verifier %s read 0 of %d ATX credentials; every one came back as couldn't read, with: %s.", label, total, strings.TrimSuffix(top[0].Reason, "."))
-	case read == 0 && len(top) > 0:
+	case answered == 0 && len(top) > 0:
 		return fmt.Sprintf("Verifier %s read 0 of %d ATX credentials; every one came back as couldn't read, most often with: %s.", label, total, strings.TrimSuffix(top[0].Reason, "."))
 	}
-	note := fmt.Sprintf("Verifier %s read %d of %d ATX credentials and agreed with the answer key on %d; it accepted %d that must fail and rejected %d that must pass",
-		label, read, total, s.Agree, s.AcceptedMustFail, s.RejectedMustPass)
+	note := fmt.Sprintf("Verifier %s answered %d of %d ATX credentials and agreed with the answer key on %d; it accepted %d that must fail and rejected %d that must pass",
+		label, answered, total, s.Agree, s.AcceptedMustFail, s.RejectedMustPass)
 	if s.CouldNotRead > 0 {
 		note += fmt.Sprintf(", and %d came back as couldn't read", s.CouldNotRead)
 	}
