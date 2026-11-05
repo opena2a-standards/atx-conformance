@@ -179,7 +179,7 @@ func (s *suite) writeFixtures(dir string) error {
 
 // provenance is the kit version and the suite commit this binary records.
 // The kit and the fixture set are one module, so the kit version is the
-// module version go run or go build recorded: for `go run
+// module version go install or go build recorded: for `go install
 // <module>/cmd/atx-verify@<commit>` a pseudo-version, whose last part is
 // the first 12 hex digits of the commit. A build from a checkout records
 // (devel) and, when the build recorded it, the commit in vcs.revision.

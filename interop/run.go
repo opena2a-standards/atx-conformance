@@ -8,7 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"os/exec"
 	"runtime/debug"
@@ -74,7 +73,8 @@ the kit sends nothing anywhere except fixtures to the URL you pass with
                           '...' or "...". Pipes, redirects, $VARIABLES and ~
                           are not expanded. A backslash outside quotes is kept
                           as it is, so a Windows path works as written.
-  --verifier-url <url>    POST each fixture's credential JSON to <url>. A 2xx
+  --verifier-url <url>    POST each fixture's credential JSON to <url>; an
+                          ATX-Fixture header names the fixture file. A 2xx
                           status is ACCEPT, 4xx is REJECT, and 5xx, no answer
                           or a timeout is couldn't read.
   --label <name>          your verifier's name and version, printed in the
@@ -99,9 +99,13 @@ Exit status: 0 when every fixture agrees with the answer key, 1 when any
 does not, 2 for a usage error or when the kit could not run.
 `
 
-// credentialOnlyLimit is said before a run that sends the credential alone:
-// a command with no {file}, or a URL.
+// credentialOnlyLimit is said before a run of a command with no {file}, which
+// gets the credential alone.
 const credentialOnlyLimit = "Each fixture's credential is sent alone, without the fixture's trusted issuers, keys, revocation list or clock; a command with {file} gets the whole fixture file."
+
+// urlLimit is said before a URL run: the body is the credential alone, and a
+// header names the fixture, so a partner does not discover it in their logs.
+const urlLimit = "Each fixture's credential is sent alone, without the fixture's trusted issuers, keys, revocation list or clock, and its file name goes in an " + FixtureHeader + " header; a command with {file} gets the whole fixture file."
 
 // usageHint ends each usage error.
 const usageHint = "add --help to see the options"
@@ -157,10 +161,12 @@ func run(args []string, stdout, stderr io.Writer, env runEnv) int {
 	}
 
 	var adapter Adapter
-	adapterName, credentialOnly := "command", true
+	adapterName, limit := "command", ""
 	if opts.set["verifier"] {
 		argv, _ := splitCommand(opts.verifier) // parseOptions checked it
-		credentialOnly = !usesFile(argv)
+		if !usesFile(argv) {
+			limit = credentialOnlyLimit
+		}
 		if _, err := exec.LookPath(argv[0]); err != nil {
 			fmt.Fprintf(stderr, "error: the --verifier command could not be started: %s\n", escapeControls(err.Error()))
 			return 2
@@ -179,7 +185,7 @@ func run(args []string, stdout, stderr io.Writer, env runEnv) int {
 		}
 		adapter = NewCommandAdapter(opts.verifier, opts.timeout)
 	} else {
-		adapterName = "url"
+		adapterName, limit = "url", urlLimit
 		adapter = NewURLAdapter(opts.verifierURL, opts.timeout)
 	}
 	if opts.report != "" {
@@ -208,8 +214,8 @@ func run(args []string, stdout, stderr io.Writer, env runEnv) int {
 	fmt.Fprintf(stdout, "Sending %d ATX conformance fixtures to %s, one at a time (%s adapter, %s form, up to %s each)\n",
 		len(s.entries), escapeControls(opts.label), adapterName, opts.form, opts.timeout)
 	fmt.Fprintln(stdout, compareLimit)
-	if credentialOnly {
-		fmt.Fprintln(stdout, credentialOnlyLimit)
+	if limit != "" {
+		fmt.Fprintln(stdout, limit)
 	}
 	fmt.Fprintln(stdout)
 	width := 0
@@ -290,9 +296,8 @@ func parseOptions(args []string) (*options, error) {
 			return nil, fmt.Errorf("--verifier: %v", err)
 		}
 	default:
-		u, err := url.Parse(opts.verifierURL)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			return nil, fmt.Errorf("--verifier-url %q is not an http:// or https:// URL", opts.verifierURL)
+		if err := CheckURL(opts.verifierURL); err != nil {
+			return nil, fmt.Errorf("--verifier-url: %w", err)
 		}
 	}
 	if strings.TrimSpace(opts.label) == "" {

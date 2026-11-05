@@ -225,10 +225,17 @@ func TestOutputEscapesWhatAVerifierPrints(t *testing.T) {
 func TestURLAdapterPath(t *testing.T) {
 	// No listener: whatever URL adapter this build holds answers couldn't
 	// read for each fixture, and nothing leaves the machine.
-	code, _, rep := readReport(t, "--verifier-url", "http://127.0.0.1:1/verify", "--label", "url", "--timeout", "2")
+	code, out, rep := readReport(t, "--verifier-url", "http://127.0.0.1:1/verify", "--label", "url", "--timeout", "2")
 	checkSummary(t, rep.Summary, Summary{CouldNotRead: fixturesAtThisCommit})
 	if code != 1 || rep.Adapter != "url" {
 		t.Errorf("exit %d, adapter %q", code, rep.Adapter)
+	}
+	first := strings.Index(out, "baseline-valid-hybrid.json")
+	if i := strings.Index(out, urlLimit); i < 0 || i > first {
+		t.Errorf("the limit %q, which names the header, is not said before the first fixture runs:\n%s", urlLimit, out)
+	}
+	if strings.Contains(out, credentialOnlyLimit) {
+		t.Errorf("a URL run is told the limit of a command run:\n%s", out)
 	}
 }
 
@@ -263,7 +270,7 @@ func TestUsageErrors(t *testing.T) {
 		{[]string{"--verifier", cmd, "--timeout", "soon"}, "--timeout: soon is not a duration"},
 		{[]string{"--verifier", cmd, "--label", " "}, "--label is empty"},
 		{[]string{"--verifier", cmd, "--bogus"}, "unknown option: --bogus"},
-		{[]string{"--verifier-url", "localhost:8080"}, `--verifier-url "localhost:8080" is not an http:// or https:// URL`},
+		{[]string{"--verifier-url", "localhost:8080"}, `--verifier-url: the verifier URL must start with http:// or https:// and name a host, for example http://127.0.0.1:8080/; got "localhost:8080"`},
 		{[]string{"--verifier", quote(filepath.Join(t.TempDir(), "missing"))}, "the --verifier command could not be started"},
 	}
 	for _, c := range cases {
