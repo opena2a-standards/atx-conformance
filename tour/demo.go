@@ -382,6 +382,14 @@ func (e *Env) demoChecks(ctx context.Context) (string, error) {
 		return "", plainf("the demo checkout is at %s, and steps 6 and 7 were measured at %s: run git -C %s checkout %s",
 			shortCommit(head), shortCommit(demoCommit), shellQuote(e.Demo), shortCommit(demoCommit))
 	}
+	// HEAD can name the commit without the checkout holding it, and tracked
+	// files can differ from it; the launcher runs only on the commit itself.
+	if _, err := e.runIn(exec.CommandContext(ctx, "git", "cat-file", "-e", demoCommit+"^{commit}"), e.Demo, "the demo checkout", sandboxProfile); err != nil {
+		return "", plainf("the demo checkout does not hold commit %s: run git -C %s fetch", shortCommit(demoCommit), shellQuote(e.Demo))
+	}
+	if _, err := e.runIn(exec.CommandContext(ctx, "git", "-c", "core.fsmonitor=false", "diff", "--quiet", "--no-ext-diff", "--no-textconv", "HEAD"), e.Demo, "the demo checkout", sandboxProfile); err != nil {
+		return "", plainf("the demo checkout has local changes; run git -C %s status", shellQuote(e.Demo))
+	}
 	node, err := e.LookPath("node")
 	if err != nil {
 		return "", plainf("Node.js is not installed; the demo needs %s or later", versionText(minNode))

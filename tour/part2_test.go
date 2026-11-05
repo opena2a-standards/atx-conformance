@@ -194,6 +194,52 @@ func TestPart2HiddenWithAReasonForEachFailedCondition(t *testing.T) {
 	}
 }
 
+func TestPart2HiddenUnlessTheCheckoutIsThePinnedCommit(t *testing.T) {
+	needTools(t, "bash", "git")
+	for _, c := range []struct {
+		name   string
+		edit   func(t *testing.T, dir string) (pin string)
+		reason string
+	}{
+		{"HEAD names a commit the checkout does not hold", func(t *testing.T, dir string) string {
+			pin := "0123456789abcdef0123456789abcdef01234567"
+			writeFile(t, dir, ".git/HEAD", pin+"\n", 0o644)
+			return pin
+		}, `^the demo checkout does not hold commit 0123456789ab: run git -C \S+ fetch$`},
+		{"a tracked file has local changes", func(t *testing.T, dir string) string {
+			gitIn(t, dir, "add", demoLauncher)
+			gitIn(t, dir, "-c", "user.name=tour test", "-c", "user.email=tour-test@example.invalid",
+				"-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "launcher")
+			pin := gitIn(t, dir, "rev-parse", "HEAD")
+			writeFile(t, dir, demoLauncher, "// stand-in, edited\n", 0o644)
+			return pin
+		}, `^the demo checkout has local changes; run git -C \S+ status$`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e, _ := testEnv(t)
+			e.Timeout = 10 * time.Second
+			dir, _ := fakeDemo(t, true, true)
+			pinTo(t, c.edit(t, dir))
+			withNode(t, e, true)
+			e.Demo = dir
+			var pre bytes.Buffer
+			st := Preflight(context.Background(), e, Part2(), NewScreen(&pre, false))
+			re := regexp.MustCompile(c.reason)
+			for _, s := range st.Steps {
+				if s.Status != Hidden || !re.MatchString(s.Reason) {
+					t.Errorf("step %d is %q with reason %q, want hidden with %s", s.Number, s.Status, s.Reason, c.reason)
+				}
+			}
+			if !strings.Contains(pre.String(), "0 ready, 2 hidden") {
+				t.Errorf("the pre-flight's last line is wrong:\n%s", pre.String())
+			}
+			if e.demo.run != nil {
+				t.Error("the demo is still recorded as running after the pre-flight")
+			}
+		})
+	}
+}
+
 func TestDemoGetsNoNodeOptionsATMPDIROfItsOwnAndAFreePort(t *testing.T) {
 	needTools(t, "bash", "git")
 	e, _ := testEnv(t)
