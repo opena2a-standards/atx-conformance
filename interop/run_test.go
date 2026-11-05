@@ -222,6 +222,126 @@ func TestOutputEscapesWhatAVerifierPrints(t *testing.T) {
 	}
 }
 
+// outsideCodeSpans is line without its code spans, delimited as CommonMark
+// delimits them: a run of N backticks opens a span that the next run of exactly
+// N backticks closes, and a run that nothing closes is literal text.
+func outsideCodeSpans(line string) string {
+	runAt := func(i int) int {
+		n := 0
+		for i+n < len(line) && line[i+n] == '`' {
+			n++
+		}
+		return n
+	}
+	closing := func(from, want int) int {
+		for i := from; i < len(line); {
+			switch n := runAt(i); n {
+			case want:
+				return i
+			case 0:
+				i++
+			default:
+				i += n
+			}
+		}
+		return -1
+	}
+	var b strings.Builder
+	for i := 0; i < len(line); {
+		n := runAt(i)
+		if n == 0 {
+			b.WriteByte(line[i])
+			i++
+			continue
+		}
+		if end := closing(i+n, n); end >= 0 {
+			i = end + n
+			continue
+		}
+		b.WriteString(line[i : i+n])
+		i += n
+	}
+	return b.String()
+}
+
+func TestOutsideCodeSpans(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"no span", "no span"},
+		{"a `b` c", "a  c"},
+		{"a ``b`c`` d", "a  d"},
+		{"a `b", "a `b"},
+		{"a ``b` c", "a ``b` c"},
+		{"`a` b `c`", " b "},
+	}
+	for _, c := range cases {
+		if got := outsideCodeSpans(c.in); got != c.want {
+			t.Errorf("outsideCodeSpans(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestMarkdownReportKeepsVerifierTextInCodeSpans holds the file the share line
+// asks people to post or email: text a verifier or a label supplies stays in a
+// code span, in the sentence for the interop note and in the table, so a
+// Markdown renderer shows it and never acts on it. It renders nothing.
+func TestMarkdownReportKeepsVerifierTextInCodeSpans(t *testing.T) {
+	const hostile = "![pixel](https://evil.example/p.png) <img src=x onerror=alert(1)> [fix here](https://evil.example/fix)"
+	reasonIs := func(text string) string { return `{"verdict":"ERROR","reason":"` + text + `"}` }
+	cases := []struct {
+		name, exit, answer, label, text string
+		inTable                         bool
+	}{
+		{"JSON reason", "1", reasonIs(hostile), "hostile", hostile, true},
+		{"JSON reason with backticks", "1", reasonIs("`` " + hostile + " `"), "hostile", "`` " + hostile + " `", true},
+		{"JSON reason that ends in backticks", "1", reasonIs(hostile + " ```"), "hostile", hostile + " ```", true},
+		{"JSON reason with pipes", "1", reasonIs(hostile + " | forged | cell |"), "hostile", hostile + " | forged | cell |", true},
+		{"plain text at exit 2", "2", hostile, "hostile", hostile, true},
+		{"label", "1", `{"verdict":"REJECT"}`, hostile, hostile, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "report")
+			_, out, errOut := kitRun(t, "--verifier", helperCommand("exit", c.exit, c.answer), "--label", c.label, "--report", dir)
+			if errOut != "" {
+				t.Errorf("stderr: %s", errOut)
+			}
+			b, err := os.ReadFile(filepath.Join(dir, reportMDName))
+			if err != nil {
+				t.Fatalf("no Markdown report: %v\nstdout:\n%s", err, out)
+			}
+			md := string(b)
+			for i, line := range strings.Split(md, "\n") {
+				outside := outsideCodeSpans(line)
+				for _, part := range []string{"![pixel]", "<img", "[fix here]", "evil.example"} {
+					if strings.Contains(outside, part) {
+						t.Errorf("line %d has %q outside a code span: %s", i+1, part, line)
+					}
+				}
+			}
+			_, after, found := strings.Cut(md, "## For the interop note\n\n")
+			if !found {
+				t.Fatalf("no interop note heading:\n%s", md)
+			}
+			note, _, _ := strings.Cut(after, "\n")
+			if !strings.Contains(note, c.text) {
+				t.Errorf("the note line does not carry the text as written: %s", note)
+			}
+			if rest := strings.TrimSpace(outsideCodeSpans(note)); rest != "" {
+				t.Errorf("the note line has %q outside its code span: %s", rest, note)
+			}
+			_, table, _ := strings.Cut(md, "\n| 1 | ")
+			row, _, _ := strings.Cut(table, "\n")
+			row = "| 1 | " + row
+			if n := strings.Count(outsideCodeSpans(row), "|"); n != 9 {
+				t.Errorf("the first row has %d cell borders outside code spans, want 9: %s", n, row)
+			}
+			if c.inTable && !strings.Contains(row, strings.ReplaceAll(c.text, "|", `\|`)) {
+				t.Errorf("the first row does not carry the text: %s", row)
+			}
+		})
+	}
+}
+
 func TestURLAdapterPath(t *testing.T) {
 	// No listener: whatever URL adapter this build holds answers couldn't
 	// read for each fixture, and nothing leaves the machine.

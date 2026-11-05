@@ -278,7 +278,7 @@ func markdown(rep *Report) string {
 	fmt.Fprintf(&b, "| Finished | %s |\n", cell(rep.FinishedAt))
 
 	b.WriteString("\n## For the interop note\n\n")
-	fmt.Fprintf(&b, "%s\n\n", cell(rep.InteropNote))
+	fmt.Fprintf(&b, "%s\n\n", span(escapeControls(rep.InteropNote)))
 	b.WriteString(shareLine + "\n")
 	return b.String()
 }
@@ -293,7 +293,12 @@ func code(s string) string {
 	if s == "" {
 		return ""
 	}
-	s = cell(s)
+	return span(cell(s))
+}
+
+// span is s, already escaped for where it goes, as a Markdown code span. Its
+// fence is one backtick longer than the longest run in s, so s cannot close it.
+func span(s string) string {
 	longest, run := 0, 0
 	for _, c := range s {
 		if c == '`' {
