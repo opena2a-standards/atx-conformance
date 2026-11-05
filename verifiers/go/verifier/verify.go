@@ -76,8 +76,11 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
+	"math/big"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime/debug"
 	"slices"
 	"sort"
@@ -661,6 +664,156 @@ func integerOutsideExactRangeV11(a *atx) (where, literal string, fractionOrExpon
 	return "", "", false
 }
 
+// float64OverflowDigits is 2^1024 - 2^970 in decimal digits: the largest
+// float64 plus half a unit in its last place, the least magnitude IEEE 754
+// round-to-nearest-even takes to infinity, since the tie rounds to the even
+// significand, 2^1024. It has 309 digits.
+var float64OverflowDigits = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 1024), new(big.Int).Lsh(big.NewInt(1), 970)).String()
+
+// numberOutsideFloat64Range reports whether the JSON number literal s, as
+// json.Unmarshal has read it (an optional minus sign, an integer part, an
+// optional fraction and an optional exponent part), has a magnitude of
+// 2^1024 - 2^970 or more, which rounds to infinity as a float64
+// (float64OverflowDigits): Python's float() returns inf for such a literal.
+// It decides on the digits as written, whatever their count and whatever
+// the exponent. strconv.ParseFloat keeps at most 800 digits of a literal,
+// places the decimal point by the digits it kept and caps the exponent it
+// reads, so it reads 1 followed by 1000 zeros and e-650, whose value is
+// 10^350, as 1e+149 with no error, and 0. followed by 200000 zeros, 1 and
+// e200400, whose value is 10^399, as 0. A literal with no nonzero digit is
+// zero. Any other is 0.d1d2d3... × 10^point, with d1 its first nonzero digit
+// and point the count of digits before the decimal point from d1 on, plus
+// the exponent: it is outside the range when point is above 309, and when
+// point is 309 and its digits, those past the last written being zero, are
+// those of 2^1024 - 2^970 or above them. An exponent that reaches 400 past
+// the length of s decides on its own, since point is within that length of
+// zero, so the digits of an exponent of any length are read without
+// overflow.
+func numberOutsideFloat64Range(s string) bool {
+	_, digits, point := decimalForm(s)
+	if digits == "" {
+		return false
+	}
+	switch {
+	case point > len(float64OverflowDigits):
+		return true
+	case point < len(float64OverflowDigits):
+		return false
+	}
+	for i := 0; i < len(float64OverflowDigits); i++ {
+		d := byte('0')
+		if i < len(digits) {
+			d = digits[i]
+		}
+		if d != float64OverflowDigits[i] {
+			return d > float64OverflowDigits[i]
+		}
+	}
+	return true
+}
+
+// decimalForm reads the JSON number literal s, as json.Unmarshal has read
+// it, as negative, whether it opens with a minus sign; digits, its digits
+// from the first nonzero one on (none for a literal with no nonzero digit);
+// and point, such that the magnitude of s is 0.digits × 10^point. An
+// exponent is read up to 400 past the length of s, which decides the
+// magnitude of any literal on its own (numberOutsideFloat64Range).
+func decimalForm(s string) (negative bool, digits string, point int) {
+	negative = strings.HasPrefix(s, "-")
+	s = strings.TrimPrefix(s, "-")
+	mantissa, exponent := s, ""
+	if i := strings.IndexAny(s, "eE"); i >= 0 {
+		mantissa, exponent = s[:i], s[i+1:]
+	}
+	point = strings.IndexByte(mantissa, '.')
+	if point < 0 {
+		point = len(mantissa)
+	}
+	written := strings.Replace(mantissa, ".", "", 1)
+	digits = strings.TrimLeft(written, "0")
+	if digits == "" {
+		return negative, "", 0
+	}
+	point -= len(written) - len(digits)
+	if exponent != "" {
+		negativeExponent := exponent[0] == '-'
+		if negativeExponent || exponent[0] == '+' {
+			exponent = exponent[1:]
+		}
+		e, limit := 0, len(s)+400
+		for i := 0; i < len(exponent) && e < limit; i++ {
+			e = e*10 + int(exponent[i]-'0')
+		}
+		if negativeExponent {
+			e = -e
+		}
+		point += e
+	}
+	return negative, digits, point
+}
+
+// nearestFloat64 returns the float64 nearest the value of the JSON number
+// literal s, ties to even, decided on every digit written: the value
+// Python's float() reads s as. The caller has refused a literal outside the
+// float64 range (numberOutsideFloat64Range). strconv.ParseFloat keeps at most
+// 800 digits of a literal and places the decimal point by the digits it
+// kept, so it reads 875 followed by 900 zeros and e-901, whose value is 87.5,
+// as 8.75e-102. A magnitude below 10^-400 is zero, keeping the sign, as it
+// is in float(). Past 800 significant digits, the digits after the 800th are
+// read as one nonzero digit: a point halfway between two float64s is written
+// with at most 767 significant digits, so the digits past the 800th decide
+// no rounding but whether the value lies above the first 800.
+func nearestFloat64(s string) float64 {
+	negative, digits, point := decimalForm(s)
+	digits = strings.TrimRight(digits, "0")
+	var f float64
+	if digits != "" && point >= -400 {
+		if len(digits) > 800 {
+			digits = digits[:800] + "1"
+		}
+		r, ok := new(big.Rat).SetString(digits + "e" + strconv.Itoa(point-len(digits)))
+		if !ok {
+			panic("nearestFloat64: " + s + " is not a JSON number")
+		}
+		f, _ = r.Float64()
+	}
+	if negative {
+		f = math.Copysign(f, -1)
+	}
+	return f
+}
+
+// readTrustScore sets the trustScore of a, which json.Unmarshal has decoded
+// from the credential raw, to the value raw writes for it, decided on every
+// digit written (nearestFloat64), so the v1.0 and v1.1 signed payloads hold
+// the %.6f form of the value the credential carries, as the Python
+// reference verifier's float() reads it. json.Unmarshal reads the float64
+// with strconv.ParseFloat, which reads a literal of more than 800 digits by
+// the digits it keeps. A literal whose value is outside the float64 range
+// (numberOutsideFloat64Range) is refused with the error json.Unmarshal
+// returns for 1e400, although ParseFloat reads 1 followed by 1000 zeros and
+// e-650, whose value is 10^350, as 1e+149. The member is read by a second
+// decode of raw, which matches member names as the first does, so it reads
+// the member the first decoded. A trustScore that is null or absent keeps
+// the zero value. (Same reading in verifiers/python; atx-conformance#308.)
+func readTrustScore(raw []byte, a *atx) error {
+	var member struct {
+		TrustScore json.RawMessage `json:"trustScore"`
+	}
+	if err := json.Unmarshal(raw, &member); err != nil {
+		return err
+	}
+	literal := string(member.TrustScore)
+	if literal == "" || literal[0] != '-' && (literal[0] < '0' || literal[0] > '9') {
+		return nil
+	}
+	if numberOutsideFloat64Range(literal) {
+		return &json.UnmarshalTypeError{Value: "number " + literal, Type: reflect.TypeOf(a.TrustScore), Struct: "atx", Field: "trustScore"}
+	}
+	a.TrustScore = nearestFloat64(literal)
+	return nil
+}
+
 // purposeNumbersV11 returns each number the declaredPurpose of a writes, as
 // written and in the order written, and none when the v1.1 TBS omits
 // declaredPurpose. declaredPurpose enters the TBS as written, so no typed
@@ -1018,6 +1171,9 @@ func verify(f fixture) result {
 
 	var a atx
 	if err := json.Unmarshal(f.ATX, &a); err != nil {
+		return result{RejectCategory: "PARSE_ERROR", Reason: err.Error()}
+	}
+	if err := readTrustScore(f.ATX, &a); err != nil {
 		return result{RejectCategory: "PARSE_ERROR", Reason: err.Error()}
 	}
 

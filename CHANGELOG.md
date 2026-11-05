@@ -66,6 +66,14 @@ they should not.
 
 ### Fixed
 
+- The Python unit tests step of `conformance.yml` runs the 2 tests of
+  `docs/demo/test_record_atx_verify.py`, which hold
+  `docs/demo/record-atx-verify.sh` to refusing a Dockerfile that references an
+  image it does not read (#325). The step's `unittest discover` run reads
+  `scripts/` and held 3 tests, none from `docs/demo`.
+  `scripts/test_demo_recording.py`, which that run matches, adds the 2 tests,
+  and that run now fails on a Dockerfile the script refuses and on a
+  `docs/demo/test_record_atx_verify.py` that is gone. No workflow file changes.
 - Both reference verifiers reject a v1.1 credential whose `declaredPurpose`
   holds a number outside the float64 range as `SIGNATURE_INVALID`, with a
   reason that quotes the number as written (#302). They rejected it as
@@ -175,6 +183,53 @@ they should not.
   altered count sites, from 272): a 0.6 s sleep, in which the process
   does not run, held to a 0.5 s bound, which the wall-clock reading
   fails. No fixture changes.
+- The Go reference verifier builds the v1.0 and v1.1 signed payloads from
+  the `trustScore` value the credential writes, decided on every digit
+  written, as the Python reference verifier's `float()` reads it (#308).
+  It read `trustScore` with `strconv.ParseFloat`, which keeps at most 800
+  digits of a literal and places the decimal point by the digits it kept:
+  it read `875` followed by 900 zeros and `e-901`, whose value is 87.5, as
+  8.75e-102, and refused the v1.0 and v1.1 baselines carrying it as
+  `SIGNATURE_INVALID`, where the Python verifier accepts them. It read `1`
+  followed by 1000 zeros and `e-650`, whose value is 10^350, as 1e+149,
+  where the Python verifier refuses it as `PARSE_ERROR`; the Go verifier now
+  refuses it as `PARSE_ERROR` too, with the reason it gives for `1e400`. It
+  decides that range with `numberOutsideFloat64Range` and
+  `float64OverflowDigits`, which the #302 entry above removes with the
+  `declaredPurpose` check they served; they stay for `trustScore`, and
+  `TestNumberOutsideFloat64Range` pins them at 2^1024 - 2^970 again. No
+  fixture changes.
+- `docs/demo/record-atx-verify.sh` gives the render container a
+  `--pids-limit` of 512 plus 32 for each CPU `docker info` counts on the
+  docker host, 768 with 8 CPUs and 1024 with 16, where it gave 256 whatever
+  the CPU count (#311). The pids cgroup counts threads as well as processes,
+  and the render's peak grows with the CPU count: read from the render
+  container's `pids.peak` on Docker Desktop (linux/arm64), it was 254 tasks
+  with 16 CPUs, 2 under the limit, and 211 with the render held to 8 of them
+  by `--cpuset-cpus 0-7`. A render runs `docker info` before the build and
+  stops there, with exit code 1, when it exits non-zero or prints no CPU
+  count; `--dry-run` prints the rule in place of the number. The check
+  inside the container counts `--pids-limit` as run when `RUN_FLAGS` gives
+  it a positive whole number in digits with no leading zero (`4096` is
+  taken; `0`, `-1` and no number are not), where it required
+  `--pids-limit 256`. `docs/demo/test_record_atx_verify.py` runs the script
+  with a stub in place of docker and holds the limit to at least twice each
+  measured peak, and its growth a CPU to at least twice the peak's from 8
+  CPUs to 16. The committed GIF, frames, capture and sidecar are not
+  re-rendered.
+- `scripts/check_readme_counts.py` reads an empty argument, written `''`
+  or `""`, on a `python3 -m unittest discover` line of the workflow as an
+  argument, as unittest reads it (#327). It had read such an argument as
+  a shell operator and stopped with an `IndexError` traceback, printing
+  no verdict. With the workflow's discover line given `-p ''`, on which
+  unittest runs no test, it now reports `scripts/test_script_options.py`
+  as not run and exits 1. The self-test adds three discover steps (319
+  altered count sites, from 316): an empty argument before `-s` and `-p`,
+  which `-s` replaces as the start directory; the empty pattern `-p ''`;
+  and an empty argument after `-s` and `-p`, which unittest reads as the
+  start directory, the directory it is run from. Given to the check as it
+  was before this change, each of the three raises `IndexError`. No
+  fixture changes.
 
 ## v0.1.0
 

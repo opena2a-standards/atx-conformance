@@ -18,12 +18,12 @@
 # by no commit, and the sidecar's `recorder` records them as the Dockerfile writes them. The
 # container's hostname is `laptop` and its home directory /work/demo-user starts empty, so the Go
 # module and build caches start empty too. It runs with --cap-drop ALL, --security-opt
-# no-new-privileges and --pids-limit 256, and with the network: the tape's command resolves the
-# module through the Go module proxy, so a render with no network would record another command, and
-# the sidecar lists --network none as dropped, with that reason. docs/demo is mounted into it
-# read-only, at /work/input/docs/demo, and the render writes into a new empty directory mounted at
-# /work/docs/demo. It receives no variable of the calling environment other than the ones this
-# script names. In the container the script:
+# no-new-privileges and a --pids-limit derived from the docker host's CPU count (PIDS_BASE below),
+# and with the network: the tape's command resolves the module through the Go module proxy, so a
+# render with no network would record another command, and the sidecar lists --network none as
+# dropped, with that reason. docs/demo is mounted into it read-only, at /work/input/docs/demo, and
+# the render writes into a new empty directory mounted at /work/docs/demo. It receives no variable
+# of the calling environment other than the ones this script names. In the container the script:
 #   1. asks the module proxy which version @latest names (`go list -m -json`);
 #   2. renders the tape: atx-verify.gif, out/atx-verify.mp4 and one PNG per step;
 #   3. runs the typed commands once more with NO_COLOR=1 TERM=dumb COLUMNS=110 into
@@ -45,18 +45,19 @@
 # way leaves none of them there and copies nothing; the script then names the directory that holds
 # what the render wrote. The MP4 goes to docs/demo/out/, which is not committed.
 #
-# docker build and docker run use a configuration directory of this script's own, removed when the
-# script ends, which names no credential helper and holds no registry credentials; the base images
-# are public and are pulled by digest. The caller's configuration can name a helper that reads the
-# OS keychain. The endpoint of the docker context in use is carried over as DOCKER_HOST, and the
-# caller's plugin directory and Docker Desktop's (when present) as cliPluginsExtraDirs, so buildx is
-# still found.
+# docker info, docker build and docker run use a configuration directory of this script's own,
+# removed when the script ends, which names no credential helper and holds no registry credentials;
+# the base images are public and are pulled by digest. The caller's configuration can name a helper
+# that reads the OS keychain. The endpoint of the docker context in use is carried over as
+# DOCKER_HOST, and the caller's plugin directory and Docker Desktop's (when present) as
+# cliPluginsExtraDirs, so buildx is still found.
 #
-# --dry-run prints the image, its base images, the VHS source, the container's flags, the tape, the
-# checkout and the files a render writes, then exits 0. It runs git and no docker command, and
-# writes no file. Like a render, it exits 1 when the Dockerfile names a base image by tag alone or
-# the VHS source by no commit, references an image other than its two base images, or holds a part
-# the script does not read (read_images lists what it reads).
+# --dry-run prints the image, its base images, the VHS source, the container's flags (the pids limit
+# as the rule a render derives it by), the tape, the checkout and the files a render writes, then
+# exits 0. It runs git and no docker command, and writes no file. Like a render, it exits 1 when the
+# Dockerfile names a base image by tag alone or the VHS source by no commit, references an image
+# other than its two base images, or holds a part the script does not read (read_images lists what
+# it reads).
 #
 # Nothing metered is called: VHS, Go, the Go module proxy and the checksum database are free to use.
 set -euo pipefail
@@ -84,8 +85,10 @@ PATCH = f'{DEMO}/docker/vhs-0.12.0-render-context.patch'
 RECORD = f'{DEMO}/record-{NAME}.sh'
 TITLES = {'s1': "Run the README's first command", 's2': 'Print the exit code'}
 # The container's limits. Each one either ran, as the host side passes it in RUN_FLAGS, or is written
-# here with the reason the render goes without it; a limit that is neither stops the render.
-LIMITS = ('--network none', '--cap-drop ALL', '--security-opt no-new-privileges', '--pids-limit 256')
+# here with the reason the render goes without it; a limit that is neither stops the render. The host
+# side derives the number --pids-limit takes from the docker host's CPU count (PIDS_BASE there), so
+# that limit ran when RUN_FLAGS gives it a number.
+LIMITS = ('--network none', '--cap-drop ALL', '--security-opt no-new-privileges', '--pids-limit')
 DROPPED = [{'flag': '--network none',
             'reason': f"the tape types the README's first command, `go run {MODULE}/cmd/{NAME}@latest`, which "
                       'resolves the module through the Go module proxy that environment.goproxy names; with no '
@@ -278,8 +281,16 @@ with open(mounted(NARRATION), encoding='utf-8') as f:
     narration = json.load(f)
 # The limits the container runs with, as the host side ran them, and the ones it goes without.
 ran_flags = re.findall(r'--\S+(?: (?!--)\S+)?', os.environ.get('RUN_FLAGS', ''))
+
+
+def ran(limit):
+    if limit == '--pids-limit':
+        return any(re.fullmatch(r'--pids-limit [1-9][0-9]*', flag) for flag in ran_flags)
+    return limit in ran_flags
+
+
 dropped = [d for d in DROPPED if d['flag'] not in ran_flags]
-unaccounted = [flag for flag in LIMITS if flag not in ran_flags and flag not in [d['flag'] for d in dropped]]
+unaccounted = [flag for flag in LIMITS if not ran(flag) and flag not in [d['flag'] for d in dropped]]
 if unaccounted:
     fail(f'the container runs without {", ".join(unaccounted)}, and {RECORD} gives no reason for it in DROPPED; '
          'not recording.')
@@ -547,8 +558,19 @@ DOCKER="${DOCKER:-docker}"
 DOCKER_DIR="$REPO_ROOT/docs/demo/docker"
 PATCH_FILE="vhs-0.12.0-render-context.patch"
 # The container's limits (see the header). The sidecar records them as they ran, and --network none,
-# which the render goes without, with its reason.
-RUN_FLAGS=(--cap-drop ALL --security-opt no-new-privileges --pids-limit 256)
+# which the render goes without, with its reason. A render adds --pids-limit once it has the docker
+# host's CPU count.
+RUN_FLAGS=(--cap-drop ALL --security-opt no-new-privileges)
+# The pids limit. The pids cgroup counts threads as well as processes, and the render's peak grows
+# with the CPU count: read from the render container's pids.peak on Docker Desktop (linux/arm64), it
+# was 254 tasks with 16 CPUs, and 211 with the render held to 8 of them by --cpuset-cpus 0-7; it came
+# after the recording, while VHS encoded the GIF and the MP4 with Chromium still running.
+# --pids-limit is PIDS_BASE plus PIDS_PER_CPU for each CPU `docker info` counts on the docker host:
+# 768 with 8 CPUs and 1024 with 16, and 32 more for each CPU past that, where the peak grew by 43
+# from 8 CPUs to 16. A render stops before the build when `docker info` exits non-zero or prints no
+# CPU count.
+PIDS_BASE=512
+PIDS_PER_CPU=32
 
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d" " -f1; else shasum -a 256 | cut -d" " -f1; fi
@@ -722,7 +744,7 @@ if [ "$DRY_RUN" = 1 ]; then
   echo "  source    $SOURCE_REPOSITORY $SOURCE_TAG, commit $SOURCE_COMMIT"
   echo "  tape      $TAPE"
   echo "  runs      go run $MODULE/cmd/$NAME@latest, the version the Go module proxy names when it runs"
-  echo "  container ${RUN_FLAGS[*]}, with the network; docs/demo mounted read-only, the render's files copied into it from a directory of its own"
+  echo "  container ${RUN_FLAGS[*]} --pids-limit $PIDS_BASE plus $PIDS_PER_CPU for each CPU of the docker host, with the network; docs/demo mounted read-only, the render's files copied into it from a directory of its own"
   echo "  checkout  $HEAD_SHA${HEAD_TAGS:+, tags $HEAD_TAGS}"
   echo "  writes    $(sed -n -E 's/^(Output|Screenshot) (.*)$/\2/p' "$REPO_ROOT/$TAPE" | paste -s -d " " -) docs/demo/$NAME-capture.txt docs/demo/$NAME.json, and the version in docs/demo/$NAME.narration.json"
   echo "  docker    a configuration of the script's own, with no credential helper and no registry credentials"
@@ -773,6 +795,14 @@ fi
 printf '{\n  "cliPluginsExtraDirs": [%s]\n}\n' "$PLUGIN_DIRS" > "$OWN_DOCKER_CONFIG/config.json"
 export DOCKER_HOST
 export DOCKER_CONFIG="$OWN_DOCKER_CONFIG"
+
+# The docker host's CPU count, which the pids limit is derived from (see PIDS_BASE).
+CPUS="$("$DOCKER" info --format '{{.NCPU}}')" && INFO_STATUS=0 || INFO_STATUS=$?
+if [ "$INFO_STATUS" != 0 ] || ! [[ $CPUS =~ ^[1-9][0-9]{0,5}$ ]]; then
+  echo "record-$NAME.sh: \`$DOCKER info --format '{{.NCPU}}'\` exited $INFO_STATUS and printed '$CPUS', not the docker host's CPU count, which the pids limit is derived from; not recording." >&2
+  exit 1
+fi
+RUN_FLAGS+=(--pids-limit "$((PIDS_BASE + PIDS_PER_CPU * CPUS))")
 
 "$DOCKER" build -t "$IMAGE" "$CONTEXT"
 IMAGE_ID="$("$DOCKER" image inspect --format '{{.Id}}' "$IMAGE")"
