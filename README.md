@@ -82,7 +82,9 @@ service (yours goes in the angle brackets):
 ```
 
 To see a result before you connect yours, use `true`, which answers ACCEPT to
-everything: 9 agree, and 32 accepted what must fail.
+everything: 9 agree, and 32 accepted what must fail. The URL form has no
+one-word stand-in: it needs a service that is listening, yours or
+[`examples/serve_verifier.py`](examples/serve_verifier.py) from a clone.
 
 ```bash
 "$(go env GOPATH)/bin/atx-verify" --verifier true --label "always ACCEPT" --report atx-report
