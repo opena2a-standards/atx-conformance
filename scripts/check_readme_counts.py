@@ -2099,11 +2099,14 @@ def workflow_run_commands(workflow):
     one line or more, in a block-style step or a flow mapping, is read as
     YAML reads it before bash reads it (quoted_scalar()): its quotes
     removed, `''` in single quotes read as `'`, the escapes of double
-    quotes undone and its line breaks folded. One that does not close,
-    holds an escape YAML does not define, or has text other than a comment
-    after its closing quote is kept as it is written, quotes included. A
-    key may be quoted (`- "run": python3 scripts/a.py`) and is read by
-    yaml_key(), and spaces may stand between a block-style key and its `:`
+    quotes undone and its line breaks folded. The spaces and tabs that end
+    its first line reach quoted_scalar() with it, so a backslash before
+    them is read as an escaped space or tab, as YAML reads it, and not as
+    one that ends the line. One that does not close, holds an escape YAML
+    does not define, or has text other than a comment after its closing
+    quote is kept as it is written, quotes included. A key may be quoted
+    (`- "run": python3 scripts/a.py`) and is read by yaml_key(), and spaces
+    may stand between a block-style key and its `:`
     (`- run : python3 scripts/a.py`). A script named in a YAML comment, a
     step `name:` or an action's `with:` input is in none of them."""
     lines = (workflow or "").splitlines()
@@ -2146,7 +2149,11 @@ def workflow_run_commands(workflow):
         if not key:
             continue
         column = key.start(3)
-        name, value = yaml_key(key.group(3)), (key.group(4) or "").strip()
+        # `first` is the value's first line with the white space that ends
+        # it kept: in a double-quoted scalar a backslash before that white
+        # space escapes a space or tab and does not end the line.
+        first = key.group(4) or ""
+        name, value = yaml_key(key.group(3)), first.strip()
         # A step's command may start on a later line than its `run:` key,
         # indented past it, after any YAML comment lines.
         if not value and name == "run" and is_step:
@@ -2155,7 +2162,8 @@ def workflow_run_commands(workflow):
                                       or lines[j].lstrip().startswith("#")):
                 j += 1
             if j < len(lines) and len(lines[j]) - len(lines[j].lstrip(" ")) > column:
-                value, i = lines[j].strip(), j + 1
+                first, i = lines[j], j + 1
+                value = first.strip()
         # Lines indented past the key carry its value: a block scalar's body,
         # or the continuation of a value begun on the key's line.
         body, header = [], None
@@ -2171,7 +2179,7 @@ def workflow_run_commands(workflow):
             if header:
                 command = block_scalar(header, body, column)
             elif value[:1] in ("'", '"'):
-                command = "\n".join([value] + body)
+                command = "\n".join([first.lstrip()] + body)
                 read = quoted_scalar(command)
                 command = command if read is None else read
             else:
@@ -4763,7 +4771,12 @@ def _ci_gate_label_cases(readme, workflow, scripts):
     and double-quoted with a comment after its closing quote: none may add
     a failure. Double-quoted with an empty line between the run and its
     arguments, which YAML reads as a line break, and double-quoted with
-    the escape `\\q`, which YAML does not define, each must."""
+    the escape `\\q`, which YAML does not define, each must. A
+    double-quoted run whose first line ends in a backslash and a space,
+    which YAML reads as an escaped space before the space it folds the line
+    break into, on the key's line or on the line under `run:`, and one
+    whose first line ends in a backslash and a tab, which YAML reads as an
+    escaped tab, may add no failure."""
     labels = (
         "scripts/*.py script that no workflow step runs",
         "script the workflow stops naming",
@@ -4833,6 +4846,9 @@ def _ci_gate_label_cases(readme, workflow, scripts):
         "script run by a unittest discover step whose double-quoted run: scalar a comment follows",
         "script a unittest discover step does not run when an empty line splits its double-quoted run: scalar",
         "script a unittest discover step does not run when its double-quoted run: scalar holds an undefined escape",
+        "script run by a unittest discover step whose double-quoted run: scalar ends a line in an escaped space",
+        "script run by a unittest discover step under run: whose double-quoted scalar ends a line in an escaped space",
+        "script run by a unittest discover step whose double-quoted run: scalar ends a line in an escaped tab",
     )
     if not CI_GATE_GLOB.search(readme):
         why = ("no `scripts/*.py  CI gates` layout line found in README.md or its "
@@ -5015,7 +5031,13 @@ def _ci_gate_label_cases(readme, workflow, scripts):
             # YAML defines no `\q`, so the scalar is kept with its quotes and
             # the closing one stands unbalanced after the run's arguments; read
             # as `q`, it would be a start directory -s replaces.
-            (labels[67], f'- run: "{discover} \\q {quoted}"', True)):
+            (labels[67], f'- run: "{discover} \\q {quoted}"', True),
+            # A backslash before the white space that ends a line escapes a
+            # space or tab; the line break after it is still folded into a
+            # space, so `-v` stands apart from the pattern.
+            (labels[68], f'- run: "{discover} {quoted}\\ \n          -v"', False),
+            (labels[69], f'- run:\n          "{discover} {quoted}\\ \n          -v"', False),
+            (labels[70], f'- run: "{discover} {quoted}\\\t\n          -v"', False)):
         flow = (workflow or "") + f"\n      {step}\n"
         got = new(readme + line, flow, files)
         cases.append((any(want in f for f in got) == reported, label,
