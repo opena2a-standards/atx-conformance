@@ -159,16 +159,23 @@ A fixture named as a file is named in the report as its argument spells it,
 an unknown option and the error line of a path that does not exist or
 cannot be read are written as bytes (_say_err), so an argument that is not
 UTF-8 is written as the bytes it was given, as the Go reference verifier
-writes it, and not as a backslash escape. A report line naming a fixture
-whose path is not UTF-8, its PASS or FAIL line, writes the path's bytes too,
-as the argument gave them or as the directory listing named the file:
-standard output is set to write each surrogate escape as the byte it stands
-for before the first report line (_write_surrogate_escapes_as_bytes, _say).
-A fixture file that cannot be read fails to load with the error the Go
-reference verifier's os.ReadFile returns, which names the step that failed
-and the path as spelled, its bytes where it is not UTF-8: run as a user
-other than root, `open d/x.json: permission denied` for a file of mode 000
-(_read_file).
+writes it, and not as a backslash escape, a byte 0x80 to 0x9f aside. A
+report line naming a fixture whose path is not UTF-8, its PASS or FAIL
+line, writes the path's bytes too, as the argument gave them or as the
+directory listing named the file, the same bytes aside: standard output is
+set to write each surrogate escape as the byte it stands for before the
+first report line (_write_surrogate_escapes_as_bytes, _say). main passes
+each argument and path those lines quote through _escape_controls first,
+which writes each control character as a visible escape, and a byte 0x80
+to 0x9f that is not UTF-8, a C1 control to a terminal that reads 8-bit
+codes, as the four characters \\xHH, as the Go reference verifier writes
+them: for the byte 0x9b between x and y.json, both write
+`error: x\\x9by.json: no such file or directory`. A fixture file that
+cannot be read fails to load with the error the Go reference verifier's
+os.ReadFile returns, which names the step that failed and the path as
+spelled, its bytes where it is not UTF-8, the same bytes aside: run as a
+user other than root, `open d/x.json: permission denied` for a file of mode
+000 (_read_file).
 
 The signatures line writes each boolean as true or false, and a rejection
 reason that quotes the credential's atcVersion or a duplicate member name
@@ -1955,9 +1962,13 @@ def _say(text: str, end: str = "\n") -> None:
     for (errors="surrogateescape"), as main sets it to before the first
     report line. sys.argv and os.scandir hold each byte of a path that does
     not decode as one, so a path that is not UTF-8 is then written as its
-    bytes, as the Go reference verifier writes it, where the line was
-    written with the six characters \\udcff for the byte 0xff, in
-    `PASS  d/\\udcff.json`."""
+    bytes, a byte 0x80 to 0x9f aside, as the Go reference verifier writes
+    it, where the line was written with the six characters \\udcff for the
+    byte 0xff, in `PASS  d/\\udcff.json`. main writes a byte 0x80 to 0x9f
+    that is not UTF-8, a C1 control to a terminal that reads 8-bit codes,
+    as the four characters \\xHH (_escape_controls) before the line reaches
+    this, so the line holds no surrogate escape for it: for a fixture
+    listed in d under the byte 0x9b then .json, `PASS  d/\\x9b.json`."""
     encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
 
     def escaped(part: str) -> str:
@@ -1974,11 +1985,13 @@ def _say(text: str, end: str = "\n") -> None:
 def _write_surrogate_escapes_as_bytes(stream: Any) -> None:
     """Set stream, standard output, to write each surrogate escape as the
     byte it stands for, so _say writes a path that is not UTF-8 as its
-    bytes. A stream that cannot be reconfigured, such as an io.StringIO, is
-    left as it is. reconfigure flushes the stream before it sets errors, so
-    main calls this before the first report line, with nothing yet written
-    to flush. Writing a line's bytes to sys.stdout.buffer instead would need
-    a flush of the text written before it, to keep the lines in order."""
+    bytes, a byte 0x80 to 0x9f aside: main writes such a byte that is not
+    UTF-8 as \\xHH (_escape_controls) before the line reaches _say. A
+    stream that cannot be reconfigured, such as an io.StringIO, is left as
+    it is. reconfigure flushes the stream before it sets errors, so main
+    calls this before the first report line, with nothing yet written to
+    flush. Writing a line's bytes to sys.stdout.buffer instead would need a
+    flush of the text written before it, to keep the lines in order."""
     reconfigure = getattr(stream, "reconfigure", None)
     if reconfigure is not None:
         reconfigure(errors="surrogateescape")
@@ -1992,8 +2005,12 @@ def _say_err(text: str) -> None:
     `error: \\udcff: no such file or directory`, where the Go reference
     verifier writes the byte. The line is written to the binary stream under
     sys.stderr as the bytes os.fsencode gives, the argument's own bytes among
-    them, and as text to a stream with no binary stream under it, such as an
-    io.StringIO."""
+    them, a byte 0x80 to 0x9f aside, and as text to a stream with no binary
+    stream under it, such as an io.StringIO. main writes a byte 0x80 to 0x9f
+    that is not UTF-8 as the four characters \\xHH (_escape_controls)
+    before the line reaches this, as the Go reference verifier writes it,
+    so the line holds no surrogate escape for it:
+    `error: \\x9b: no such file or directory` for the byte 0x9b."""
     stream = getattr(sys.stderr, "buffer", None)
     if stream is None:
         sys.stderr.write(text)
