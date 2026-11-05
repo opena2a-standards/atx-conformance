@@ -62,15 +62,23 @@ func Preflight(ctx context.Context, e *Env, steps []Step, scr *Screen) *State {
 	scr.Title("Pre-flight: every step, run unattended with the network blocked")
 	scr.Printf("Clone: atx-conformance at %s", shortCommit(e.Commit))
 	scr.Labeled("Network: blocked by ", e.NetworkBlock(), "")
+	if e.Demo != "" && demoAfter(steps) {
+		scr.Labeled("Demo: ", "its launcher runs outside that sandbox, since it starts each part "+
+			"in a sandbox of its own; the steps that use it require those sandboxes and check "+
+			"that every connection the demo logged stayed on loopback.", "")
+	}
 	scr.Blank()
 	e.Log.Printf("pre-flight of %s at %s; network blocked by %s", e.Repo, e.Commit, e.NetworkBlock())
-	for _, s := range steps {
+	for i, s := range steps {
 		reason := ""
 		var limitErr error
 		if s.Limit != nil {
 			_, limitErr = s.Limit(e)
 		}
 		out := RunStep(ctx, e, s)
+		if s.UsesDemo && (out.Err != nil || !demoAfter(steps[i+1:])) {
+			e.StopDemo()
+		}
 		switch {
 		case out.Err != nil:
 			reason = Reason(out.Err, e.Timeout)

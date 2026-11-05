@@ -49,6 +49,8 @@ type Env struct {
 	goErr  error
 	sbOnce sync.Once
 	sb     bool
+
+	demo demoState
 }
 
 // On macOS every command of the tour and the pre-flight also runs under
@@ -57,6 +59,11 @@ type Env struct {
 const (
 	sandboxExec    = "/usr/bin/sandbox-exec"
 	sandboxProfile = "(version 1)(allow default)(deny network-outbound (remote ip))"
+	// sandboxLoopback is the profile of the commands of tour Part 2: every
+	// outbound connection to an IP address is refused except to loopback,
+	// where the delegation demo listens.
+	sandboxLoopback = `(version 1)(allow default)(deny network-outbound (remote ip))` +
+		`(allow network-outbound (remote ip "localhost:*"))`
 )
 
 // sandboxed reports whether commands run under the macOS sandbox: on macOS,
@@ -230,7 +237,17 @@ func (e *Env) childEnv() []string {
 // returns the command's combined output, and logs the command, the output and
 // the exit status.
 func (e *Env) run(cmd *exec.Cmd, dir string, extra ...string) (string, error) {
-	cmd.Dir = filepath.Join(e.Repo, filepath.FromSlash(dir))
+	where := dir
+	if where == "" {
+		where = "."
+	}
+	return e.runIn(cmd, filepath.Join(e.Repo, filepath.FromSlash(dir)), where, sandboxProfile, extra...)
+}
+
+// runIn is run with the working directory abs, which the log calls where,
+// and with the macOS sandbox profile profile.
+func (e *Env) runIn(cmd *exec.Cmd, abs, where, profile string, extra ...string) (string, error) {
+	cmd.Dir = abs
 	cmd.Env = append(e.childEnv(), extra...)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
@@ -239,17 +256,13 @@ func (e *Env) run(cmd *exec.Cmd, dir string, extra ...string) (string, error) {
 	cmd.WaitDelay = 2 * time.Second
 	setProcessGroup(cmd)
 	if !e.Online && cmd.Err == nil && e.sandboxed() {
-		cmd.Args = append([]string{sandboxExec, "-p", sandboxProfile, cmd.Path}, cmd.Args[1:]...)
+		cmd.Args = append([]string{sandboxExec, "-p", profile, cmd.Path}, cmd.Args[1:]...)
 		cmd.Path = sandboxExec
 	}
 	start := time.Now()
 	err := cmd.Run()
 	out := buf.String()
 	if e.Log != nil {
-		where := dir
-		if where == "" {
-			where = "."
-		}
 		e.Log.Printf("$ %s\n  in %s%s", strings.Join(cmd.Args, " "), where, extraNote(extra))
 		e.Log.Block(out)
 		status := "exit 0"

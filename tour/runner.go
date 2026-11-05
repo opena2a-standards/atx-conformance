@@ -139,13 +139,24 @@ func (t *Tour) Show(ctx context.Context, st *State) int {
 	scr.Labeled("Said first: ", formLimit, "")
 	scr.Blank()
 	scr.Printf("Enter: next step    r: repeat a step    q: quit")
+	if steps[0].UsesDemo {
+		t.Env.StartDemo()
+	}
 	if t.Keys.Next(ctx) == KeyQuit {
 		return t.stopped(ctx)
 	}
 	for i := 0; i < len(steps); {
-		t.showStep(ctx, steps[i])
+		ok := t.showStep(ctx, steps[i])
+		if steps[i].UsesDemo && !ok {
+			t.Env.StopDemo()
+		}
 		if ctx.Err() != nil {
 			return t.stopped(ctx)
+		}
+		// The demo starts while the presenter is still on the step before
+		// the first step that uses it.
+		if i+1 < len(steps) && steps[i+1].UsesDemo {
+			t.Env.StartDemo()
 		}
 		if i == len(steps)-1 {
 			scr.Printf("[Enter] end   [r] repeat   [q] quit")
@@ -158,8 +169,12 @@ func (t *Tour) Show(ctx context.Context, st *State) int {
 		case KeyRepeat:
 			continue
 		}
+		if steps[i].UsesDemo && !demoAfter(steps[i+1:]) {
+			t.Env.StopDemo()
+		}
 		i++
 	}
+	t.Env.StopDemo()
 	scr.Rule()
 	scr.Printf("End of the tour.")
 	return 0
@@ -167,6 +182,7 @@ func (t *Tour) Show(ctx context.Context, st *State) int {
 
 // stopped ends the tour early: q, the end of input, or Ctrl-C (exit 130).
 func (t *Tour) stopped(ctx context.Context) int {
+	t.Env.StopDemo()
 	t.Screen.Blank()
 	t.Screen.Printf("Tour stopped.")
 	if ctx.Err() != nil {
@@ -175,7 +191,8 @@ func (t *Tour) stopped(ctx context.Context) int {
 	return 0
 }
 
-func (t *Tour) showStep(ctx context.Context, s Step) {
+// showStep shows one step and reports whether it ran.
+func (t *Tour) showStep(ctx context.Context, s Step) bool {
 	scr, e := t.Screen, t.Env
 	scr.Rule()
 	scr.Title(fmt.Sprintf("Step %d. %s", s.Number, s.Title))
@@ -186,7 +203,7 @@ func (t *Tour) showStep(ctx context.Context, s Step) {
 		if err != nil {
 			e.Log.Printf("step %d: its limit could not be read: %v", s.Number, err)
 			t.fail(s, false)
-			return
+			return false
 		}
 		scr.Blank()
 		scr.Labeled("Said first: ", limit, "")
@@ -200,11 +217,11 @@ func (t *Tour) showStep(ctx context.Context, s Step) {
 	out := RunStep(ctx, e, s)
 	scr.DoneRunning()
 	if ctx.Err() != nil {
-		return
+		return false
 	}
 	if out.Err != nil {
 		t.fail(s, errors.Is(out.Err, ErrTimeout))
-		return
+		return false
 	}
 	for _, line := range out.Lines {
 		scr.Output(line)
@@ -212,6 +229,7 @@ func (t *Tour) showStep(ctx context.Context, s Step) {
 	scr.Blank()
 	scr.Result(true, out.Result)
 	scr.Blank()
+	return true
 }
 
 // fail shows the fallback command and nothing of the error, which is in the log.

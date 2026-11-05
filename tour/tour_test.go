@@ -284,7 +284,7 @@ func TestPart2IsHiddenWithItsReasonAndNeverShown(t *testing.T) {
 		demo, reason string
 	}{
 		{"", "no --demo path was given"},
-		{t.TempDir(), "this commit does not run the delegation demo"},
+		{t.TempDir(), "the --demo directory is not a checkout of the delegation demo (it has no bin/start.mjs)"},
 	} {
 		e, _ := testEnv(t)
 		e.Demo = c.demo

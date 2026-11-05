@@ -161,8 +161,11 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	e.Demo = opts.Demo
 	e.Commit = headCommit(e)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
+	// The demo of Part 2 is stopped on every way out, while a second Ctrl-C
+	// is still caught.
+	defer e.StopDemo()
 
 	code := run(ctx, opts, e, Table(), notes, scr, stdin, terminalIn)
 	scr.Printf("Log: %s", log.Path)

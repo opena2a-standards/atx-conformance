@@ -25,6 +25,8 @@ they should not.
 - `cmd/atx-tour` is a guided tour of the suite, run from a clone. Its pre-flight
   (`--check`) runs every step with the network blocked and decides which steps
   the tour shows.
+- `atx-tour --demo <path>` runs steps 6 and 7 against a checkout of the
+  delegation demo, and hides each with its reason when the checkout is not ready.
 
 ### Changed
 

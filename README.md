@@ -135,6 +135,8 @@ go run ./cmd/atx-tour
 ```
 
 In the tour, Enter shows the next step, `r` repeats a step and `q` quits.
+`--demo <path>` adds steps when the presenter has a checkout of the delegation
+demo at that path.
 
 ## Running the verifiers
 
