@@ -212,7 +212,7 @@ func stepSecret() Step {
 				"Grant path, a normal bill: " + billB.Reason + " The bank saw: " + billB.BankSaw + ".",
 				"The grant path agent's directory holds: " + strings.Join(d.Listing, " "),
 				"Search for the word password and the customers' sign-in names in that directory: no match",
-			}, "Neither the word password nor a customer sign-in name appears in the grant path agent's directory.", nil
+			}, "Neither the word password nor a sign-in name is in that agent's directory.", nil
 		},
 	}
 }

@@ -549,7 +549,7 @@ func TestStep6ShowsTheMeasuredLinesAndRefusesAnythingElse(t *testing.T) {
 	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("lines:\n%s", strings.Join(lines, "\n"))
 	}
-	if want := "Neither the word password nor a customer sign-in name appears in the grant path agent's directory."; result != want {
+	if want := "Neither the word password nor a sign-in name is in that agent's directory."; result != want {
 		t.Fatalf("result %q, want %q", result, want)
 	}
 	if s := stepSecret().Sentence(nil); !strings.Contains(s, "searches it for the word password and the customers' sign-in names.") {
@@ -649,6 +649,47 @@ func TestPart2FallbackNamesTheDemoCheckout(t *testing.T) {
 	for _, s := range Part2() {
 		if fb := s.Fallback(e); !strings.HasPrefix(fb, "cd '/path with space/demo' && npm run scenarios") {
 			t.Errorf("step %d's fallback: %q", s.Number, fb)
+		}
+	}
+}
+
+// TestNoLineOfAWholePipedTourIsClipped shows every step of the tour, piped,
+// on the 80-column screen: Part 1 runs against this clone (a step whose
+// packages --setup did not install shows its command), and steps 6 to 8 read
+// the answers they were measured with. Clip ends a line it cuts with "...",
+// so no line of the tour may end that way.
+func TestNoLineOfAWholePipedTourIsClipped(t *testing.T) {
+	root := repoRoot(t)
+	var logBuf bytes.Buffer
+	e := NewEnv(root, NewLog(&logBuf, "test.log"))
+	e.Timeout = 2 * time.Minute
+	e.Matrix = fakeMatrix(t, true)
+	measured := map[int]any{
+		6: secretData{Answer: answer(t, answerScenario1, nil), Search: 1,
+			Listing: strings.Fields("agent.log atx.json broker.token grant.json home stderr.log")},
+		7: answer(t, answerScenario3, nil),
+		8: "Threat matrix version 1.2, updated 2026-11-01: 61 techniques\n" +
+			"T-3001 System Prompt Credential Extraction (credential-harvest): evidence tier observed\n",
+	}
+	steps := Table()
+	for i := range steps {
+		if data, ok := measured[steps[i].Number]; ok {
+			steps[i].UsesDemo, steps[i].Needs = false, nil
+			steps[i].Run = func(context.Context, *Env) (*Output, error) { return &Output{Data: data}, nil }
+		}
+	}
+	out := showOne(t, e, steps, strings.Repeat("\n", 12), false)
+	for _, s := range steps {
+		if want := "Step " + strconv.Itoa(s.Number) + ". " + s.Title; !strings.Contains(out, want) {
+			t.Fatalf("the tour lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "This step didn't run") {
+		t.Logf("a step showed its command instead:\n%s", logBuf.String())
+	}
+	for i, line := range strings.Split(out, "\n") {
+		if strings.HasSuffix(line, "...") {
+			t.Errorf("line %d of the tour is clipped: %q", i+1, line)
 		}
 	}
 }
