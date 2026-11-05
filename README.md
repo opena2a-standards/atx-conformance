@@ -120,18 +120,21 @@ you need.
 
 [`cmd/atx-tour`](cmd/atx-tour/) walks through the suite step by step from a
 clone: each step says what is about to happen, runs the real commands and shows
-the lines that matter. The clone and `--setup` need the network; the pre-flight
-(`--check`) and the tour do not. Steps that need Python or Node are left out
-when those are not installed.
+the lines that matter. Steps that need Python or Node are left out when those
+are not installed. This line needs the network once:
 
 ```bash
-git clone https://github.com/opena2a-standards/atx-conformance.git
-cd atx-conformance
-git checkout COMMIT
-go run ./cmd/atx-tour --setup
+git clone https://github.com/opena2a-standards/atx-conformance.git && cd atx-conformance && git checkout COMMIT && go run ./cmd/atx-tour --setup
+```
+
+The pre-flight and the tour do not:
+
+```bash
 go run ./cmd/atx-tour --check
 go run ./cmd/atx-tour
 ```
+
+In the tour, Enter shows the next step, `r` repeats a step and `q` quits.
 
 ## Running the verifiers
 
