@@ -324,7 +324,10 @@ run held before it (`held 3 tests`). It may not state how many tests a file or
 a run holds (`the 8 tests`, `holds 8 tests`, `runs 8 tests`, `Ran 8 tests`) or a
 self-test's total (`324 altered count sites`, `293 cases green`, `68 cases, from
 67`). A run of no test or of one test says what that run did and is not held,
-and the sections below the top one record past commits and are not held.
+a set of tests named by what they did (`the three tests that held the old
+reading`) is not held, `the` being the one form `that` exempts (`holds 8 tests
+that check the script` still counts the file and is held), and the sections
+below the top one record past commits and are not held.
 
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
@@ -3137,10 +3140,14 @@ def spec_name_failures(readme, spec_text):
 # tests`) stays true, a run of no test or of one (`Ran 0 tests`, `Ran 1 test`)
 # says what that run did, and `the three tests that held the old reading`, as
 # the `v0.1.0` section says, names a set of tests rather than counting a file.
+# That exemption is the `the` form's alone: `holds 8 tests that check the
+# script`, `runs 8 tests that ...` and `Ran 14 tests that ...` still count the
+# file or the run, so a `that` after those verbs exempts nothing.
 # top_section() puts a sentence on one line, so each blank here is one space.
 # `Ran` is the capital unittest prints.
+COUNTED_TESTS = rf"(?:[1-9]\d*|{'|'.join(COUNT_WORDS[2:])}) tests\b"
 RUNNING_TOTAL = re.compile(
-    rf"\b(?:[Tt]he|holds?|runs?|Ran) (?:[1-9]\d*|{'|'.join(COUNT_WORDS[2:])}) tests\b(?! that\b)"
+    rf"\b(?:[Tt]he {COUNTED_TESTS}(?! that\b)|(?:holds?|runs?|Ran) {COUNTED_TESTS})"
     r"|\b\d+ (?:altered count sites\b|cases green\b|cases, from \d+)")
 TOTAL_SITE = f"{CHANGELOG_NAME} top-section sentence"
 # The sentences the check was written for, as they were wrapped.
@@ -4223,11 +4230,13 @@ def _changelog_total_cases(tree):
     """Sentences added to the top section of the published CHANGELOG.md, its
     first `## ` section. The #325 and #327 sentences as they were wrapped each
     add a failure naming the total they state, the second also once the top
-    section is retitled `## v9.9.9`, and so does each other form of total. The
-    two sentences as amended, `adds 21 cases`, `adds 2 tests`, what a run held
-    before a change, a run of no test or of one and a set of tests named by what
-    they did add none, nor do the retracted sentences in a section below the top
-    one. A missing CHANGELOG.md and one with no `## ` heading add none here; the
+    section is retitled `## v9.9.9`, and so does each other form of total,
+    `holds 8 tests that ...`, `runs 8 tests that ...` and `Ran 14 tests that
+    ...` among them. The two sentences as amended, `adds 21 cases`, `adds 2
+    tests`, what a run held before a change, a run of no test or of one and a
+    set of tests named by what they did (`the three tests that ...`) add none,
+    nor do the retracted sentences in a section below the top one. A missing
+    CHANGELOG.md and one with no `## ` heading add none here; the
     first-command check reports them. Each case counts only the failures the
     text it adds brings, so over a published CHANGELOG.md the check fails each
     case stays green."""
@@ -4273,6 +4282,12 @@ def _changelog_total_cases(tree):
             ("293 cases green", "Its self-test adds 21 cases (293 cases green, from 272)."),
             ("68 cases, from 67", "It reads the module (self-test 68 cases, from 67).")):
         case(f"CHANGELOG.md stating `{total}`", opening(sentence), total)
+    for total, sentence in (
+            ("holds 8 tests", "`x.py` holds 8 tests that check the script."),
+            ("runs 8 tests", "The step runs 8 tests that check the script."),
+            ("Ran 14 tests", "The step printed Ran 14 tests that morning.")):
+        case(f"CHANGELOG.md stating `{total}` with `that` after it, which exempts "
+             f"the `the` form alone", opening(sentence), total)
     for label, sentence in (
             ("the #325 sentence as amended", AMENDED_TEST_TOTAL),
             ("the #327 sentence as amended", AMENDED_SITE_TOTAL),

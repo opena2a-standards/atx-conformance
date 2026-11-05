@@ -324,7 +324,7 @@ they should not.
   `runs N tests`, `Ran N tests`) or a self-test's total
   (`N altered count sites`, `N cases green`, `N cases, from M`).
   `adds 3 cases`, `held 3 tests`, `Ran 1 test`, `the N tests that` and a
-  section below the top one are not held. Its self-test adds 27 cases. No
+  section below the top one are not held. Its self-test adds 30 cases. No
   fixture or verifier changes.
 
 ## v0.1.0
