@@ -176,9 +176,10 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), stopSignals...)
 	defer stop()
 	// The demo of Part 2 is stopped after a failed step, and when the tour
-	// ends with q, at the end, or on Ctrl-C, Ctrl-\, SIGTERM or SIGHUP, while
-	// a second signal is still caught. SIGKILL or a crash of the tour leaves
-	// the demo running, because its launcher has a process group of its own.
+	// ends with q, at the end, or on Ctrl-C, Ctrl-\, SIGTERM, SIGHUP or
+	// SIGPIPE (a closed output pipe), while a second signal is still caught.
+	// SIGKILL or a crash of the tour leaves the demo running, because its
+	// launcher has a process group of its own.
 	defer e.StopDemo()
 
 	code := run(ctx, opts, e, Table(), notes, scr, stdin, terminalIn)
@@ -187,8 +188,9 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 }
 
 // stopSignals end the tour through its deferred stops: Ctrl-C, Ctrl-\,
-// SIGTERM and SIGHUP.
-var stopSignals = []os.Signal{os.Interrupt, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP}
+// SIGTERM, SIGHUP and SIGPIPE. With SIGPIPE caught, a write to a closed pipe
+// fails instead of ending the program before the deferred stops run.
+var stopSignals = []os.Signal{os.Interrupt, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGPIPE}
 
 func run(ctx context.Context, opts *Options, e *Env, steps []Step, notes Notes, scr *Screen, stdin io.Reader, terminalIn bool) int {
 	switch {

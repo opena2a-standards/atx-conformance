@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -454,6 +455,53 @@ func TestDemoIsStoppedOnEachHandledExit(t *testing.T) {
 			t.Fatalf(`Ctrl-\ exited %d, want 130`, code)
 		}
 		p.gone(t, `Ctrl-\`)
+	})
+	t.Run("SIGPIPE", func(t *testing.T) {
+		if runtime.GOOS == "darwin" {
+			// runtime/signal_unix.go drops a SIGPIPE that reaches its handler
+			// on macOS (golang.org/issue/33384). The tour meets SIGPIPE as a
+			// write to a closed stdout, which os passes to stopSignals there.
+			t.Skip("on macOS the Go runtime drops a SIGPIPE sent with kill")
+		}
+		e := standinEnv(t)
+		defer e.StopDemo()
+		var p procs
+		// A SIGPIPE that stopSignals misses reaches this channel too, so the
+		// tour waits for a key until the pipe below closes and ends with 0.
+		pipe := make(chan os.Signal, 1)
+		signal.Notify(pipe, syscall.SIGPIPE)
+		defer signal.Stop(pipe)
+		ctx, stop := signal.NotifyContext(context.Background(), stopSignals...)
+		defer stop()
+		ran := standinStep(t, 6, &p, func(*Env, *demo) error {
+			go func() {
+				time.Sleep(200 * time.Millisecond)
+				_ = syscall.Kill(os.Getpid(), syscall.SIGPIPE)
+			}()
+			return nil
+		})
+		keys, w := io.Pipe()
+		defer func() { _ = w.Close() }()
+		done := make(chan struct{})
+		defer close(done)
+		go func() {
+			_, _ = io.WriteString(w, "\n")
+			select {
+			case <-pipe:
+			case <-done:
+				return
+			}
+			select {
+			case <-time.After(3 * time.Second):
+				_ = w.Close()
+			case <-done:
+			}
+		}()
+		_, code := showWith(e, []Step{ran, standinStep(t, 7, &p, nil)}, ctx, keys)
+		if code != 130 {
+			t.Fatalf("SIGPIPE exited %d, want 130", code)
+		}
+		p.gone(t, "SIGPIPE")
 	})
 	t.Run("the demo dies mid-step", func(t *testing.T) {
 		e := standinEnv(t)
