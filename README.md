@@ -136,7 +136,9 @@ go run ./cmd/atx-tour
 
 In the tour, Enter shows the next step, `r` repeats a step and `q` quits.
 `--demo <path>` and `--matrix <path>` add steps when the presenter has a
-checkout of the delegation demo or of the agent threat matrix at that path.
+checkout of the delegation demo or of the agent threat matrix at that path,
+at the commit the steps were measured at; the pre-flight names the reason
+when a step stays hidden.
 
 ## Running the verifiers
 
