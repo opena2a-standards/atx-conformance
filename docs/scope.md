@@ -87,6 +87,14 @@ trustLevel | trustScore (%.6f) | issuedAt (RFC 3339) | expiresAt (RFC 3339) |
 atcVersion (hardcoded "1.0")
 ```
 
+`trustScore` enters the v1.0 string, and the v1.1 TBS as a string, in the
+`%.6f` form of the float64 nearest the value the credential writes (ties to
+even), decided on every digit written: both reference
+verifiers read `875` followed by 900 zeros and `e-901` as 87.5. A
+`trustScore` whose value rounds past the largest float64, such as `1e400`
+or `1` followed by 1000 zeros and `e-650`, is a `PARSE_ERROR` in both
+(atx-conformance#308).
+
 Fields NOT covered by the v1.0 signature include `capabilities`, `scanSummary`,
 `behavioralProfile`, `publisher`, `publisherDid`, `transparencyLogIndex`,
 `signatures`, `revoked`, `revokedAt`, `revocationReason`, `createdAt`, `id`,

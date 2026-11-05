@@ -67,4 +67,6 @@ scripts/capture_go_verifier.py   runs the README's Go command from the tree and
 scripts/check_circl_pin.sh       CI gate: one cloudflare/circl version per Go module
 scripts/test_script_options.py   CI gate: every script's -h, --help and unknown-argument
                                  handling
+scripts/test_demo_recording.py   CI gate: adds docs/demo/test_record_atx_verify.py to the
+                                 workflow's unittest discovery run over scripts/
 ```

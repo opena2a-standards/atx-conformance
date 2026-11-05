@@ -10,7 +10,8 @@ behavioralProfile.generatedAt outside it, a NaN or Infinity literal, a fixture
 the verifier raises on, a path that does not exist, and the verifier's own v1.1
 projection over every jcs-vectors vector. They also pin what Go's encoding/json
 makes of a member name in another case, a timestamp written with a JSON
-escape, an unpaired surrogate escape and a trustScore of -0, the projection of
+escape, an unpaired surrogate escape, a trustScore of -0 and one written
+with more than 800 digits, the projection of
 behavioralProfile and scanSummary members outside their Go type, a v1.1
 behavioralProfile that is not an object of exactly checksum, generatedAt and
 observationDays (a member outside them or missing, a name in another case, a
@@ -1872,6 +1873,41 @@ class GoNegativeZero(unittest.TestCase):
                 self.assertTrue(got.accepted, got.reason)
                 got = _at_verdict(baseline, ("trustLevel",), "-0")
                 self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+
+
+# trustScore literals written with more than 800 digits, and the verdict both
+# reference verifiers reach on the v1.0 and v1.1 baselines, signed over
+# 87.500000 (TestTrustScoreReadAsWritten in the Go verifier). Each verifier
+# reads the value written, decided on every digit: float() here, and
+# nearestFloat64 in the Go verifier. Until atx-conformance#308 the Go
+# verifier read trustScore with strconv.ParseFloat, which reads the first two
+# as values other than 87.5 and the last two, whose value is 10^350, as
+# 1e+149.
+GO_LONG_TRUST_SCORE_VERDICTS = (
+    ("875" + "0" * 900 + "e-901", "ACCEPT"),
+    ("8750" + "0" * 1000 + "e-1002", "ACCEPT"),
+    ("87.5" + "0" * 1000 + "e0", "ACCEPT"),
+    ("0." + "0" * 900 + "875e902", "ACCEPT"),
+    ("875" + "0" * 900 + "e-902", "SIGNATURE_INVALID"),
+    ("875" + "0" * 900 + "e-900", "SIGNATURE_INVALID"),
+    ("1" + "0" * 1000 + "e-650", "PARSE_ERROR"),
+    ("-1" + "0" * 1000 + "e-650", "PARSE_ERROR"),
+)
+
+
+class GoTrustScoreAsWritten(unittest.TestCase):
+    def test_long_trust_score_reaches_the_go_verdict(self):
+        for literal, outcome in GO_LONG_TRUST_SCORE_VERDICTS:
+            for baseline in (BASELINE_V10, BASELINE_V11):
+                with self.subTest(literal=literal[:40], length=len(literal), baseline=baseline.name):
+                    got = _at_verdict(baseline, ("trustScore",), literal)
+                    self.assertEqual(_outcome(got), outcome, got.reason[:200])
+
+    def test_long_trust_score_signs_its_value(self):
+        literal = "875" + "0" * 900 + "e-901"
+        v10 = verify.canonical_payload(_credential_at(BASELINE_V10, ("trustScore",), literal))
+        self.assertEqual(v10.decode("utf-8").split("|")[7], "87.500000")
+        self.assertEqual(_projection_at(("trustScore",), literal)["trustScore"], "87.500000")
 
 
 class GoUndecodableProjection(unittest.TestCase):
