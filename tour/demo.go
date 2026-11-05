@@ -383,7 +383,10 @@ func (e *Env) demoChecks(ctx context.Context) (string, error) {
 			shortCommit(head), shortCommit(demoCommit), shellQuote(e.Demo), shortCommit(demoCommit))
 	}
 	// HEAD can name the commit without the checkout holding it, and tracked
-	// files can differ from it; the launcher runs only on the commit itself.
+	// files can differ from it. With the check above, these refuse another
+	// commit, a HEAD without that commit, and changes git diff reports. They
+	// are not an integrity check: untracked files, node_modules and index
+	// flags such as assume-unchanged are not covered.
 	if _, err := e.runIn(exec.CommandContext(ctx, "git", "cat-file", "-e", demoCommit+"^{commit}"), e.Demo, "the demo checkout", sandboxProfile); err != nil {
 		return "", plainf("the demo checkout does not hold commit %s: run git -C %s fetch", shortCommit(demoCommit), shellQuote(e.Demo))
 	}
