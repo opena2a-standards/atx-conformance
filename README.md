@@ -12,8 +12,8 @@ report PASS or FAIL per vector. Fixture bytes are pinned in
 License: Apache 2.0. All keypairs, seeds, and credential identifiers in this
 repository are TEST-ONLY.
 
-The command below needs Go 1.22 or later ([go.dev/dl](https://go.dev/dl/));
-the Python verifier needs Python 3.11 or later
+The command below needs Go 1.22 or later; on macOS 26, Go 1.23 or later
+([go.dev/dl](https://go.dev/dl/)). The Python verifier needs Python 3.11 or later
 ([python.org/downloads](https://www.python.org/downloads/)).
 
 ```bash
@@ -50,6 +50,115 @@ The suite does not check `contentHash` against an agent binary, transparency
 log inclusion, build attestations or the content of behavioral profiles;
 [docs/scope.md](docs/scope.md) lists what it covers and the notes to read
 before relying on a result.
+
+## Try your verifier in two minutes
+
+The kit sends each of the 41 fixtures to your verifier and compares its
+verdicts with the answer key in [`conformance.json`](conformance.json). Your
+verifier stays yours. The kit uploads nothing: the fixtures go to your
+verifier only, and the report stays on your laptop unless you share it.
+
+The fixtures are native ATX credentials. A verifier that reads JWT or W3C
+credentials cannot parse them; when it answers as in the "Couldn't read"
+column below, the kit records that as a result, not as a REJECT.
+`--form jws` and `--form vc` are reserved for JWS and VC forms.
+
+The kit needs Go 1.22 or later; on macOS 26, Go 1.23 or later. Install it at
+one commit. This line needs the network once; the installed kit does not.
+
+```bash
+go install github.com/opena2a-standards/atx-conformance/cmd/atx-verify@9740950b12f46e8f09fd9d2b6d6a3d2dbcd49e38
+```
+
+Then point it at a verifier you run as a command, or at one you run as a
+service (yours goes in the angle brackets):
+
+```bash
+"$(go env GOPATH)/bin/atx-verify" --verifier "<your command> {file}" --label "<name and version>"
+```
+
+```bash
+"$(go env GOPATH)/bin/atx-verify" --verifier-url "<your URL>" --label "<name and version>"
+```
+
+To see a result before you connect yours, use `true`, which answers ACCEPT to
+everything: 9 agree, and 32 accepted what must fail.
+
+```bash
+"$(go env GOPATH)/bin/atx-verify" --verifier true --label "always ACCEPT" --report atx-report
+```
+
+The URL form has no one-word stand-in: it needs a service that is listening,
+yours or [`examples/serve_verifier.py`](examples/serve_verifier.py), which
+comes with a clone. From the root of a clone, this puts `true` behind a URL:
+
+```bash
+python3 examples/serve_verifier.py 8080 true &
+```
+
+When it prints its `listening on` line, run the kit against port 8080 on
+this machine; it shows the same 9 agree and 32 accepted what must fail, and
+`kill %1` stops the service:
+
+```bash
+"$(go env GOPATH)/bin/atx-verify" --verifier-url http://localhost:8080/ --label "always ACCEPT"
+kill %1
+```
+
+`{file}` becomes each fixture's path; the file holds the credential in `atx`
+and the settings to judge it by in `verifierState`. Without `{file}`, and
+through a URL (a JSON POST), your verifier gets the credential alone and
+judges it by its own settings; a URL request also names the fixture file in
+an `ATX-Fixture` header. The kit starts your command without a shell, so
+pipes and `$VARIABLES` are not expanded.
+
+| Adapter | ACCEPT | REJECT | Couldn't read |
+|---|---|---|---|
+| Command | exit 0 | exit 1 | any other exit, a crash, or a timeout |
+| URL | 2xx | 4xx | 5xx, no answer, or a timeout |
+| Either, if it prints JSON | "verdict": "ACCEPT" or "valid": true | "verdict": "REJECT" or "valid": false | "verdict": "ERROR" |
+
+When the whole answer is one JSON object, a "verdict" of ACCEPT, REJECT or
+ERROR in any letter case decides; without one of those words, a boolean
+"valid" decides; without either, the exit or status code decides.
+An optional "reason" string is recorded, and the first 200 characters of each
+raw response are kept in the report, so a person can judge.
+
+The kit prints four numbers: agree, accepted what must fail, rejected what
+must pass, and couldn't read. It exits 0 only when all 41 agree.
+`--report <dir>` writes `atx-interop-report.md` and `atx-interop-report.json`;
+`--verifier --help` lists every option. To share a result, open an issue on
+this repository titled `<verifier> fails <fixture>.json at <suite commit>`, or
+email info@opena2a.org.
+
+Wrappers that put any verifier behind this contract are in
+[`examples/`](examples/); `go install` does not fetch them, so copy the file
+you need.
+
+## The guided tour
+
+[`cmd/atx-tour`](cmd/atx-tour/) walks through the suite step by step from a
+clone: each step says what is about to happen, runs the real commands and shows
+the lines that matter. The tour needs Go 1.22 or later; on macOS 26, Go 1.23 or
+later. Steps that need Python or Node are left out when those are not
+installed. This line needs the network once:
+
+```bash
+git clone https://github.com/opena2a-standards/atx-conformance.git && cd atx-conformance && git checkout 9740950b12f46e8f09fd9d2b6d6a3d2dbcd49e38 && go run ./cmd/atx-tour --setup
+```
+
+The pre-flight and the tour do not:
+
+```bash
+go run ./cmd/atx-tour --check
+go run ./cmd/atx-tour
+```
+
+In the tour, Enter shows the next step, `r` repeats a step and `q` quits.
+`--demo <path>` and `--matrix <path>` add steps when the presenter has a
+checkout of the delegation demo or of the agent threat matrix at that path,
+at the commit the steps were measured at; the pre-flight names the reason
+when a step stays hidden.
 
 ## Running the verifiers
 

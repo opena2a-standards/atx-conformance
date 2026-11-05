@@ -11,6 +11,31 @@ they should not.
 
 ## [Unreleased]
 
+### Added
+
+- `atx-verify --verifier "<command>"` and `atx-verify --verifier-url <url>`
+  send each of the 41 embedded fixtures to an outside verifier and compare its
+  verdicts with the answer key in `conformance.json`; `--report <dir>` writes
+  `atx-interop-report.json` and `atx-interop-report.md`. With none of the new
+  options, atx-verify's output is unchanged. On macOS 26, a binary built with
+  Go 1.22 stops at start with a dyld error, also with none of the new options,
+  because the kit's `net/http` import links system frameworks; built with
+  Go 1.23 or later it runs. `atx-tour` stops the same way under Go 1.22 on
+  macOS 26, `go run ./cmd/atx-tour` included, and runs under Go 1.23 or later.
+  `answerkey.go` embeds
+  `conformance.json` and `MANIFEST.sha256` in the module's root package. No
+  fixture, expected verdict, verifier logic, schema or module dependency changed.
+- `examples/wrap-verifier.sh` and `examples/serve_verifier.py` put a verifier
+  behind the kit's contract without editing it.
+- `cmd/atx-tour` is a guided tour of the suite, run from a clone. Its pre-flight
+  (`--check`) runs every step with the network blocked and decides which steps
+  the tour shows.
+- `atx-tour --demo <path>` runs steps 6 and 7 against a checkout of the
+  delegation demo, and `--matrix <path>` runs step 8 against a checkout of the
+  agent threat matrix; each is hidden with its reason when the checkout is not ready.
+  The demo's launcher runs outside the tour's sandbox; the steps check its
+  connection log.
+
 ### Changed
 
 - Both reference verifiers print fixture fields and file names with control characters escaped.

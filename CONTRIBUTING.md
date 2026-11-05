@@ -31,8 +31,18 @@ go.mod, go.sum                   the Go module the repository publishes,
 fixtures.go                      the module's root package: fixtures/*.json as an
                                  embedded file system, the set the Go verifier
                                  walks when run with no argument
+answerkey.go                     conformance.json and MANIFEST.sha256 embedded in
+                                 the root package, for the interop kit
 cmd/atx-verify/                  the Go verifier's published entry point,
-                                 go run <module>/cmd/atx-verify@latest
+                                 go run <module>/cmd/atx-verify@latest; with
+                                 --verifier or --verifier-url, the interop kit
+cmd/atx-tour/                    the guided tour's command, run from a clone
+interop/                         the interop kit: sends each fixture to an outside
+                                 verifier and compares its verdicts with the answer
+                                 key
+examples/                        wrappers that put a verifier behind the interop
+                                 kit's contract
+tour/                            the guided tour's steps, pre-flight and runner
 docs/                            scope, fixtures, gates, dependencies, version
                                  pinning and stability (the pages the README
                                  links), and the full output of its Go run with
