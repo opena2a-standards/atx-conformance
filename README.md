@@ -63,21 +63,37 @@ credentials cannot parse them; when it answers as in the "Couldn't read"
 column below, the kit records that as a result, not as a REJECT.
 `--form jws` and `--form vc` are reserved for JWS and VC forms.
 
-With Go 1.22 or later and a network connection, a verifier you run as a
-command, then one you run as a service (yours goes in the angle brackets):
+With Go 1.22 or later, install the kit at one commit. This line needs the
+network once; the installed kit does not.
 
 ```bash
-go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@COMMIT --verifier "<your command> {file}" --label "<name and version>"
+go install github.com/opena2a-standards/atx-conformance/cmd/atx-verify@COMMIT
+```
+
+Then point it at a verifier you run as a command, or at one you run as a
+service (yours goes in the angle brackets):
+
+```bash
+"$(go env GOPATH)/bin/atx-verify" --verifier "<your command> {file}" --label "<name and version>"
 ```
 
 ```bash
-go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@COMMIT --verifier-url "<your URL>" --label "<name and version>"
+"$(go env GOPATH)/bin/atx-verify" --verifier-url "<your URL>" --label "<name and version>"
+```
+
+To see a result before you connect yours, use `true`, which answers ACCEPT to
+everything: 9 agree, and 32 accepted what must fail.
+
+```bash
+"$(go env GOPATH)/bin/atx-verify" --verifier true --label "always ACCEPT" --report atx-report
 ```
 
 `{file}` becomes each fixture's path; the file holds the credential in `atx`
 and the settings to judge it by in `verifierState`. Without `{file}`, and
 through a URL (a JSON POST), your verifier gets the credential alone and
-judges it by its own settings.
+judges it by its own settings; a URL request also names the fixture file in
+an `ATX-Fixture` header. The kit starts your command without a shell, so
+pipes and `$VARIABLES` are not expanded.
 
 | Adapter | ACCEPT | REJECT | Couldn't read |
 |---|---|---|---|
@@ -85,19 +101,37 @@ judges it by its own settings.
 | URL | 2xx | 4xx | 5xx, no answer, or a timeout |
 | Either, if it prints JSON | "verdict": "ACCEPT" or "valid": true | "verdict": "REJECT" or "valid": false | "verdict": "ERROR" |
 
-JSON wins over exit and status codes. An optional "reason" string is
-recorded, and the first 200 characters of each raw response are kept in the
-report, so a person can judge.
+JSON wins over exit and status codes when the whole answer is one JSON object.
+An optional "reason" string is recorded, and the first 200 characters of each
+raw response are kept in the report, so a person can judge.
 
 The kit prints four numbers: agree, accepted what must fail, rejected what
 must pass, and couldn't read. It exits 0 only when all 41 agree.
-`--report <dir>` writes `atx-interop-report.md` and `atx-interop-report.json`.
-To share a result, open an issue on this repository titled
-`<verifier> fails <fixture>.json at <suite commit>`, or email info@opena2a.org.
+`--report <dir>` writes `atx-interop-report.md` and `atx-interop-report.json`;
+`--verifier --help` lists every option. To share a result, open an issue on
+this repository titled `<verifier> fails <fixture>.json at <suite commit>`, or
+email info@opena2a.org.
 
-Wrappers for any verifier are in [`examples/`](examples/). The guided tour
-runs from a clone: `go run ./cmd/atx-tour --setup` once with the network on,
-then `go run ./cmd/atx-tour --check` and `go run ./cmd/atx-tour`.
+Wrappers that put any verifier behind this contract are in
+[`examples/`](examples/); `go install` does not fetch them, so copy the file
+you need.
+
+## The guided tour
+
+[`cmd/atx-tour`](cmd/atx-tour/) walks through the suite step by step from a
+clone: each step says what is about to happen, runs the real commands and shows
+the lines that matter. The clone and `--setup` need the network; the pre-flight
+(`--check`) and the tour do not. Steps that need Python or Node are left out
+when those are not installed.
+
+```bash
+git clone https://github.com/opena2a-standards/atx-conformance.git
+cd atx-conformance
+git checkout COMMIT
+go run ./cmd/atx-tour --setup
+go run ./cmd/atx-tour --check
+go run ./cmd/atx-tour
+```
 
 ## Running the verifiers
 

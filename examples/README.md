@@ -1,6 +1,6 @@
 # Put your verifier behind the kit's contract
 
-`atx-verify --verifier` and `atx-verify --verifier-url` call your verifier once per fixture and compare its verdicts with `conformance.json`. The two wrappers here fit a verifier to that contract without editing it. Each file's header says what it does and how to run it; copy the file next to your verifier, it runs from any directory. Below, `atx-verify` stands for `go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@<commit>` at the suite commit you test against.
+`atx-verify --verifier` and `atx-verify --verifier-url` call your verifier once per fixture and compare its verdicts with `conformance.json`. The two wrappers here fit a verifier to that contract without editing it. Each file's header says what it does and how to run it. `go install` does not fetch these files: copy the one you need next to your verifier, for example with `curl -fsSLO https://raw.githubusercontent.com/opena2a-standards/atx-conformance/<commit>/examples/wrap-verifier.sh` at the suite commit you test against; it runs from any directory. Below, `atx-verify` stands for the kit that `go install github.com/opena2a-standards/atx-conformance/cmd/atx-verify@<commit>` put at `"$(go env GOPATH)/bin/atx-verify"`.
 
 | File | Use with | What it does |
 |---|---|---|
