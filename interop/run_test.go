@@ -5,6 +5,7 @@ package interop
 import (
 	"bytes"
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -475,6 +476,38 @@ func TestFailedConnectionLeavesTheURLOut(t *testing.T) {
 	}
 	if !strings.Contains(texts[reportJSONName], `"raw": "no answer`) {
 		t.Errorf("the JSON report does not say what happened:\n%s", texts[reportJSONName])
+	}
+	// A redirect can reflect the request's path and query in its Location
+	// header, whether the header parses or not.
+	for _, c := range []struct{ location, said string }{
+		{"https://verifier.example", `HTTP 301, a redirect to "https://verifier.example" that the kit does not follow`},
+		{":%zz", "no answer: a redirect whose Location header does not parse"},
+	} {
+		s := serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Location", c.location+r.URL.RequestURI())
+			w.WriteHeader(http.StatusMovedPermanently)
+		}))
+		dir := filepath.Join(t.TempDir(), "report")
+		code, out, errOut := kitRun(t, "--verifier-url", s.URL+"/redirect/PATHVALUE?apikey=QUERYVALUE",
+			"--label", "url", "--timeout", "2", "--report", dir)
+		if code != 1 || !strings.Contains(out, c.said) {
+			t.Errorf("Location %q: exit %d, want 1, and stdout without %q:\n%s", c.location, code, c.said, out)
+		}
+		texts := map[string]string{"stdout": out, "stderr": errOut}
+		for _, name := range []string{reportJSONName, reportMDName} {
+			b, err := os.ReadFile(filepath.Join(dir, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			texts[name] = string(b)
+		}
+		for name, text := range texts {
+			for _, marker := range []string{"PATHVALUE", "QUERYVALUE"} {
+				if n := strings.Count(text, marker); n != 0 {
+					t.Errorf("Location %q: %s carries %s %d times", c.location, name, marker, n)
+				}
+			}
+		}
 	}
 }
 

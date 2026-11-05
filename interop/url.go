@@ -143,11 +143,22 @@ func (a *urlAdapter) Verify(ctx context.Context, f Fixture) Result {
 	r := Classify(fallback, body)
 	switch {
 	case r.Verdict == Unreadable && resp.StatusCode >= 300 && resp.StatusCode <= 399:
-		r.Raw = firstChars(fmt.Sprintf("HTTP %d, a redirect to %q that the kit does not follow", resp.StatusCode, resp.Header.Get("Location")), 200)
+		r.Raw = firstChars(fmt.Sprintf("HTTP %d, a redirect%s that the kit does not follow", resp.StatusCode, redirectTarget(resp.Header.Get("Location"))), 200)
 	case strings.TrimSpace(r.Raw) == "":
 		r.Raw = fmt.Sprintf("HTTP %d with an empty body", resp.StatusCode)
 	}
 	return r
+}
+
+// redirectTarget names the scheme and host of a redirect's Location header,
+// or nothing when it has none. Its path and query are left out: a redirect
+// can reflect the request's own, and this text goes into the reports.
+func redirectTarget(location string) string {
+	u, err := url.Parse(location)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return fmt.Sprintf(" to %q", u.Scheme+"://"+u.Host)
 }
 
 // noAnswer is the result of a request that got no HTTP answer at all.
@@ -166,6 +177,11 @@ func (a *urlAdapter) describe(ctx context.Context, err error) string {
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
 		err = urlErr.Err
+	}
+	// The client's error for a Location it cannot parse quotes the header,
+	// which can hold the request's path and query.
+	if strings.Contains(err.Error(), "Location header") {
+		return "no answer: a redirect whose Location header does not parse"
 	}
 	return "no answer: " + err.Error()
 }
