@@ -180,7 +180,13 @@ over a later -s or -p, where unittest keeps the last value given. With
 `--durations 5` added to the workflow's discover line it reported
 scripts/test_script_options.py as not run, and with that line changed to
 `discover -v scripts -s verifiers/python`, which discovers in
-verifiers/python, it counted the script as run.
+verifiers/python, it counted the script as run. A line of such a command
+that ends in a backslash continues on the next, and a run after another on
+the same line is read as well. A run's arguments were read to the end of its
+line, so a run whose arguments a trailing backslash put on the next line
+counted no script, and a second run on a line, after `&&` or `;`, was not
+read: the Python unit tests step, with its discover run continued that way
+or placed second after `&&`, failed the check on test_script_options.py.
 
 The criterion (c) claim is matched in more wordings than the one the README
 used ("fulfils criterion (c)", "closes criterion c"), and a failure is
@@ -2098,9 +2104,10 @@ def workflow_run_commands(workflow):
     return commands
 
 
-# `python3 -m unittest discover` and the arguments after it on its line.
+# `python3 -m unittest discover`; its arguments follow it. The match ends
+# there, so a second run later on the same line is matched as well.
 UNITTEST_DISCOVER = re.compile(
-    r"\bpython[\d.]*[ \t]+-m[ \t]+unittest[ \t]+discover\b([^\n]*)")
+    r"\bpython[\d.]*[ \t]+-m[ \t]+unittest[ \t]+discover\b")
 # The file name unittest's discovery imports as a test module.
 TEST_MODULE_NAME = re.compile(r"[_a-z]\w*\.py$", re.I)
 
@@ -2141,6 +2148,29 @@ class UnittestDiscoverParser(argparse.ArgumentParser):
         raise UnittestUsageError(message)
 
 
+def join_continued_lines(command):
+    """The command text with each line that ends in a backslash joined to
+    the line after it, as bash joins them: the backslash and the newline
+    are dropped, outside quotes and inside double quotes. Inside single
+    quotes both are kept, and a line ending in an escaped backslash (`\\\\`)
+    is not continued."""
+    joined, quote, i = [], None, 0
+    while i < len(command):
+        char = command[i]
+        if char == "\\" and quote != "'":
+            if command.startswith("\n", i + 1):
+                i += 2
+                continue
+            joined.append(command[i:i + 2])
+            i += 2
+            continue
+        if char in "'\"" and quote in (None, char):
+            quote = None if quote else char
+        joined.append(char)
+        i += 1
+    return "".join(joined)
+
+
 def unittest_discover_scripts(command, scripts):
     """The scripts/*.py names a `python3 -m unittest discover` run in the
     command text imports: the start directory, given by -s or
@@ -2151,24 +2181,33 @@ def unittest_discover_scripts(command, scripts):
     as unittest reads them: a later -s or -p value replaces a start
     directory or pattern given before it, by option or by position, and a
     run with arguments unittest refuses, or with -h or --help, counts no
-    script. The arguments end at the first shell operator; a file-descriptor
-    number before a redirection (`2>&1`) is not an argument. A discovery run
-    from another directory counts no script."""
+    script. The arguments end at the first shell operator or at the newline
+    that ends the command; a line ending in a backslash continues on the
+    next (join_continued_lines()), and a run after another on the same
+    line, past `&&` or `;`, is read as well. A file-descriptor number before
+    a redirection (`2>&1`) is not an argument. A discovery run from another
+    directory counts no script. The command text comes from
+    workflow_run_commands(), its comments removed, so a `#` the arguments
+    still hold is part of a word, as bash reads it."""
     found = set()
+    command = join_continued_lines(command)
     for match in UNITTEST_DISCOVER.finditer(command):
-        lexer = shlex.shlex(match.group(1), posix=True, punctuation_chars=True)
+        # A newline outside quotes ends the command, as an operator does.
+        lexer = shlex.shlex(command[match.end():], posix=True,
+                            punctuation_chars="();<>|&\n")
+        lexer.whitespace = lexer.whitespace.replace("\n", "")
         lexer.whitespace_split = True
+        lexer.commenters = ""
+        args = []
         try:
-            tokens = list(lexer)
+            for token in lexer:
+                if all(c in lexer.punctuation_chars for c in token):
+                    if token[0] in "<>" and args and args[-1].isdigit():
+                        args.pop()
+                    break
+                args.append(token)
         except ValueError:
             continue
-        args = []
-        for token in tokens:
-            if all(c in lexer.punctuation_chars for c in token):
-                if token[0] in "<>" and args and args[-1].isdigit():
-                    args.pop()
-                break
-            args.append(token)
         # unittest sets these before its parser reads the arguments.
         read = argparse.Namespace(start=".", pattern="test*.py", top=None)
         try:
@@ -4297,7 +4336,12 @@ def _ci_gate_label_cases(readme, workflow, scripts):
     not match the script; with scripts/ and the pattern given by position,
     then -s naming another directory; with them given by position, then -p
     naming a pattern that does not match; with an option unittest refuses;
-    and with -h: each must."""
+    and with -h: each must. Then run it from added `run: |` steps: a run
+    whose arguments a trailing backslash puts on the next line, a run
+    continued by a backslash before `discover`, and a run over scripts/
+    after another on the same line, past `&&` and past `;`, may add no
+    failure; a run whose arguments stand on the next line with no backslash
+    before them must."""
     labels = (
         "scripts/*.py script that no workflow step runs",
         "script the workflow stops naming",
@@ -4332,6 +4376,11 @@ def _ci_gate_label_cases(readme, workflow, scripts):
         "script run by a unittest discover step with abbreviated long options",
         "script a unittest discover step with an option unittest refuses does not run",
         "script a unittest discover step with -h does not run",
+        "script run by a unittest discover step continued by a trailing backslash",
+        "script run by a unittest discover step continued before discover",
+        "script run by a second unittest discover run on its line, after &&",
+        "script run by a second unittest discover run on its line, after ;",
+        "script named on the line after a unittest discover run, with no backslash",
     )
     if not CI_GATE_GLOB.search(readme):
         why = ("no `scripts/*.py  CI gates` layout line found in README.md or its "
@@ -4432,6 +4481,26 @@ def _ci_gate_label_cases(readme, workflow, scripts):
             (labels[31], "-s scripts -p 'invented_*.py' --bogus", True),
             (labels[32], "-h -s scripts -p 'invented_*.py'", True)):
         flow = (workflow or "") + f"\n      - run: python3 -m unittest discover {step}\n"
+        got = new(readme + line, flow, files)
+        cases.append((any(want in f for f in got) == reported, label,
+                      f"expected {'a' if reported else 'no'} failure containing "
+                      f"{want!r}, got {got}"))
+
+    # The same script, run from a `run: |` step whose command goes on past
+    # the end of a line or holds a second discovery run on a line.
+    discover = "python3 -m unittest discover"
+    over_scripts = "-s scripts -t scripts -p 'invented_*.py' 2>&1 | tee x.log"
+    for label, command, reported in (
+            (labels[33], (f"{discover} -v \\", f"  {over_scripts}"), False),
+            (labels[34], ("python3 -m unittest \\", f"  discover -v {over_scripts}"),
+             False),
+            (labels[35], (f"{discover} -s verifiers/python && {discover} -v {over_scripts}",),
+             False),
+            (labels[36], (f"{discover} -s verifiers/python; {discover} scripts invented_*.py",),
+             False),
+            (labels[37], (f"{discover} -v", f"  {over_scripts}"), True)):
+        flow = (workflow or "") + "\n      - run: |\n" + "".join(
+            f"          {part}\n" for part in command)
         got = new(readme + line, flow, files)
         cases.append((any(want in f for f in got) == reported, label,
                       f"expected {'a' if reported else 'no'} failure containing "
