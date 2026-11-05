@@ -69,6 +69,7 @@ func TestCommandAdapterExitCodes(t *testing.T) {
 		{"JSON valid text leaves exit 0 to decide", helperCommand("exit", "0", `{"valid":"false"}`), Accept, `{"valid":"false"}`},
 		{"JSON valid text leaves exit 1 to decide", helperCommand("exit", "1", `{"valid":"true"}`), Reject, `{"valid":"true"}`},
 		{"JSON valid number leaves exit 3 to decide", helperCommand("exit", "3", `{"valid":1}`), Unreadable, `exit status 3: {"valid":1}`},
+		{"a log line before the JSON leaves exit 0 to decide", helperCommand("exit", "0", "loaded 3 keys\n"+`{"verdict":"REJECT"}`), Accept, "loaded 3 keys\n" + `{"verdict":"REJECT"}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -395,6 +395,25 @@ func TestHelp(t *testing.T) {
 	}
 }
 
+// TestJSONWinsCarriesItsCondition holds --help and both READMEs to one wording
+// of the rule the adapters apply; the adapter tables hold the rule itself, with
+// a log line before the JSON leaving the exit or status code to decide.
+func TestJSONWinsCarriesItsCondition(t *testing.T) {
+	const condition = "JSON wins over exit and status codes when the whole answer is one JSON object"
+	if !strings.Contains(usage, condition) {
+		t.Errorf("--help lacks %q", condition)
+	}
+	for _, path := range []string{"../README.md", "../examples/README.md"} {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), condition) {
+			t.Errorf("%s lacks %q", path, condition)
+		}
+	}
+}
+
 func TestUsageErrors(t *testing.T) {
 	cmd := quote(dummies["acceptall"])
 	cases := []struct {

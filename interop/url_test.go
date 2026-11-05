@@ -116,6 +116,7 @@ func TestURLAdapterContractTable(t *testing.T) {
 		{"JSON valid text is not false: 200 with \"true\" keeps ACCEPT", 200, `{"valid":"true"}`, Accept, "", `{"valid":"true"}`},
 		{"JSON valid text is not true: 422 keeps REJECT", 422, `{"valid":"true"}`, Reject, "", `{"valid":"true"}`},
 		{"JSON valid number keeps the status", 500, `{"valid":1}`, Unreadable, "", `{"valid":1}`},
+		{"a log line before the JSON keeps the status", 200, "loaded 3 keys\n" + `{"verdict":"REJECT"}`, Accept, "", "loaded 3 keys\n" + `{"verdict":"REJECT"}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
