@@ -31,6 +31,7 @@ type Env struct {
 	Commit   string // the clone's HEAD commit, or "unknown"
 	StateDir string // where the pre-flight state and the logs go
 	Demo     string // --demo, for tour Part 2
+	Matrix   string // --matrix, for the optional step 8
 	Timeout  time.Duration
 	// Online is true only for --setup. The tour and the pre-flight run every
 	// command with the network blocked (OfflineEnv).

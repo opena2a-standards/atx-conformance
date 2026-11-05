@@ -26,7 +26,8 @@ they should not.
   (`--check`) runs every step with the network blocked and decides which steps
   the tour shows.
 - `atx-tour --demo <path>` runs steps 6 and 7 against a checkout of the
-  delegation demo, and hides each with its reason when the checkout is not ready.
+  delegation demo, and `--matrix <path>` runs step 8 against a checkout of the
+  agent threat matrix; each is hidden with its reason when the checkout is not ready.
 
 ### Changed
 

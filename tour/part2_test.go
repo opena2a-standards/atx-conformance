@@ -160,6 +160,7 @@ func TestPart2HiddenWithAReasonForEachFailedCondition(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e, _ := testEnv(t)
+			e.Timeout = 10 * time.Second
 			var dir, head string
 			if c.s.git {
 				dir, head = fakeDemo(t, c.s.launcher, c.s.deps)
@@ -195,6 +196,7 @@ func TestPart2HiddenWithAReasonForEachFailedCondition(t *testing.T) {
 func TestDemoGetsNoNodeOptionsATMPDIROfItsOwnAndAFreePort(t *testing.T) {
 	needTools(t, "bash", "git")
 	e, _ := testEnv(t)
+	e.Timeout = 10 * time.Second
 	dir, head := fakeDemo(t, true, true)
 	pinTo(t, head)
 	withNode(t, e, true, "NODE_OPTIONS=--require /nonexistent.js", "TMPDIR=/somewhere/else", "PORT=1")

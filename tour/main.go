@@ -18,10 +18,10 @@ import (
 	"time"
 )
 
-// Table is every step of the tour, in order. The optional last step is a
-// later row of this table.
+// Table is every step of the tour, in order: Part 1, Part 2 and the optional
+// last step.
 func Table() []Step {
-	return append(Part1(), Part2()...)
+	return append(append(Part1(), Part2()...), Optional()...)
 }
 
 const usageHead = `atx-tour: a guided tour of the ATX conformance suite, run from a clone.
@@ -46,6 +46,7 @@ One-time setup, from a clone at the commit you will show (network on):
 type Options struct {
 	Check, Setup bool
 	Demo         string
+	Matrix       string
 	NotesPath    string
 	Repo         string
 	StateDir     string
@@ -58,6 +59,7 @@ func parseFlags(args []string, stderr io.Writer) (*Options, error) {
 	fl.BoolVar(&o.Check, "check", false, "run the pre-flight: every step unattended, with the network blocked")
 	fl.BoolVar(&o.Setup, "setup", false, "fetch what the steps need, once, with the network on")
 	fl.StringVar(&o.Demo, "demo", "", "a checkout of the delegation demo, for tour Part 2")
+	fl.StringVar(&o.Matrix, "matrix", "", "a checkout of the agent threat matrix, for the optional step 8")
 	fl.StringVar(&o.NotesPath, "notes", "", "a local file of presenter lines per step, shown in a second color,\nwritten like this:\n"+indent(NotesForm, "    "))
 	fl.StringVar(&o.Repo, "repo", "", "the atx-conformance clone (default: found from the working directory)")
 	fl.StringVar(&o.StateDir, "state-dir", "", "where the pre-flight result and the logs go\n(default: atx-tour in the user cache directory)")
@@ -115,10 +117,19 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		stateDir = filepath.Join(cache, "atx-tour")
 	}
-	if opts.Demo != "" {
-		if info, err := os.Stat(opts.Demo); err != nil || !info.IsDir() {
-			_, _ = fmt.Fprintf(stderr, "atx-tour: --demo %s is not a directory\n", opts.Demo)
+	for _, d := range []struct {
+		flag string
+		path *string
+	}{{"--demo", &opts.Demo}, {"--matrix", &opts.Matrix}} {
+		if *d.path == "" {
+			continue
+		}
+		if info, err := os.Stat(*d.path); err != nil || !info.IsDir() {
+			_, _ = fmt.Fprintf(stderr, "atx-tour: %s %s is not a directory\n", d.flag, *d.path)
 			return 2
+		}
+		if abs, err := filepath.Abs(*d.path); err == nil {
+			*d.path = abs
 		}
 	}
 	notes := Notes{}
@@ -159,6 +170,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	e := NewEnv(repo, log)
 	e.StateDir = stateDir
 	e.Demo = opts.Demo
+	e.Matrix = opts.Matrix
 	e.Commit = headCommit(e)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)

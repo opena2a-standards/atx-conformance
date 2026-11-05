@@ -132,8 +132,8 @@ func TestTimedOutStepIsReported(t *testing.T) {
 	if !strings.Contains(out, failLine) {
 		t.Fatalf("no fallback line for a timed-out step:\n%s", out)
 	}
-	if !strings.Contains(logBuf.String(), ErrTimeout.Error()) {
-		t.Fatalf("the timeout is not in the log:\n%s", logBuf.String())
+	if text := logText(e.Log, logBuf); !strings.Contains(text, ErrTimeout.Error()) {
+		t.Fatalf("the timeout is not in the log:\n%s", text)
 	}
 
 	// The pre-flight hides the step and names the timeout as its reason.
@@ -142,6 +142,14 @@ func TestTimedOutStepIsReported(t *testing.T) {
 	if st.Steps[0].Status != Hidden || !strings.Contains(st.Steps[0].Reason, "did not finish in") {
 		t.Fatalf("pre-flight state for a timed-out step: %+v", st.Steps[0])
 	}
+}
+
+// logText reads a test's log buffer under the log's lock: the goroutine of a
+// step that timed out can still be writing to it.
+func logText(l *Log, b *bytes.Buffer) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return b.String()
 }
 
 var escapeRe = regexp.MustCompile("\x1b\\[[0-9;]*[A-Za-z]")

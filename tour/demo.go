@@ -228,8 +228,12 @@ func (e *Env) stopDemoRun(d *demo) {
 	if err := os.RemoveAll(d.tmp); err != nil {
 		e.Log.Printf("the demo's directory %s could not be removed: %v", d.tmp, err)
 	}
-	e.Log.Printf("the demo stopped in %.1f s: launcher pid %d, %d processes it logged, %d still running%s",
-		time.Since(start).Seconds(), d.pid, len(pids), len(left), listNote(left))
+	all := make([]string, len(pids))
+	for i, pid := range pids {
+		all[i] = strconv.Itoa(pid)
+	}
+	e.Log.Printf("the demo stopped in %.1f s: port %d, launcher pid %d, processes %s; %d still running%s",
+		time.Since(start).Seconds(), d.port, d.pid, strings.Join(all, " "), len(left), listNote(left))
 }
 
 func listNote(pids []string) string {
