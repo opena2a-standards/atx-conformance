@@ -11,6 +11,21 @@ they should not.
 
 ## [Unreleased]
 
+### Added
+
+- `atx-verify --verifier "<command>"` and `atx-verify --verifier-url <url>`
+  send each of the 41 embedded fixtures to an outside verifier and compare its
+  verdicts with the answer key in `conformance.json`; `--report <dir>` writes
+  `atx-interop-report.json` and `atx-interop-report.md`. With none of the new
+  options, atx-verify's output is unchanged. `answerkey.go` embeds
+  `conformance.json` and `MANIFEST.sha256` in the module's root package. No
+  fixture, expected verdict, verifier logic, schema or module dependency changed.
+- `examples/wrap-verifier.sh` and `examples/serve_verifier.py` put a verifier
+  behind the kit's contract without editing it.
+- `cmd/atx-tour` is a guided tour of the suite, run from a clone. Its pre-flight
+  (`--check`) runs every step with the network blocked and decides which steps
+  the tour shows.
+
 ### Changed
 
 - Both reference verifiers print fixture fields and file names with control characters escaped.
