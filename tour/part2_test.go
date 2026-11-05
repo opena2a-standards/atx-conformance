@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -320,7 +321,7 @@ func showWith(e *Env, steps []Step, ctx context.Context, keys io.Reader) (string
 	return screen.String(), code
 }
 
-func TestDemoIsStoppedOnEveryWayOut(t *testing.T) {
+func TestDemoIsStoppedOnEachHandledExit(t *testing.T) {
 	needTools(t, "ps")
 	if !alive(os.Getpid()) {
 		t.Fatal("alive does not see this test's own process, so no check below proves anything")
@@ -365,6 +366,48 @@ func TestDemoIsStoppedOnEveryWayOut(t *testing.T) {
 			t.Fatalf("Ctrl-C exited %d, want 130", code)
 		}
 		p.gone(t, "Ctrl-C")
+	})
+	t.Run(`Ctrl-\`, func(t *testing.T) {
+		e := standinEnv(t)
+		defer e.StopDemo()
+		var p procs
+		// A SIGQUIT that stopSignals misses reaches this channel too, so the
+		// test reports it instead of Go's default action ending the binary.
+		quit := make(chan os.Signal, 1)
+		signal.Notify(quit, syscall.SIGQUIT)
+		defer signal.Stop(quit)
+		ctx, stop := signal.NotifyContext(context.Background(), stopSignals...)
+		defer stop()
+		ran := standinStep(t, 6, &p, func(*Env, *demo) error {
+			go func() {
+				time.Sleep(200 * time.Millisecond)
+				_ = syscall.Kill(os.Getpid(), syscall.SIGQUIT)
+			}()
+			return nil
+		})
+		keys, w := io.Pipe()
+		defer func() { _ = w.Close() }()
+		done := make(chan struct{})
+		defer close(done)
+		go func() {
+			_, _ = io.WriteString(w, "\n")
+			// A tour the signal did not end waits for a key; EOF ends it.
+			select {
+			case <-quit:
+			case <-done:
+				return
+			}
+			select {
+			case <-time.After(3 * time.Second):
+				_ = w.Close()
+			case <-done:
+			}
+		}()
+		_, code := showWith(e, []Step{ran, standinStep(t, 7, &p, nil)}, ctx, keys)
+		if code != 130 {
+			t.Fatalf(`Ctrl-\ exited %d, want 130`, code)
+		}
+		p.gone(t, `Ctrl-\`)
 	})
 	t.Run("the demo dies mid-step", func(t *testing.T) {
 		e := standinEnv(t)

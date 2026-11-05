@@ -173,16 +173,22 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	e.Matrix = opts.Matrix
 	e.Commit = headCommit(e)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	ctx, stop := signal.NotifyContext(context.Background(), stopSignals...)
 	defer stop()
-	// The demo of Part 2 is stopped on every way out, while a second Ctrl-C
-	// is still caught.
+	// The demo of Part 2 is stopped after a failed step, and when the tour
+	// ends with q, at the end, or on Ctrl-C, Ctrl-\, SIGTERM or SIGHUP, while
+	// a second signal is still caught. SIGKILL or a crash of the tour leaves
+	// the demo running, because its launcher has a process group of its own.
 	defer e.StopDemo()
 
 	code := run(ctx, opts, e, Table(), notes, scr, stdin, terminalIn)
 	scr.Printf("Log: %s", log.Path)
 	return code
 }
+
+// stopSignals end the tour through its deferred stops: Ctrl-C, Ctrl-\,
+// SIGTERM and SIGHUP.
+var stopSignals = []os.Signal{os.Interrupt, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP}
 
 func run(ctx context.Context, opts *Options, e *Env, steps []Step, notes Notes, scr *Screen, stdin io.Reader, terminalIn bool) int {
 	switch {
