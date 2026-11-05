@@ -82,12 +82,27 @@ service (yours goes in the angle brackets):
 ```
 
 To see a result before you connect yours, use `true`, which answers ACCEPT to
-everything: 9 agree, and 32 accepted what must fail. The URL form has no
-one-word stand-in: it needs a service that is listening, yours or
-[`examples/serve_verifier.py`](examples/serve_verifier.py) from a clone.
+everything: 9 agree, and 32 accepted what must fail.
 
 ```bash
 "$(go env GOPATH)/bin/atx-verify" --verifier true --label "always ACCEPT" --report atx-report
+```
+
+The URL form has no one-word stand-in: it needs a service that is listening,
+yours or [`examples/serve_verifier.py`](examples/serve_verifier.py), which
+comes with a clone. From the root of a clone, this puts `true` behind a URL:
+
+```bash
+python3 examples/serve_verifier.py 8080 true &
+```
+
+When it prints its `listening on` line, run the kit against port 8080 on
+this machine; it shows the same 9 agree and 32 accepted what must fail, and
+`kill %1` stops the service:
+
+```bash
+"$(go env GOPATH)/bin/atx-verify" --verifier-url http://localhost:8080/ --label "always ACCEPT"
+kill %1
 ```
 
 `{file}` becomes each fixture's path; the file holds the credential in `atx`
