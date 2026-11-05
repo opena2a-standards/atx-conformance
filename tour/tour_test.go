@@ -322,6 +322,15 @@ func TestTheFormLimitIsSaidBeforeTheFirstStep(t *testing.T) {
 	if limit < 0 || first < 0 || limit > first {
 		t.Fatalf("the limit is not said before the first step:\n%s", out)
 	}
+	said := strings.Join(strings.Fields(out), " ")
+	for _, want := range []string{
+		`when it answers with an exit other than 0 or 1, a 5xx, or "verdict": "ERROR", the kit in this repository records that as couldn't read`,
+		"a verifier that exits 1 on a credential it cannot parse is recorded as REJECT",
+	} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the limit does not say %q:\n%s", want, out)
+		}
+	}
 }
 
 func TestTourWithoutStateRunsThePreflightFirst(t *testing.T) {

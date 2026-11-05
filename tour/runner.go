@@ -108,8 +108,10 @@ const failLine = "This step didn't run. Here's the command instead:"
 // formLimit is the limit said before the first step: what a verifier in the
 // room can read of these fixtures.
 const formLimit = "These fixtures are native ATX credentials. A verifier that reads JWT or " +
-	"W3C credentials cannot parse them; the kit in this repository records that as " +
-	"couldn't read, which is a result. The jws and vc forms are reserved for a later release."
+	"W3C credentials cannot parse them; when it answers with an exit other than 0 or 1, " +
+	"a 5xx, or \"verdict\": \"ERROR\", the kit in this repository records that as " +
+	"couldn't read, which is a result; a verifier that exits 1 on a credential it cannot " +
+	"parse is recorded as REJECT. The jws and vc forms are reserved for a later release."
 
 // Show runs the steps the state marks ready, in table order, one per key
 // press. It returns the process exit code.
