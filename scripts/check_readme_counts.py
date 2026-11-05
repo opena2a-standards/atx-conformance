@@ -192,6 +192,10 @@ unittest reads it. The check had read it as a shell operator and stopped
 with an IndexError traceback, printing no verdict: with the workflow's
 discover line given `-p ''`, on which unittest runs no test, it raised
 IndexError where it now reports scripts/test_script_options.py as not run.
+`discover` is read in either case of each of its letters, as unittest reads
+it. The check had matched the lowercase word alone: with the workflow's
+discover line written `DISCOVER`, which runs the same tests, it reported
+scripts/test_script_options.py as not run.
 
 The criterion (c) claim is matched in more wordings than the one the README
 used ("fulfils criterion (c)", "closes criterion c"), and a failure is
@@ -2111,8 +2115,13 @@ def workflow_run_commands(workflow):
 
 # `python3 -m unittest discover`; its arguments follow it. The match ends
 # there, so a second run later on the same line is matched as well.
+# unittest compares `argv[1].lower()` to `discover`, so the word is read here
+# with `(?i)` too. The `a` flag holds that to its ASCII letters: `(?i)` alone
+# also reads the word written with U+0130, U+0131 or U+017F, and given
+# `-s scripts -p 'test_*.py'` after such a word unittest exits 2 and runs no
+# test.
 UNITTEST_DISCOVER = re.compile(
-    r"\bpython[\d.]*[ \t]+-m[ \t]+unittest[ \t]+discover\b")
+    r"\bpython[\d.]*[ \t]+-m[ \t]+unittest[ \t]+(?ai:discover)\b")
 # The file name unittest's discovery imports as a test module.
 TEST_MODULE_NAME = re.compile(r"[_a-z]\w*\.py$", re.I)
 
@@ -2194,7 +2203,9 @@ def unittest_discover_scripts(command, scripts):
     redirection (`2>&1`) is not an argument. A discovery run from another
     directory counts no script. The command text comes from
     workflow_run_commands(), its comments removed, so a `#` the arguments
-    still hold is part of a word, as bash reads it."""
+    still hold is part of a word, as bash reads it. `discover` is read in
+    either case of each of its letters, as unittest reads it
+    (UNITTEST_DISCOVER)."""
     found = set()
     command = join_continued_lines(command)
     for match in UNITTEST_DISCOVER.finditer(command):
@@ -4348,12 +4359,16 @@ def _ci_gate_label_cases(readme, workflow, scripts):
     does not match; with an option unittest refuses; with -h; with the
     empty pattern `-p ''`, which matches no file; and with -s and -p
     followed by an empty argument, written `''`, which unittest reads as
-    the start directory, the directory it is run from: each must. Then run
-    it from added `run: |` steps: a run whose arguments a trailing backslash
-    puts on the next line, a run continued by a backslash before `discover`,
-    and a run over scripts/ after another on the same line, past `&&` and
-    past `;`, may add no failure; a run whose arguments stand on the next
-    line with no backslash before them must."""
+    the start directory, the directory it is run from: each must. With
+    `discover` written DISCOVER and Discover, which unittest reads as that
+    word, neither may. With it written with U+0130, U+0131 or U+017F, which
+    `(?i)` alone reads as that word and unittest does not, and with the
+    module named UNITTEST, each must. Then run it from added `run: |`
+    steps: a run whose arguments a trailing backslash puts on the next
+    line, a run continued by a backslash before `discover`, and a run over
+    scripts/ after another on the same line, past `&&` and past `;`, may
+    add no failure; a run whose arguments stand on the next line with no
+    backslash before them must."""
     labels = (
         "scripts/*.py script that no workflow step runs",
         "script the workflow stops naming",
@@ -4396,6 +4411,12 @@ def _ci_gate_label_cases(readme, workflow, scripts):
         "script run by a unittest discover step with an empty argument before -s and -p",
         "script a unittest discover step with the empty pattern -p '' does not run",
         "script a unittest discover step ending in an empty start directory does not run",
+        "script run by a unittest discover step written DISCOVER",
+        "script run by a unittest discover step written Discover",
+        "script a unittest step writing discover with U+0130 does not run",
+        "script a unittest step writing discover with U+0131 does not run",
+        "script a unittest step writing discover with U+017F does not run",
+        "script a step naming the unittest module UNITTEST does not run",
     )
     if not CI_GATE_GLOB.search(readme):
         why = ("no `scripts/*.py  CI gates` layout line found in README.md or its "
@@ -4480,6 +4501,14 @@ def _ci_gate_label_cases(readme, workflow, scripts):
     line = f"\nscripts/{name}       CI gate: an invented discovered test\n"
     files = {**scripts, name: ""}
     want = f"calls scripts/{name} a CI gate"
+
+    def discover_case(label, command, reported):
+        flow = (workflow or "") + f"\n      - run: {command}\n"
+        got = new(readme + line, flow, files)
+        cases.append((any(want in f for f in got) == reported, label,
+                      f"expected {'a' if reported else 'no'} failure containing "
+                      f"{want!r}, got {got}"))
+
     for label, step, reported in (
             (labels[20], "-v -s scripts -t scripts -p 'invented_*.py' 2>&1 | tee x.log",
              False),
@@ -4498,11 +4527,16 @@ def _ci_gate_label_cases(readme, workflow, scripts):
             (labels[38], "\"\" -s scripts -p 'invented_*.py'", False),
             (labels[39], "-s scripts -p ''", True),
             (labels[40], "-s scripts -p 'invented_*.py' ''", True)):
-        flow = (workflow or "") + f"\n      - run: python3 -m unittest discover {step}\n"
-        got = new(readme + line, flow, files)
-        cases.append((any(want in f for f in got) == reported, label,
-                      f"expected {'a' if reported else 'no'} failure containing "
-                      f"{want!r}, got {got}"))
+        discover_case(label, f"python3 -m unittest discover {step}", reported)
+    for label, words, reported in (
+            (labels[41], "unittest DISCOVER", False),
+            (labels[42], "unittest Discover", False),
+            (labels[43], f"unittest D{chr(0x130)}SCOVER", True),
+            (labels[44], f"unittest d{chr(0x131)}scover", True),
+            (labels[45], f"unittest di{chr(0x17f)}cover", True),
+            (labels[46], "UNITTEST DISCOVER", True)):
+        discover_case(label, f"python3 -m {words} -s scripts -p 'invented_*.py'",
+                      reported)
 
     # The same script, run from a `run: |` step whose command goes on past
     # the end of a line or holds a second discovery run on a line.
