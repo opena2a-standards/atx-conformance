@@ -395,6 +395,36 @@ func TestHelp(t *testing.T) {
 	}
 }
 
+// TestFailedConnectionLeavesTheURLOut keeps what a verifier URL carries out of
+// the terminal and the two reports, which are made to be shared: the Go error
+// for a failed request prints the URL with its query.
+func TestFailedConnectionLeavesTheURLOut(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "report")
+	code, out, errOut := kitRun(t, "--verifier-url", "http://user:PASSVALUE@127.0.0.1:1/verify/PATHVALUE?apikey=QUERYVALUE",
+		"--label", "url", "--timeout", "2", "--report", dir)
+	if code != 1 {
+		t.Errorf("exit %d, want 1\n%s", code, out)
+	}
+	texts := map[string]string{"stdout": out, "stderr": errOut}
+	for _, name := range []string{reportJSONName, reportMDName} {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		texts[name] = string(b)
+	}
+	for name, text := range texts {
+		for _, secret := range []string{"QUERYVALUE", "PATHVALUE", "PASSVALUE"} {
+			if strings.Contains(text, secret) {
+				t.Errorf("%s carries %s", name, secret)
+			}
+		}
+	}
+	if !strings.Contains(texts[reportJSONName], `"raw": "no answer`) {
+		t.Errorf("the JSON report does not say what happened:\n%s", texts[reportJSONName])
+	}
+}
+
 // TestJSONWinsCarriesItsCondition holds --help and both READMEs to one wording
 // of the rule the adapters apply; the adapter tables hold the rule itself, with
 // a log line before the JSON leaving the exit or status code to decide.

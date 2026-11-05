@@ -160,6 +160,12 @@ func (a *urlAdapter) describe(ctx context.Context, err error) string {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout()) {
 		return fmt.Sprintf("no answer within %s (timeout)", a.timeout)
 	}
+	// A *url.Error prints the URL with its query, and this text goes into the
+	// reports; what went wrong is in its Err.
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		err = urlErr.Err
+	}
 	return "no answer: " + err.Error()
 }
 
