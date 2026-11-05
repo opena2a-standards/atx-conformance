@@ -22,7 +22,8 @@ cd atx-conformance
 # Run both verifiers and record exit summaries
 (cd verifiers/go && go run . ../../fixtures)
 (cd verifiers/python && python3 -m venv .venv && . .venv/bin/activate &&
-    python3 -m pip install -r requirements.txt && python3 verify.py ../../fixtures)
+    python3 -m pip install --disable-pip-version-check -r requirements.txt &&
+    python3 verify.py ../../fixtures)
 
 # Sigstore keyless cosign over MANIFEST.sha256
 cosign sign-blob MANIFEST.sha256 \

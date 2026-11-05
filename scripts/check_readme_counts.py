@@ -249,6 +249,29 @@ comments: what those tests expect of a timestamp does not depend on the Go
 release that runs them. A sentence saying the result differed until a later
 change is not held, and a missing verify_test.go fails the check.
 
+It also holds what README.md states above its first command to the toolchain
+minimums. README.md opened with `go run <module>/cmd/atx-verify@latest` and
+said nothing above it about the toolchain the command needs, so on a machine
+without Go the first thing a reader saw was the shell reporting that `go` was
+not found; the minimums stood two links away, in the dependency lists of
+docs/running-the-verifiers.md. README.md, read alone, must state above its
+first fenced block each minimum a list item of the README text states (`- Go
+1.22 or later`), in the item's words; a minimum in two parts is not a
+version VERSION_OR_DATE matches.
+
+It also holds each `pip install` command in a fenced block of the README text
+and of COSIGNERS.md to --disable-pip-version-check. In a new virtual
+environment whose pip was older than the newest release, the install line
+README.md gave wrote a notice to standard error that a new release of pip was
+available, the only text on its first-time path a reader did not ask for.
+
+It also holds each `Agent Trust <word>` name in the README text to the names
+the vendored specification text, schemas/vendor/atx-spec/core.md, uses.
+README.md said each fixture bundles "an Agent Trust Credential", a name
+core.md does not use: it calls the credential the Agent Trust eXtension
+(ATX), the name conformance.json gives the specification. A name whose words
+are joined by hyphens, as in the Agent-Trust-Credential header, is not held.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
 declares, each signature-verification Scope row that claims a set of fixtures
@@ -279,9 +302,11 @@ pinning link names a commit, the reproduction steps match the generator, no
 coordination link points at a closed issue, every statement of the TBS
 numbers matches the vectors, the jcs-vectors README scopes signing to the
 TBS projection, the Ed25519-only ACCEPT count matches the fixtures, the
-workflow runs every script the layout calls a CI gate and README.md states no
-version or date, 1 otherwise, 2 on an
-unknown argument.
+workflow runs every script the layout calls a CI gate, README.md states no
+version or date and states each toolchain minimum above its first command,
+every fenced `pip install` command passes --disable-pip-version-check, and
+each `Agent Trust <word>` name in the README text is one core.md uses, 1
+otherwise, 2 on an unknown argument.
 """
 
 import collections
@@ -2666,6 +2691,137 @@ def front_page_failures(front_page):
     return failures
 
 
+# README.md opened with `go run <module>/cmd/atx-verify@latest` and said
+# nothing above it about the toolchain the command needs, so on a machine
+# without Go the first thing a reader saw was the shell reporting that `go`
+# was not found; the minimums, Go 1.22 or later and Python 3.11 or later,
+# stood two links away, in the dependency lists of
+# docs/running-the-verifiers.md. README.md, read alone, must state above its
+# first fenced block each minimum a list item of the README text states
+# (`- Go 1.22 or later`), in the words of the item (`Go 1.22 or later`). A
+# minimum written in two parts is not a version VERSION_OR_DATE matches.
+TOOLCHAIN_MINIMUM = re.compile(r"^- ((?:Go|Python) \d+\.\d+ or later)\b", re.M)
+PREREQUISITE_SITE = "README.md text above its first command"
+
+
+def toolchain_minimums(readme):
+    """Each toolchain minimum a list item of the README text states
+    (`- Go 1.22 or later`), as `Go 1.22 or later`, once each and in order."""
+    return list(dict.fromkeys(TOOLCHAIN_MINIMUM.findall(readme or "")))
+
+
+def _phrase_at(phrase, text):
+    """The first match in `text` of `phrase` whole, any run of whitespace
+    standing for each blank in it so a phrase wrapped across lines is found,
+    or None."""
+    words = r"\s+".join(map(re.escape, phrase.split()))
+    return re.search(rf"(?<!\w){words}(?!\w)", text)
+
+
+def prerequisite_failures(readme, front_page):
+    """README.md read alone (`front_page`) must state above its first fenced
+    block each minimum toolchain_minimums() reads from the README text. With
+    no minimum listed, or no fenced block in README.md, the check fails
+    rather than pass having compared nothing."""
+    minimums = toolchain_minimums(readme)
+    if not minimums:
+        return [f"no toolchain minimum (`- Go 1.22 or later`) found in a list "
+                f"item of the README or its pages; the {PREREQUISITE_SITE} "
+                f"cannot be held to one"]
+    block = FENCED.search(front_page or "")
+    if block is None:
+        return [f"README.md has no fenced block, so no first command; the "
+                f"{PREREQUISITE_SITE} cannot be held to the toolchain minimums"]
+    above = front_page[:block.start()]
+    return [f"{PREREQUISITE_SITE} does not state `{minimum}`, a toolchain "
+            f"minimum the README text lists; a reader without that toolchain "
+            f"meets the command first"
+            for minimum in minimums if _phrase_at(minimum, above) is None]
+
+
+# README.md, docs/running-the-verifiers.md and COSIGNERS.md installed the
+# Python verifier's packages with `python3 -m pip install -r
+# requirements.txt`. In a new virtual environment whose pip was older than
+# the newest release, that command also wrote two `[notice]` lines to
+# standard error, that a new release of pip was available and how to upgrade
+# it: the only text on README.md's first-time path a reader did not ask for,
+# and one a reader may take for a missed step. Each line of a fenced block in
+# the README text or COSIGNERS.md that runs `pip install` must pass
+# --disable-pip-version-check, which skips that lookup; a line ending in a
+# backslash is read with the line it continues onto.
+PIP_INSTALL = re.compile(r"\bpip3?\s+install\b")
+PIP_VERSION_CHECK = "--disable-pip-version-check"
+PIP_SITE = "fenced `pip install` command"
+# The install line the check was written for, as README.md published it.
+RETRACTED_PIP_INSTALL = "python3 -m pip install -r requirements.txt"
+
+
+def pip_install_lines(text):
+    """Each line of a fenced block of `text` that runs `pip install`, stripped,
+    a line ending in a backslash joined to the line it continues onto."""
+    return [line.strip() for block in FENCED.findall(text or "")
+            for line in re.sub(r"\\\n", " ", block).splitlines()
+            if PIP_INSTALL.search(line)]
+
+
+def pip_notice_failures(readme, cosigners):
+    """Each line pip_install_lines() reads from the README text and from
+    COSIGNERS.md (None when the file is missing) must pass
+    --disable-pip-version-check. With no such line in the README text the
+    check fails rather than pass having read none."""
+    readme_lines = pip_install_lines(readme)
+    failures = []
+    if not readme_lines:
+        failures.append(f"no {PIP_SITE} found in a fenced block of the README or "
+                        f"its pages; the Python verifier's install line cannot be "
+                        f"held to {PIP_VERSION_CHECK}")
+    for name, lines in (("README", readme_lines),
+                        ("COSIGNERS.md", pip_install_lines(cosigners))):
+        for line in dict.fromkeys(lines):
+            if PIP_VERSION_CHECK not in line.split():
+                failures.append(
+                    f"{name} {PIP_SITE} `{line}` does not pass {PIP_VERSION_CHECK}; "
+                    f"in a new virtual environment whose pip is older than the "
+                    f"newest release, pip writes a notice to standard error "
+                    f"suggesting an upgrade of pip")
+    return failures
+
+
+# README.md said each fixture bundles "an Agent Trust Credential", a name the
+# specification does not give the credential: conformance.json names the
+# specification the Agent Trust eXtension, and the vendored copy of its
+# core.md calls the credential the Agent Trust eXtension (ATX) and the
+# protocol the Agent Trust Protocol. The words of a name are separated by
+# whitespace, a line break included, so the HTTP header core.md names,
+# Agent-Trust-Credential, written with hyphens, is not a name here.
+SPEC_TEXT_NAME = "schemas/vendor/atx-spec/core.md"
+SPEC_TEXT = ROOT / SPEC_TEXT_NAME
+AGENT_TRUST_NAME = re.compile(r"\bAgent\s+Trust\s+[A-Za-z]+")
+RETRACTED_CREDENTIAL_NAME = "Agent Trust Credential"
+
+
+def agent_trust_names(text):
+    """Each `Agent Trust <word>` name in `text`, its whitespace collapsed."""
+    return {" ".join(m.group(0).split()) for m in AGENT_TRUST_NAME.finditer(text or "")}
+
+
+def spec_name_failures(readme, spec_text):
+    """Each `Agent Trust <word>` name in the README text must be one the
+    vendored specification text (None when the file is missing) uses. With
+    no such name in that text the check fails rather than pass having read
+    none."""
+    if spec_text is None:
+        return [f"{SPEC_TEXT_NAME} not found; the names the README text gives "
+                f"the credential cannot be checked"]
+    names = agent_trust_names(spec_text)
+    if not names:
+        return [f"{SPEC_TEXT_NAME} uses no `Agent Trust <word>` name; refusing "
+                f"to pass the names in the README text vacuously"]
+    return [f"README names `{name}`, a name {SPEC_TEXT_NAME} does not use; it "
+            f"calls the credential the ATX and uses {' and '.join(sorted(names))}"
+            for name in sorted(agent_trust_names(readme) - names)]
+
+
 def count_vectors(root):
     return len(sorted((root / "jcs-vectors" / "vectors").glob("*.json")))
 
@@ -2837,7 +2993,8 @@ Tree = collections.namedtuple("Tree", (
     "key_vectors used_key_ids versions go_mod verify_go py_requirements "
     "py_dependency_texts jcs_sites tbs_sites tbs_canonical jcs_readme "
     "gate_sites gate_libraries profile outcomes suites scripts front_page "
-    "module_start nested_modules changelog release_tags verify_go_test"))
+    "module_start nested_modules changelog release_tags verify_go_test "
+    "spec_text"))
 
 # One check tree_failures() runs: its name, the call (`run(tree)` returns
 # failures) and the alteration the self-test makes to prove the call is still
@@ -4253,6 +4410,148 @@ def _front_page_cases(front_page):
     return cases
 
 
+def _prerequisite_cases(tree):
+    """README.md with each paragraph above its first command that states a
+    toolchain minimum removed, the opening it published, adds a failure
+    naming each minimum; so does each minimum stated there with the next
+    minor version, or stated below the first command alone. A minimum a list
+    item of the pages adds is held too, list items that state no minimum add
+    the failure saying so, and so does a README.md with no fenced block."""
+    readme, front_page = tree.readme, tree.front_page or ""
+    baseline = set(prerequisite_failures(readme, front_page))
+    cases = [(not baseline, f"{PREREQUISITE_SITE} stating each toolchain minimum",
+              f"the published text fails: {sorted(baseline)}")]
+
+    def case(label, needle, text=readme, page=front_page):
+        new = [f for f in prerequisite_failures(text, page) if f not in baseline]
+        cases.append((any(needle in f for f in new), label,
+                      f"expected a failure naming {needle!r}, got {new}"))
+
+    minimums = toolchain_minimums(readme)
+    block = FENCED.search(front_page)
+    if not minimums or block is None:
+        cases.append((False, f"{PREREQUISITE_SITE} held to the toolchain minimums",
+                      "no toolchain minimum in a list item of the README text, or "
+                      "no fenced block in README.md"))
+        return cases
+    above, rest = front_page[:block.start()], front_page[block.start():]
+    published = "".join(part for part in re.split(r"(?<=\n\n)", above)
+                        if not any(_phrase_at(m, part) for m in minimums))
+    for minimum in minimums:
+        case(f"{PREREQUISITE_SITE} with no paragraph stating a toolchain minimum, "
+             f"as published: `{minimum}`", f"does not state `{minimum}`",
+             page=published + rest)
+        site = _phrase_at(minimum, above)
+        if site is None:
+            continue
+        major, minor = re.search(r"(\d+)\.(\d+)", minimum).groups()
+        other = minimum.replace(f"{major}.{minor}", f"{major}.{int(minor) + 1}", 1)
+        case(f"{PREREQUISITE_SITE} stating `{other}` where a list item states "
+             f"`{minimum}`", f"does not state `{minimum}`",
+             page=above[:site.start()] + other + above[site.end():] + rest)
+        case(f"{PREREQUISITE_SITE} with `{minimum}` stated below the first "
+             f"command alone", f"does not state `{minimum}`",
+             page=(above[:site.start()] + "a toolchain" + above[site.end():] + rest
+                   + f"\nThe command needs {minimum}.\n"))
+    case("a list item of the README text adding a toolchain minimum",
+         "does not state `Python 9.9 or later`",
+         text=readme + "\n- Python 9.9 or later\n")
+    case("list items of the README text stating no toolchain minimum",
+         "no toolchain minimum",
+         text=TOOLCHAIN_MINIMUM.sub(
+             lambda m: m.group(0).replace(" or later", " or newer"), readme))
+    case("README.md with no fenced block", "README.md has no fenced block",
+         page=above)
+    return cases
+
+
+def _pip_notice_cases(tree):
+    """README.md's install line as it published it, with no
+    --disable-pip-version-check, adds a failure naming it, as does
+    COSIGNERS.md's install line with the flag removed and an install line
+    continued with a backslash onto a line that does not pass it. The flag
+    on the line an install line continues onto adds none, nor does a `pip
+    install` named in prose outside a fenced block; a README text with no
+    fenced `pip install` adds the failure saying so."""
+    readme, cosigners = tree.readme, tree.cosigners
+    baseline = set(pip_notice_failures(readme, cosigners))
+    cases = [(not baseline, f"each {PIP_SITE} passing {PIP_VERSION_CHECK}",
+              f"the published text fails: {sorted(baseline)}")]
+
+    def case(label, needle, text=readme, cos=cosigners):
+        new = [f for f in pip_notice_failures(text, cos) if f not in baseline]
+        if needle is None:
+            cases.append((not new, label, f"expected no new failure, got {new}"))
+        else:
+            cases.append((any(needle in f for f in new), label,
+                          f"expected a failure naming {needle!r}, got {new}"))
+
+    flagged = f"pip install {PIP_VERSION_CHECK} "
+    for name, text in (("README", readme), ("COSIGNERS.md", cosigners or "")):
+        label = f"{name} install line with {PIP_VERSION_CHECK} removed"
+        if flagged not in text:
+            cases.append((False, label, f"no `{flagged.strip()}` found in {name}"))
+        elif name == "README":
+            case(f"{label}, as README.md published it",
+                 f"`{RETRACTED_PIP_INSTALL}` does not pass",
+                 text=text.replace(flagged, "pip install ", 1))
+        else:
+            case(label, f"COSIGNERS.md {PIP_SITE}",
+                 cos=text.replace(flagged, "pip install ", 1))
+    case(f"an install line continued onto a line passing {PIP_VERSION_CHECK}", None,
+         text=(readme + "\n```bash\npython3 -m pip install \\\n    "
+               + PIP_VERSION_CHECK + " -r requirements.txt\n```\n"))
+    case(f"an install line continued onto a line that does not pass "
+         f"{PIP_VERSION_CHECK}", f"does not pass {PIP_VERSION_CHECK}",
+         text=readme + "\n```bash\npython3 -m pip install \\\n    -r requirements.txt\n```\n")
+    case("a `pip install` named in prose outside a fenced block", None,
+         text=readme + f"\nRun `{RETRACTED_PIP_INSTALL}` first.\n")
+    case(f"a README text with no {PIP_SITE}", f"no {PIP_SITE} found",
+         text=FENCED.sub(lambda m: PIP_INSTALL.sub("pip download", m.group(0)), readme))
+    return cases
+
+
+def _spec_name_cases(tree):
+    """The README text with the credential name README.md published added,
+    on one line and wrapped across two, adds a failure naming it; the header
+    name Agent-Trust-Credential and a name the specification text uses add
+    none. A missing specification text, or one using no `Agent Trust <word>`
+    name, adds the failure saying so."""
+    readme, spec_text = tree.readme, tree.spec_text
+    baseline = set(spec_name_failures(readme, spec_text))
+    cases = [(not baseline, f"the README text using only names {SPEC_TEXT_NAME} uses",
+              f"the published text fails: {sorted(baseline)}")]
+
+    def case(label, needle, text=readme, spec=spec_text):
+        new = [f for f in spec_name_failures(text, spec) if f not in baseline]
+        if needle is None:
+            cases.append((not new, label, f"expected no new failure, got {new}"))
+        else:
+            cases.append((any(needle in f for f in new), label,
+                          f"expected a failure naming {needle!r}, got {new}"))
+
+    named = f"README names `{RETRACTED_CREDENTIAL_NAME}`"
+    case(f"the README text calling the credential an {RETRACTED_CREDENTIAL_NAME}, "
+         f"as README.md published it", named,
+         text=readme + f"\nEach fixture bundles an {RETRACTED_CREDENTIAL_NAME}.\n")
+    case(f"the README text with `{RETRACTED_CREDENTIAL_NAME}` wrapped across a "
+         f"line break", named,
+         text=readme + "\nEach fixture bundles an Agent Trust\nCredential.\n")
+    case("the README text naming the Agent-Trust-Credential header", None,
+         text=readme + "\nThe ATX travels in the Agent-Trust-Credential header.\n")
+    used = sorted(agent_trust_names(spec_text))
+    if not used:
+        cases.append((False, f"a name {SPEC_TEXT_NAME} uses, added to the README text",
+                      f"{SPEC_TEXT_NAME} is missing or uses no `Agent Trust <word>` name"))
+    else:
+        case(f"the README text naming the {used[0]}, a name {SPEC_TEXT_NAME} uses",
+             None, text=readme + f"\nThe {used[0]} is named here.\n")
+    case(f"a missing {SPEC_TEXT_NAME}", f"{SPEC_TEXT_NAME} not found", spec=None)
+    case(f"a {SPEC_TEXT_NAME} using no `Agent Trust <word>` name",
+         "refusing to pass", spec=AGENT_TRUST_NAME.sub("ATX", spec_text or ""))
+    return cases
+
+
 def _wire_count(tree):
     row = FIXTURE_ROW.search(tree.readme)
     if row is None:
@@ -4430,6 +4729,21 @@ def _wire_front_page(tree):
             {"front_page": "Requires Go 9.9.9 or later.\n" + tree.front_page})
 
 
+def _wire_prerequisite(tree):
+    return ("does not state `Go 9.9 or later`",
+            {"readme": (tree.readme or "") + "\n- Go 9.9 or later\n"})
+
+
+def _wire_pip_notice(tree):
+    return (f"`{RETRACTED_PIP_INSTALL}` does not pass",
+            {"readme": (tree.readme or "") + f"\n```bash\n{RETRACTED_PIP_INSTALL}\n```\n"})
+
+
+def _wire_spec_name(tree):
+    return (f"README names `{RETRACTED_CREDENTIAL_NAME}`",
+            {"readme": (tree.readme or "") + f"\n{RETRACTED_CREDENTIAL_NAME}\n"})
+
+
 CHECKS = (
     Check("count",
           lambda t: check(t.readme, t.cosigners, t.fixtures, t.vectors, t.signing),
@@ -4488,6 +4802,13 @@ CHECKS = (
     Check("CI gate label",
           lambda t: ci_gate_label_failures(t.readme, t.workflow, t.scripts),
           _wire_ci_gate_label),
+    Check("README.md toolchain minimum",
+          lambda t: prerequisite_failures(t.readme, t.front_page),
+          _wire_prerequisite),
+    Check("pip version check", lambda t: pip_notice_failures(t.readme, t.cosigners),
+          _wire_pip_notice),
+    Check("specification name", lambda t: spec_name_failures(t.readme, t.spec_text),
+          _wire_spec_name),
     Check("README.md version or date", lambda t: front_page_failures(t.front_page),
           _wire_front_page),
 )
@@ -4611,6 +4932,21 @@ def _whole_script_case(tree):
             and FAILURE_HEADER in child.stderr, label,
             f"expected exit 1 and {want!r} under {FAILURE_HEADER!r} on stderr, got "
             f"exit {child.returncode} and {child.stderr.strip()[-300:]!r}")
+
+
+def _cpu_time_cases(scans):
+    """One case per (label, scan, bound, why) in `scans`: green when scan()
+    takes under `bound` seconds of this process's CPU time, read from
+    time.process_time(). Wall-clock time also counts the time the process
+    waits for a CPU, so on a loaded machine a scan went over its bound with
+    no change to the README, the tree or the patterns."""
+    cases = []
+    for label, scan, bound, why in scans:
+        started = time.process_time()
+        scan()
+        took = time.process_time() - started
+        cases.append((took < bound, label, f"took {took:.1f} s of CPU time; {why}"))
+    return cases
 
 
 def self_test(tree, verbose):
@@ -4811,34 +5147,38 @@ def self_test(tree, verbose):
                       f"{name} citing closed A2A#1885 with no `(closed` note",
                       f"appending the citation to {name} still passes: {new}"))
 
-    # Linear in the run: about 0.2 s. Unbounded link text took 3.5 s or more.
-    started = time.perf_counter()
-    closed_tracker_mentions("README.md", "[" * 40000)
-    took = time.perf_counter() - started
-    cases.append((took < 1.5, "closed-tracker scan over a 40,000-character run of `[`",
-                  f"took {took:.1f} s; the link-text match backtracks over the run"))
-    # Each of these took 1.5 s or more while its pattern rescanned the run from
-    # every position in it; bounded, each takes under 0.05 s.
+    # Unbounded link text took 3.5 s or more, and each of the other five took
+    # 1.5 s or more while its pattern rescanned the run from every position in
+    # it. Bounded, in ten runs on a 16-CPU machine at load averages of 20 to
+    # 23, each took 0.08 s of CPU time or less.
     blank = "\n" * 20000
-    for label, scan in (
-            ("line-leading comment markers stripped from 20,000 blank lines (_flat_prose)",
-             lambda: _flat_prose(blank)),
-            ("line-leading comment markers stripped from 20,000 blank lines (_prose)",
-             lambda: _prose(blank)),
-            ("requirements.txt package names read from 20,000 blank lines",
-             lambda: python_requirements(blank)),
-            ("only-number claim scan over one 16,000-character word",
-             lambda: list(ONLY_NUMBER_CLAIM.finditer("a" * 16000))),
-            ("only-number claim scan over 40,000 unclosed parentheses",
-             lambda: list(ONLY_NUMBER_CLAIM.finditer("a (" * 40000)))):
-        started = time.perf_counter()
-        scan()
-        took = time.perf_counter() - started
-        cases.append((took < 0.5, label,
-                      f"took {took:.1f} s; the pattern rescans the run from every "
-                      f"position in it"))
+    rescans = "the pattern rescans the run from every position in it"
+    cases.extend(_cpu_time_cases((
+        ("closed-tracker scan over a 40,000-character run of `[`",
+         lambda: closed_tracker_mentions("README.md", "[" * 40000), 1.5,
+         "the link-text match backtracks over the run"),
+        ("line-leading comment markers stripped from 20,000 blank lines (_flat_prose)",
+         lambda: _flat_prose(blank), 0.5, rescans),
+        ("line-leading comment markers stripped from 20,000 blank lines (_prose)",
+         lambda: _prose(blank), 0.5, rescans),
+        ("requirements.txt package names read from 20,000 blank lines",
+         lambda: python_requirements(blank), 0.5, rescans),
+        ("only-number claim scan over one 16,000-character word",
+         lambda: list(ONLY_NUMBER_CLAIM.finditer("a" * 16000)), 0.5, rescans),
+        ("only-number claim scan over 40,000 unclosed parentheses",
+         lambda: list(ONLY_NUMBER_CLAIM.finditer("a (" * 40000)), 0.5, rescans))))
+    # A loaded machine holds this process off the CPU while a scan runs. A
+    # sleep stands for that wait: 0.6 s, more than the 0.5 s bound, in which
+    # the process does not run, so the case it is timed in must be green.
+    cases.extend(_cpu_time_cases((
+        ("a scan held off the CPU for 0.6 s, under a 0.5 s bound",
+         lambda: time.sleep(0.6), 0.5,
+         "the bound counts the time the process waits for a CPU"),)))
     cases.extend(_tbs_number_cases(tree.tbs_sites, tree.tbs_canonical))
     cases.extend(_front_page_cases(tree.front_page))
+    cases.extend(_prerequisite_cases(tree))
+    cases.extend(_pip_notice_cases(tree))
+    cases.extend(_spec_name_cases(tree))
 
     jcs_readme = tree.jcs_readme
     jcs_text = jcs_readme or ""
@@ -4932,6 +5272,7 @@ def main():
         release_tags=version_tags(ROOT),
         verify_go_test=(VERIFY_GO_TEST.read_text(encoding="utf-8")
                         if VERIFY_GO_TEST.exists() else None),
+        spec_text=SPEC_TEXT.read_text(encoding="utf-8") if SPEC_TEXT.exists() else None,
     )
 
     failed, total = self_test(tree, only_self_test)
@@ -5013,7 +5354,11 @@ def main():
           f"{JCS_README_NAME} scopes v1.1 signing to the TBS projection; "
           f"the Ed25519-only ACCEPT count matches the fixtures; "
           f"{WORKFLOW_NAME} runs each scripts/*.py the layout calls a CI gate; "
-          f"README.md states no version or date")
+          f"README.md states no version or date; "
+          f"README.md states {' and '.join(toolchain_minimums(tree.readme))} above "
+          f"its first command; each {PIP_SITE} in the README and COSIGNERS.md "
+          f"passes {PIP_VERSION_CHECK}; each `Agent Trust <word>` name in the "
+          f"README is one {SPEC_TEXT_NAME} uses")
     return 0
 
 

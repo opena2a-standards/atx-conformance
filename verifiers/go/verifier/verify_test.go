@@ -1214,11 +1214,9 @@ func TestSuitePinsMemberNamesOutsidePrintableASCII(t *testing.T) {
 // 1000 zeros and e-650, whose value is 10^350 and which strconv.ParseFloat
 // reads as 1e+149. rawDuplicateMember reports the duplicate after each. A
 // v1.1 credential whose declaredPurpose is that last number rejects as
-// VERIFIER_CONFIG_ERROR with the reason the Python reference verifier writes,
-// since hasNumberOutsideFloat64RangeV11 decides the range on the digits as
-// written (numberOutsideFloat64Range); it rejected as SIGNATURE_INVALID while
-// that decision was strconv.ParseFloat's. atx-conformance#294,
-// atx-conformance#293.
+// SIGNATURE_INVALID, with a reason that quotes it as written
+// (integerOutsideExactRangeV11), whatever strconv.ParseFloat reads it as.
+// atx-conformance#294, atx-conformance#302.
 func TestDecoderWithoutUseNumberOnOutOfRangeNumbers(t *testing.T) {
 	misread := "1" + strings.Repeat("0", 1000) + "e-650"
 	for _, tc := range []struct {
@@ -1249,9 +1247,8 @@ func TestDecoderWithoutUseNumberOnOutOfRangeNumbers(t *testing.T) {
 	if f, err := strconv.ParseFloat(misread, 64); f != 1e149 || err != nil {
 		t.Errorf("strconv.ParseFloat(1 followed by 1000 zeros and e-650) = %g, %.80v; want 1e+149, <nil>", f, err)
 	}
-	const outside = "v1.1 canonicalization failed: declaredPurpose holds a number outside the float64 range"
-	if got := verify(withMembers(t, v11Baseline(t), map[string]string{"declaredPurpose": misread})); got.RejectCategory != "VERIFIER_CONFIG_ERROR" || got.Reason != outside {
-		t.Errorf("declaredPurpose 1 followed by 1000 zeros and e-650: %.300s, want REJECT[VERIFIER_CONFIG_ERROR: %s]", got, outside)
+	if got, want := verify(withMembers(t, v11Baseline(t), map[string]string{"declaredPurpose": misread})), fractionOrExponentReason(misread); got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != want {
+		t.Errorf("declaredPurpose 1 followed by 1000 zeros and e-650: %.300s, want REJECT[SIGNATURE_INVALID: %.300s]", got, want)
 	}
 }
 
@@ -2754,14 +2751,12 @@ func TestIntegerOutsideExactRange(t *testing.T) {
 		t.Errorf("fixtures/v1_1-integer-outside-exact-range.json: %s, want REJECT[SIGNATURE_INVALID: %s]", got, reason("scanSummary.criticalFindings", "9007199254740993"))
 	}
 
-	// Checks that run first keep their verdicts: a payload the JCS library
-	// cannot canonicalize, and a scanSummary member outside its type.
+	// Checks that run first keep their verdicts: an unpaired surrogate escape
+	// in declaredPurpose, and a scanSummary member outside its type.
 	for _, tc := range []struct {
 		label, want, reasonHas string
 		f                      fixture
 	}{
-		{"declaredPurpose [1e400, 2^53+1]", "VERIFIER_CONFIG_ERROR", "v1.1 canonicalization failed",
-			withMembers(t, base, map[string]string{"declaredPurpose": "[1e400, 9007199254740993]"})},
 		{`declaredPurpose "\ud800" and criticalFindings 2^53+1`, "VERIFIER_CONFIG_ERROR", "unpaired UTF-16 surrogate",
 			withMembers(t, count(base, "9007199254740993"), map[string]string{"declaredPurpose": `"\ud800"`})},
 		{"hma 7 and criticalFindings 2^53+1", "SIGNATURE_INVALID", "member outside its type",
@@ -2823,6 +2818,13 @@ func fractionOrExponentReason(literal string) string {
 	return "no signature covers declaredPurpose: the number " + literal + " is written with a fraction or an exponent part, not as an integer"
 }
 
+// outsideRangeReason is the reason both reference verifiers write for a v1.1
+// credential whose declaredPurpose writes an integer outside the I-JSON exact
+// range, literal as the credential writes it.
+func outsideRangeReason(literal string) string {
+	return "no signature covers declaredPurpose: the integer " + literal + " is outside the I-JSON exact range, -(2^53-1) to 2^53-1"
+}
+
 // TestDeclaredPurposeNumberWithFractionOrExponent pins the verdict and reason
 // on a v1.1 credential whose declaredPurpose writes a number with a fraction
 // or an exponent part. The JCS library writes such a number as the double
@@ -2879,14 +2881,11 @@ func TestDeclaredPurposeNumberWithFractionOrExponent(t *testing.T) {
 	// form or the exact range decides, whichever defect it has, in the order
 	// the credential writes the numbers and not the order JCS writes the
 	// members in. A digit string is no number.
-	outsideRange := func(literal string) string {
-		return "no signature covers declaredPurpose: the integer " + literal + " is outside the I-JSON exact range, -(2^53-1) to 2^53-1"
-	}
 	for _, tc := range []struct{ purpose, want string }{
 		{`{"b": 1.5, "a": 9007199254740993}`, fractionOrExponentReason("1.5")},
-		{`{"a": 9007199254740993, "b": 1.5}`, outsideRange("9007199254740993")},
+		{`{"a": 9007199254740993, "b": 1.5}`, outsideRangeReason("9007199254740993")},
 		{`[1.5, "18014398509481985", 1e21, 9007199254740993, -9007199254740993]`, fractionOrExponentReason("1.5")},
-		{`["18014398509481985", 9007199254740993, 1.5]`, outsideRange("9007199254740993")},
+		{`["18014398509481985", 9007199254740993, 1.5]`, outsideRangeReason("9007199254740993")},
 		{`{"n": [7, {"m": 2.5E-3}], "k": 1e1}`, fractionOrExponentReason("2.5E-3")},
 	} {
 		got := verify(withMembers(t, base, map[string]string{"declaredPurpose": tc.purpose}))
@@ -2904,7 +2903,7 @@ func TestDeclaredPurposeNumberWithFractionOrExponent(t *testing.T) {
 			t.Errorf("declaredPurpose %s, signed: %s, want ACCEPT", signed, got)
 		}
 	}
-	outside := outsideRange("9007199254740993")
+	outside := outsideRangeReason("9007199254740993")
 	if got := verify(signedOver(`{"n": 9007199254740993}`, `{"n": 9007199254740993}`)); got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != outside {
 		t.Errorf(`declaredPurpose {"n": 9007199254740993}, signed: %s, want REJECT[SIGNATURE_INVALID: %s]`, got, outside)
 	}
@@ -2927,13 +2926,12 @@ func TestDeclaredPurposeNumberWithFractionOrExponent(t *testing.T) {
 // accepts the one written as signed and rejects the others with the reason
 // that names the number as the credential writes it.
 func TestDeclaredPurposeNumberFixtures(t *testing.T) {
-	outsideRange := "no signature covers declaredPurpose: the integer 9007199254740993 is outside the I-JSON exact range, -(2^53-1) to 2^53-1"
 	for _, tc := range []struct{ file, reason string }{
 		{"v1_1-declared-purpose-integer-signed.json", ""},
 		{"v1_1-declared-purpose-integer-respelled-fraction.json", fractionOrExponentReason("1000.0")},
 		{"v1_1-declared-purpose-integer-respelled-exponent.json", fractionOrExponentReason("1e3")},
 		{"v1_1-declared-purpose-integer-respelled-upper-exponent.json", fractionOrExponentReason("1E3")},
-		{"v1_1-declared-purpose-integer-outside-range.json", outsideRange},
+		{"v1_1-declared-purpose-integer-outside-range.json", outsideRangeReason("9007199254740993")},
 	} {
 		f, err := loadFixture(repoRoot + "/fixtures/" + tc.file)
 		if err != nil {
@@ -2957,97 +2955,136 @@ func TestDeclaredPurposeNumberFixtures(t *testing.T) {
 
 // TestDeclaredPurposeNumberOutsideFloat64Range pins the verdict and reason on
 // a v1.1 credential whose declaredPurpose writes a number outside the float64
-// range, such as 1e400. declaredPurpose enters the TBS as written, and the
-// JCS library refuses such a number with the error strconv.ParseFloat returns
-// for it, whose text the Go release sets. This verifier wrote that error as
-// its reason, v1.1 canonicalization failed: strconv.ParseFloat: parsing
-// "1e400": value out of range, where the Python reference verifier writes a
-// sentence that names the member. Both now reject each value in purposes as
-// VERIFIER_CONFIG_ERROR with that sentence (GO_PURPOSE_NUMBER_VERDICTS in
-// verifiers/python/test_verify.py). strconv.ParseFloat reads a number written
-// with more than 800 digits and an exponent part as finite when its value is
-// outside the range: it reads 1 followed by 1000 zeros and e-650 as 1e+149.
-// This verifier decided the range with it, so on a declaredPurpose of that
-// number it rejected the credential as SIGNATURE_INVALID, where the Python
-// reference verifier rejects it as VERIFIER_CONFIG_ERROR. It now decides the
-// range on the digits as written (numberOutsideFloat64Range), and each such
-// number in purposes rejects as VERIFIER_CONFIG_ERROR with that sentence.
-// atx-conformance#289, atx-conformance#293.
+// range, such as 1e400. Both reference verifiers rejected each as
+// VERIFIER_CONFIG_ERROR, with the reason v1.1 canonicalization failed:
+// declaredPurpose holds a number outside the float64 range, where they rejected
+// 1e3 and 2.5 as SIGNATURE_INVALID. Such a number is written with a fraction
+// or an exponent part, or is an integer outside the exact range, so no
+// signature covers it whatever its value. Both now refuse it in the scan that
+// refuses a number in that form or outside that range, before the JCS library
+// reads one (integerOutsideExactRangeV11), with a reason that quotes the first
+// such number as written, and neither decides the float64 range. The numbers here
+// stand on both sides of 2^1024 - 2^970, where a float64 rounds to infinity,
+// written short and written long, and each gets the verdict its form gives it
+// (GO_PURPOSE_FORM_BESIDE_FLOAT64_EDGE and GO_PURPOSE_INTEGERS_BESIDE_FLOAT64_EDGE
+// in verifiers/python/test_verify.py). atx-conformance#302.
 func TestDeclaredPurposeNumberOutsideFloat64Range(t *testing.T) {
 	base := v11Baseline(t)
-	const outside = "v1.1 canonicalization failed: declaredPurpose holds a number outside the float64 range"
+	refused := func(purpose, want string) {
+		t.Helper()
+		got := verify(withMembers(t, base, map[string]string{"declaredPurpose": purpose}))
+		if got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != want {
+			t.Errorf("declaredPurpose %.40s (%d bytes): %.300s, want REJECT[SIGNATURE_INVALID: %.300s]", purpose, len(purpose), got, want)
+		}
+	}
+	zeros := func(n int) string { return strings.Repeat("0", n) }
 	// edge is 2^1024 - 2^970, the largest float64 plus half a unit in its
 	// last place: the smallest integer that rounds past it, to infinity.
-	edge := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 1024), new(big.Int).Lsh(big.NewInt(1), 970))
-	purposes := []string{
-		`1e400`,
-		`-1e400`,
-		`{"n": 1e400}`,
-		`{"n": -1e400}`,
-		`1E400`,
-		`1e+400`,
-		`1.7976931348623159e308`,
-		edge.String(),
-		"-" + edge.String(),
-		`{"limit": 1e400}`,
-		`["billing:inquiry", 1e400]`,
-		`[1.5, 1e400]`,
-		`[1e400, 9007199254740993]`,
-		strings.Repeat("[", 9997) + "1e400" + strings.Repeat("]", 9997),
+	edgeValue := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 1024), new(big.Int).Lsh(big.NewInt(1), 970))
+	edge := edgeValue.String()
+	above := new(big.Int).Add(edgeValue, big.NewInt(1)).String()
+	below := new(big.Int).Sub(edgeValue, big.NewInt(1)).String()
+	// 10^350, which strconv.ParseFloat reads as 1e+149.
+	long := "1" + zeros(1000) + "e-650"
+
+	// Written with a fraction or an exponent part, outside the range. The
+	// last ten are written with more than 800 digits and an exponent part,
+	// which strconv.ParseFloat reads as finite: those atx-conformance#293
+	// lists, then 10^309 and 2^1024 - 2^970 written with 1000 trailing zeros.
+	for _, number := range []string{
+		`1e400`, `-1e400`, `1E400`, `1e+400`, `1e309`, `0.1e310`, `10e308`,
+		`1e99999999999999999999`, `1.7976931348623159e308`,
+		edge + ".0", edge + ".5", edge + "e0", "0." + edge + "e309", "0.000" + edge + "E+312",
+		long, "-" + long, "1" + zeros(1000) + "E-650", "1" + zeros(900) + "1e-560",
+		"1" + zeros(850) + "e-500", "1" + zeros(5000) + "e-4600",
+		"0." + zeros(200000) + "1e200400", "1" + zeros(1000) + ".5e-650",
+		"1" + zeros(1000) + "e-691", edge + zeros(1000) + "e-1000",
+	} {
+		refused(number, fractionOrExponentReason(number))
 	}
-	// Integers of 401 and 5001 digits, written as the Python verifier's
+	// Written with a fraction or an exponent part, inside the range: more
+	// than 800 digits and an exponent part included (10^308, 10^300, 10^307
+	// and 2^1024 - 2^970 - 1), and zero, whatever its exponent.
+	for _, number := range []string{
+		`1.7976931348623158e308`, `1e308`, `0.1e309`, `10e307`, `1e-400`, `1e-99999999999999999999`,
+		`0.0`, `0e400`, `0.000E-400`, "0." + zeros(1000) + "e99999999999999999999",
+		below + ".9", "0." + below + "e309",
+		"1" + zeros(1000) + "e-692", "1" + zeros(1000) + "e-700",
+		"0." + zeros(30000) + "1e30308", "0." + zeros(200000) + "1e200308",
+		below + zeros(1000) + "e-1000",
+	} {
+		refused(number, fractionOrExponentReason(number))
+	}
+	// Integers outside the exact range, on both sides of the edge, of 401
+	// and 5001 digits among them, written as the Python verifier's
 	// LongInteger tests write them.
-	for _, digits := range []string{"1" + strings.Repeat("0", 400), "1" + strings.Repeat("0", 5000)} {
-		purposes = append(purposes, digits, "-"+digits, `{"x": `+digits+`}`, `[7, `+digits+`]`)
+	for _, number := range []string{
+		edge, "-" + edge, above, below, "-" + below,
+		"1" + zeros(400), "-1" + zeros(400), "1" + zeros(5000), "-1" + zeros(5000),
+	} {
+		refused(number, outsideRangeReason(number))
 	}
-	// Numbers written with more than 800 digits and an exponent part, which
-	// strconv.ParseFloat reads as finite: those atx-conformance#293 lists,
-	// then 10^309 and 2^1024 - 2^970 written with 1000 trailing zeros.
-	long := "1" + strings.Repeat("0", 1000) + "e-650"
-	purposes = append(purposes,
-		long,
-		"-"+long,
-		`{"n": `+long+`}`,
-		`[1.5, `+long+`]`,
-		"1"+strings.Repeat("0", 1000)+"E-650",
-		"1"+strings.Repeat("0", 900)+"1e-560",
-		"1"+strings.Repeat("0", 850)+"e-500",
-		"1"+strings.Repeat("0", 5000)+"e-4600",
-		"0."+strings.Repeat("0", 200000)+"1e200400",
-		"1"+strings.Repeat("0", 1000)+".5e-650",
-		"1"+strings.Repeat("0", 1000)+"e-691",
-		edge.String()+strings.Repeat("0", 1000)+"e-1000",
-	)
-	for _, purpose := range purposes {
-		got := verify(withMembers(t, base, map[string]string{"declaredPurpose": purpose}))
-		if got.RejectCategory != "VERIFIER_CONFIG_ERROR" || got.Reason != outside {
-			t.Errorf("declaredPurpose %.40s (%d bytes): %.300s, want REJECT[VERIFIER_CONFIG_ERROR: %s]", purpose, len(purpose), got, outside)
+	// Inside other values. The first number declaredPurpose writes that is
+	// outside the integer form or the exact range decides.
+	for _, tc := range []struct{ purpose, want string }{
+		{`{"n": 1e400}`, fractionOrExponentReason(`1e400`)},
+		{`{"n": -1e400}`, fractionOrExponentReason(`-1e400`)},
+		{`{"limit": 1e400}`, fractionOrExponentReason(`1e400`)},
+		{`["billing:inquiry", 1e400]`, fractionOrExponentReason(`1e400`)},
+		{strings.Repeat("[", 9997) + "1e400" + strings.Repeat("]", 9997), fractionOrExponentReason(`1e400`)},
+		{`{"n": ` + long + `}`, fractionOrExponentReason(long)},
+		{`{"x": 1` + zeros(400) + `}`, outsideRangeReason("1" + zeros(400))},
+		{`[7, 1` + zeros(400) + `]`, outsideRangeReason("1" + zeros(400))},
+		{`{"x": 1` + zeros(5000) + `}`, outsideRangeReason("1" + zeros(5000))},
+		{`[7, 1` + zeros(5000) + `]`, outsideRangeReason("1" + zeros(5000))},
+		{`[1.5, 1e400]`, fractionOrExponentReason(`1.5`)},
+		{`[1.5, ` + long + `]`, fractionOrExponentReason(`1.5`)},
+		{`[1e400, 9007199254740993]`, fractionOrExponentReason(`1e400`)},
+		{`[9007199254740993, 1e400]`, outsideRangeReason(`9007199254740993`)},
+	} {
+		refused(tc.purpose, tc.want)
+	}
+
+	// Controls: an integer in the exact range, and 1e400 written in a string
+	// or as a member name, which is no number, reach the signature check. The
+	// baseline signs no declaredPurpose, so the signature fails.
+	const notVerified = "Ed25519 signature did:opena2a:authority:opena2a.org#key-1 did not verify against any configured public key"
+	for _, purpose := range []string{`0`, `-0`, `1`, `-1`, `{"n": "1e400"}`, `{"1e400": 1}`} {
+		refused(purpose, notVerified)
+	}
+
+	// The JCS library refuses these two, so the scan runs before it reads them.
+	for _, number := range []string{`1e400`, "1" + zeros(400)} {
+		var a atx
+		if err := json.Unmarshal(withMembers(t, base, map[string]string{"declaredPurpose": number}).ATX, &a); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := canonicalPayloadV11(&a); err == nil {
+			t.Errorf("canonicalPayloadV11 with declaredPurpose %.40s (%d bytes): no error, want the JCS library's", number, len(number))
 		}
 	}
 
-	// Controls: a number in the float64 range keeps its category,
-	// SIGNATURE_INVALID. One written with a fraction or an exponent part is
-	// refused for its form, with the number as written, more than 800 digits
-	// and an exponent part included (10^308, 10^300, 10^307 and
-	// 2^1024 - 2^970 - 1); an integer outside the exact range is refused for
-	// its range; and 1e400 written in a string or as a member name is no
-	// number, so the signature fails. The baseline signs no declaredPurpose.
-	const notVerified = "Ed25519 signature did:opena2a:authority:opena2a.org#key-1 did not verify against any configured public key"
-	below := new(big.Int).Sub(edge, big.NewInt(1)).String()
-	for _, tc := range []struct{ purpose, want string }{
-		{`1.7976931348623158e308`, fractionOrExponentReason(`1.7976931348623158e308`)},
-		{`1e-400`, fractionOrExponentReason(`1e-400`)},
-		{below, "no signature covers declaredPurpose: the integer " + below + " is outside the I-JSON exact range, -(2^53-1) to 2^53-1"},
-		{`{"n": "1e400"}`, notVerified},
-		{`{"1e400": 1}`, notVerified},
-		{"1" + strings.Repeat("0", 1000) + "e-692", fractionOrExponentReason("1" + strings.Repeat("0", 1000) + "e-692")},
-		{"1" + strings.Repeat("0", 1000) + "e-700", fractionOrExponentReason("1" + strings.Repeat("0", 1000) + "e-700")},
-		{"0." + strings.Repeat("0", 30000) + "1e30308", fractionOrExponentReason("0." + strings.Repeat("0", 30000) + "1e30308")},
-		{below + strings.Repeat("0", 1000) + "e-1000", fractionOrExponentReason(below + strings.Repeat("0", 1000) + "e-1000")},
-	} {
-		got := verify(withMembers(t, base, map[string]string{"declaredPurpose": tc.purpose}))
-		if got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != tc.want {
-			t.Errorf("declaredPurpose %.40s (%d bytes): %.300s, want REJECT[SIGNATURE_INVALID: %.300s]", tc.purpose, len(tc.purpose), got, tc.want)
+	// A signature that verifies over the bytes the JCS library writes does
+	// not save such a number: strconv.ParseFloat reads long as 1e+149, so the
+	// library writes for it what it writes for the 1e149 signed here.
+	carried := withMembers(t, signedByPrimary(t, withMembers(t, base, map[string]string{"declaredPurpose": `1e149`})), map[string]string{"declaredPurpose": long})
+	if !signaturesVerifyOverTBS(t, carried) {
+		t.Error("declaredPurpose 1 followed by 1000 zeros and e-650, signed as 1e149: the signature does not verify over JCS(TBS)")
+	}
+	if got, want := verify(carried), fractionOrExponentReason(long); got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != want {
+		t.Errorf("declaredPurpose 1 followed by 1000 zeros and e-650, signed as 1e149: %.300s, want REJECT[SIGNATURE_INVALID: %.300s]", got, want)
+	}
+
+	// The fixture of a number in declaredPurpose, with its 1.5 replaced by
+	// each number atx-conformance#302 names, passes as a fixture: it expects
+	// SIGNATURE_INVALID and a reason containing signature.
+	injected, err := loadFixture(repoRoot + "/fixtures/v1_1-declared-purpose-number-injected.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, number := range []string{`1e400`, "1" + zeros(400)} {
+		if got := verify(withMembers(t, injected, map[string]string{"declaredPurpose": number})); !matchesExpected(injected.Expected, got) {
+			t.Errorf("fixtures/v1_1-declared-purpose-number-injected.json with declaredPurpose %.40s (%d bytes): %.300s, not the pinned outcome", number, len(number), got)
 		}
 	}
 
@@ -3066,94 +3103,6 @@ func TestDeclaredPurposeNumberOutsideFloat64Range(t *testing.T) {
 	}
 	if got := verify(withMembers(t, v10, map[string]string{"declaredPurpose": `{"n": 1e400}`})); !got.Accepted {
 		t.Errorf(`declaredPurpose {"n": 1e400} on the v1.0 baseline: %s, want ACCEPT`, got)
-	}
-}
-
-// TestNumberOutsideFloat64Range pins numberOutsideFloat64Range at and around
-// 2^1024 - 2^970 (float64OverflowDigits) on literals written short and
-// written long, and holds it to strconv.ParseFloat, which rounds at the same
-// edge, on each literal of at most 800 bytes, where ParseFloat reads every
-// digit. atx-conformance#293.
-func TestNumberOutsideFloat64Range(t *testing.T) {
-	edge := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 1024), new(big.Int).Lsh(big.NewInt(1), 970))
-	if float64OverflowDigits != edge.String() || len(float64OverflowDigits) != 309 {
-		t.Fatalf("float64OverflowDigits = %.40s (%d digits), want 2^1024 - 2^970, %.40s (%d digits)", float64OverflowDigits, len(float64OverflowDigits), edge, len(edge.String()))
-	}
-	above := new(big.Int).Add(edge, big.NewInt(1)).String()
-	below := new(big.Int).Sub(edge, big.NewInt(1)).String()
-	zeros := func(n int) string { return strings.Repeat("0", n) }
-	for _, tc := range []struct {
-		literal string
-		outside bool
-	}{
-		// Zero, however written.
-		{`0`, false},
-		{`-0`, false},
-		{`0.0`, false},
-		{`0e400`, false},
-		{`0.000E-400`, false},
-		{"0." + zeros(1000) + "e99999999999999999999", false},
-		// In the range.
-		{`1`, false},
-		{`-1`, false},
-		{`1.5`, false},
-		{`1e3`, false},
-		{`1E+3`, false},
-		{`1e-400`, false},
-		{`1e-99999999999999999999`, false},
-		{`1e308`, false},
-		{`0.1e309`, false},
-		{`10e307`, false},
-		{`1.7976931348623158e308`, false},
-		{below, false},
-		{"-" + below, false},
-		{below + ".9", false},
-		{"0." + below + "e309", false},
-		{"1" + zeros(1000) + "e-692", false},
-		{"1" + zeros(1000) + "e-700", false},
-		{below + zeros(1000) + "e-1000", false},
-		{"0." + zeros(30000) + "1e30308", false},
-		{"0." + zeros(200000) + "1e200308", false},
-		// At the edge, which rounds to infinity, and above it.
-		{edge.String(), true},
-		{"-" + edge.String(), true},
-		{edge.String() + ".0", true},
-		{edge.String() + ".5", true},
-		{above, true},
-		{"0." + edge.String() + "e309", true},
-		{"0.000" + edge.String() + "E+312", true},
-		{edge.String() + "e0", true},
-		{`1.7976931348623159e308`, true},
-		{`1e309`, true},
-		{`0.1e310`, true},
-		{`10e308`, true},
-		{`1e400`, true},
-		{`-1e400`, true},
-		{`1E400`, true},
-		{`1e+400`, true},
-		{`1e99999999999999999999`, true},
-		{"1" + zeros(400), true},
-		{edge.String() + zeros(1000) + "e-1000", true},
-		{"1" + zeros(1000) + "e-691", true},
-		{"1" + zeros(1000) + "e-650", true},
-		{"-1" + zeros(1000) + "e-650", true},
-		{"1" + zeros(1000) + "E-650", true},
-		{"1" + zeros(900) + "1e-560", true},
-		{"1" + zeros(850) + "e-500", true},
-		{"1" + zeros(5000) + "e-4600", true},
-		{"0." + zeros(200000) + "1e200400", true},
-		{"1" + zeros(1000) + ".5e-650", true},
-	} {
-		if got := numberOutsideFloat64Range(tc.literal); got != tc.outside {
-			t.Errorf("numberOutsideFloat64Range(%.40s, %d bytes) = %v, want %v", tc.literal, len(tc.literal), got, tc.outside)
-		}
-		if len(tc.literal) > 800 {
-			continue
-		}
-		_, err := strconv.ParseFloat(tc.literal, 64)
-		if refused := errors.Is(err, strconv.ErrRange); refused != tc.outside {
-			t.Errorf("strconv.ParseFloat(%.40s, %d bytes): %.80v; want ErrRange: %v", tc.literal, len(tc.literal), err, tc.outside)
-		}
 	}
 }
 

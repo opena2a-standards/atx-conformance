@@ -55,7 +55,8 @@
 # --dry-run prints the image, its base images, the VHS source, the container's flags, the tape, the
 # checkout and the files a render writes, then exits 0. It runs git and no docker command, and
 # writes no file. Like a render, it exits 1 when the Dockerfile names a base image by tag alone or
-# the VHS source by no commit.
+# the VHS source by no commit, references an image other than its two base images, or holds a part
+# the script does not read (read_images lists what it reads).
 #
 # Nothing metered is called: VHS, Go, the Go module proxy and the checksum database are free to use.
 set -euo pipefail
@@ -553,13 +554,141 @@ sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d" " -f1; else shasum -a 256 | cut -d" " -f1; fi
 }
 
+# Ends the script on a part of the Dockerfile it does not read: $1 is its line, $2 says what it is.
+refuse() {
+  echo "record-$NAME.sh: docs/demo/docker/Dockerfile:$1: $2; not recording." >&2
+  exit 1
+}
+
+lower() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+# The images the build uses, read from the Dockerfile ($1) into BUILDER_IMAGE and BASE_IMAGE. The
+# sidecar records two images, so the script refuses a Dockerfile that references another, and
+# refuses a part of the Dockerfile it does not read instead of skipping it. It reads the Dockerfile
+# one instruction at a time: a line that ends in a backslash continues on the next one, and comment
+# lines and blank lines inside an instruction are skipped. It lower-cases an instruction's keyword, a
+# flag name and a from= key before reading them.
+#   FROM      read in two forms, each once, with one space between words: `FROM <image> AS vhsbuild`,
+#             the build stage, and `FROM <image>`, the render stage. A FROM line in another form is
+#             refused, with or without --platform.
+#   COPY      the value of --from must be vhsbuild.
+#   RUN       the value of a from= key of --mount must be vhsbuild.
+#             A flag of COPY or RUN written with a quote or a backslash is refused.
+#   ONBUILD   refused, and so is a word that is not a Dockerfile instruction.
+# Also refused: a heredoc (<<); a byte other than printable ASCII or a tab outside a comment; a NUL
+# byte; and, above the first instruction, a comment in the form of a parser directive (# name=value):
+# `# syntax=` names an image of its own and `# escape=` changes how lines continue.
+read_images() {
+  # The C locale makes the character classes below match bytes; in a UTF-8 locale, [[:print:]] also
+  # matches a character of more than one byte.
+  local LC_ALL=C
+  local n=0 start=0 text="" raw started=0 continued=0
+  local comment='^[[:blank:]]*#' blank='^[[:blank:]]*$' other='[^[:print:][:blank:]]'
+  local directive='^[[:space:]]*#[[:space:]]*[A-Za-z][A-Za-z0-9]*[[:space:]]*='
+  local continues='(^|[^\\])\\[[:blank:]]*$'
+  BUILDER_IMAGE="" BASE_IMAGE=""
+  if IFS= read -r -d '' raw < "$1"; then
+    echo "record-$NAME.sh: docs/demo/docker/Dockerfile holds a NUL byte, which the script does not read; not recording." >&2
+    exit 1
+  fi
+  while IFS= read -r raw || [ -n "$raw" ]; do
+    n=$((n + 1))
+    if [[ $raw =~ $comment ]]; then
+      if [ "$started" = 0 ] && [[ $raw =~ $directive ]]; then
+        refuse "$n" "a comment above the first instruction in the form of a parser directive (# name=value), which the script does not read"
+      fi
+      continue
+    fi
+    if [[ $raw =~ $other ]]; then
+      refuse "$n" "a character other than printable ASCII or a tab outside a comment, which the script does not read"
+    fi
+    if [[ $raw =~ $blank ]]; then
+      continue
+    fi
+    if [ "$continued" = 0 ]; then
+      start=$n text=""
+    fi
+    started=1
+    text="$text$raw"
+    if [[ $text =~ $continues ]]; then
+      text="${text%\\*}"
+      continued=1
+    else
+      continued=0
+      read_instruction "$start" "$text"
+    fi
+  done < "$1"
+  if [ "$continued" = 1 ]; then
+    read_instruction "$start" "$text"
+  fi
+}
+
+# One instruction of the Dockerfile ($2), which starts at line $1; see read_images.
+read_instruction() {
+  local line="$1" text="${2#"${2%%[![:blank:]]*}"}" keyword kind word name value field
+  local build_stage='^FROM ([^[:blank:]]+) AS vhsbuild$' render_stage='^FROM ([^[:blank:]]+)$'
+  local -a words fields
+  [ -n "$text" ] || return 0
+  keyword="${text%%[[:blank:]]*}"
+  kind="$(lower "$keyword")"
+  if [[ $text == *'<<'* ]]; then
+    refuse "$line" "$keyword carries <<, the form of a heredoc, which the script does not read"
+  fi
+  case "$kind" in
+    from)
+      if [[ $text =~ $build_stage ]]; then
+        [ -z "$BUILDER_IMAGE" ] || refuse "$line" "a second FROM line of the build stage (AS vhsbuild); the script reads one"
+        BUILDER_IMAGE="${BASH_REMATCH[1]}"
+      elif [[ $text =~ $render_stage ]]; then
+        [ -z "$BASE_IMAGE" ] || refuse "$line" "a second FROM line with no stage name; the script reads one, the render stage"
+        BASE_IMAGE="${BASH_REMATCH[1]}"
+      else
+        refuse "$line" "\`$text\` is a FROM line the script does not read. It reads two, \`FROM <image> AS vhsbuild\` and \`FROM <image>\`, and the sidecar records the image of no other"
+      fi
+      ;;
+    copy | run)
+      # The flags are the words after the keyword that start with --, up to the first that does not
+      # or a word that is -- alone.
+      read -r -a words <<< "${text#"$keyword"}"
+      for word in ${words[@]+"${words[@]}"}; do
+        case "$word" in
+          --) break ;;
+          --*) ;;
+          *) break ;;
+        esac
+        case "$word" in
+          *[\"\'\\]*) refuse "$line" "$keyword flag $word is written with a quote or a backslash, which the script does not read" ;;
+        esac
+        name="$(lower "${word%%=*}")"
+        value=""
+        if [[ $word == *=* ]]; then value="${word#*=}"; fi
+        if [ "$kind" = copy ] && [ "$name" = --from ] && [ "$value" != vhsbuild ]; then
+          refuse "$line" "\`$keyword $word\`: the script reads a --from of COPY only when it is vhsbuild, the build stage, and the sidecar records no other image"
+        fi
+        if [ "$kind" = run ] && [ "$name" = --mount ]; then
+          IFS=, read -r -a fields <<< "$value"
+          for field in ${fields[@]+"${fields[@]}"}; do
+            if [ "$(lower "${field%%=*}")" = from ] && [ "${field#*=}" != vhsbuild ]; then
+              refuse "$line" "\`$keyword $word\`: the script reads a from= key of RUN --mount only when it is vhsbuild, the build stage, and the sidecar records no other image"
+            fi
+          done
+        fi
+      done
+      ;;
+    onbuild) refuse "$line" "$keyword, which the script does not read" ;;
+    add | arg | cmd | entrypoint | env | expose | healthcheck | label | maintainer | shell | stopsignal | user | volume | workdir) ;;
+    *) refuse "$line" "$keyword is not an instruction the script reads" ;;
+  esac
+}
+
 # The pins of the render image as the Dockerfile writes them: the builder and the base image by the
 # digest of their image index, and the repository, tag and commit of the VHS source. The sidecar
 # records these strings, so a sidecar names the pins of the Dockerfile at the commit it ran from.
 read_pins() {
   local by_digest='^[^@[:space:]]+@sha256:[0-9a-f]{64}$' by_commit='^[0-9a-f]{40}$' ref
-  BUILDER_IMAGE="$(sed -n -E 's/^FROM ([^ ]+) AS vhsbuild$/\1/p' "$1")"
-  BASE_IMAGE="$(sed -n -E 's/^FROM ([^ ]+)$/\1/p' "$1")"
+  read_images "$1"
   SOURCE_REPOSITORY="$(sed -n -E 's/^ARG VHS_REPOSITORY=(.+)$/\1/p' "$1")"
   SOURCE_TAG="$(sed -n -E 's/^ARG VHS_TAG=(.+)$/\1/p' "$1")"
   SOURCE_COMMIT="$(sed -n -E 's/^ARG VHS_COMMIT=(.+)$/\1/p' "$1")"
@@ -589,7 +718,7 @@ if [ "$DRY_RUN" = 1 ]; then
   read_pins "$DOCKER_DIR/Dockerfile"
   echo "record-$NAME.sh --dry-run: runs git and no docker command; no file is written."
   echo "  image     $IMAGE, built with $DOCKER from docs/demo/docker/Dockerfile"
-  echo "  bases     $(sed -n -E 's/^FROM ([^ ]+).*/\1/p' "$DOCKER_DIR/Dockerfile" | paste -s -d " " -)"
+  echo "  bases     $BUILDER_IMAGE $BASE_IMAGE"
   echo "  source    $SOURCE_REPOSITORY $SOURCE_TAG, commit $SOURCE_COMMIT"
   echo "  tape      $TAPE"
   echo "  runs      go run $MODULE/cmd/$NAME@latest, the version the Go module proxy names when it runs"

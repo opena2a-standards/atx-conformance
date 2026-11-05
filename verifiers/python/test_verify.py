@@ -382,54 +382,59 @@ def _load_serializer(path: Path):
 # that rounds past it, to infinity, under round-half-to-even.
 FLOAT64_EDGE = 2**1024 - 2**970
 
-# Numbers written into an unsigned declaredPurpose, and the category the Go
-# reference verifier reports for each, read from its run over these values.
-# The rows written with more than 800 digits and an exponent part, which
-# strconv.ParseFloat reads as finite, are those atx-conformance#293 lists,
-# then 10^309 and 2^1024 - 2^970 written with 1000 trailing zeros, and, in
-# the range, 10^308, 10^300, 10^307 and 2^1024 - 2^970 - 1 written so.
-GO_PURPOSE_NUMBER_VERDICTS = (
-    ("1e400", "VERIFIER_CONFIG_ERROR"),
-    ("-1e400", "VERIFIER_CONFIG_ERROR"),
-    ('{"n": 1e400}', "VERIFIER_CONFIG_ERROR"),
-    ('{"n": -1e400}', "VERIFIER_CONFIG_ERROR"),
-    ("1E400", "VERIFIER_CONFIG_ERROR"),
-    ("1e+400", "VERIFIER_CONFIG_ERROR"),
-    ("1.7976931348623159e308", "VERIFIER_CONFIG_ERROR"),
-    (str(FLOAT64_EDGE), "VERIFIER_CONFIG_ERROR"),
-    (str(-FLOAT64_EDGE), "VERIFIER_CONFIG_ERROR"),
-    ('{"limit": 1e400}', "VERIFIER_CONFIG_ERROR"),
-    ('["billing:inquiry", 1e400]', "VERIFIER_CONFIG_ERROR"),
-    ("[1.5, 1e400]", "VERIFIER_CONFIG_ERROR"),
-    ("[" * 9997 + "1e400" + "]" * 9997, "VERIFIER_CONFIG_ERROR"),
-    ("1" + "0" * 1000 + "e-650", "VERIFIER_CONFIG_ERROR"),
-    ("-1" + "0" * 1000 + "e-650", "VERIFIER_CONFIG_ERROR"),
-    ('{"n": 1' + "0" * 1000 + "e-650}", "VERIFIER_CONFIG_ERROR"),
-    ("[1.5, 1" + "0" * 1000 + "e-650]", "VERIFIER_CONFIG_ERROR"),
-    ("1" + "0" * 1000 + "E-650", "VERIFIER_CONFIG_ERROR"),
-    ("1" + "0" * 900 + "1e-560", "VERIFIER_CONFIG_ERROR"),
-    ("1" + "0" * 850 + "e-500", "VERIFIER_CONFIG_ERROR"),
-    ("1" + "0" * 5000 + "e-4600", "VERIFIER_CONFIG_ERROR"),
-    ("0." + "0" * 200000 + "1e200400", "VERIFIER_CONFIG_ERROR"),
-    ("1" + "0" * 1000 + ".5e-650", "VERIFIER_CONFIG_ERROR"),
-    ("1" + "0" * 1000 + "e-691", "VERIFIER_CONFIG_ERROR"),
-    (str(FLOAT64_EDGE) + "0" * 1000 + "e-1000", "VERIFIER_CONFIG_ERROR"),
-    ("1.7976931348623158e308", "SIGNATURE_INVALID"),
-    (str(FLOAT64_EDGE - 1), "SIGNATURE_INVALID"),
-    ("1e308", "SIGNATURE_INVALID"),
-    ("1e-400", "SIGNATURE_INVALID"),
-    ("1" + "0" * 1000 + "e-692", "SIGNATURE_INVALID"),
-    ("1" + "0" * 1000 + "e-700", "SIGNATURE_INVALID"),
-    ("0." + "0" * 30000 + "1e30308", "SIGNATURE_INVALID"),
-    (str(FLOAT64_EDGE - 1) + "0" * 1000 + "e-1000", "SIGNATURE_INVALID"),
+# Each row below is a value written into an unsigned declaredPurpose, on one
+# side or the other of the float64 edge, and the number in it that the reason
+# quotes, read from the Go reference verifier's run over these values: the
+# first number the credential writes that is outside the integer form or the
+# exact range decides. The first table holds numbers written with a fraction
+# or an exponent part. Its rows written with more than 800 digits and an
+# exponent part, which strconv.ParseFloat reads as finite, are those
+# atx-conformance#293 lists, then 10^309 and 2^1024 - 2^970 written with 1000
+# trailing zeros, and, in the range, 10^308, 10^300, 10^307 and
+# 2^1024 - 2^970 - 1 written so.
+GO_PURPOSE_FORM_BESIDE_FLOAT64_EDGE = (
+    ("1e400", "1e400"),
+    ("-1e400", "-1e400"),
+    ('{"n": 1e400}', "1e400"),
+    ('{"n": -1e400}', "-1e400"),
+    ("1E400", "1E400"),
+    ("1e+400", "1e+400"),
+    ("1.7976931348623159e308", "1.7976931348623159e308"),
+    ('{"limit": 1e400}', "1e400"),
+    ('["billing:inquiry", 1e400]', "1e400"),
+    ("[1.5, 1e400]", "1.5"),
+    ("[1e400, 9007199254740993]", "1e400"),
+    ("[" * 9997 + "1e400" + "]" * 9997, "1e400"),
+    ("1" + "0" * 1000 + "e-650", "1" + "0" * 1000 + "e-650"),
+    ("-1" + "0" * 1000 + "e-650", "-1" + "0" * 1000 + "e-650"),
+    ('{"n": 1' + "0" * 1000 + "e-650}", "1" + "0" * 1000 + "e-650"),
+    ("[1.5, 1" + "0" * 1000 + "e-650]", "1.5"),
+    ("1" + "0" * 1000 + "E-650", "1" + "0" * 1000 + "E-650"),
+    ("1" + "0" * 900 + "1e-560", "1" + "0" * 900 + "1e-560"),
+    ("1" + "0" * 850 + "e-500", "1" + "0" * 850 + "e-500"),
+    ("1" + "0" * 5000 + "e-4600", "1" + "0" * 5000 + "e-4600"),
+    ("0." + "0" * 200000 + "1e200400", "0." + "0" * 200000 + "1e200400"),
+    ("1" + "0" * 1000 + ".5e-650", "1" + "0" * 1000 + ".5e-650"),
+    ("1" + "0" * 1000 + "e-691", "1" + "0" * 1000 + "e-691"),
+    (str(FLOAT64_EDGE) + "0" * 1000 + "e-1000", str(FLOAT64_EDGE) + "0" * 1000 + "e-1000"),
+    ("1.7976931348623158e308", "1.7976931348623158e308"),
+    ("1e308", "1e308"),
+    ("1e-400", "1e-400"),
+    ("1" + "0" * 1000 + "e-692", "1" + "0" * 1000 + "e-692"),
+    ("1" + "0" * 1000 + "e-700", "1" + "0" * 1000 + "e-700"),
+    ("0." + "0" * 30000 + "1e30308", "0." + "0" * 30000 + "1e30308"),
+    (str(FLOAT64_EDGE - 1) + "0" * 1000 + "e-1000", str(FLOAT64_EDGE - 1) + "0" * 1000 + "e-1000"),
 )
 
-# The reason both reference verifiers write for a number in a v1.1
-# declaredPurpose that strconv.ParseFloat refuses as outside the float64
-# range, such as the VERIFIER_CONFIG_ERROR rows above. The Go verifier wrote
-# the error its JCS library returned, strconv.ParseFloat: parsing "1e400":
-# value out of range, until atx-conformance#289.
-GO_OUTSIDE_FLOAT64_REASON = "v1.1 canonicalization failed: declaredPurpose holds a number outside the float64 range"
+# The same for integers outside the exact range.
+GO_PURPOSE_INTEGERS_BESIDE_FLOAT64_EDGE = (
+    (str(FLOAT64_EDGE), str(FLOAT64_EDGE)),
+    (str(-FLOAT64_EDGE), str(-FLOAT64_EDGE)),
+    (str(FLOAT64_EDGE + 1), str(FLOAT64_EDGE + 1)),
+    (str(FLOAT64_EDGE - 1), str(FLOAT64_EDGE - 1)),
+    (str(1 - FLOAT64_EDGE), str(1 - FLOAT64_EDGE)),
+    ("[9007199254740993, 1e400]", "9007199254740993"),
+)
 
 
 class InjectedNumberPurpose(unittest.TestCase):
@@ -467,49 +472,58 @@ class InjectedNumberPurpose(unittest.TestCase):
                 self.assertEqual(got.reject_category, "SIGNATURE_INVALID")
                 self.assertIn("signature", got.reason.lower())
 
-    def test_number_outside_float64_range_reaches_the_go_category(self):
-        # The Go reference verifier decides the float64 range on the digits
-        # as written, at 2^1024 - 2^970 (numberOutsideFloat64Range): a number
-        # at or past that edge rejects as VERIFIER_CONFIG_ERROR, one below it
-        # is canonicalized and the signature fails. Python's float() rounds
-        # at the same edge on each number of GO_PURPOSE_NUMBER_VERDICTS, those
-        # written with more than 800 digits and an exponent part included,
-        # which strconv.ParseFloat reads as finite and the Go verifier decided
-        # the range with until atx-conformance#293
-        # (test_number_outside_float64_range_written_with_more_than_800_digits).
-        for literal, category in GO_PURPOSE_NUMBER_VERDICTS:
-            with self.subTest(literal=literal[:40], length=len(literal)):
-                got = _at_verdict(BASELINE_V11, ("declaredPurpose",), literal)
-                self.assertFalse(got.accepted)
-                self.assertEqual(got.reject_category, category, got.reason[:200])
-
-    def test_number_outside_float64_range_has_the_go_reason(self):
-        # Both reference verifiers refuse such a number (the
-        # VERIFIER_CONFIG_ERROR rows) before their JCS serializer reads it,
-        # with one reason, which names the member
+    def test_number_beside_the_float64_edge_has_the_go_reason(self):
+        # Both reference verifiers rejected a number outside the float64 range
+        # as VERIFIER_CONFIG_ERROR, where they rejected 1e3 and 2.5 as
+        # SIGNATURE_INVALID. Such a number is written with a fraction or an
+        # exponent part, or is an integer outside the exact range, so no
+        # signature covers it whatever its value. Both refuse it before their
+        # JCS serializer reads it, in the scan that refuses a number in that
+        # form or outside that range, and neither decides the float64 range
         # (TestDeclaredPurposeNumberOutsideFloat64Range in the Go verifier).
-        for literal, category in GO_PURPOSE_NUMBER_VERDICTS:
-            if category != "VERIFIER_CONFIG_ERROR":
-                continue
-            with self.subTest(literal=literal[:40], length=len(literal)):
-                got = _at_verdict(BASELINE_V11, ("declaredPurpose",), literal)
-                self.assertEqual(got.reason, GO_OUTSIDE_FLOAT64_REASON)
+        # atx-conformance#302.
+        for rows, reason in (
+            (GO_PURPOSE_FORM_BESIDE_FLOAT64_EDGE, _fraction_or_exponent_reason),
+            (GO_PURPOSE_INTEGERS_BESIDE_FLOAT64_EDGE, lambda literal: _exact_range_reason("declaredPurpose", literal)),
+        ):
+            for written, literal in rows:
+                with self.subTest(written=written[:40], length=len(written)):
+                    got = _at_verdict(BASELINE_V11, ("declaredPurpose",), written)
+                    self.assertFalse(got.accepted)
+                    self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason[:200])
+                    self.assertEqual(got.reason, reason(literal))
 
     def test_number_outside_float64_range_written_with_more_than_800_digits(self):
         # 1 followed by 1000 zeros and e-650, whose value is 10^350, is
-        # outside the float64 range: float() returns inf, and this verifier
-        # rejects it as VERIFIER_CONFIG_ERROR with GO_OUTSIDE_FLOAT64_REASON.
-        # strconv.ParseFloat reads it as 1e+149, and the Go reference
-        # verifier, which decided the range with it, rejected it as
-        # SIGNATURE_INVALID until atx-conformance#293; it now decides the
-        # range on the digits as written
-        # (TestDecoderWithoutUseNumberOnOutOfRangeNumbers), and the number is
-        # a row of GO_PURPOSE_NUMBER_VERDICTS. atx-conformance#294.
+        # outside the float64 range: float() returns inf. strconv.ParseFloat
+        # reads it as 1e+149, so the Go reference verifier's JCS library
+        # writes it as it writes 1e149, and a signature over those bytes
+        # verifies over them. Neither reference verifier reads that signature:
+        # the number is written with an exponent part. atx-conformance#294,
+        # atx-conformance#302.
         literal = "1" + "0" * 1000 + "e-650"
         self.assertEqual(float(literal), float("inf"))
-        self.assertTrue(verify._holds_number_outside_float64(json.loads(literal)))
+        reason = _fraction_or_exponent_reason(literal)
         got = _at_verdict(BASELINE_V11, ("declaredPurpose",), literal)
-        self.assertEqual((got.reject_category, got.reason), ("VERIFIER_CONFIG_ERROR", GO_OUTSIDE_FLOAT64_REASON))
+        self.assertEqual((got.reject_category, got.reason), ("SIGNATURE_INVALID", reason))
+        with tempfile.TemporaryDirectory() as tmp:
+            signed = _write_signed_purpose(Path(tmp), "purpose.json", literal, b"1e+149")
+            got = verify.verify_fixture(verify.load_fixture(signed))
+        self.assertEqual((got.reject_category, got.reason), ("SIGNATURE_INVALID", reason))
+
+    def test_injected_number_fixture_passes_with_a_number_outside_float64_range(self):
+        # fixtures/v1_1-declared-purpose-number-injected.json, with its 1.5
+        # replaced by each number atx-conformance#302 names, passes as a
+        # fixture: it expects SIGNATURE_INVALID and a reason containing
+        # signature.
+        text = (ROOT / "fixtures" / "v1_1-declared-purpose-number-injected.json").read_text()
+        self.assertEqual(text.count('"declaredPurpose": 1.5'), 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, number in (("exponent.json", "1e400"), ("digits.json", "1" + "0" * 400)):
+                (Path(tmp) / name).write_text(text.replace('"declaredPurpose": 1.5', f'"declaredPurpose": {number}'))
+            code, out, err = _run_main(tmp)
+        self.assertEqual(code, 0, out[-400:] + err)
+        self.assertEqual(out.splitlines()[-1], "summary: 2 pass, 0 fail (2 fixtures)")
 
     def test_directory_run_reaches_the_summary_line(self):
         # One fixture the verifier cannot canonicalize must not end the run:
@@ -2097,7 +2111,6 @@ class GoIntegerOutsideExactRange(unittest.TestCase):
 
     def test_checks_that_run_first_keep_their_verdicts(self):
         for edits, category, held in (
-            ({PURPOSE: "[1e400, 9007199254740993]"}, "VERIFIER_CONFIG_ERROR", "v1.1 canonicalization failed"),
             ({CRITICAL: "9007199254740993", PURPOSE: '"\\ud800"'}, "VERIFIER_CONFIG_ERROR", "unpaired UTF-16 surrogate"),
             ({CRITICAL: "9007199254740993", ("scanSummary", "hma"): "7"}, "SIGNATURE_INVALID", "member outside its type"),
         ):
@@ -3335,20 +3348,20 @@ class LongInteger(unittest.TestCase):
     def test_declared_purpose_rejects_as_it_does_for_a_shorter_integer(self):
         # declaredPurpose enters the v1.1 signed payload as written, so no
         # typed decode refuses the number there. An integer of 401 digits,
-        # which int() converts, is outside float64 range too, and the Go
-        # verifier refuses both before its JCS library reads them, as
-        # VERIFIER_CONFIG_ERROR with the reason this one writes
-        # (TestDeclaredPurposeNumberOutsideFloat64Range).
+        # which int() converts, is outside the exact range too, and both
+        # reference verifiers refuse both before their JCS serializer reads
+        # them, as SIGNATURE_INVALID with a reason that quotes the number as
+        # written (TestDeclaredPurposeNumberOutsideFloat64Range).
         shorter = "1" + "0" * 400
-        for purpose in ("%s", "-%s", '{"x": %s}', "[7, %s]"):
+        for purpose, sign in (("%s", ""), ("-%s", "-"), ('{"x": %s}', ""), ("[7, %s]", "")):
             with self.subTest(purpose=purpose):
                 got = _at_verdict(BASELINE_V11, ("declaredPurpose",), purpose % LONG_INTEGER)
                 control = _at_verdict(BASELINE_V11, ("declaredPurpose",), purpose % shorter)
                 self.assertFalse(got.accepted)
                 self.assertEqual(got.reject_category, control.reject_category)
-                self.assertEqual(got.reject_category, "VERIFIER_CONFIG_ERROR", got.reason[:200])
-                self.assertEqual(got.reason, GO_OUTSIDE_FLOAT64_REASON)
-                self.assertEqual(control.reason, GO_OUTSIDE_FLOAT64_REASON)
+                self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason[:200])
+                self.assertEqual(got.reason, _exact_range_reason("declaredPurpose", sign + LONG_INTEGER))
+                self.assertEqual(control.reason, _exact_range_reason("declaredPurpose", sign + shorter))
 
     def test_directory_run_reaches_the_summary_line(self):
         with tempfile.TemporaryDirectory() as tmp:

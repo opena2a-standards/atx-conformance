@@ -14,6 +14,116 @@ they should not.
 ### Changed
 
 - Both reference verifiers print fixture fields and file names with control characters escaped.
+- README.md states above its first command the toolchain each verifier
+  needs, Go 1.22 or later and Python 3.11 or later, the minimums the
+  dependency lists of `docs/running-the-verifiers.md` state (#305). Its
+  paragraph on how `@latest` and the `@<commit>` forms resolve through the
+  Go module proxy moved to that page, under "Which version `go run`
+  fetches", which also says what a pseudo-version is; README.md keeps a
+  sentence on what `@latest` resolves to and a link to that section. The
+  Python verifier's install line in README.md, that page and COSIGNERS.md
+  passes `--disable-pip-version-check`: in a new virtual environment with
+  pip 26.0, the line without it wrote two `[notice]` lines to standard
+  error, that pip 26.3 was available and how to upgrade, and with it wrote
+  nothing there. `scripts/check_readme_counts.py` holds the text above
+  README.md's first command to the minimums those lists state, and each
+  `pip install` line in a fenced block of the README, its pages and
+  COSIGNERS.md to the flag. Its self-test adds 21 cases (293 cases green,
+  from 272). No fixture or verifier changes.
+- README.md says each fixture bundles an ATX, the name the vendored
+  specification text `schemas/vendor/atx-spec/core.md` gives the
+  credential, where it said an Agent Trust Credential, a name core.md does
+  not use (#315). The wire names `atcVersion` and the
+  `Agent-Trust-Credential` header are unchanged.
+  `scripts/check_readme_counts.py` holds each `Agent Trust <word>` name in
+  the README and its pages to the names core.md uses, Agent Trust
+  eXtension and Agent Trust Protocol; a name written with hyphens is not
+  held. Its self-test adds 9 cases (302 cases green, from 293). No fixture
+  or verifier changes.
+
+### Fixed
+
+- Both reference verifiers reject a v1.1 credential whose `declaredPurpose`
+  holds a number outside the float64 range as `SIGNATURE_INVALID`, with a
+  reason that quotes the number as written (#302). They rejected it as
+  `VERIFIER_CONFIG_ERROR`, with the reason `v1.1 canonicalization failed:
+  declaredPurpose holds a number outside the float64 range`, where they
+  reject `1e3` and `2.5` as `SIGNATURE_INVALID`:
+  `fixtures/v1_1-declared-purpose-number-injected.json` with its `1.5`
+  replaced by `1e400`, or by `1` followed by 400 zeros, counted as a failure
+  in each verifier, and a run over either copy exited 1. Each copy now counts
+  as a pass, and that run exits 0. Such a number is written with a fraction
+  or an exponent part, or is an integer outside the I-JSON exact range, so
+  the scan that refuses each of those (`integerOutsideExactRangeV11` in the
+  Go verifier, `_integer_outside_exact_range` in the Python one) refuses it
+  too, with the reason it gives them: `no signature covers declaredPurpose:
+  the number 1e400 is written with a fraction or an exponent part, not as an
+  integer`, and, for an integer, `no signature covers declaredPurpose: the
+  integer <digits> is outside the I-JSON exact range, -(2^53-1) to 2^53-1`.
+  The first such number the credential writes decides, so `[1.5, 1e400]`
+  quotes `1.5`. In the Go verifier the scan now runs before the JCS library
+  reads the payload, which it ran after: the library refuses `1e400` and an
+  integer of 401 digits, and writes `1` followed by 1000 zeros and `e-650`
+  as `1e+149`. An unpaired surrogate escape in `declaredPurpose` is still
+  refused first, as `VERIFIER_CONFIG_ERROR`. Neither verifier decides the
+  float64 range now, so `numberOutsideFloat64Range`,
+  `float64OverflowDigits`, `hasNumberOutsideFloat64RangeV11` and
+  `_holds_number_outside_float64` are removed, and the Python scan now
+  refuses an integer with more digits than `int()` converts, which the
+  removed check refused before it. This replaces the category the `v0.1.0`
+  entries for #151, #289 and #293 give such a number.
+  `TestDeclaredPurposeNumberOutsideFloat64Range` in the Go verifier and
+  `GO_PURPOSE_FORM_BESIDE_FLOAT64_EDGE` and
+  `GO_PURPOSE_INTEGERS_BESIDE_FLOAT64_EDGE` in the Python one pin the verdict
+  and reason on either side of 2^1024 - 2^970; built with Go 1.26.3 and run
+  under Python 3.14.3, the two verifiers print the same lines over those
+  tables' rows. Their reports over `fixtures/` are unchanged byte for byte,
+  and no fixture carries such a number. `docs/captures/go-verifier.txt` is
+  unchanged, and its sidecar, `docs/captures/go-verifier.json`, records the
+  new tree id of `verifiers/go/verifier`, so
+  `scripts/capture_go_verifier.py --check` passes. No fixture changes.
+- `docs/demo/record-atx-verify.sh`, `--dry-run` included, reads
+  `docs/demo/docker/Dockerfile` one instruction at a time and exits 1 on an
+  image reference other than the FROM lines of the build stage and the
+  render stage, the two images the sidecar's `recorder` records as
+  `builderImage` and `baseImage` (#314). It read those two lines,
+  `FROM <image> AS vhsbuild` and `FROM <image>`, and no other, so
+  `--dry-run` exited 0 with a third FROM line
+  (`FROM busybox:latest AS helper`, the same in lower case, or with
+  `--platform=linux/amd64`), and with
+  `COPY --from=busybox:latest /bin/busybox /bin/busybox` or
+  `RUN --mount=type=bind,from=busybox:latest,target=/bb true` in the
+  render stage, that COPY split over continuation lines included; a second
+  FROM line of either form was refused as an image not named by digest,
+  with both references in one message. The script joins a line that ends
+  in a backslash to the next, skips comment and blank lines, and refuses: a
+  FROM line in another form (`from` and `From` lines, and lines with
+  `--platform`, among them), or either form twice; a `COPY --from` value,
+  or a `from=` key of a `RUN --mount` value, other than `vhsbuild`; a
+  flag of `COPY` or `RUN` written with a quote or a backslash; `ONBUILD`;
+  a word that is not a Dockerfile instruction; `<<`, the form of a
+  heredoc; a byte other than printable ASCII or a tab outside a comment; a
+  NUL byte; and, above the first instruction, a comment in the form of a
+  parser directive (`# syntax=` names an image of its own). Each of these
+  refusals but the NUL byte's names its line. The two images it reads are
+  still refused unless written as `<name>@sha256:<64 hex digits>`. On the
+  committed Dockerfile, `--dry-run` prints what it printed before.
+  `docs/demo/test_record_atx_verify.py` holds the script to each of these,
+  with and without `--dry-run`. The committed outputs and sidecar are not
+  re-rendered.
+- `scripts/check_readme_counts.py` holds each of the six scans its
+  self-test times to its bound in its own process's CPU time, read from
+  `time.process_time()`, where it read wall-clock time, which also counts
+  the time the process waits for a CPU (#307). The bounds are unchanged:
+  1.5 s for the closed-tracker scan and 0.5 s for each of the other five.
+  On a 16-CPU machine at a load average above 20, the script exited 1 at
+  the commit before this change, with no change to the tree, on
+  `only-number claim scan over one 16,000-character word`, which took
+  0.5 s. In ten runs there at load averages of 20 to 23, each of the six
+  took 0.08 s of CPU time or less. The self-test adds one case (273
+  altered count sites, from 272): a 0.6 s sleep, in which the process
+  does not run, held to a 0.5 s bound, which the wall-clock reading
+  fails. No fixture changes.
 
 ## v0.1.0
 

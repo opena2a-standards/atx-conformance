@@ -131,6 +131,24 @@ The parity gate runs both verifiers on each of these shapes, no argument
 and `--` alone included, which it holds to this difference
 ([continuous verification](continuous-verification.md)).
 
+## Which version `go run` fetches
+
+This repository has no release tag, so `@latest` resolves to a
+pseudo-version of a commit on `main`, the one the Go module proxy reports
+as latest. A pseudo-version is the version Go gives a commit that carries no
+version tag, built from the commit's time in UTC and the first 12 characters
+of its hash: at `20799e3`, `v0.0.0-20261018142916-20799e3db50c`.
+
+`@<commit>` in place of `@latest` runs the verifier and fixtures of that
+commit: `cmd/atx-verify@<commit>` for a commit that has `cmd/atx-verify`,
+and `verifiers/go@<commit>` for `ea4b485` or a later commit on `main`;
+`go run` resolves the commit to its release tag, or to a pseudo-version when
+the commit has no tag. `ea4b485` is the first commit with `go.mod` at the
+repository root. Before it, `verifiers/go` was a module of its own; the
+module proxy answers `verifiers/go@latest` with a version of that module,
+and `go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest`
+exits 1, so `@latest` goes with `cmd/atx-verify`.
+
 ## Which commit a run verified
 
 `--version` prints one line naming what the verifier was built from. The Go
@@ -250,13 +268,16 @@ Depends on:
 cd verifiers/python
 python3 -m venv .venv
 . .venv/bin/activate
-python3 -m pip install -r requirements.txt
+python3 -m pip install --disable-pip-version-check -r requirements.txt
 python3 verify.py ../../fixtures
 ```
 
 The commands expect a virtual environment, which the second and third lines
 create in `verifiers/python/.venv` and activate; outside one a system may
 provide `python3` and `pip3` only, with no `python` or `pip` on `PATH`.
+`--disable-pip-version-check` stops pip from looking up whether a newer
+release of pip exists; without it, pip writes a notice to standard error
+suggesting an upgrade of pip when there is one.
 
 Depends on:
 
