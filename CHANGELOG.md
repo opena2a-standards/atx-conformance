@@ -43,6 +43,14 @@ they should not.
 
 ### Fixed
 
+- The Python unit tests step of `conformance.yml` runs the 2 tests of
+  `docs/demo/test_record_atx_verify.py`, which hold
+  `docs/demo/record-atx-verify.sh` to refusing a Dockerfile that references an
+  image it does not read (#325). The step's `unittest discover` run reads
+  `scripts/` and held 3 tests, none from `docs/demo`.
+  `scripts/test_demo_recording.py`, which that run matches, adds the 2 tests,
+  and that run now fails on a Dockerfile the script refuses and on a
+  `docs/demo/test_record_atx_verify.py` that is gone. No workflow file changes.
 - Both reference verifiers reject a v1.1 credential whose `declaredPurpose`
   holds a number outside the float64 range as `SIGNATURE_INVALID`, with a
   reason that quotes the number as written (#302). They rejected it as
