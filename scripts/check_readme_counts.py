@@ -2071,11 +2071,17 @@ def workflow_run_commands(workflow):
     or on a later line indented past it, and a step may be a flow mapping
     on one line or more (`- {name: a, run: python3 scripts/a.py}`). A
     command written as a block scalar (`run: |` or `run: >`) is read as
-    YAML reads it, its indentation removed (block_scalar()). A key may be
-    quoted (`- "run": python3 scripts/a.py`) and is read by yaml_key(), and
-    spaces may stand between a block-style key and its `:`
-    (`- run : python3 scripts/a.py`). A script named in a YAML comment, a
-    step `name:` or an action's `with:` input is in none of them."""
+    YAML reads it, its indentation removed (block_scalar()), and one
+    written as a plain scalar on more than one line, in a block-style step
+    or a flow mapping, is folded as YAML folds it before bash reads it
+    (plain_scalar()): each line break into one space and each empty line
+    into a line break, so arguments on the line after
+    `run: python3 -m unittest discover`, indented past the key, follow it
+    on one line. A key may be quoted (`- "run": python3 scripts/a.py`) and
+    is read by yaml_key(), and spaces may stand between a block-style key
+    and its `:` (`- run : python3 scripts/a.py`). A script named in a YAML
+    comment, a step `name:` or an action's `with:` input is in none of
+    them."""
     lines = (workflow or "").splitlines()
     commands = []
     # Open nodes, innermost last: (column, "-") for a sequence item and
@@ -2105,7 +2111,10 @@ def workflow_run_commands(workflow):
             # it takes to close.
             step, i = flow_node_lines(lines, i, line[item.end():])
             if is_step and isinstance(step, dict) and isinstance(step.get("run"), str):
-                commands.append(bash_text(step["run"]))
+                command = step["run"]
+                if command[:1] not in "'\"":
+                    command = plain_scalar(command.splitlines())
+                commands.append(bash_text(command))
             continue
         if not key:
             continue
@@ -2132,8 +2141,12 @@ def workflow_run_commands(workflow):
                 header, value = value, ""
         stack.append((column, name))
         if name == "run" and is_step:
-            command = (block_scalar(header, body, column) if header
-                       else "\n".join([value] + body))
+            if header:
+                command = block_scalar(header, body, column)
+            elif value[:1] in "'\"":
+                command = "\n".join([value] + body)
+            else:
+                command = plain_scalar([value] + body)
             commands.append(bash_text(command))
     return commands
 
@@ -2182,6 +2195,30 @@ def block_scalar(header, body, column):
         parts.append("\n")
     if "+" in header:
         parts.append("\n" * empty)
+    return "".join(parts)
+
+
+def plain_scalar(lines):
+    """The value YAML reads from a plain scalar written on `lines`: the line
+    it starts on, from its first character, and each line indented past its
+    key that goes on with it. The spaces that indent a line and those that
+    end it are no part of the value. Two lines that hold text are joined by
+    one space, or, where empty lines stand between them, by one line break
+    for each of those lines; a line of spaces alone is empty. Empty lines
+    after the last line that holds text add nothing, so the value ends in
+    no line break. A backslash that ends a line is kept, as YAML gives it
+    no meaning in a plain scalar: bash_text() reads the folded text after
+    this, where that backslash stands before a space and joins no line."""
+    parts, empty = [], 0
+    for line in lines:
+        text = line.strip(" \t")
+        if not text:
+            empty += 1
+            continue
+        if parts:
+            parts.append("\n" * empty if empty else " ")
+        parts.append(text)
+        empty = 0
     return "".join(parts)
 
 
@@ -4458,7 +4495,15 @@ def _ci_gate_label_cases(readme, workflow, scripts):
     the value in double quotes or outside quotes, and neither may a run in
     a folded `run: >` block whose arguments stand on its next line. A run
     whose -s value a trailing backslash joins to a next line `#x`, and a
-    run whose split -s value a `run: |1` block leaves a space in, must."""
+    run whose split -s value a `run: |1` block leaves a space in, must.
+    Last, run it from steps whose plain `run:` scalar goes on to a second
+    line indented past the key: with the arguments on the line after
+    `run: python3 -m unittest discover`, with the command starting on the
+    line under `run:` and its arguments on the line after that, and from a
+    flow-mapping step written so, none may add a failure; with an empty
+    line between the run and its arguments, which YAML reads as a line
+    break, and with a backslash ending the first line, which YAML keeps
+    before the space it folds the line break into, each must."""
     labels = (
         "scripts/*.py script that no workflow step runs",
         "script the workflow stops naming",
@@ -4514,6 +4559,11 @@ def _ci_gate_label_cases(readme, workflow, scripts):
         "script a unittest discover step does not run when a backslash joins #x to -s",
         "script run by a unittest discover step in a folded run: > block on two lines",
         "script a unittest discover step does not run when a |1 block keeps a space in -s",
+        "script run by a unittest discover step whose plain run: scalar spans two lines",
+        "script run by a unittest discover step under run: whose plain scalar spans two lines",
+        "script a unittest discover step whose arguments an empty line sets apart does not run",
+        "script run by a flow-mapping unittest discover step whose plain run: scalar spans two lines",
+        "script a unittest discover step does not run when its plain run: scalar ends a line in a backslash",
     )
     if not CI_GATE_GLOB.search(readme):
         why = ("no `scripts/*.py  CI gates` layout line found in README.md or its "
@@ -4662,6 +4712,23 @@ def _ci_gate_label_cases(readme, workflow, scripts):
             (labels[53], "|1", (f"{discover} -v -s scr\\", f"ipts {rest}"), True)):
         flow = (workflow or "") + f"\n      - run: {header}\n" + "".join(
             f"          {part}\n" for part in command)
+        got = new(readme + line, flow, files)
+        cases.append((any(want in f for f in got) == reported, label,
+                      f"expected {'a' if reported else 'no'} failure containing "
+                      f"{want!r}, got {got}"))
+
+    # The same script, run from a step whose plain `run:` scalar goes on to
+    # a second line, indented past the key. YAML folds the line break into
+    # a space, and an empty line between the two into a line break, before
+    # bash reads the command (plain_scalar()), so a backslash that ends the
+    # first line stays a backslash before a space and joins no line.
+    for label, step, reported in (
+            (labels[54], f"- run: {discover}\n          {over_scripts}", False),
+            (labels[55], f"- run:\n          {discover}\n          {over_scripts}", False),
+            (labels[56], f"- run: {discover} -v\n\n          {over_scripts}", True),
+            (labels[57], f"- {{name: a, run: {discover}\n          {over_scripts}}}", False),
+            (labels[58], f"- run: {discover} \\\n          {over_scripts}", True)):
+        flow = (workflow or "") + f"\n      {step}\n"
         got = new(readme + line, flow, files)
         cases.append((any(want in f for f in got) == reported, label,
                       f"expected {'a' if reported else 'no'} failure containing "

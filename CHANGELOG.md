@@ -241,6 +241,27 @@ they should not.
   stand-in for `docker` that refuses the render's calls as the kernel of
   such an engine refuses them, and the stub of its `PidsLimit` cases reads
   the limit from the arguments of `docker create` in place of `docker run`.
+- `scripts/check_readme_counts.py` reads a `run:` command written as a
+  plain YAML scalar on more than one line as YAML reads it, each line break
+  folded into one space and each empty line into one line break, before it
+  reads the command as bash does (#335). It joined the lines with the line
+  break, which ends the arguments of a `python3 -m unittest discover` run.
+  With the workflow's Python unit tests step written as
+  `run: python3 -m unittest discover -v` with
+  `-s scripts -t scripts -p 'test_*.py'` on the next line, indented past
+  the key, which PyYAML 6.0.3 reads as the one line
+  `python3 -m unittest discover -v -s scripts -t scripts -p 'test_*.py'`,
+  it reported `README layout calls scripts/test_demo_recording.py a CI
+  gate, but .github/workflows/conformance.yml does not run it`, the same
+  for `scripts/test_script_options.py`, and exited 1; it now exits 0. The
+  self-test adds five cases (342 altered count sites, from 337): the
+  arguments on the line after `run: python3 -m unittest discover`, on the
+  line after a command that starts on the line under `run:`, and on the
+  second line of a step written as a flow mapping must each count as a
+  run; arguments an empty line sets apart from the run, which YAML reads
+  as a line break, and a run whose first line ends in a backslash, which
+  YAML keeps before the space it folds the line break into, must not. All
+  but the empty-line case failed before the change. No fixture changes.
 
 ## v0.1.0
 
