@@ -12,8 +12,8 @@ report PASS or FAIL per vector. Fixture bytes are pinned in
 License: Apache 2.0. All keypairs, seeds, and credential identifiers in this
 repository are TEST-ONLY.
 
-The command below needs Go 1.22 or later ([go.dev/dl](https://go.dev/dl/));
-the Python verifier needs Python 3.11 or later
+The command below needs Go 1.22 or later; on macOS 26, Go 1.23 or later
+([go.dev/dl](https://go.dev/dl/)). The Python verifier needs Python 3.11 or later
 ([python.org/downloads](https://www.python.org/downloads/)).
 
 ```bash
@@ -63,8 +63,8 @@ credentials cannot parse them; when it answers as in the "Couldn't read"
 column below, the kit records that as a result, not as a REJECT.
 `--form jws` and `--form vc` are reserved for JWS and VC forms.
 
-With Go 1.22 or later, install the kit at one commit. This line needs the
-network once; the installed kit does not.
+The kit needs Go 1.22 or later; on macOS 26, Go 1.23 or later. Install it at
+one commit. This line needs the network once; the installed kit does not.
 
 ```bash
 go install github.com/opena2a-standards/atx-conformance/cmd/atx-verify@COMMIT

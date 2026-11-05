@@ -17,7 +17,10 @@ they should not.
   send each of the 41 embedded fixtures to an outside verifier and compare its
   verdicts with the answer key in `conformance.json`; `--report <dir>` writes
   `atx-interop-report.json` and `atx-interop-report.md`. With none of the new
-  options, atx-verify's output is unchanged. `answerkey.go` embeds
+  options, atx-verify's output is unchanged. On macOS 26, a binary built with
+  Go 1.22 stops at start with a dyld error, also with none of the new options,
+  because the kit's `net/http` import links system frameworks; built with
+  Go 1.23 or later it runs. `answerkey.go` embeds
   `conformance.json` and `MANIFEST.sha256` in the module's root package. No
   fixture, expected verdict, verifier logic, schema or module dependency changed.
 - `examples/wrap-verifier.sh` and `examples/serve_verifier.py` put a verifier

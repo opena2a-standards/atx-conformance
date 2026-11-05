@@ -414,6 +414,30 @@ func TestJSONWinsCarriesItsCondition(t *testing.T) {
 	}
 }
 
+// TestGoFloorNamesMacOS26 holds what the README and the changelog say about the
+// toolchain: the kit's net/http import links system frameworks, and a binary
+// built with Go 1.22 that links them stops at start on macOS 26. CI runs on
+// Linux, so no run there can see it.
+func TestGoFloorNamesMacOS26(t *testing.T) {
+	read := func(path string) string {
+		t.Helper()
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(strings.Fields(string(b)), " ")
+	}
+	const floor = "Go 1.22 or later; on macOS 26, Go 1.23 or later"
+	if n := strings.Count(read("../README.md"), floor); n != 2 {
+		t.Errorf("the README states %q %d times, want 2: above the first command and above the install line", floor, n)
+	}
+	for _, want := range []string{"built with Go 1.22 stops at start with a dyld error", "built with Go 1.23 or later it runs"} {
+		if !strings.Contains(read("../CHANGELOG.md"), want) {
+			t.Errorf("the changelog lacks %q", want)
+		}
+	}
+}
+
 func TestUsageErrors(t *testing.T) {
 	cmd := quote(dummies["acceptall"])
 	cases := []struct {
