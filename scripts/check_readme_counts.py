@@ -3162,12 +3162,15 @@ def spec_name_failures(readme, spec_text):
 # the `v0.1.0` section says, names a set of tests rather than counting a file.
 # That exemption is the `the` form's alone: `holds 8 tests that check the
 # script`, `runs 8 tests that ...` and `Ran 14 tests that ...` still count the
-# file or the run, so a `that` after those verbs exempts nothing.
+# file or the run, so a `that` after those verbs exempts nothing. `all 8
+# tests`, and `has`, `contains` or `includes` before `8 tests`, count them as
+# `holds 8 tests` does, and a `that` after them exempts nothing either.
 # top_section() puts a sentence on one line, so each blank here is one space.
 # `Ran` is the capital unittest prints.
 COUNTED_TESTS = rf"(?:[1-9]\d*|{'|'.join(COUNT_WORDS[2:])}) tests\b"
 RUNNING_TOTAL = re.compile(
-    rf"\b(?:[Tt]he {COUNTED_TESTS}(?! that\b)|(?:holds?|runs?|Ran) {COUNTED_TESTS})"
+    rf"\b(?:[Tt]he {COUNTED_TESTS}(?! that\b)"
+    rf"|(?:[Aa]ll|has|have|contains?|includes?|holds?|runs?|Ran) {COUNTED_TESTS})"
     r"|\b\d+ (?:altered count sites\b|cases green\b|cases, from \d+)")
 # The entry for the two did:web fixtures said the capture's summary line
 # `counts 43`, that docs/scope.md `counts 34 of 43 fixtures` reaching
@@ -3184,6 +3187,12 @@ RUNNING_TOTAL = re.compile(
 # count reached in a sentence on how it went (`from 32 of 41 to 34 of 43
 # fixtures`) is not held either. `counts? N` holds a present-tense count of
 # anything, as `its summary line counts 43` gave one with no noun after it.
+# `all 44 fixtures` is held as `the 44 fixtures` is, `existing` or `new` after
+# the count and `before` after `fixtures` exempting it too, but a `that` after
+# it does not: `all 44 fixtures that the kit embeds` counts them. `has`,
+# `contains` and `includes` count fixtures as `holds` does, and `(N fixtures)`
+# is how the summary line that ends docs/captures/go-verifier.txt gives the
+# total.
 COUNTED = rf"(?:[1-9]\d*|{'|'.join(COUNT_WORDS[2:])})\b"
 FIXTURE_TOTAL = re.compile(
     rf"\bcounts? {COUNTED}(?: of {COUNTED})?(?: [A-Za-z]+)? fixtures\b"
@@ -3191,7 +3200,24 @@ FIXTURE_TOTAL = re.compile(
     rf"|(?<!\bto )\b{COUNTED} of {COUNTED}(?: [A-Za-z]+)? fixtures\b"
     rf"|\b[Tt]he {COUNTED}(?! (?:existing|new)\b)(?: [A-Za-z]+)? fixtures\b"
     rf"(?! (?:before|that)\b)"
-    rf"|\b(?:holds?|embeds?|runs?) {COUNTED}(?: [A-Za-z]+)? fixtures\b")
+    rf"|\b[Aa]ll {COUNTED}(?! (?:existing|new)\b)(?: [A-Za-z]+)? fixtures\b"
+    rf"(?! before\b)"
+    rf"|\b(?:has|have|contains?|includes?|holds?|embeds?|runs?) {COUNTED}"
+    rf"(?: [A-Za-z]+)? fixtures\b"
+    rf"|\({COUNTED} fixtures\)")
+# The forms of total RUNNING_TOTAL and FIXTURE_TOTAL hold, as the success
+# line names them. The self-test reads each with its N as 44 and its M as 45
+# and fails when the check passes one, so the line names no form the check
+# passes. A total in a form not named here passes the check, a count opening
+# a sentence (`44 fixtures pass in both verifiers.`) and `keeps 41 fixtures`
+# among them.
+TOTAL_FORMS = (
+    "the N tests", "all N tests", "has N tests", "contains N tests",
+    "includes N tests", "holds N tests", "runs N tests", "Ran N tests",
+    "N altered count sites", "N cases green", "N cases, from M", "counts N",
+    "N of M fixtures", "the N fixtures", "all N fixtures", "has N fixtures",
+    "contains N fixtures", "includes N fixtures", "holds N fixtures",
+    "embeds N fixtures", "runs N fixtures", "(N fixtures)")
 TOTAL_SITE = f"{CHANGELOG_NAME} top-section sentence"
 # The sentences the check was written for, as they were wrapped.
 RETRACTED_TEST_TOTAL = (
@@ -4311,6 +4337,21 @@ AMENDED_KIT_TOTAL = (
     "  verdicts with the answer key in `conformance.json`.")
 
 
+def _unheld_total_forms(changelog, forms):
+    """Each of `forms`, its N read as 44 and its M as 45, that adds no failure
+    naming it when it is a sentence opening the top section of `changelog`."""
+    before = collections.Counter(changelog_total_failures(changelog))
+    unheld = []
+    for form in forms:
+        total = re.sub(r"\bM\b", "45", re.sub(r"\bN\b", "44", form))
+        after = collections.Counter(
+            changelog_total_failures(_top_section_with(changelog, f"{total}.")))
+        if not any(f.startswith(TOTAL_SITE) and f"states `{total}`" in f
+                   for f in (after - before).elements()):
+            unheld.append(total)
+    return unheld
+
+
 def _changelog_total_cases(tree):
     """Sentences added to the top section of the published CHANGELOG.md, its
     first `## ` section. The #325 and #327 sentences as they were wrapped each
@@ -4322,9 +4363,11 @@ def _changelog_total_cases(tree):
     set of tests named by what they did (`the three tests that ...`) add none,
     nor do the retracted sentences in a section below the top one. A missing
     CHANGELOG.md and one with no `## ` heading add none here; the
-    first-command check reports them. Each case counts only the failures the
-    text it adds brings, so over a published CHANGELOG.md the check fails each
-    case stays green."""
+    first-command check reports them. Each form TOTAL_FORMS names, which the
+    success line prints, adds a failure naming it, and `adds N fixtures`, a
+    form the check passes, is reported as one. Each case counts only the
+    failures the text it adds brings, so over a published CHANGELOG.md the
+    check fails each case stays green."""
     changelog = tree.changelog or ""
     if top_heading_at(changelog.split("\n")) is None:
         # As in the first-command cases: with a top section added, a sentence
@@ -4426,6 +4469,51 @@ def _changelog_total_cases(tree):
              "Its count goes from 32 of 41 to 34 of 43 fixtures."),
             ("`counts as a pass`", "Each copy now counts as a pass.")):
         case(f"CHANGELOG.md stating {label}", opening(sentence), None)
+    # The first five are the sentences, as they were reported, that the check
+    # was extended for: `all` and `has` before a count, and a summary line's
+    # `(N fixtures)`.
+    for total, sentence in (
+            ("All 44 fixtures", "All 44 fixtures pass in both verifiers."),
+            ("all 44 embedded fixtures",
+             "`atx-verify --verifier` sends all 44 embedded fixtures to an outside "
+             "verifier."),
+            ("has 44 fixtures", "`fixtures/` has 44 fixtures."),
+            ("(44 fixtures)", "The capture ends `summary: 44 pass, 0 fail (44 fixtures)`."),
+            ("All 8 tests", "All 8 tests pass."),
+            ("all ten ACCEPT fixtures", "It reads all ten ACCEPT fixtures."),
+            ("have 44 fixtures", "The two directories have 44 fixtures."),
+            ("contain 44 fixtures", "The two directories contain 44 fixtures."),
+            ("include 44 fixtures", "The two suites include 44 fixtures."),
+            ("all eight tests", "The step runs all eight tests."),
+            ("have 8 tests", "The two files have 8 tests."),
+            ("contain 8 tests", "The two files contain 8 tests."),
+            ("include 8 tests", "The two steps include 8 tests.")):
+        case(f"CHANGELOG.md stating `{total}` in {sentence!r}", opening(sentence), total)
+    for total, sentence in (
+            ("All 44 fixtures", "All 44 fixtures that the kit embeds pass."),
+            ("All 8 tests", "All 8 tests that check the script pass.")):
+        case(f"CHANGELOG.md stating `{total}` with `that` after it, which exempts "
+             f"the `the` form alone", opening(sentence), total)
+    for label, sentence in (
+            ("the fixtures before the change, `all 41 existing fixtures`",
+             "All 41 existing fixtures are byte-identical."),
+            ("the fixtures the change adds, `all three new fixtures`",
+             "All three new fixtures expect `REJECT`."),
+            ("`all 43 fixtures before this one`",
+             "All 43 fixtures before this one passed in both verifiers."),
+            ("what the change adds in parentheses, `(two new fixtures)`",
+             "The manifest gains two lines (two new fixtures).")):
+        case(f"CHANGELOG.md stating {label}", opening(sentence), None)
+    unheld = _unheld_total_forms(changelog, TOTAL_FORMS)
+    cases.append((not unheld, "CHANGELOG.md stating a total in each form the success "
+                              "line names, its N read as 44 and its M as 45",
+                  f"the check passes {unheld}, which the success line names"))
+    # A form the check passes is reported, so the case above is not green
+    # having held no form.
+    passed = _unheld_total_forms(changelog, ("adds N fixtures",))
+    cases.append((passed == ["adds 44 fixtures"],
+                  "`adds N fixtures`, a form the check passes, reported by the "
+                  "success-line form case", f"got {passed}"))
     case("the #325 and #327 sentences and the did:web fixtures' sentences in a "
          "CHANGELOG.md section below the top one",
          f"{changelog}\n## 0000000: a past commit\n\n{RETRACTED_TEST_TOTAL}\n\n"
@@ -6091,6 +6179,7 @@ def main():
     first = first_command(tree.front_page)
     # The CHANGELOG.md check passed, so the file has a top section.
     heading = top_section(tree.changelog)[0]
+    totals = ", ".join(f"`{form}`" for form in TOTAL_FORMS[:-1])
     print(f"README and COSIGNERS counts match the tree: {len(fixtures)} fixtures "
           f"(each with one fixture-table row), {tree.vectors} JCS vectors, all stated "
           f"as passing; README names the MANIFEST.sha256 byte check; "
@@ -6128,8 +6217,8 @@ def main():
              f"read in this checkout; ")
           + f"no {CHANGELOG_NAME} top-section sentence saying a result can still "
           f"differ by release quotes a timestamp {VERIFY_GO_TEST_NAME} writes; "
-          f"no {CHANGELOG_NAME} top-section sentence states a running total of tests, "
-          f"of a self-test or of fixtures; "
+          f"no {CHANGELOG_NAME} top-section sentence states a total of tests, of a "
+          f"self-test or of fixtures as {totals} or `{TOTAL_FORMS[-1]}`; "
           f"no jcs-vectors README or RFC 8785 serializer docstring calls the "
           f"Python verifier zero-dependency; "
           f"each jcs-vectors file describing canonicalize cites "
