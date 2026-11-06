@@ -373,8 +373,8 @@ they should not.
 - The entries of this section for #305, #307, #315, #325, #327, #328, #335
   and #339 say what each change adds, with no running total, and
   `scripts/check_readme_counts.py` holds the top section of this file to
-  that (#333). In a3ead8a, the commit that carried the #325 and #327
-  entries, the first gave `docs/demo/test_record_atx_verify.py` 2 tests
+  stating none in the forms below (#333). In a3ead8a, the commit that
+  carried the #325 and #327 entries, the first gave `docs/demo/test_record_atx_verify.py` 2 tests
   where `grep -c 'def test_'` printed 8, and the second gave the self-test
   319 sites where the script printed 324. A sentence of the top section now
   fails the check, which exits 1 and names the total, when it states how
@@ -412,8 +412,9 @@ they should not.
   `fixtures/expired-beyond-skew.json` say how each fixture count they name
   went, the `atx-verify --verifier` entry says it sends each embedded
   fixture, and `scripts/check_readme_counts.py` holds the top section of
-  this file to stating no fixture total (#347). The `did:web` entry said
-  that the capture's summary line, the kit's self-tests and the
+  this file to stating no fixture total in the forms below (#347). The
+  `did:web` entry said that the capture's summary line, the kit's
+  self-tests and the
   `atx-verify --verifier` entry counted 43 fixtures and `docs/scope.md`
   34 of 43; the entry for `fixtures/expired-beyond-skew.json` took each of
   those to 44 while the `did:web` entry stayed as it was. A sentence of the
@@ -425,6 +426,28 @@ they should not.
   `the N fixtures before this one`, `the N fixtures that`, a count reached
   in a sentence on how it went and a section below the top one are not
   held. Its self-test adds 27 cases. No fixture or verifier changes.
+- `scripts/check_readme_counts.py` fails a sentence of the top section of
+  this file that states a total of tests as `all N tests`, `has N tests`,
+  `contains N tests` or `includes N tests`, or one of fixtures as
+  `all N fixtures`, `has N fixtures`, `contains N fixtures`,
+  `includes N fixtures` or `(N fixtures)`, as a verifier's summary line
+  ends, and its success line names the forms of total the check holds
+  (#349). With N as 44, a sentence opening the top section that said all N
+  fixtures pass in both verifiers, that `atx-verify --verifier` sends all N
+  embedded fixtures to an outside verifier, that `fixtures/` has N fixtures
+  or that the capture ends `summary: N pass, 0 fail (N fixtures)` passed
+  the check, which exited 0, and so did one saying all N tests pass, with N
+  as 8. Each now fails it, which exits 1 and names the total. `existing` or
+  `new` after the count and `before` after `fixtures` exempt
+  `all N fixtures`, as they exempt `the N fixtures`, and a `that` after it
+  exempts nothing. The success line said that no sentence of the top
+  section states a running total of tests, of a self-test or of fixtures;
+  it now names the forms the check holds, and the self-test fails when the
+  check passes one of them. A total in another form, such as a count
+  opening a sentence, still passes. The entries above for #333 and #347 say
+  that the check holds the top section to stating no total in the forms
+  they list, where they said it held the top section to stating none. Its
+  self-test adds 21 cases. No fixture or verifier changes.
 
 ## v0.1.0
 
