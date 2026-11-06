@@ -342,6 +342,14 @@ a count in the present tense (`counts 43`, `count 43 fixtures`) or how many
 fixtures there are (`34 of 44 fixtures`, `the 44 embedded fixtures`, `holds 44
 fixtures`, `embeds 44 fixtures`, `runs 44 fixtures`).
 
+It also holds the two sentences of README.md's interop kit section, `## Try
+your verifier in two minutes`, on what the kit sends and on when it exits 0.
+They said the kit sends each of the 41 fixtures and exits 0 only when all 41
+agree, and the check passed them with fixtures/ holding 44. A number either
+sentence states in digits must be the number of fixtures/*.json. The words
+each sentence is found by (`the kit sends`, `exits 0 only when`) and link
+targets are not read, and the section's other sentences are not held.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
 declares, each signature-verification Scope row that claims a set of fixtures
@@ -374,9 +382,11 @@ numbers matches the vectors, the jcs-vectors README scopes signing to the
 TBS projection, the Ed25519-only ACCEPT count matches the fixtures, the
 workflow runs every script the layout calls a CI gate, README.md states no
 version or date and states each toolchain minimum above its first command,
-every fenced `pip install` command passes --disable-pip-version-check, and
-each `Agent Trust <word>` name in the README text is one core.md uses, 1
-otherwise, 2 on an unknown argument.
+every fenced `pip install` command passes --disable-pip-version-check, each
+`Agent Trust <word>` name in the README text is one core.md uses, and each
+fixture count the kit section's sentences on what the kit sends and when it
+exits 0 state is the number of fixtures, 1 otherwise, 2 on an unknown
+argument.
 """
 
 import argparse
@@ -3151,6 +3161,63 @@ def spec_name_failures(readme, spec_text):
             for name in sorted(agent_trust_names(readme) - names)]
 
 
+# README.md's interop kit section said "The kit sends each of the 41 fixtures
+# to your verifier" and "It exits 0 only when all 41 agree" (#345). Both came
+# in when the suite held 41 fixtures, and the check passed them with
+# fixtures/ holding 44. The kit sends each fixture built into it: the kit its
+# install line pins, built from commit 9740950, sends 41, and one built from
+# a tree holding 44 sends 44. So the two sentences state no count, and a
+# number either states in digits must be the number of fixtures/*.json. The
+# words each sentence is found by, the exit status 0 among them, and link
+# targets are not read. The section's other counts (`9 agree`) are what the
+# pinned kit reports for `true` and are not held here.
+KIT_SECTION = "## Try your verifier in two minutes"
+# (what the sentence says, the words it is found by)
+KIT_SENTENCES = (
+    ("what the kit sends", re.compile(r"\bthe\s+kit\s+sends\b", re.I)),
+    ("when the kit exits 0", re.compile(r"\bexits\s+0\s+only\s+when\b", re.I)),
+)
+# A whole number in digits: not joined to a letter, a digit or `_`, as the
+# digits of the commit id 9740950b are, and not part of a dotted version such
+# as Go 1.23 or ATX v1.1.
+WHOLE_NUMBER = re.compile(r"(?<![\w.])\d+(?!\w|\.\d)")
+# The target of a Markdown link: `(conformance.json)` in `[text](conformance.json)`.
+LINK_TARGET = re.compile(r"(?<=\])\([^()\s]*\)")
+
+
+def kit_count_failures(readme, fixtures):
+    """Each number stated in digits in the README kit section's sentences on
+    what the kit sends and on when it exits 0 must be the number of
+    fixtures/*.json (`fixtures` is the map load_fixtures returns). A missing
+    section, or either sentence missing from it, fails the check rather than
+    pass having read none."""
+    body = section(readme, KIT_SECTION)
+    if body is None:
+        return [f"no `{KIT_SECTION}` section found in the README; what it says "
+                f"the kit sends cannot be held to fixtures/"]
+    sentences = list(statements(body))
+    failures, held = [], {}
+    for site, words in KIT_SENTENCES:
+        found = [s for s in sentences if words.search(s)]
+        if not found:
+            failures.append(f"no sentence on {site} found in the README "
+                            f"`{KIT_SECTION}` section; the count it states cannot "
+                            f"be held to fixtures/")
+        held.update(dict.fromkeys(found))
+    actual = len(fixtures)
+    for sentence in held:
+        prose = sentence
+        for _, words in KIT_SENTENCES:
+            prose = words.sub(" ", prose)
+        for stated in dict.fromkeys(WHOLE_NUMBER.findall(LINK_TARGET.sub("", prose))):
+            if int(stated) != actual:
+                failures.append(
+                    f"README `{KIT_SECTION}` sentence states {stated}, but fixtures/ "
+                    f"holds {actual}; a number there reads as the count of fixtures "
+                    f"the kit sends, so state {actual} or no number: {sentence!r}")
+    return failures
+
+
 # CHANGELOG.md's #325 entry said the Python unit tests step runs the 2 tests of
 # docs/demo/test_record_atx_verify.py, and its #327 entry said 319 altered count
 # sites, where a3ead8a, the commit that carried both, held 8 tests in that file
@@ -5422,6 +5489,120 @@ def _spec_name_cases(tree):
     return cases
 
 
+# Counts no fixture set here holds, and not ones the other cases write.
+KIT_BAD_SENDS = "9301"
+KIT_BAD_EXIT = "9302"
+KIT_BAD_SPAN = "9303"
+KIT_BAD_LINK = "9304"
+KIT_BAD_OTHER = "9305"
+# The kit section's two sentences on the whole fixture set as README.md
+# published them, as they were wrapped, and the opening words a reader finds
+# each by.
+RETRACTED_KIT_SENDS = (
+    "The kit sends each of the 41 fixtures to your verifier and compares its\n"
+    "verdicts with the answer key in [`conformance.json`](conformance.json).")
+RETRACTED_KIT_EXIT = "It exits 0 only when all 41 agree."
+KIT_OPENINGS = ("The kit sends", "It exits 0 only when")
+
+
+def _kit_sentence(readme, opening):
+    """(start, end) of the sentence `opening` starts in the README kit
+    section, up to the first `.`, `!` or `?` that ends a sentence, or None."""
+    heading = re.search(rf"^{re.escape(KIT_SECTION)}$", readme, re.M)
+    if heading is None:
+        return None
+    end = readme.find("\n## ", heading.end())
+    end = len(readme) if end < 0 else end
+    at = readme.find(opening, heading.end(), end)
+    if at < 0:
+        return None
+    stop = re.compile(r"[.!?](?=\s|$)").search(readme, at, end)
+    return at, (stop.end() if stop else end)
+
+
+def _kit_count_cases(tree):
+    """Each of the README kit section's sentences on what the kit sends and
+    on when it exits 0, put back as README.md published it, stating 41, adds
+    a failure naming 41; so does that sentence stating a count no fixture set
+    holds, inline and on the line after its opening words, while stating the
+    number of fixtures/*.json adds none. A count is read with the opening
+    words wrapped across a line break and in a code span; the exit status
+    alone, a number in a link target and a count in another sentence of the
+    section add none. Either sentence removed, or the section heading
+    renamed, adds the failure saying so."""
+    readme, fixtures = tree.readme, tree.fixtures
+    actual = str(len(fixtures))
+    baseline = set(kit_count_failures(readme, fixtures))
+    cases = [(not baseline, f"the README `{KIT_SECTION}` sentences on the fixture "
+                            f"set stating no count but the fixture count",
+              f"the published text fails: {sorted(baseline)}")]
+
+    def case(label, needle, text):
+        new = [f for f in kit_count_failures(text, fixtures) if f not in baseline]
+        if needle is None:
+            cases.append((not new, label, f"expected no new failure, got {new}"))
+        else:
+            cases.append((any(needle in f for f in new), label,
+                          f"expected a failure naming {needle!r}, got {new}"))
+
+    spans = {}
+    for (site, _), opening, published, bad in zip(
+            KIT_SENTENCES, KIT_OPENINGS,
+            (RETRACTED_KIT_SENDS, RETRACTED_KIT_EXIT), (KIT_BAD_SENDS, KIT_BAD_EXIT)):
+        span = spans[opening] = _kit_sentence(readme, opening)
+        label = f"the kit section sentence on {site}"
+        if span is None:
+            cases.append((False, label,
+                          f"no sentence opening `{opening}` found in the README "
+                          f"`{KIT_SECTION}` section: a count stated there is not "
+                          f"covered by this self-test"))
+            continue
+
+        def put(sentence, span=span):
+            return readme[:span[0]] + sentence + readme[span[1]:]
+
+        case(f"{label} as README.md published it, stating 41",
+             None if actual == "41" else "sentence states 41,", put(published))
+        case(f"{label} stating {bad}", f"sentence states {bad},",
+             put(published.replace(" 41 ", f" {bad} ")))
+        case(f"{label} stating {bad} on the line after its opening words",
+             f"sentence states {bad},", put(published.replace(" 41 ", f"\n{bad} ")))
+        case(f"{label} stating {actual}, the number of fixtures/*.json", None,
+             put(published.replace(" 41 ", f" {actual} ")))
+        case(f"{label} removed", f"no sentence on {site} found", put(""))
+
+    sends, exits = (spans[opening] for opening in KIT_OPENINGS)
+    if sends is not None:
+        def put_sends(sentence):
+            return readme[:sends[0]] + sentence + readme[sends[1]:]
+
+        case("the kit section sentence on what the kit sends with its opening "
+             "words wrapped across a line break", f"sentence states {KIT_BAD_SENDS},",
+             put_sends(RETRACTED_KIT_SENDS.replace("The kit sends", "The kit\nsends")
+                       .replace(" 41 ", f" {KIT_BAD_SENDS} ")))
+        case("the kit section sentence on what the kit sends stating a count in a "
+             "code span", f"sentence states {KIT_BAD_SPAN},",
+             put_sends(RETRACTED_KIT_SENDS.replace(" 41 ", f" `{KIT_BAD_SPAN}` ")))
+        case("the kit section sentence on what the kit sends with a number in a "
+             "link target", None,
+             put_sends("The kit sends each fixture built into it to your verifier and "
+                       "compares its verdicts with the answer key in [`conformance.json`]"
+                       f"(https://example.invalid/{KIT_BAD_LINK}/conformance.json)."))
+    if exits is not None:
+        def put_exits(sentence):
+            return readme[:exits[0]] + sentence + readme[exits[1]:]
+
+        case("the kit section sentence on when the kit exits 0 stating its exit "
+             "status alone", None, put_exits("It exits 0 only when every fixture agrees."))
+        case("a count in another sentence of the kit section, as `9 agree` is", None,
+             readme[:exits[1]] + f" Of the fixtures, {KIT_BAD_OTHER} must fail."
+             + readme[exits[1]:])
+    case(f"the README with its `{KIT_SECTION}` heading renamed",
+         f"no `{KIT_SECTION}` section found",
+         re.sub(rf"^{re.escape(KIT_SECTION)}$", "## Try a verifier", readme, flags=re.M))
+    return cases
+
+
 def _wire_count(tree):
     row = FIXTURE_ROW.search(tree.readme)
     if row is None:
@@ -5620,6 +5801,17 @@ def _wire_spec_name(tree):
             {"readme": (tree.readme or "") + f"\n{RETRACTED_CREDENTIAL_NAME}\n"})
 
 
+def _wire_kit_count(tree):
+    span = _kit_sentence(tree.readme, KIT_OPENINGS[0])
+    if span is None:
+        return (f"no sentence opening `{KIT_OPENINGS[0]}` found in the README "
+                f"`{KIT_SECTION}` section")
+    return (f"sentence states {KIT_BAD_SENDS},",
+            {"readme": (tree.readme[:span[0]]
+                        + RETRACTED_KIT_SENDS.replace(" 41 ", f" {KIT_BAD_SENDS} ")
+                        + tree.readme[span[1]:])})
+
+
 CHECKS = (
     Check("count",
           lambda t: check(t.readme, t.cosigners, t.fixtures, t.vectors, t.signing),
@@ -5687,6 +5879,8 @@ CHECKS = (
           _wire_pip_notice),
     Check("specification name", lambda t: spec_name_failures(t.readme, t.spec_text),
           _wire_spec_name),
+    Check("kit fixture count", lambda t: kit_count_failures(t.readme, t.fixtures),
+          _wire_kit_count),
     Check("README.md version or date", lambda t: front_page_failures(t.front_page),
           _wire_front_page),
 )
@@ -6058,6 +6252,7 @@ def self_test(tree, verbose):
     cases.extend(_prerequisite_cases(tree))
     cases.extend(_pip_notice_cases(tree))
     cases.extend(_spec_name_cases(tree))
+    cases.extend(_kit_count_cases(tree))
 
     jcs_readme = tree.jcs_readme
     jcs_text = jcs_readme or ""
@@ -6240,7 +6435,9 @@ def main():
           f"README.md states {' and '.join(toolchain_minimums(tree.readme))} above "
           f"its first command; each {PIP_SITE} in the README and COSIGNERS.md "
           f"passes {PIP_VERSION_CHECK}; each `Agent Trust <word>` name in the "
-          f"README is one {SPEC_TEXT_NAME} uses")
+          f"README is one {SPEC_TEXT_NAME} uses; the README kit section's sentences "
+          f"on what the kit sends and when it exits 0 state no fixture count but "
+          f"{len(fixtures)}")
     return 0
 
 
