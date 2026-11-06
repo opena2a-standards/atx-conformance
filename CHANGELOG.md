@@ -417,6 +417,17 @@ they should not.
   the Go verifier's.
   `scripts/check_readme_counts.py` places `REVOCATION_UNKNOWN` at step 3,
   before signature verification.
+- The interop day kit's `README-START-HERE.md` ends with
+  `Not in this kit: github.com/opena2a-standards/{atp,aip,aap}-conformance`,
+  one line that names the sibling suites atp-conformance, aip-conformance
+  and aap-conformance by URL and says none of the three is in the kit. The
+  line takes the place of a blank line, so the screen keeps its line count
+  and its anchors within line 30: without the terminal-safety lines, the
+  blank line above `In this folder:`; with them, the blank line above
+  `Check before you run`. `scripts/kit/test/test_kit.py --ci` adds two
+  cells: one fails unless a line of each render names the three by URL and
+  says they are not in the kit, and one drops that line and must be
+  refused. No fixture or verifier changes.
 
 ### Fixed
 
