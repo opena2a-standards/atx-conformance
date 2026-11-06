@@ -14,7 +14,7 @@ they should not.
 ### Added
 
 - `atx-verify --verifier "<command>"` and `atx-verify --verifier-url <url>`
-  send each of the 44 embedded fixtures to an outside verifier and compare its
+  send each embedded fixture to an outside verifier and compare its
   verdicts with the answer key in `conformance.json`; `--report <dir>` writes
   `atx-interop-report.json` and `atx-interop-report.md`. With none of the new
   options, atx-verify's output is unchanged. On macOS 26, a binary built with
@@ -49,16 +49,17 @@ they should not.
   them. The 41 existing fixtures and their `MANIFEST.sha256` lines are
   byte-identical; the manifest gains two lines. `conformance.json` and the
   capture under `docs/captures/` are regenerated; the capture gains the
-  fixtures' eight lines, and its summary line counts 43. The fixture counts
-  in README.md (the first command's summary line, the expected output and
-  the implementation table), COSIGNERS.md, CONTRIBUTING.md,
-  `docs/continuous-verification.md` and `docs/sibling-repositories.md` go
-  from 41 to 43 (the sibling row's v1.0 count from 12 to 14),
-  `docs/scope.md` counts 34 of 43 fixtures reaching signature verification
-  and 10 ACCEPT fixtures, and `docs/fixtures.md` gains a row for each. The
-  kit's self-tests in `interop/run_test.go` count 43 fixtures, 10 to accept
-  and 33 to reject, where they counted 41, 9 and 32, and the kit entry above
-  counts 43 embedded fixtures. README.md's kit section keeps 41 fixtures,
+  fixtures' eight lines, and its summary line's pass and fixture counts go
+  from 41 to 43. The fixture counts in README.md (the first command's
+  summary line, the expected output and the implementation table),
+  COSIGNERS.md, CONTRIBUTING.md, `docs/continuous-verification.md` and
+  `docs/sibling-repositories.md` go from 41 to 43 (the sibling row's v1.0
+  count from 12 to 14), the count of fixtures reaching signature
+  verification in `docs/scope.md` goes from 32 of 41 to 34 of 43 and its
+  count of ACCEPT fixtures from 9 to 10, and `docs/fixtures.md` gains a row
+  for each. The fixture, accept and reject counts of the kit's self-tests
+  in `interop/run_test.go` go from 41, 9 and 32 to 43, 10 and 33.
+  README.md's kit section keeps 41 fixtures,
   9 agree and 32 accepted what must fail: those are the counts of the kit at
   commit `9740950`, which its install line pins.
 - `fixtures/expired-beyond-skew.json`, built by the generator, is the
@@ -81,16 +82,17 @@ they should not.
   are byte-identical; the manifest gains one line. The fixture cites
   ATP-SPEC.md §10.2 at commit `e6b4e29`, which `docs/version-pinning.md`
   gains a row for. `conformance.json` and the capture under `docs/captures/`
-  are regenerated; the capture gains the fixture's three lines. The fixture
+  are regenerated; the capture gains the fixture's three lines, and its
+  summary line's pass and fixture counts go from 43 to 44. The fixture
   counts in README.md (the first command's summary line, the expected
   output and the implementation table), COSIGNERS.md, CONTRIBUTING.md,
   `docs/continuous-verification.md` and `docs/sibling-repositories.md` go
-  from 43 to 44 (the sibling row's v1.0 count from 14 to 15),
-  `docs/scope.md` counts 34 of 44 fixtures reaching signature verification
-  and gains a row for the bound, and `docs/fixtures.md` gains a row. The
-  kit's self-tests in `interop/run_test.go` count 44 fixtures, 10 to accept
-  and 34 to reject, where they counted 43, 10 and 33, and the kit entry
-  above counts 44 embedded fixtures.
+  from 43 to 44 (the sibling row's v1.0 count from 14 to 15), the count of
+  fixtures reaching signature verification in `docs/scope.md` goes from 34
+  of 43 to 34 of 44, `docs/scope.md` gains a row for the bound, and
+  `docs/fixtures.md` gains a row. The fixture, accept and reject counts of
+  the kit's self-tests in `interop/run_test.go` go from 43, 10 and 33 to
+  44, 10 and 34.
 
 ### Changed
 
@@ -406,6 +408,23 @@ they should not.
   the key's line and on the line under `run:`, and one whose first line
   ends in a backslash and a tab, must each count as a run. Each failed
   before the change. No fixture changes.
+- The entries of this section for the two `did:web` fixtures and for
+  `fixtures/expired-beyond-skew.json` say how each fixture count they name
+  went, the `atx-verify --verifier` entry says it sends each embedded
+  fixture, and `scripts/check_readme_counts.py` holds the top section of
+  this file to stating no fixture total (#347). The `did:web` entry said
+  that the capture's summary line, the kit's self-tests and the
+  `atx-verify --verifier` entry counted 43 fixtures and `docs/scope.md`
+  34 of 43; the entry for `fixtures/expired-beyond-skew.json` took each of
+  those to 44 while the `did:web` entry stayed as it was. A sentence of the
+  top section now fails the check, which exits 1 and names the total, when
+  it states one (`counts N`, `count N fixtures`, `N of M fixtures`,
+  `the N fixtures`, `the N embedded fixtures`, `holds N fixtures`,
+  `embeds N fixtures`, `runs N fixtures`). `go from N to M`, `counted N`,
+  `adds two fixtures`, `the N existing fixtures`, `the N new fixtures`,
+  `the N fixtures before this one`, `the N fixtures that`, a count reached
+  in a sentence on how it went and a section below the top one are not
+  held. Its self-test adds 27 cases. No fixture or verifier changes.
 
 ## v0.1.0
 

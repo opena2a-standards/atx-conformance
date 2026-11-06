@@ -329,6 +329,19 @@ reading`) is not held, `the` being the one form `that` exempts (`holds 8 tests
 that check the script` still counts the file and is held), and the sections
 below the top one record past commits and are not held.
 
+It also holds that section to stating no fixture total. Its entry for the two
+did:web fixtures said the capture's summary line counts 43, docs/scope.md
+counts 34 of 43 fixtures and the kit's self-tests count 43 fixtures, and the
+entry for fixtures/expired-beyond-skew.json took each of those to 44 while
+that entry stayed as it was. A sentence may say how a count went (`go from 41
+to 43`), what it was before the change (`counted 41`) or what a change adds
+(`adds two fixtures`), and may name the fixtures there were before the change
+or that it adds (`the 41 existing fixtures`, `the two new fixtures`, `the 43
+fixtures before this one`, `the two fixtures that it adds`). It may not state
+a count in the present tense (`counts 43`, `count 43 fixtures`) or how many
+fixtures there are (`34 of 44 fixtures`, `the 44 embedded fixtures`, `holds 44
+fixtures`, `embeds 44 fixtures`, `runs 44 fixtures`).
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
 declares, each signature-verification Scope row that claims a set of fixtures
@@ -349,9 +362,8 @@ with, each README and CHANGELOG.md opening-paragraph sentence on this
 repository's tags matches the version tags it carries (where they can be
 read), no sentence of CHANGELOG.md's top section saying a result can still
 differ by release quotes a timestamp verify_test.go writes, no sentence of that
-section states a running total of tests or of a self-test, no Python
-dependency site calls the Python verifier
-zero-dependency while requirements.txt names a package, each jcs-vectors
+section states a running total of tests, of a self-test or of fixtures, no
+Python dependency site calls the Python verifier zero-dependency while requirements.txt names a package, each jcs-vectors
 file describing canonicalize cites RFC 8785 Appendix G, none calls an RFC
 8785 library a reference implementation or port, neither description of what
 the byte-agreement gate runs says it runs no code from another repository,
@@ -3157,6 +3169,29 @@ COUNTED_TESTS = rf"(?:[1-9]\d*|{'|'.join(COUNT_WORDS[2:])}) tests\b"
 RUNNING_TOTAL = re.compile(
     rf"\b(?:[Tt]he {COUNTED_TESTS}(?! that\b)|(?:holds?|runs?|Ran) {COUNTED_TESTS})"
     r"|\b\d+ (?:altered count sites\b|cases green\b|cases, from \d+)")
+# The entry for the two did:web fixtures said the capture's summary line
+# `counts 43`, that docs/scope.md `counts 34 of 43 fixtures` reaching
+# signature verification and that the kit's self-tests `count 43 fixtures`,
+# and the kit entry above it sent `each of the 44 embedded fixtures`; the
+# entry for fixtures/expired-beyond-skew.json took each of those totals to 44
+# while the did:web sentences stayed as they were. So a sentence of the top
+# section states no fixture total either. Saying how a count went (`go from
+# 41 to 43`), what it was before the change (`where they counted 41`) or what
+# a change adds (`adds two fixtures`) stays true, and so does naming the
+# fixtures there were before it or that it adds (`the 41 existing fixtures`,
+# `the two new fixtures`, `the 43 fixtures before this one`, `the two
+# fixtures that it adds`), `the` again being the one form `that` exempts. A
+# count reached in a sentence on how it went (`from 32 of 41 to 34 of 43
+# fixtures`) is not held either. `counts? N` holds a present-tense count of
+# anything, as `its summary line counts 43` gave one with no noun after it.
+COUNTED = rf"(?:[1-9]\d*|{'|'.join(COUNT_WORDS[2:])})\b"
+FIXTURE_TOTAL = re.compile(
+    rf"\bcounts? {COUNTED}(?: of {COUNTED})?(?: [A-Za-z]+)? fixtures\b"
+    rf"|\bcounts? {COUNTED}"
+    rf"|(?<!\bto )\b{COUNTED} of {COUNTED}(?: [A-Za-z]+)? fixtures\b"
+    rf"|\b[Tt]he {COUNTED}(?! (?:existing|new)\b)(?: [A-Za-z]+)? fixtures\b"
+    rf"(?! (?:before|that)\b)"
+    rf"|\b(?:holds?|embeds?|runs?) {COUNTED}(?: [A-Za-z]+)? fixtures\b")
 TOTAL_SITE = f"{CHANGELOG_NAME} top-section sentence"
 # The sentences the check was written for, as they were wrapped.
 RETRACTED_TEST_TOTAL = (
@@ -3174,17 +3209,19 @@ RETRACTED_SITE_TOTAL = (
 
 def changelog_total_failures(changelog):
     """Each sentence of CHANGELOG.md's top section (top_section()) must state no
-    total RUNNING_TOTAL reads. A CHANGELOG.md that is missing or has no `## `
-    heading has no top section to hold here; the first-command check reports
-    it."""
+    total RUNNING_TOTAL or FIXTURE_TOTAL reads. A CHANGELOG.md that is missing
+    or has no `## ` heading has no top section to hold here; the first-command
+    check reports it."""
     top = top_section(changelog) if changelog is not None else None
     if top is None:
         return []
     return [f"{TOTAL_SITE} states `{total}`, a total another change of the release "
-            f"can add to while this sentence stays as it is; say what the change adds, "
-            f"as `adds 3 cases` does: {sentence!r}"
+            f"can add to while this sentence stays as it is; say what the change adds "
+            f"or how the count went, as `adds 3 cases` and `go from 41 to 43` do: "
+            f"{sentence!r}"
             for sentence in top[1]
-            for total in dict.fromkeys(RUNNING_TOTAL.findall(sentence))]
+            for total in dict.fromkeys(RUNNING_TOTAL.findall(sentence)
+                                       + FIXTURE_TOTAL.findall(sentence))]
 
 
 def count_vectors(root):
@@ -4232,6 +4269,46 @@ AMENDED_SITE_TOTAL = (
     "  directory; the empty pattern `-p ''`; and an empty argument after `-s`\n"
     "  and `-p`, which unittest reads as the start directory, the directory it\n"
     "  is run from.")
+# The fixture totals the check was extended for, as they were wrapped: the
+# close of the entry for the two did:web fixtures, and the kit entry's opening
+# as the entry for fixtures/expired-beyond-skew.json left it.
+RETRACTED_FIXTURE_TOTAL = (
+    "The 41 existing fixtures and their `MANIFEST.sha256` lines are\n"
+    "  byte-identical; the manifest gains two lines. `conformance.json` and the\n"
+    "  capture under `docs/captures/` are regenerated; the capture gains the\n"
+    "  fixtures' eight lines, and its summary line counts 43. The fixture counts\n"
+    "  in README.md (the first command's summary line, the expected output and\n"
+    "  the implementation table), COSIGNERS.md, CONTRIBUTING.md,\n"
+    "  `docs/continuous-verification.md` and `docs/sibling-repositories.md` go\n"
+    "  from 41 to 43 (the sibling row's v1.0 count from 12 to 14),\n"
+    "  `docs/scope.md` counts 34 of 43 fixtures reaching signature verification\n"
+    "  and 10 ACCEPT fixtures, and `docs/fixtures.md` gains a row for each. The\n"
+    "  kit's self-tests in `interop/run_test.go` count 43 fixtures, 10 to accept\n"
+    "  and 33 to reject, where they counted 41, 9 and 32, and the kit entry above\n"
+    "  counts 43 embedded fixtures.")
+RETRACTED_KIT_TOTAL = (
+    "- `atx-verify --verifier \"<command>\"` and `atx-verify --verifier-url <url>`\n"
+    "  send each of the 44 embedded fixtures to an outside verifier and compare its\n"
+    "  verdicts with the answer key in `conformance.json`.")
+# The same sentences as CHANGELOG.md came to state them.
+AMENDED_FIXTURE_TOTAL = (
+    "The 41 existing fixtures and their `MANIFEST.sha256` lines are\n"
+    "  byte-identical; the manifest gains two lines. `conformance.json` and the\n"
+    "  capture under `docs/captures/` are regenerated; the capture gains the\n"
+    "  fixtures' eight lines, and its summary line's pass and fixture counts go\n"
+    "  from 41 to 43. The fixture counts in README.md (the first command's\n"
+    "  summary line, the expected output and the implementation table),\n"
+    "  COSIGNERS.md, CONTRIBUTING.md, `docs/continuous-verification.md` and\n"
+    "  `docs/sibling-repositories.md` go from 41 to 43 (the sibling row's v1.0\n"
+    "  count from 12 to 14), the count of fixtures reaching signature\n"
+    "  verification in `docs/scope.md` goes from 32 of 41 to 34 of 43 and its\n"
+    "  count of ACCEPT fixtures from 9 to 10, and `docs/fixtures.md` gains a row\n"
+    "  for each. The fixture, accept and reject counts of the kit's self-tests\n"
+    "  in `interop/run_test.go` go from 41, 9 and 32 to 43, 10 and 33.")
+AMENDED_KIT_TOTAL = (
+    "- `atx-verify --verifier \"<command>\"` and `atx-verify --verifier-url <url>`\n"
+    "  send each embedded fixture to an outside verifier and compare its\n"
+    "  verdicts with the answer key in `conformance.json`.")
 
 
 def _changelog_total_cases(tree):
@@ -4309,9 +4386,51 @@ def _changelog_total_cases(tree):
             ("a set of tests, `the three tests that held the old reading`",
              "The three tests that held the old reading hold the new one.")):
         case(f"CHANGELOG.md stating {label}", opening(sentence), None)
-    case("the #325 and #327 sentences in a CHANGELOG.md section below the top one",
+    for total in ("counts 43", "counts 34 of 43 fixtures", "count 43 fixtures",
+                  "counts 43 embedded fixtures"):
+        case(f"CHANGELOG.md restoring the did:web fixtures' sentences, which state "
+             f"`{total}`", opening(RETRACTED_FIXTURE_TOTAL), total)
+    case("CHANGELOG.md restoring the kit entry's fixture total",
+         opening(RETRACTED_KIT_TOTAL), "the 44 embedded fixtures")
+    for total, sentence in (
+            ("count 44", "The kit's self-tests count 44, 10 to accept and 34 to reject."),
+            ("count two fixtures", "The two files count two fixtures."),
+            ("34 of 44 fixtures", "`docs/scope.md` says 34 of 44 fixtures reach step 5."),
+            ("The 44 fixtures", "The 44 fixtures pass in both verifiers."),
+            ("the ten ACCEPT fixtures", "It reads the ten ACCEPT fixtures."),
+            ("holds 44 fixtures", "`fixtures/` holds 44 fixtures."),
+            ("hold 44 fixtures", "The two directories hold 44 fixtures."),
+            ("embeds 44 fixtures", "The kit embeds 44 fixtures."),
+            ("runs 44 fixtures", "The tour runs 44 fixtures."),
+            ("holds 44 fixtures", "`fixtures/` holds 44 fixtures that the kit embeds.")):
+        case(f"CHANGELOG.md stating `{total}` in {sentence!r}", opening(sentence), total)
+    for label, sentence in (
+            ("the did:web fixtures' sentences as amended", AMENDED_FIXTURE_TOTAL),
+            ("the kit entry as amended", AMENDED_KIT_TOTAL),
+            ("how a count went, `go from 41 to 43`",
+             "The fixture counts in README.md go from 41 to 43."),
+            ("what a count was before the change, `counted 41`",
+             "The self-tests counted 41 fixtures, 9 to accept and 32 to reject."),
+            ("`adds two fixtures`", "The change adds two fixtures."),
+            ("a count opening the sentence on what the change adds",
+             "Two fixtures built by the generator name the subject under `did:web`."),
+            ("the fixtures before the change, `the 41 existing fixtures`",
+             "The 41 existing fixtures are byte-identical."),
+            ("the fixtures the change adds, `the two new fixtures`",
+             "`docs/fixtures.md` gains a row for each of the two new fixtures."),
+            ("`the 43 fixtures before this one`",
+             "The 43 fixtures before this one passed in both verifiers."),
+            ("a set of fixtures, `the two fixtures that it adds`",
+             "The two fixtures that it adds expect `ACCEPT`."),
+            ("the count a change reaches, `to 34 of 43 fixtures`",
+             "Its count goes from 32 of 41 to 34 of 43 fixtures."),
+            ("`counts as a pass`", "Each copy now counts as a pass.")):
+        case(f"CHANGELOG.md stating {label}", opening(sentence), None)
+    case("the #325 and #327 sentences and the did:web fixtures' sentences in a "
+         "CHANGELOG.md section below the top one",
          f"{changelog}\n## 0000000: a past commit\n\n{RETRACTED_TEST_TOTAL}\n\n"
-         f"{RETRACTED_SITE_TOTAL}\n", None)
+         f"{RETRACTED_SITE_TOTAL}\n\n{RETRACTED_FIXTURE_TOTAL}\n\n"
+         f"{RETRACTED_KIT_TOTAL}\n", None)
     missing = changelog_total_failures(None)
     cases.append((not missing, "CHANGELOG.md missing, which the first-command check "
                                "reports", f"got {missing}"))
@@ -6009,8 +6128,8 @@ def main():
              f"read in this checkout; ")
           + f"no {CHANGELOG_NAME} top-section sentence saying a result can still "
           f"differ by release quotes a timestamp {VERIFY_GO_TEST_NAME} writes; "
-          f"no {CHANGELOG_NAME} top-section sentence states a running total of tests "
-          f"or of a self-test; "
+          f"no {CHANGELOG_NAME} top-section sentence states a running total of tests, "
+          f"of a self-test or of fixtures; "
           f"no jcs-vectors README or RFC 8785 serializer docstring calls the "
           f"Python verifier zero-dependency; "
           f"each jcs-vectors file describing canonicalize cites "
