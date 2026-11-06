@@ -20,7 +20,13 @@ jobs:
     name: verifiers + parity + byte-pin
     runs-on: ubuntu-latest
     steps:
+      # check_readme_counts.py holds README statements to the repository
+      # history (first_module_commit, nested_module_dirs, latest_run_failures),
+      # which needs the full clone: the default shallow checkout makes all
+      # three read None and the run only notes that they were skipped.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
