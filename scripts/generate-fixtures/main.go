@@ -379,6 +379,17 @@ const (
 	testBuildAtt   = "https://slsa.dev/provenance/v1#opena2a-conformance"
 )
 
+// The subject of the foreign-did-method fixtures, named under the did:web
+// method rather than the issuer's did:opena2a: an agent and its publisher on a
+// platform that issues its own identifiers, under the reserved example domain
+// platform.example (RFC 2606). foreignAgentDIDAltered is the agentDid the
+// altered-after-signing fixture carries in place of the signed one.
+const (
+	foreignAgentDID        = "did:web:platform.example:agents:billing-agent"
+	foreignAgentDIDAltered = "did:web:platform.example:agents:other-agent"
+	foreignPublisherDID    = "did:web:platform.example"
+)
+
 // presentDeclaredPurpose is the populated declaredPurpose object the present-case
 // v1.1 fixtures carry. Its logical content matches jcs-vectors/vectors/
 // 08-declared-purpose.json, so a baseline-v1.1 credential carrying it canonicalizes
@@ -533,6 +544,53 @@ func main() {
 				},
 				hybridVerifierState,
 				ExpectedOutcome{VerifyResult: "ACCEPT"},
+				atx)
+		}},
+		// ---- subject named under a foreign DID method ----
+		// The baseline-valid-hybrid credential whose agentDid and publisherDid
+		// are did:web identifiers, issued and signed, with both suites, by the
+		// trusted did:opena2a issuer every other fixture uses. The verifier
+		// resolves the issuerDid (core.md §1.3 step 3); no step reads the DID
+		// method of the subject's DIDs. The legacy canonical form signs
+		// agentDid as written (§1.3a.1), so the second fixture, which changes
+		// agentDid after signing, pins that the signature binds the foreign
+		// identifier. Under atcVersion 1.0 publisherDid is outside the signed
+		// bytes (§1.3a.1).
+		{"fixtures/foreign-did-method-valid.json", func() Fixture {
+			atx := newBaselineATX()
+			atx.AgentDID = foreignAgentDID
+			atx.PublisherDID = foreignPublisherDID
+			ed := signWithKey(primary, atx)
+			pq, _ := signMLDSA65(mldsa.SeedHex, canonicalPayload(&atx))
+			pq.KeyID = mldsa.KeyID
+			atx.Signatures = []ATCSignature{ed, pq}
+			return wrap("atx-v1/foreign-did-method-valid",
+				"The baseline-valid-hybrid.json credential, ATX v1.0, with its subject named under a DID method other than its issuer's: agentDid is did:web:platform.example:agents:billing-agent and publisherDid is did:web:platform.example, while issuerDid stays did:opena2a:authority:opena2a.org, the trusted issuer whose keys make its Ed25519 and ML-DSA-65 signatures over the same canonical payload. The verifier resolves the issuerDid to the issuer's keys (§1.3 step 3); no step of §1.3 reads the DID method of agentDid or publisherDid, and the credential schema's DID pattern admits any method. The legacy canonical form signs agentDid as written (§1.3a.1); it does not sign publisherDid. A verifier MUST verify both signatures and ACCEPT. A verifier that requires the subject's DIDs to use the issuer's DID method, or did:opena2a, rejects a credential the algorithm accepts.",
+				[]KeypairRef{
+					keypairRefFor(primary, "vectors/issuer-primary.json"),
+					{Role: mldsa.Role, Path: "vectors/mldsa65-seed.json", Algorithm: mldsa.Algorithm, PublicKeyHex: mldsa.PublicKeyHex, KeyID: mldsa.KeyID},
+				},
+				hybridVerifierState,
+				ExpectedOutcome{VerifyResult: "ACCEPT"},
+				atx)
+		}},
+		{"fixtures/foreign-did-method-altered-after-signing.json", func() Fixture {
+			atx := newBaselineATX()
+			atx.AgentDID = foreignAgentDID
+			atx.PublisherDID = foreignPublisherDID
+			ed := signWithKey(primary, atx)
+			pq, _ := signMLDSA65(mldsa.SeedHex, canonicalPayload(&atx))
+			pq.KeyID = mldsa.KeyID
+			atx.Signatures = []ATCSignature{ed, pq}
+			atx.AgentDID = foreignAgentDIDAltered
+			return wrap("atx-v1/foreign-did-method-altered-after-signing",
+				"The foreign-did-method-valid.json credential with its agentDid changed after signing, from did:web:platform.example:agents:billing-agent to did:web:platform.example:agents:other-agent; every other member, both signatures included, is unchanged. agentDid is the second of the eleven fields the legacy canonical form signs (§1.3a.1), so the canonical bytes the verifier computes from this credential are not the bytes either signature covers, and the Ed25519 signature does not verify (§1.3 step 4). A verifier MUST REJECT with a signature-validation reason. The signature binds the credential to the did:web identifier its issuer signed: a holder cannot move it to another agent identifier.",
+				[]KeypairRef{
+					keypairRefFor(primary, "vectors/issuer-primary.json"),
+					{Role: mldsa.Role, Path: "vectors/mldsa65-seed.json", Algorithm: mldsa.Algorithm, PublicKeyHex: mldsa.PublicKeyHex, KeyID: mldsa.KeyID},
+				},
+				hybridVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
 				atx)
 		}},
 		{"fixtures/hybrid-pq-only.json", func() Fixture {
@@ -1600,6 +1658,10 @@ var fixtureRequirements = map[string]string{
 	"atx-v1_1/declared-purpose-integer-respelled-exponent":       "§1.3a.2 rule 3: RFC 8785 number serialization is kept out of cross-language scope, so a declaredPurpose number written with an exponent part, 1e3 where the signature covers 1000, has no bytes the signature covers and is a signature failure",
 	"atx-v1_1/declared-purpose-integer-respelled-upper-exponent": "§1.3a.2 rule 3: RFC 8785 number serialization is kept out of cross-language scope, so a declaredPurpose number written with an exponent part that opens with an upper-case E, 1E3 where the signature covers 1000, has no bytes the signature covers and is a signature failure",
 	"atx-v1_1/declared-purpose-integer-outside-range":            "§1.3a.2 rule 3: RFC 8785 number serialization is kept out of cross-language scope, and outside the I-JSON exact range it does not write every integer as its digits, so declaredPurpose n 9007199254740993, which it writes as 9007199254740992, has no value the signature covers and is a signature failure",
+
+	// Subject named under a foreign DID method.
+	"atx-v1/foreign-did-method-valid":                 "§1.3 step 3: the verifier resolves the issuerDid, not the subject's DIDs, and no step reads the DID method of agentDid or publisherDid, so a v1.0 hybrid credential whose agentDid and publisherDid are did:web identifiers, signed by its trusted did:opena2a issuer, is accepted",
+	"atx-v1/foreign-did-method-altered-after-signing": "§1.3 step 4: the legacy canonical form signs agentDid as written (§1.3a.1), so a did:web agentDid changed after signing is a signature failure",
 }
 
 // fixtureRequirementsUsed records which fixtureRequirements entries wrap consumed.
