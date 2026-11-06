@@ -53,7 +53,7 @@ before relying on a result.
 
 ## Try your verifier in two minutes
 
-The kit sends each of the 41 fixtures to your verifier and compares its
+The kit sends each fixture built into it to your verifier and compares its
 verdicts with the answer key in [`conformance.json`](conformance.json). Your
 verifier stays yours. The kit uploads nothing: the fixtures go to your
 verifier only, and the report stays on your laptop unless you share it.
@@ -125,7 +125,7 @@ An optional "reason" string is recorded, and the first 200 characters of each
 raw response are kept in the report, so a person can judge.
 
 The kit prints four numbers: agree, accepted what must fail, rejected what
-must pass, and couldn't read. It exits 0 only when all 41 agree.
+must pass, and couldn't read. It exits 0 only when every fixture agrees.
 `--report <dir>` writes `atx-interop-report.md` and `atx-interop-report.json`;
 `--verifier --help` lists every option. To share a result, open an issue on
 this repository titled `<verifier> fails <fixture>.json at <suite commit>`, or
