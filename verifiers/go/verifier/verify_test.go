@@ -1776,6 +1776,60 @@ func lastWins(raw json.RawMessage) (json.RawMessage, error) {
 	return json.Marshal(v)
 }
 
+// TestExpiredBeyondSkewPinsTheSkewBound pins what
+// fixtures/expired-beyond-skew.json tests. core.md section 1.3 step 2
+// evaluates expiresAt within the family clock-skew bound of ATP-SPEC section
+// 10.2: a verifier tolerates at most 60 seconds of clock skew. This verifier
+// tolerates none and reads the clock at step 2 alone, so a verifier that
+// tolerates s seconds decides as this one does at a clock s seconds earlier.
+// The fixture's expiresAt is 61 seconds before its clock: at every whole s
+// from 0 to 60 the credential is rejected as EXPIRED, and at 61, where the
+// clock equals expiresAt, it is accepted, so expiry is the one gate it fails.
+// fixtures/expired.json is rejected at 61 too, so it does not tell a verifier
+// 61 seconds outside the bound from one inside it.
+func TestExpiredBeyondSkewPinsTheSkewBound(t *testing.T) {
+	const bound = 60 * time.Second
+	load := func(name string) (fixture, time.Time) {
+		t.Helper()
+		f, err := loadFixture(repoRoot + "/fixtures/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		clock, err := parseRFC3339(f.VerifierState.ClockRFC3339)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f, clock.UTC()
+	}
+	// at verifies f, a copy, with its clock moved skew earlier.
+	at := func(f fixture, clock time.Time, skew time.Duration) result {
+		f.VerifierState.ClockRFC3339 = clock.Add(-skew).Format(time.RFC3339)
+		return verify(f)
+	}
+
+	f, clock := load("expired-beyond-skew.json")
+	var a atx
+	if err := json.Unmarshal(f.ATX, &a); err != nil {
+		t.Fatal(err)
+	}
+	if gap := clock.Sub(a.ExpiresAt.Time); gap != bound+time.Second {
+		t.Fatalf("expiresAt is %s before the clock, want %s", gap, bound+time.Second)
+	}
+	for skew := time.Duration(0); skew <= bound; skew += time.Second {
+		if got := at(f, clock, skew); got.Accepted || got.RejectCategory != "EXPIRED" {
+			t.Errorf("clock %s earlier: got %s, want REJECT[EXPIRED]", skew, got)
+		}
+	}
+	if got := at(f, clock, bound+time.Second); !got.Accepted {
+		t.Errorf("clock %s earlier, equal to expiresAt: got %s, want ACCEPT", bound+time.Second, got)
+	}
+
+	old, oldClock := load("expired.json")
+	if got := at(old, oldClock, bound+time.Second); got.Accepted || got.RejectCategory != "EXPIRED" {
+		t.Errorf("expired.json, clock %s earlier: got %s, want REJECT[EXPIRED]", bound+time.Second, got)
+	}
+}
+
 // TestJCSVectorsThroughVerifierProjection runs this verifier's own v1.1 path
 // (credential parse, TBS projection, JCS) over every jcs-vectors vector and
 // requires the pinned expected.canonicalHex byte-for-byte. The byte-agreement

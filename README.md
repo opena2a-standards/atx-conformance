@@ -31,7 +31,7 @@ PASS  fixtures/wrong-issuer.json
        expected: REJECT [UNTRUSTED_ISSUER]
        observed: REJECT[UNTRUSTED_ISSUER: issuer DID did:opena2a:authority:attacker.example is not in the verifier's trusted set (untrusted issuer)]
 
-summary: 43 pass, 0 fail (43 fixtures)
+summary: 44 pass, 0 fail (44 fixtures)
 ```
 
 With no argument the verifier walks the fixture set built into the module
@@ -203,7 +203,7 @@ minimums, the modules and packages each verifier pins, and those inputs.
 
 ### Expected output
 
-Both verifiers report `summary: 43 pass, 0 fail (43 fixtures)` against the
+Both verifiers report `summary: 44 pass, 0 fail (44 fixtures)` against the
 shipped fixture set.
 
 A verifier prints a FAIL line when its result on a
@@ -230,8 +230,8 @@ modified fixture reads `FAILED` and the command exits non-zero. On Linux,
 
 | Implementation | Verifier | Status |
 |---|---|---|
-| `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 43 / 43 PASS |
-| `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 43 / 43 PASS |
+| `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 44 / 44 PASS |
+| `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 44 / 44 PASS |
 
 To list an independent second-party implementation here, or to arrange a
 cosignature, open an issue on this repository's
