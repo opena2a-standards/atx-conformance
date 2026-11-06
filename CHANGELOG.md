@@ -462,6 +462,20 @@ they should not.
   9 agree and 32 accepted what must fail, are what the kit at `9740950`
   reports for `true`, and are not held. Its self-test adds 19 cases. No
   fixture or verifier changes.
+- `scripts/check_readme_counts.py` reads a count written after `e.g.` or
+  `i.e.` in the README kit section's sentences on what the kit sends and on
+  when it exits 0 (#352). It split a sentence at the `.` that closes either
+  abbreviation, so the count fell in a part of the sentence the check did
+  not hold: with the sentence on what the kit sends written as `The kit
+  sends each fixture built into it (e.g. all 41) to your verifier`, or as
+  `The kit sends each fixture, i.e. 41 of them, to your verifier`, the
+  script exited 0. It now exits 1 naming 41. The sentences it reads from
+  README.md and the pages it links, from CHANGELOG.md's opening paragraph
+  and from the files the Python dependency check reads do not end at the
+  `.` closing `e.g.` or `i.e.`, in either letter case; on this tree that
+  joins one sentence outside the kit section, in `jcs-vectors/README.md`,
+  and the script exits 0. Its self-test adds 10 cases. No fixture or
+  verifier changes.
 
 ## v0.1.0
 
