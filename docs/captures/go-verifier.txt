@@ -11,6 +11,9 @@ PASS  fixtures/baseline-valid.json
 PASS  fixtures/cross-issuer-key.json
        expected: REJECT [SIGNATURE_INVALID]
        observed: REJECT[SIGNATURE_INVALID: Ed25519 signature did:opena2a:authority:partner.example#key-1 did not verify against any configured public key]
+PASS  fixtures/expired-beyond-skew.json
+       expected: REJECT [EXPIRED]
+       observed: REJECT[EXPIRED: expired at 2026-05-23T23:58:59Z, verifier clock is 2026-05-24T00:00:00Z]
 PASS  fixtures/expired.json
        expected: REJECT [EXPIRED]
        observed: REJECT[EXPIRED: expired at 2025-01-01T00:00:00Z, verifier clock is 2026-05-24T00:00:00Z]
@@ -148,4 +151,4 @@ PASS  fixtures/wrong-issuer.json
        expected: REJECT [UNTRUSTED_ISSUER]
        observed: REJECT[UNTRUSTED_ISSUER: issuer DID did:opena2a:authority:attacker.example is not in the verifier's trusted set (untrusted issuer)]
 
-summary: 43 pass, 0 fail (43 fixtures)
+summary: 44 pass, 0 fail (44 fixtures)

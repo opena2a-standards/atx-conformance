@@ -179,6 +179,52 @@
       "description": "An ATX v1.0 credential issued by the primary authority (issuerDid = did:opena2a:authority:opena2a.org) but signed by a DIFFERENT trusted authority's key (did:opena2a:authority:partner.example#key-1). The signature is valid over the canonical payload and the signing authority is independently trusted, yet that key is not controlled by the credential's issuer and is not in its issuerChain. A verifier MUST bind each signature to a key controlled by the credential's issuer and MUST REJECT with a signature-validation reason, so a trusted authority cannot impersonate another. A verifier that tries every configured key would wrongly ACCEPT."
     },
     {
+      "fixture": "fixtures/expired-beyond-skew.json",
+      "name": "atx-v1/expired-beyond-skew",
+      "requirement": "§1.3 step 2: expiry is evaluated within the family clock-skew bound of ATP §10.2, at most 60 seconds, so a credential whose expiresAt is 61 seconds earlier than the verifier's clock is rejected at every tolerance the bound allows",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.1 Legacy form (`atcVersion` = \"1.0\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "ATP",
+          "ref": "https://github.com/opena2a-standards/agent-trust-protocol/blob/e6b4e29f037469133683482bc9ab923f5704aa85/ATP-SPEC.md",
+          "section": "§10.2 Trust Proof Validity (clock skew: at most 60 seconds, symmetrically, for issuedAt and expiresAt in ATX credentials)"
+        }
+      ],
+      "expected": "REJECT[EXPIRED]",
+      "description": "The baseline-valid.json credential, ATX v1.0, with expiresAt 2026-05-23T23:58:59Z, 61 seconds earlier than the verifier's pinned clock, 2026-05-24T00:00:00Z, and its one Ed25519 signature made over that expiresAt. core.md §1.3 step 2 evaluates expiry within the family clock-skew bound of ATP §10.2: a verifier tolerates at most 60 seconds of clock skew, and the tolerance extends no TTL or cache window. At every tolerance from 0 to 60 seconds the credential is expired, so a verifier MUST REJECT with an expiry reason. A verifier that tolerates more than 61 seconds of skew, outside the bound, wrongly ACCEPTs; expired.json, whose expiresAt is 508 days earlier than the clock, is rejected at any tolerance short of 508 days, so it does not tell such a verifier from one inside the bound. An expiresAt less than 60 seconds before the clock pins no verdict: a verifier with no tolerance rejects it and one with 60 seconds accepts it. 61 seconds is one second past the bound, so the verdict does not turn on whether a verifier holds a credential expired at the instant its expiresAt plus its tolerance equals its clock."
+    },
+    {
       "fixture": "fixtures/expired.json",
       "name": "atx-v1/expired",
       "requirement": "§1.3 step 2: a credential whose expiresAt is earlier than the verifier's clock is rejected",

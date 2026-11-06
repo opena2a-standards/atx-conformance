@@ -14,7 +14,7 @@ they should not.
 ### Added
 
 - `atx-verify --verifier "<command>"` and `atx-verify --verifier-url <url>`
-  send each of the 43 embedded fixtures to an outside verifier and compare its
+  send each of the 44 embedded fixtures to an outside verifier and compare its
   verdicts with the answer key in `conformance.json`; `--report <dir>` writes
   `atx-interop-report.json` and `atx-interop-report.md`. With none of the new
   options, atx-verify's output is unchanged. On macOS 26, a binary built with
@@ -61,6 +61,36 @@ they should not.
   counts 43 embedded fixtures. README.md's kit section keeps 41 fixtures,
   9 agree and 32 accepted what must fail: those are the counts of the kit at
   commit `9740950`, which its install line pins.
+- `fixtures/expired-beyond-skew.json`, built by the generator, is the
+  `baseline-valid.json` credential (ATX v1.0) with `expiresAt`
+  `2026-05-23T23:58:59Z`, 61 seconds before the pinned verifier clock
+  `2026-05-24T00:00:00Z`, signed over that value, and expects
+  `REJECT [EXPIRED]` with a reason containing `expired`. core.md §1.3 step 2
+  evaluates expiry within the family clock-skew bound of ATP §10.2, under
+  which a verifier tolerates at most 60 seconds of skew, so the credential
+  is expired at every tolerance the bound allows. Both reference verifiers
+  read the clock at the expiry step alone, so moving a fixture's clock back
+  stands in for a verifier that tolerates that much skew: moved back 61
+  seconds, and 3600, the 43 fixtures before this one passed in both
+  verifiers, and this one fails in both; moved back 60 seconds, every
+  fixture passes in both. A test in `verifiers/go/verifier` runs the fixture
+  at its clock moved back by each whole second from 0 to 61: rejected as
+  `EXPIRED` from 0 to 60, accepted at 61, where the clock equals
+  `expiresAt`. Both reference verifiers report the expected outcome with no
+  change to them. The 43 existing fixtures and their `MANIFEST.sha256` lines
+  are byte-identical; the manifest gains one line. The fixture cites
+  ATP-SPEC.md §10.2 at commit `e6b4e29`, which `docs/version-pinning.md`
+  gains a row for. `conformance.json` and the capture under `docs/captures/`
+  are regenerated; the capture gains the fixture's three lines. The fixture
+  counts in README.md (the first command's summary line, the expected
+  output and the implementation table), COSIGNERS.md, CONTRIBUTING.md,
+  `docs/continuous-verification.md` and `docs/sibling-repositories.md` go
+  from 43 to 44 (the sibling row's v1.0 count from 14 to 15),
+  `docs/scope.md` counts 34 of 44 fixtures reaching signature verification
+  and gains a row for the bound, and `docs/fixtures.md` gains a row. The
+  kit's self-tests in `interop/run_test.go` count 44 fixtures, 10 to accept
+  and 34 to reject, where they counted 43, 10 and 33, and the kit entry
+  above counts 44 embedded fixtures.
 
 ### Changed
 

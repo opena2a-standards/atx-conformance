@@ -49,8 +49,15 @@ const jcsBaselineCanonicalHex = "7b226167656e74446964223a226469643a6f70656e61326
 const jcsDeclaredPurposeCanonicalHex = "7b226167656e74446964223a226469643a6f70656e6132613a6167656e743a6167656e745f636f6e666f726d616e63655f746573745f303031222c226167656e744964223a226167656e745f636f6e666f726d616e63655f746573745f303031222c2261746356657273696f6e223a22312e31222c226265686176696f72616c50726f66696c65223a7b22636865636b73756d223a227368613235363a676869373839222c2267656e6572617465644174223a22323032362d30352d31395430303a30303a30305a222c226f62736572766174696f6e44617973223a31347d2c226275696c644174746573746174696f6e223a2268747470733a2f2f736c73612e6465762f70726f76656e616e63652f7631236f70656e6132612d636f6e666f726d616e6365222c226361706162696c6974696573223a5b2264623a72656164222c2264623a7772697465225d2c22636f6e74656e7448617368223a2230303030313131313232323233333333343434343535353536363636373737373838383839393939616161616262626263636363646464646565656566666666222c226465636c61726564507572706f7365223a7b226175746f6e6f6d79223a2273757065727669736564222c226361706162696c6974794a757374696669636174696f6e223a7b2264623a72656164223a5b2262696c6c696e673a696e7175697279225d2c2264623a7772697465223a5b2262696c6c696e673a726566756e64225d7d2c2263617465676f7279223a2266696e616e6369616c2d6f7065726174696f6e73222c226461746153636f706573223a5b22637573746f6d65722e62696c6c696e67222c22637573746f6d65722e636f6e74616374225d2c2265677265737353636f706573223a5b226170692e7374726970652e636f6d222c22686f6f6b732e696e7465726e616c2e61636d652e636f6d225d2c2273746174656d656e74223a2250726f63657373657320637573746f6d65722062696c6c696e6720696e7175697269657320616e642069737375657320726566756e647320757020746f20612073757065727669736f722d736574206c696d69742e20e58c97e4baac222c227461736b53636f706573223a5b2262696c6c696e673a696e7175697279222c2262696c6c696e673a726566756e64225d2c22766f63616256657273696f6e223a2231227d2c22657870697265734174223a22323039392d31322d33315432333a35393a35395a222c226973737565644174223a22323032362d30352d32335430303a30303a30305a222c22697373756572436861696e223a5b226469643a6f70656e6132613a617574686f726974793a6f70656e6132612e6f72672d726f6f74222c226469643a6f70656e6132613a617574686f726974793a6f70656e6132612e6f7267225d2c22697373756572446964223a226469643a6f70656e6132613a617574686f726974793a6f70656e6132612e6f7267222c227075626c6973686572223a226f70656e6132612d636f6e666f726d616e6365222c227075626c6973686572446964223a226469643a6f70656e6132613a7075626c69736865723a6f70656e6132612d636f6e666f726d616e6365222c227363616e53756d6d617279223a7b22637269746963616c46696e64696e6773223a302c2263727970746f5365727665223a226e6f2d7765616b2d63727970746f222c226869676846696e64696e6773223a302c22686d61223a22706173736564222c226f6173624c6576656c223a224c31222c227365637265746c657373223a22636c65616e227d2c2274727573744c6576656c223a342c22747275737453636f7265223a2238372e353030303030222c2276657273696f6e223a22312e302e30227d"
 
 // fixedClock pins the verifier clock for the entire suite. Valid fixtures
-// have ExpiresAt later than this; the expired fixture has ExpiresAt earlier.
+// have ExpiresAt later than this; the two expired fixtures have ExpiresAt
+// earlier.
 const fixedClockRFC3339 = "2026-05-24T00:00:00Z"
+
+// atpMaxSkew is the family clock-skew bound that core.md §1.3 step 2
+// evaluates expiresAt within, stated in ATP-SPEC §10.2 (atpSpecRef): a
+// verifier tolerates at most 60 seconds of clock skew, and the tolerance
+// extends no TTL or cache window.
+const atpMaxSkew = 60 * time.Second
 
 // outDir is the conformance repo root, derived at run time relative to this
 // generator's location.
@@ -366,6 +373,10 @@ var (
 	expiredAt   = mustParseTime("2025-01-01T00:00:00Z")
 	createdAt   = mustParseTime("2026-05-23T00:00:00Z")
 	revokedTime = mustParseTime("2026-05-23T12:00:00Z")
+
+	// expiredBeyondSkewAt is one second past atpMaxSkew before the pinned
+	// verifier clock: 2026-05-23T23:58:59Z.
+	expiredBeyondSkewAt = mustParseTime(fixedClockRFC3339).Add(-(atpMaxSkew + time.Second))
 )
 
 // Fixed test agent + content hash used across fixtures so reviewers can see at
@@ -693,6 +704,26 @@ func main() {
 			atx.Signatures = []ATCSignature{signWithKey(primary, atx)}
 			return wrap("atx-v1/expired",
 				"An otherwise-valid ATX whose ExpiresAt is earlier than the verifier's pinned clock. Verifier MUST REJECT with an expiry reason.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "EXPIRED", ReasonContains: "expired"},
+				atx)
+		}},
+		{"fixtures/expired-beyond-skew.json", func() Fixture {
+			// The expiry check one second past the family clock-skew bound.
+			// core.md §1.3 step 2 evaluates expiresAt within the bound of
+			// ATP-SPEC §10.2, so a verifier may tolerate any skew from 0 to
+			// 60 seconds. expired.json expired 508 days before the clock, so
+			// a verifier rejects it at any tolerance short of 508 days, inside
+			// the bound or far outside it. This credential, signed over an
+			// expiresAt 61 seconds before the clock, is expired at every
+			// tolerance the bound allows; one that expired less than 60
+			// seconds before the clock would pin no verdict.
+			atx := newBaselineATX()
+			atx.ExpiresAt = expiredBeyondSkewAt
+			atx.Signatures = []ATCSignature{signWithKey(primary, atx)}
+			return wrap("atx-v1/expired-beyond-skew",
+				"The baseline-valid.json credential, ATX v1.0, with expiresAt 2026-05-23T23:58:59Z, 61 seconds earlier than the verifier's pinned clock, 2026-05-24T00:00:00Z, and its one Ed25519 signature made over that expiresAt. core.md §1.3 step 2 evaluates expiry within the family clock-skew bound of ATP §10.2: a verifier tolerates at most 60 seconds of clock skew, and the tolerance extends no TTL or cache window. At every tolerance from 0 to 60 seconds the credential is expired, so a verifier MUST REJECT with an expiry reason. A verifier that tolerates more than 61 seconds of skew, outside the bound, wrongly ACCEPTs; expired.json, whose expiresAt is 508 days earlier than the clock, is rejected at any tolerance short of 508 days, so it does not tell such a verifier from one inside the bound. An expiresAt less than 60 seconds before the clock pins no verdict: a verifier with no tolerance rejects it and one with 60 seconds accepts it. 61 seconds is one second past the bound, so the verdict does not turn on whether a verifier holds a credential expired at the instant its expiresAt plus its tolerance equals its clock.",
 				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
 				defaultVerifierState,
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "EXPIRED", ReasonContains: "expired"},
@@ -1528,6 +1559,12 @@ const atxCoreRef = "https://github.com/opena2a-standards/atx-spec/blob/e89bed94c
 // 1.2.0-draft text it names after AIP-SPEC.md changes on main.
 const aipSpecRef = "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md"
 
+// atpSpecRef is ATP-SPEC.md at the commit docs/version-pinning.md pins, whose
+// §10.2 states the family clock-skew bound (atpMaxSkew) that core.md §1.3
+// step 2 names, so the ATP citation opens that text after ATP-SPEC.md
+// changes on main.
+const atpSpecRef = "https://github.com/opena2a-standards/agent-trust-protocol/blob/e6b4e29f037469133683482bc9ab923f5704aa85/ATP-SPEC.md"
+
 // AIP-SPEC citations: §3.1 scoped to the signature algorithms a credential
 // carries (aipSigningSection), and §6.1 for the trustScore member every
 // credential carries. scripts/conformance_profile.py --check holds each
@@ -1662,6 +1699,9 @@ var fixtureRequirements = map[string]string{
 	// Subject named under a foreign DID method.
 	"atx-v1/foreign-did-method-valid":                 "§1.3 step 3: the verifier resolves the issuerDid, not the subject's DIDs, and no step reads the DID method of agentDid or publisherDid, so a v1.0 hybrid credential whose agentDid and publisherDid are did:web identifiers, signed by its trusted did:opena2a issuer, is accepted",
 	"atx-v1/foreign-did-method-altered-after-signing": "§1.3 step 4: the legacy canonical form signs agentDid as written (§1.3a.1), so a did:web agentDid changed after signing is a signature failure",
+
+	// Expiry one second past the family clock-skew bound.
+	"atx-v1/expired-beyond-skew": "§1.3 step 2: expiry is evaluated within the family clock-skew bound of ATP §10.2, at most 60 seconds, so a credential whose expiresAt is 61 seconds earlier than the verifier's clock is rejected at every tolerance the bound allows",
 }
 
 // fixtureRequirementsUsed records which fixtureRequirements entries wrap consumed.
@@ -1687,6 +1727,9 @@ var fixtureOtherRefs = map[string][]SpecRef{
 	"atx-v1_1/declared-purpose-integer-outside-range": {
 		{ID: "RFC 7493", Ref: "https://datatracker.ietf.org/doc/html/rfc7493", Section: "§2.2 Numbers (the I-JSON exact integer range, -(2^53-1) to 2^53-1)"},
 		{ID: "RFC 8785", Ref: "https://datatracker.ietf.org/doc/html/rfc8785", Section: "§3.2.2.3 Serialization of Numbers"},
+	},
+	"atx-v1/expired-beyond-skew": {
+		{ID: "ATP", Ref: atpSpecRef, Section: "§10.2 Trust Proof Validity (clock skew: at most 60 seconds, symmetrically, for issuedAt and expiresAt in ATX credentials)"},
 	},
 }
 
