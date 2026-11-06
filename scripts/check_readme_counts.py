@@ -348,7 +348,11 @@ They said the kit sends each of the 41 fixtures and exits 0 only when all 41
 agree, and the check passed them with fixtures/ holding 44. A number either
 sentence states in digits must be the number of fixtures/*.json. The words
 each sentence is found by (`the kit sends`, `exits 0 only when`) and link
-targets are not read, and the section's other sentences are not held.
+targets are not read, and the section's other sentences are not held. A
+sentence does not end at the `.` that closes `e.g.` or `i.e.`: the check
+split it there, so with the sentence on what the kit sends stating 41 after
+either (`each fixture built into it (e.g. all 41)`), the count fell outside
+the sentence it holds, and it exited 0.
 
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
@@ -1304,13 +1308,25 @@ def python_requirements(requirements):
     return PY_REQUIREMENT.findall(requirements)
 
 
+# A sentence of statements() ends at `.`, `!` or `?` and a blank, but not at
+# the `.` that closes `e.g.` or `i.e.`, in either letter case (#352). Split
+# there, `The kit sends each fixture built into it (e.g. all 41) to your
+# verifier` was read as two sentences, the first holding the words the kit
+# section's sentence is found by and the second the count, and the check on
+# that sentence passed it with fixtures/ holding 44.
+NOT_AN_ABBREVIATION = r"(?<!\b[Ee]\.[Gg]\.)(?<!\b[Ii]\.[Ee]\.)"
+STATEMENT_BREAK = re.compile(rf"(?<=[.!?]){NOT_AN_ABBREVIATION}\s+")
+
+
 def statements(text):
-    """Each sentence of `text` on one line, and each table row as one."""
+    """Each sentence of `text` on one line, and each table row as one. A
+    sentence ends where STATEMENT_BREAK matches, so not after `e.g.` or
+    `i.e.`."""
     for block in re.split(r"\n\s*\n", text):
         if block.lstrip().startswith("|"):
             yield from (line.strip() for line in block.splitlines())
         else:
-            yield from re.split(r"(?<=[.!?])\s+", " ".join(block.split()))
+            yield from STATEMENT_BREAK.split(" ".join(block.split()))
 
 
 def python_dependency_failures(requirements, texts):
@@ -3170,7 +3186,10 @@ def spec_name_failures(readme, spec_text):
 # number either states in digits must be the number of fixtures/*.json. The
 # words each sentence is found by, the exit status 0 among them, and link
 # targets are not read. The section's other counts (`9 agree`) are what the
-# pinned kit reports for `true` and are not held here.
+# pinned kit reports for `true` and are not held here. A count written after
+# `e.g.` or `i.e.` in either sentence is read with it (#352): statements()
+# split a sentence at the `.` closing either, and the check passed `The kit
+# sends each fixture, i.e. 41 of them, to your verifier`.
 KIT_SECTION = "## Try your verifier in two minutes"
 # (what the sentence says, the words it is found by)
 KIT_SENTENCES = (
@@ -5503,11 +5522,21 @@ RETRACTED_KIT_SENDS = (
     "verdicts with the answer key in [`conformance.json`](conformance.json).")
 RETRACTED_KIT_EXIT = "It exits 0 only when all 41 agree."
 KIT_OPENINGS = ("The kit sends", "It exits 0 only when")
+# Each of the two sentences with its count after an abbreviation whose `.`
+# statements() read as a sentence end (#352), in the order of KIT_OPENINGS,
+# and the abbreviations each is restated with.
+KIT_ABBREVIATED = (
+    "The kit sends each fixture built into it ({abbreviation} all {count}) to "
+    "your verifier and compares its\nverdicts with the answer key in "
+    "[`conformance.json`](conformance.json).",
+    "It exits 0 only when every fixture agrees ({abbreviation} all {count}).")
+KIT_ABBREVIATIONS = ("e.g.", "i.e.", "E.g.", "I.e.")
 
 
 def _kit_sentence(readme, opening):
     """(start, end) of the sentence `opening` starts in the README kit
-    section, up to the first `.`, `!` or `?` that ends a sentence, or None."""
+    section, up to the first `.`, `!` or `?` that ends a sentence, as
+    statements() reads one, or None."""
     heading = re.search(rf"^{re.escape(KIT_SECTION)}$", readme, re.M)
     if heading is None:
         return None
@@ -5516,7 +5545,7 @@ def _kit_sentence(readme, opening):
     at = readme.find(opening, heading.end(), end)
     if at < 0:
         return None
-    stop = re.compile(r"[.!?](?=\s|$)").search(readme, at, end)
+    stop = re.compile(rf"[.!?]{NOT_AN_ABBREVIATION}(?=\s|$)").search(readme, at, end)
     return at, (stop.end() if stop else end)
 
 
@@ -5524,11 +5553,12 @@ def _kit_count_cases(tree):
     """Each of the README kit section's sentences on what the kit sends and
     on when it exits 0, put back as README.md published it, stating 41, adds
     a failure naming 41; so does that sentence stating a count no fixture set
-    holds, inline and on the line after its opening words, while stating the
-    number of fixtures/*.json adds none. A count is read with the opening
-    words wrapped across a line break and in a code span; the exit status
-    alone, a number in a link target and a count in another sentence of the
-    section add none. Either sentence removed, or the section heading
+    holds, inline, on the line after its opening words and after each of
+    KIT_ABBREVIATIONS, while stating the number of fixtures/*.json adds none.
+    A count is read with the opening words wrapped across a line break, in a
+    code span and on the line after `e.g.`; the exit status alone, a number
+    in a link target and a count in another sentence of the section, after
+    `e.g.` or not, add none. Either sentence removed, or the section heading
     renamed, adds the failure saying so."""
     readme, fixtures = tree.readme, tree.fixtures
     actual = str(len(fixtures))
@@ -5546,9 +5576,10 @@ def _kit_count_cases(tree):
                           f"expected a failure naming {needle!r}, got {new}"))
 
     spans = {}
-    for (site, _), opening, published, bad in zip(
+    for (site, _), opening, published, bad, abbreviated in zip(
             KIT_SENTENCES, KIT_OPENINGS,
-            (RETRACTED_KIT_SENDS, RETRACTED_KIT_EXIT), (KIT_BAD_SENDS, KIT_BAD_EXIT)):
+            (RETRACTED_KIT_SENDS, RETRACTED_KIT_EXIT), (KIT_BAD_SENDS, KIT_BAD_EXIT),
+            KIT_ABBREVIATED):
         span = spans[opening] = _kit_sentence(readme, opening)
         label = f"the kit section sentence on {site}"
         if span is None:
@@ -5567,6 +5598,9 @@ def _kit_count_cases(tree):
              put(published.replace(" 41 ", f" {bad} ")))
         case(f"{label} stating {bad} on the line after its opening words",
              f"sentence states {bad},", put(published.replace(" 41 ", f"\n{bad} ")))
+        for abbreviation in KIT_ABBREVIATIONS:
+            case(f"{label} stating {bad} after `{abbreviation}`", f"sentence states {bad},",
+                 put(abbreviated.format(abbreviation=abbreviation, count=bad)))
         case(f"{label} stating {actual}, the number of fixtures/*.json", None,
              put(published.replace(" 41 ", f" {actual} ")))
         case(f"{label} removed", f"no sentence on {site} found", put(""))
@@ -5583,6 +5617,10 @@ def _kit_count_cases(tree):
         case("the kit section sentence on what the kit sends stating a count in a "
              "code span", f"sentence states {KIT_BAD_SPAN},",
              put_sends(RETRACTED_KIT_SENDS.replace(" 41 ", f" `{KIT_BAD_SPAN}` ")))
+        case("the kit section sentence on what the kit sends stating a count on the "
+             "line after `e.g.`", f"sentence states {KIT_BAD_SENDS},",
+             put_sends(KIT_ABBREVIATED[0].format(abbreviation="e.g.", count=KIT_BAD_SENDS)
+                       .replace("e.g. ", "e.g.\n")))
         case("the kit section sentence on what the kit sends with a number in a "
              "link target", None,
              put_sends("The kit sends each fixture built into it to your verifier and "
@@ -5596,6 +5634,9 @@ def _kit_count_cases(tree):
              "status alone", None, put_exits("It exits 0 only when every fixture agrees."))
         case("a count in another sentence of the kit section, as `9 agree` is", None,
              readme[:exits[1]] + f" Of the fixtures, {KIT_BAD_OTHER} must fail."
+             + readme[exits[1]:])
+        case("a count after `e.g.` in another sentence of the kit section", None,
+             readme[:exits[1]] + f" Of the fixtures, e.g. {KIT_BAD_OTHER} must fail."
              + readme[exits[1]:])
     case(f"the README with its `{KIT_SECTION}` heading renamed",
          f"no `{KIT_SECTION}` section found",
