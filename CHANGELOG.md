@@ -491,6 +491,26 @@ they should not.
   `etc.` still end one. On this tree those sentences are the same as before
   this change, and the script exits 0. Its self-test adds 22 cases. No
   fixture or verifier changes.
+- `scripts/check_readme_counts.py` holds a `go run` command that a sentence
+  of CHANGELOG.md's top section names as README.md's first command to the
+  command README.md opens with when `e.g.`, `i.e.`, `incl.`, `approx.`,
+  `ca.`, `cf.` or `viz.` stands between the command and those words (#355).
+  It split the top section's sentences at the `.` that closes each of these
+  abbreviations, so the command fell in a part of the sentence the check did
+  not hold: with a list item opening with the Go verifier's command, the one
+  ending `verifiers/go@latest`, and going on `runs the Go verifier, i.e. with
+  nothing cloned, and is README.md's first command`, or with `runs a
+  verifier, e.g. the Go one, with nothing cloned, and is` in place of the
+  `i.e.` clause, the script exited 0. It now exits 1 naming the command. The
+  top section's sentences do not end at the `.` closing `e.g.` or `i.e.`, in
+  either letter case, or one of `incl.`, `approx.`, `ca.`, `cf.` and `viz.`,
+  in lower case or capitalized, the rule the sentences it reads from
+  README.md follow since #354; so a sentence saying a result can still
+  differ by release is also read with a timestamp it quotes after one of
+  them, and the check fails when `verifiers/go/verifier/verify_test.go`
+  writes that timestamp. On this tree the top section's sentences are the
+  ones the check read before this change, and the script exits 0. Its
+  self-test adds 19 cases. No fixture or verifier changes.
 
 ## v0.1.0
 

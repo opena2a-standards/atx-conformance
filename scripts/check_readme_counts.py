@@ -263,7 +263,12 @@ the module go.mod declares, and a span with another placeholder (`go run
 sections below the top one record past commits and are not held to it. The
 check read the section headed `## Unreleased` alone, so it read no sentence
 once that section was retitled `## v0.1.0`; a CHANGELOG.md with no `## `
-heading fails it.
+heading fails it. A sentence of the top section does not end at the `.` that
+closes `e.g.`, `i.e.`, `incl.`, `approx.`, `ca.`, `cf.` or `viz.`: the check
+split it there, so with a list item opening with `go run
+<module>/verifiers/go@latest` and going on `runs the Go verifier, i.e. with
+nothing cloned, and is README.md's first command`, the span fell outside the
+sentence naming README.md's first command, and it exited 0.
 
 It also holds what the README and CHANGELOG.md's opening paragraph, the text
 above its first `## ` heading, say about this repository's tags to the tags
@@ -289,7 +294,10 @@ releases, may quote as a code span no timestamp that
 verifiers/go/verifier/verify_test.go writes as a string literal outside its
 comments: what those tests expect of a timestamp does not depend on the Go
 release that runs them. A sentence saying the result differed until a later
-change is not held, and a missing verify_test.go fails the check.
+change is not held, and a missing verify_test.go fails the check. A sentence
+does not end at the `.` closing `e.g.`, `i.e.`, `incl.`, `approx.`, `ca.`,
+`cf.` or `viz.` here either, so a timestamp quoted after one is read with the
+claim.
 
 It also holds what README.md states above its first command to the toolchain
 minimums. README.md opened with `go run <module>/cmd/atx-verify@latest` and
@@ -1022,9 +1030,29 @@ CODE_SPAN = re.compile(r"`([^`]*)`")
 GO_RUN_COMMAND = re.compile(r"(?:cd [^\s&;|]+ && )?go run \S.*")
 CD_PREFIX = re.compile(r"cd [^\s&;|]+ && (.+)")
 PLACEHOLDER = re.compile(r"<(?!module>)[^<>\s][^<>]*>")
+# A lookbehind that fails just after the `.` that closes `e.g.` or `i.e.`, in
+# either letter case (#352), or one of MID_SENTENCE_ABBREVIATIONS, in lower
+# case or capitalized (#354), so a sentence break read there ends no
+# sentence; statements() and top_section() both split with it. Each of these
+# abbreviations introduces what follows it. `etc.`, which can close a
+# sentence, and a `.` after another word still end one. One of
+# MID_SENTENCE_ABBREVIATIONS is read only as a word of its own, not after a
+# letter, a digit, `_` or a `.`: `replica.` and the dotted name
+# `example.ca.` end a sentence.
+MID_SENTENCE_ABBREVIATIONS = ("incl.", "approx.", "ca.", "cf.", "viz.")
+NOT_AN_ABBREVIATION = r"(?<!\b[Ee]\.[Gg]\.)(?<!\b[Ii]\.[Ee]\.)" + "".join(
+    rf"(?<!(?<![\w.])[{word[0].upper()}{word[0]}]{re.escape(word[1:])})"
+    for word in MID_SENTENCE_ABBREVIATIONS)
 # A sentence ends at `.`, `!` or `?` and a blank outside a code span: a span
 # is matched whole and passed over, so `go run . ../../fixtures` is not split.
-SENTENCE_BREAK = re.compile(r"`[^`]*`|(?<=[.!?])\s+")
+# It does not end where NOT_AN_ABBREVIATION fails, at the `.` closing `e.g.`,
+# `i.e.` or one of MID_SENTENCE_ABBREVIATIONS (#355). Split at the one closing
+# `i.e.`, the list item opening with the span `go run
+# <module>/verifiers/go@latest` and going on `runs the Go verifier, i.e. with
+# nothing cloned, and is README.md's first command` was read as two
+# sentences, the first holding the span and the second the words that name
+# README.md's first command, and the check passed it.
+SENTENCE_BREAK = re.compile(rf"`[^`]*`|(?<=[.!?]){NOT_AN_ABBREVIATION}\s+")
 # A paragraph ends at a blank line, and a list item where the next one opens.
 ITEM_BREAK = re.compile(r"\n[ \t]*\n|\n(?=[ \t]*[-*+][ \t])")
 FIRST_COMMAND_SITE = f"{CHANGELOG_NAME} top-section sentence"
@@ -1055,7 +1083,9 @@ def top_section(changelog):
     whatever the heading says, and each sentence of that section, up to the
     next heading of level 1 or 2, on one line; None when it has no `## `
     heading. A paragraph or list item never shares a sentence with the next,
-    and a code span is never split."""
+    a code span is never split, and a sentence ends where SENTENCE_BREAK
+    matches, so not after `e.g.`, `i.e.` or one of
+    MID_SENTENCE_ABBREVIATIONS."""
     lines = changelog.split("\n")
     at = top_heading_at(lines)
     if at is None:
@@ -1311,21 +1341,13 @@ def python_requirements(requirements):
 
 # A sentence of statements() ends at `.`, `!` or `?` and a blank, but not at
 # the `.` that closes `e.g.` or `i.e.`, in either letter case (#352), or one
-# of MID_SENTENCE_ABBREVIATIONS, in lower case or capitalized (#354). Split
-# there, `The kit sends each fixture built into it (e.g. all 41) to your
-# verifier` was read as two sentences, the first holding the words the kit
-# section's sentence is found by and the second the count, and the check on
-# that sentence passed it with fixtures/ holding 44; so was `The kit sends
-# each fixture built into it (incl. 41 that must fail) to your verifier`.
-# Each of these abbreviations introduces what follows it. `etc.`, which can
-# close a sentence, and a `.` after another word still end one. One of
-# MID_SENTENCE_ABBREVIATIONS is read only as a word of its own, not after a
-# letter, a digit, `_` or a `.`: `replica.` and the dotted name
-# `example.ca.` end a sentence.
-MID_SENTENCE_ABBREVIATIONS = ("incl.", "approx.", "ca.", "cf.", "viz.")
-NOT_AN_ABBREVIATION = r"(?<!\b[Ee]\.[Gg]\.)(?<!\b[Ii]\.[Ee]\.)" + "".join(
-    rf"(?<!(?<![\w.])[{word[0].upper()}{word[0]}]{re.escape(word[1:])})"
-    for word in MID_SENTENCE_ABBREVIATIONS)
+# of MID_SENTENCE_ABBREVIATIONS, in lower case or capitalized (#354), where
+# NOT_AN_ABBREVIATION fails. Split there, `The kit sends each fixture built
+# into it (e.g. all 41) to your verifier` was read as two sentences, the
+# first holding the words the kit section's sentence is found by and the
+# second the count, and the check on that sentence passed it with fixtures/
+# holding 44; so was `The kit sends each fixture built into it (incl. 41 that
+# must fail) to your verifier`.
 STATEMENT_BREAK = re.compile(rf"(?<=[.!?]){NOT_AN_ABBREVIATION}\s+")
 
 
@@ -3980,6 +4002,19 @@ def _failing_latest_run_cases(tree):
 
 # A command no README.md here opens with.
 INVENTED_FIRST_COMMAND = "go run example.invalid/not-the-first-command@latest"
+# The retracted sentence with a clause between its span and the words that
+# name README.md's first command, the clause opening with an abbreviation
+# whose `.` top_section() read as a sentence end (#355): the clause after an
+# abbreviation left to fill in, restated with each of KIT_ABBREVIATIONS, and
+# the clause `e.g. the Go one`.
+ABBREVIATED_FIRST_COMMAND = (
+    "- `go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest`\n"
+    "  runs the Go verifier, {abbreviation} with nothing cloned, and is README.md's first\n"
+    "  command.")
+EXAMPLE_FIRST_COMMAND = (
+    "- `go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest`\n"
+    "  runs a verifier, e.g. the Go one, with nothing cloned, and is README.md's first\n"
+    "  command.")
 
 
 def _top_section_with(changelog, text):
@@ -4002,8 +4037,13 @@ def _changelog_first_command_cases(tree):
     whose one section is `## v0.1.0`; one naming README.md's first command
     adds none, nor does it in the list item after one naming another command
     with no closing period, and it adds a failure once README.md opens with
-    another command. The retracted sentence in a section below the top one
-    adds none, nor does a form of command (`go run <import path>@<version>`).
+    another command. The retracted sentence restated with a clause between
+    its span and the words naming README.md's first command adds a failure
+    naming the command, with the clause after each of KIT_ABBREVIATIONS, on
+    the line after `i.e.` and as `e.g. the Go one`; restated with the clause
+    after `i.e.` and README.md's first command as its span, it adds none.
+    The retracted sentence in a section below the top one adds none, nor
+    does a form of command (`go run <import path>@<version>`).
     Against a README.md opening with `cd verifiers/go && go run .
     ../../fixtures`, that command with or without its `cd` prefix adds none,
     and the command with another path adds a failure naming the span whole;
@@ -4041,6 +4081,16 @@ def _changelog_first_command_cases(tree):
     retracted = CODE_SPAN.search(RETRACTED_FIRST_COMMAND).group(1)
     case(f"CHANGELOG.md restoring the retracted sentence on `{retracted}`",
          opening(RETRACTED_FIRST_COMMAND), retracted)
+    restated = f"CHANGELOG.md restating the retracted sentence on `{retracted}`"
+    for abbreviation in KIT_ABBREVIATIONS:
+        case(f"{restated} with a clause after `{abbreviation}`",
+             opening(ABBREVIATED_FIRST_COMMAND.format(abbreviation=abbreviation)),
+             retracted)
+    case(f"{restated} with a clause on the line after `i.e.`",
+         opening(ABBREVIATED_FIRST_COMMAND.format(abbreviation="i.e.")
+                 .replace("i.e. ", "i.e.\n  ")), retracted)
+    case(f"{restated} with the clause `e.g. the Go one`", opening(EXAMPLE_FIRST_COMMAND),
+         retracted)
     invented = f"`{INVENTED_FIRST_COMMAND}` is README's first command."
     case(f"CHANGELOG.md naming `{INVENTED_FIRST_COMMAND}` as README's first command",
          opening(invented), INVENTED_FIRST_COMMAND)
@@ -4058,6 +4108,10 @@ def _changelog_first_command_cases(tree):
     holds = f"README.md's first command is `{first}`."
     case(f"CHANGELOG.md naming `{first}` as README.md's first command",
          opening(holds), None)
+    case(f"CHANGELOG.md naming `{first}` as README.md's first command in a sentence "
+         f"with a clause after `i.e.`",
+         opening(ABBREVIATED_FIRST_COMMAND.format(abbreviation="i.e.")
+                 .replace(retracted, first)), None)
     case("CHANGELOG.md naming README.md's first command in the list item after "
          "one naming another command with no closing period",
          opening(f"- `{INVENTED_FIRST_COMMAND}` exits 1\n- {holds}"), None)
@@ -4318,10 +4372,12 @@ def _release_difference_cases(tree):
     """Sentences added to the top section of the published CHANGELOG.md, its
     first `## ` section, held to the published verify_test.go. The retracted
     sentence adds a failure naming `2099-12-31T23:59:59+25:00x`, as does one
-    saying the verdict on it still differs between Go releases; the sentence
-    as amended, saying the error still differed until a later change, adds
-    none, nor does one saying the error on it cannot differ by release, nor
-    the retracted sentence in a section below the top one. With each string
+    saying the verdict on it still differs between Go releases, and one
+    saying the error can still differ by release with the timestamp quoted
+    after `e.g.` or after `i.e.`; the sentence as amended, saying the error
+    still differed until a later change, adds none, nor does one saying the
+    error on it cannot differ by release, nor the retracted sentence in a
+    section below the top one. With each string
     literal of verify_test.go that is the timestamp emptied, the retracted
     sentence adds none, nor with the timestamp then written there in a
     comment; written there as a raw string literal, it adds a failure. A
@@ -4359,6 +4415,13 @@ def _release_difference_cases(tree):
     case(f"CHANGELOG.md restoring the retracted sentence on `{stamp}`", retracted, stamp)
     case(f"CHANGELOG.md saying the verdict on `{stamp}` still differs between Go releases",
          opening(f"The verdict on `{stamp}` still differs between Go releases."), stamp)
+    # top_section() ended a sentence at the `.` closing `e.g.` or `i.e.`, so a
+    # timestamp quoted after either fell outside the claim's sentence (#355).
+    for abbreviation in ("e.g.", "i.e."):
+        case(f"CHANGELOG.md saying the error can still differ by release, with "
+             f"`{stamp}` after `{abbreviation}`",
+             opening(f"The error can still differ by release ({abbreviation} on "
+                     f"`{stamp}`)."), stamp)
     case("CHANGELOG.md stating the retracted sentence as amended, a difference a later "
          "change closed", opening(AMENDED_RELEASE_DIFFERENCE), None)
     case(f"CHANGELOG.md saying the error on `{stamp}` cannot differ by release",
