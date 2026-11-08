@@ -67,7 +67,7 @@ The kit needs Go 1.22 or later; on macOS 26, Go 1.23 or later. Install it at
 one commit. This line needs the network once; the installed kit does not.
 
 ```bash
-go install github.com/opena2a-standards/atx-conformance/cmd/atx-verify@9740950b12f46e8f09fd9d2b6d6a3d2dbcd49e38
+go install github.com/opena2a-standards/atx-conformance/cmd/atx-verify@4f70281a00163ec898e9671ba9ab023907e402b2
 ```
 
 Then point it at a verifier you run as a command, or at one you run as a
@@ -144,7 +144,7 @@ later. Steps that need Python or Node are left out when those are not
 installed. This line needs the network once:
 
 ```bash
-git clone https://github.com/opena2a-standards/atx-conformance.git && cd atx-conformance && git checkout 9740950b12f46e8f09fd9d2b6d6a3d2dbcd49e38 && go run ./cmd/atx-tour --setup
+git clone https://github.com/opena2a-standards/atx-conformance.git && cd atx-conformance && git checkout 4f70281a00163ec898e9671ba9ab023907e402b2 && go run ./cmd/atx-tour --setup
 ```
 
 The pre-flight and the tour do not:

@@ -60,7 +60,7 @@ they should not.
   for each. The fixture, accept and reject counts of the kit's self-tests
   in `interop/run_test.go` go from 41, 9 and 32 to 43, 10 and 33.
   README.md's kit section keeps 9 agree and 32 accepted what must fail:
-  those are the counts of the kit at commit `9740950`, which its install
+  those are the counts of the kit at commit `4f70281`, which its install
   line pins.
 - `fixtures/expired-beyond-skew.json`, built by the generator, is the
   `baseline-valid.json` credential (ATX v1.0) with `expiresAt`
@@ -454,12 +454,12 @@ they should not.
   when it exits 0 said 41, the number of fixtures when they came in, and
   still said 41 after the two `did:web` fixtures and
   `fixtures/expired-beyond-skew.json` were added. Built from commit
-  `9740950`, which the section's install line pins, the kit sends 41;
+  `4f70281`, which the section's install line pins, the kit sends 41;
   built from a tree holding 44 fixtures, it sends 44.
   `scripts/check_readme_counts.py` holds each count either sentence states
   in digits to the number of `fixtures/*.json`. It passed the two sentences
   stating 41, and now exits 1 naming each. The section's other counts,
-  9 agree and 32 accepted what must fail, are what the kit at `9740950`
+  9 agree and 32 accepted what must fail, are what the kit at `4f70281`
   reports for `true`, and are not held. Its self-test adds 19 cases. No
   fixture or verifier changes.
 - `scripts/check_readme_counts.py` reads a count written after `e.g.` or

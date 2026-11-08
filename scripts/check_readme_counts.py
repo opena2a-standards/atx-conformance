@@ -3192,7 +3192,7 @@ def spec_name_failures(readme, spec_text):
 # to your verifier" and "It exits 0 only when all 41 agree" (#345). Both came
 # in when the suite held 41 fixtures, and the check passed them with
 # fixtures/ holding 44. The kit sends each fixture built into it: the kit its
-# install line pins, built from commit 9740950, sends 41, and one built from
+# install line pins, built from commit 4f70281, sends 41, and one built from
 # a tree holding 44 sends 44. So the two sentences state no count, and a
 # number either states in digits must be the number of fixtures/*.json. The
 # words each sentence is found by, the exit status 0 among them, and link
