@@ -307,6 +307,21 @@ they should not.
   lists: freshness and a list required". The fixture, accept and reject
   counts of the kit's self-tests in `interop/run_test.go` go from 52, 11 and
   41 to 57, 12 and 45.
+- `atx-export --form vc <fixture>` writes the credential of a native fixture
+  as a W3C Verifiable Credential 2.0 with one `eddsa-jcs-2022` Data Integrity
+  proof, signed with the suite's published test keys, the same bytes on every
+  run; `--mldsa65-proof` adds a second proof with the experimental
+  `mldsa65-jcs-2024` suite, as the 2026-03-01 revision of the W3C
+  Quantum-Resistant Cryptosuites Editor's Draft defines it (later revisions
+  leave the ML-DSA-65 suites out). This is a draft form, and its description
+  is not yet published. It signs nothing, and exits 3, when a native
+  signature does not verify over the native bytes, or when an ATX v1.1
+  credential's `behavioralProfile` or `scanSummary` holds a member those
+  bytes leave out. `@digitalbazaar/vc` 7.3.0 with
+  `@digitalbazaar/eddsa-jcs-2022-cryptosuite` 1.0.0 verified the output for
+  each ACCEPT fixture; on the output with `--mldsa65-proof` it checked the
+  Ed25519 proof only. No fixture, expected verdict, verifier, schema or
+  module dependency changed.
 
 ### Changed
 
