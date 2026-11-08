@@ -48,6 +48,11 @@ The generator:
      `capabilities`, `behavioralProfile`, `scanSummary`, `issuerChain` and,
      when present, `declaredPurpose` to the signed fields, and canonicalizes
      it per RFC 8785 with `github.com/gowebpki/jcs`.
+     `v1_1-scan-summary-extra-member-signed.json` is signed over those bytes
+     with a seventh `scanSummary` member, `extra`, written into the
+     to-be-signed object (`canonicalPayloadV11WithScanSummaryMember`), a
+     payload `core.md` §1.3a.2 rule 2, which holds `scanSummary` as its six
+     members, does not produce.
 6. Ed25519-signs and ML-DSA-65-signs that payload, as each fixture carries
    those signatures (`hybrid-pq-only.json` and `v1_1-hybrid-pq-only.json`
    carry the ML-DSA-65 signature alone). A fixture that tests tampering

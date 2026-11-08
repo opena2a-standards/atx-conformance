@@ -93,6 +93,40 @@ they should not.
   `docs/fixtures.md` gains a row. The fixture, accept and reject counts of
   the kit's self-tests in `interop/run_test.go` go from 43, 10 and 33 to
   44, 10 and 34.
+- Three fixtures, built by the generator, hold a v1.1 `scanSummary` to the
+  six members the credential schema of core.md §1.1 gives it.
+  `fixtures/v1_1-scan-summary-extra-member.json` is the v1.1 baseline with
+  a seventh `scanSummary` member, `extra` `"x"`, written after signing.
+  `fixtures/v1_1-scan-summary-extra-member-signed.json` carries the same
+  member with an Ed25519 signature over `JCS(TBS)` holding it as written,
+  so a verifier that writes every `scanSummary` member it reads into
+  `JCS(TBS)` verifies that signature.
+  `fixtures/v1_1-scan-summary-case-variant-member.json` is the v1.1
+  baseline with `scanSummary.criticalFindings` renamed `CriticalFindings`
+  after signing, the value 0 unchanged. Each expects
+  `REJECT [SIGNATURE_INVALID]` with a reason containing `signature`. Before
+  the change to the verifiers under Changed, both reference verifiers
+  accepted the first and the third, and rejected the second because its
+  signature did not verify over the six members they project. The 44
+  existing fixtures and their `MANIFEST.sha256` lines are byte-identical;
+  the manifest gains three lines. `scripts/schema_validation.py` pins the
+  schema errors each fails on: one `additionalProperties` error at
+  `scanSummary` naming `extra` for the first two, and for the third that
+  error naming `CriticalFindings` and the `required` error for
+  `criticalFindings`. `conformance.json` and the capture under
+  `docs/captures/` are regenerated; the capture gains the fixtures' nine
+  lines, and its summary line's pass and fixture counts go from 44 to 47.
+  The fixture counts in README.md (the first command's summary line, the
+  expected output and the implementation table), COSIGNERS.md,
+  CONTRIBUTING.md, `docs/continuous-verification.md` and
+  `docs/sibling-repositories.md` go from 44 to 47 (the sibling row's v1.1
+  count from 29 to 32), the count of fixtures reaching signature
+  verification in `docs/scope.md` goes from 34 of 44 to 37 of 47,
+  `docs/fixtures.md` gains a row for each, and the reproduction steps in
+  `docs/reproducing-the-fixtures.md` name the payload the second is signed
+  over, `canonicalPayloadV11WithScanSummaryMember`. The fixture, accept and
+  reject counts of the kit's self-tests in `interop/run_test.go` go from
+  44, 10 and 34 to 47, 10 and 37 (#277).
 
 ### Changed
 
@@ -122,6 +156,33 @@ they should not.
   the README and its pages to the names core.md uses, Agent Trust
   eXtension and Agent Trust Protocol; a name written with hyphens is not
   held. Its self-test adds 9 cases. No fixture or verifier changes.
+- Both reference verifiers reject a v1.1 credential whose `scanSummary`
+  holds a member under a name other than `hma`, `criticalFindings`,
+  `highFindings`, `secretless`, `cryptoServe` and `oasbLevel`, the names
+  compared exactly, as `SIGNATURE_INVALID` before they read a signature,
+  with the reason
+  `no signature covers scanSummary, which holds a member other than its six`
+  (#277). The credential schema core.md §1.1 points to gives `scanSummary`
+  those six members (`additionalProperties` false), so `JCS(TBS)` has no
+  value for any other. The Go verifier decoded `scanSummary` with
+  `encoding/json`, which matches a member name to its field
+  case-insensitively and drops a member it has no field for, and the
+  Python verifier read the names the same way, so the v1.1 baseline
+  verified carrying a seventh member or `criticalFindings` under the name
+  `CriticalFindings`. A `scanSummary` holding only the six names keeps the
+  reason
+  `no signature covers scanSummary, which holds a member outside its type or is not an object`
+  for a member outside its type, as does one that is not an object; one
+  holding a name outside the six and a member outside its type reports the
+  name. The projection into `JCS(TBS)` is unchanged: the baseline with a
+  seventh member or with `CriticalFindings` still projects the six members
+  it signs, and the refusal comes before a signature over it is read. At
+  this pin of the vendored specification a member under any other name is
+  refused, `techniques` included; the set of names widens to admit
+  `techniques` when the vendored specification is re-pinned at a revision
+  that defines it. `verifiers/python/test_verify.py` held `scanSummary.hma`
+  renamed `HMA` on the v1.1 baseline to `ACCEPT`, the Go verdict before
+  this change, and now holds it to `SIGNATURE_INVALID`.
 
 ### Fixed
 
