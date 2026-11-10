@@ -572,6 +572,29 @@ they should not.
   writes that timestamp. On this tree the top section's sentences are the
   ones the check read before this change, and the script exits 0. Its
   self-test adds 19 cases. No fixture or verifier changes.
+- The `aip-conformance` row in `docs/sibling-repositories.md` names AIP
+  v1.2.0-draft, the `spec.version` that `opena2a-standards/aip-conformance`
+  declares in its `conformance.json` at commit `169d5d6`, where it named AIP
+  v1.0.0-draft, and states 14 §5.1 challenge-response fixtures, where it
+  stated 4 (#360). `scripts/check_sibling_rows.py` takes each fixture count
+  over the `fixtures/*.json` files directly in a sibling repository's
+  `fixtures/` directory. It counted the `.json` files in its subdirectories
+  too, so at that commit it counted 16 challenge-response fixtures: the 14
+  `fixtures/challenge-response-*.json` files and 2 files of that name in
+  `fixtures/load-errors/`, which that repository's `docs/checks.md` says are
+  not part of `fixtures/*.json`. Run against the sibling repositories, the
+  script exits 0, where it reported the count of 4 and AIP v1.0.0-draft and
+  exited 1. Its self-test keeps the row published before the Spec cell was
+  checked, which named AIP v1.2.0-draft, among the retracted rows; that
+  repository now declares that version, so the case expects the failure on
+  the 4 the row states as its §5.1 count. The row this change replaces is
+  added to them and fails with `aip-conformance row's Spec cell names AIP
+  v1.0.0-draft, but`; on the page of the previous commit, which publishes
+  that row, both cases are red and the self-test exits 1. The self-test adds
+  1 case. `scripts/test_check_sibling_rows.py`, which the Python unit tests
+  step of `conformance.yml` runs, holds the count to a tree with a file in
+  `fixtures/load-errors/` and runs the self-test, with no network. No
+  fixture changes.
 
 ## v0.1.0
 
