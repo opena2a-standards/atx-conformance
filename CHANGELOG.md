@@ -127,6 +127,17 @@ they should not.
   over, `canonicalPayloadV11WithScanSummaryMember`. The fixture, accept and
   reject counts of the kit's self-tests in `interop/run_test.go` go from
   44, 10 and 34 to 47, 10 and 37 (#277).
+- A benchmark for each reference verifier. `BenchmarkVerify` in
+  `verifiers/go/verifier/verify_bench_test.go` and
+  `verifiers/python/bench_verify.py` time the verification of one
+  credential on the baseline credential of ATX v1.0 and of v1.1, each
+  signed with Ed25519 alone and with Ed25519 plus ML-DSA-65.
+  `scripts/bench_report.py` runs both and prints each figure on a line of
+  its own with the benchmark's name, the commit of the checkout, the CPU
+  model and the number of logical CPUs; no exit status depends on a figure.
+  `docs/running-the-verifiers.md` gains a section, "Benchmarks". No
+  fixture, expected verdict, verifier logic, schema or module dependency
+  changed.
 
 ### Changed
 
