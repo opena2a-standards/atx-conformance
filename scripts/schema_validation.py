@@ -39,6 +39,10 @@ Contract:
 - the four behavioralProfile fixtures (atx-conformance#277), which each carry
   a behavioralProfile outside its form by design and MUST fail validation on
   exactly the errors BEHAVIORAL_PROFILE_PINS lists for that fixture, and
+- the three scanSummary member fixtures (atx-conformance#277), which each
+  carry a scanSummary member under a name other than its six by design and
+  MUST fail validation on exactly the errors SCAN_SUMMARY_MEMBER_PINS lists
+  for that fixture, and
 - the five declaredPurpose number fixtures (atx-conformance#283), which each
   carry a declaredPurpose of one member, n, holding a number, a member the
   closed declaredPurpose schema does not define, and MUST fail validation on
@@ -144,6 +148,35 @@ BEHAVIORAL_PROFILE_PINS = {
         ("type", ("behavioralProfile",), "'object'"),
     ),
 }
+
+# The schema errors each scanSummary member fixture (atx-conformance#277) MUST
+# fail on, and no others, in the form of BEHAVIORAL_PROFILE_PINS. The text
+# names the offending member, so a fixture that loses its seventh or renamed
+# member but gains another cannot pass.
+SCAN_SUMMARY_MEMBER_PINS = {
+    "v1_1-scan-summary-case-variant-member.json": (
+        ("additionalProperties", ("scanSummary",), "'CriticalFindings'"),
+        ("required", ("scanSummary",), "'criticalFindings'"),
+    ),
+    "v1_1-scan-summary-extra-member.json": (
+        ("additionalProperties", ("scanSummary",), "'extra'"),
+    ),
+    "v1_1-scan-summary-extra-member-signed.json": (
+        ("additionalProperties", ("scanSummary",), "'extra'"),
+    ),
+}
+
+
+def only_pinned_errors(errors: list, pins: tuple) -> bool:
+    """Whether errors are exactly pins: one error per pin, matched on
+    validator and path, each message carrying its pinned text. Pins are
+    distinct on (validator, path), so sorting both sides pairs each error
+    with its pin."""
+    got = sorted((e.validator, tuple(e.absolute_path), e.message) for e in errors)
+    want = sorted(pins)
+    return len(got) == len(want) and all(
+        g[0] == w[0] and g[1] == w[1] and w[2] in g[2] for g, w in zip(got, want)
+    )
 
 
 def schema_problem(rel: pathlib.PurePath, schema: dict) -> str:
@@ -467,6 +500,7 @@ def check_credentials() -> int:
         # U+0131 followed by ssuedAt.
         added_member = NON_ASCII_MEMBERS.get(path.name)
         expect_profile_errors = BEHAVIORAL_PROFILE_PINS.get(path.name)
+        expect_scan_member_errors = SCAN_SUMMARY_MEMBER_PINS.get(path.name)
         # The declaredPurpose each number fixture carries, {'n': <number>}.
         purpose_number = DECLARED_PURPOSE_NUMBERS.get(path.name)
         if expect_version_invalid:
@@ -554,16 +588,8 @@ def check_credentials() -> int:
                     print("      (validated cleanly - fixture no longer carries the added member)")
                 failures += 1
         elif expect_profile_errors is not None:
-            # One error per pin, matched on validator and path, each message
-            # carrying its pinned text. Pins are distinct on (validator, path),
-            # so sorting both sides pairs each error with its pin.
-            got = sorted((e.validator, tuple(e.absolute_path), e.message) for e in errors)
-            want = sorted(expect_profile_errors)
-            only_pinned = len(got) == len(want) and all(
-                g[0] == w[0] and g[1] == w[1] and w[2] in g[2] for g, w in zip(got, want)
-            )
-            if only_pinned:
-                kinds = ", ".join(w[0] for w in want)
+            if only_pinned_errors(errors, expect_profile_errors):
+                kinds = ", ".join(w[0] for w in sorted(expect_profile_errors))
                 print(f"PASS  {path.name}: schema-invalid on exactly behavioralProfile ({kinds}, as pinned)")
             else:
                 print(f"FAIL  {path.name}: expected exactly the pinned behavioralProfile errors, got:")
@@ -571,6 +597,17 @@ def check_credentials() -> int:
                     print(f"      {err.json_path}: {err.message}")
                 if not errors:
                     print("      (validated cleanly - fixture no longer carries a malformed behavioralProfile)")
+                failures += 1
+        elif expect_scan_member_errors is not None:
+            if only_pinned_errors(errors, expect_scan_member_errors):
+                kinds = ", ".join(w[0] for w in sorted(expect_scan_member_errors))
+                print(f"PASS  {path.name}: schema-invalid on exactly scanSummary ({kinds}, as pinned)")
+            else:
+                print(f"FAIL  {path.name}: expected exactly the pinned scanSummary errors, got:")
+                for err in errors or []:
+                    print(f"      {err.json_path}: {err.message}")
+                if not errors:
+                    print("      (validated cleanly - fixture no longer carries a scanSummary member outside its six)")
                 failures += 1
         elif purpose_number is not None:
             # The closed declaredPurpose schema defines no member n: exactly

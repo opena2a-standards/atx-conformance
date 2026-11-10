@@ -2444,6 +2444,103 @@ func TestScanSummaryOutsideItsType(t *testing.T) {
 		withMembers(t, v10, map[string]string{"scanSummary": `{"criticalFindings": "3"}`}), "ACCEPT")
 }
 
+// TestScanSummaryMemberNames pins decodeScanSummaryV11 and the verdict on the
+// member names of a v1.1 scanSummary. The credential schema core.md §1.1
+// points to gives scanSummary exactly hma, criticalFindings, highFindings,
+// secretless, cryptoServe and oasbLevel (additionalProperties false), so a
+// member under any other name, the names compared as written, returns
+// errScanSummaryMember, techniques included at this pin of the
+// specification, and the credential rejects as SIGNATURE_INVALID. The struct
+// decode matched a name in another case to its field and dropped any other
+// name, so the v1.1 baseline verified carrying a seventh member or
+// criticalFindings under the name CriticalFindings
+// (fixtures/v1_1-scan-summary-extra-member.json and
+// fixtures/v1_1-scan-summary-case-variant-member.json). The names are read
+// first; a scanSummary of the six names keeps the decode error of a member
+// outside its type, and one that is not an object its own. Either way the
+// six members hold what the struct decode reads. Under atcVersion 1.0
+// scanSummary is unsigned (§1.3a.1) and is not read.
+// verifiers/python/test_verify.py holds the Python verifier to the same
+// rule. atx-conformance#277.
+func TestScanSummaryMemberNames(t *testing.T) {
+	const (
+		decoded   = "no error"
+		member    = "errScanSummaryMember"
+		undecoded = "the decode error"
+	)
+	// with is the v1.1 baseline's signed scanSummary with its
+	// criticalFindings member written as members.
+	with := func(members string) string {
+		return `{"hma":"passed",` + members + `,"highFindings":0,"secretless":"clean","cryptoServe":"no-weak-crypto","oasbLevel":"L1"}`
+	}
+	for _, tc := range []struct{ raw, want string }{
+		{with(`"criticalFindings":0`), decoded},
+		{``, decoded},
+		{`null`, decoded},
+		{`{}`, decoded},
+		// A member under a name other than the six, compared as written.
+		{with(`"criticalFindings":0,"extra":"x"`), member},
+		{with(`"CriticalFindings":0`), member},
+		{with(`"criticalfindings":0`), member},
+		{strings.Replace(with(`"criticalFindings":0`), `"hma"`, `"HMA"`, 1), member},
+		{with(`"criticalFindings":0,"techniques":[]`), member},
+		{`{"criticalFindings":"3","extra":"x"}`, member},
+		// The six names: a member outside its type, or not an object.
+		{`{"criticalFindings":"3"}`, undecoded},
+		{`7`, undecoded},
+		{`[]`, undecoded},
+	} {
+		_, err := decodeScanSummaryV11(json.RawMessage(tc.raw))
+		got := decoded
+		switch {
+		case errors.Is(err, errScanSummaryMember):
+			got = member
+		case err != nil:
+			got = undecoded
+		}
+		if got != tc.want {
+			t.Errorf("scanSummary %s: %s (error %v), want %s", tc.raw, got, err, tc.want)
+		}
+	}
+
+	signed := tbsScanSummaryV11{HMA: "passed", Secretless: "clean", CryptoServe: "no-weak-crypto", OASBLevel: "L1"}
+	for _, raw := range []string{with(`"criticalFindings":0`), with(`"criticalFindings":0,"extra":"x"`), with(`"CriticalFindings":0`)} {
+		if got := projectScanSummaryV11(json.RawMessage(raw)); got != signed {
+			t.Errorf("scanSummary %s: projected as %+v, want the baseline's signed %+v", raw, got, signed)
+		}
+	}
+
+	const (
+		memberReason = "no signature covers scanSummary, which holds a member other than its six"
+		typeReason   = "no signature covers scanSummary, which holds a member outside its type or is not an object"
+	)
+	base := v11Baseline(t)
+	for _, tc := range []struct{ raw, reason string }{
+		{with(`"criticalFindings":0,"extra":"x"`), memberReason},
+		{with(`"CriticalFindings":0`), memberReason},
+		{strings.Replace(with(`"criticalFindings":0`), `"hma"`, `"HMA"`, 1), memberReason},
+		{with(`"criticalFindings":0,"techniques":[]`), memberReason},
+		{`{"criticalFindings":"3","extra":"x"}`, memberReason},
+		{with(`"criticalFindings":"3"`), typeReason},
+	} {
+		got := verify(withMembers(t, base, map[string]string{"scanSummary": tc.raw}))
+		if got.Accepted || got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != tc.reason {
+			t.Errorf("scanSummary %s on the v1.1 baseline: %s, want REJECT[SIGNATURE_INVALID: %s]", tc.raw, got, tc.reason)
+		}
+	}
+	if got := verify(withMembers(t, base, map[string]string{"scanSummary": with(`"criticalFindings":0`)})); !got.Accepted {
+		t.Errorf("the v1.1 baseline's scanSummary written as six members: %s, want ACCEPT", got)
+	}
+
+	v10, err := loadFixture(repoRoot + "/fixtures/baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := verify(withMembers(t, v10, map[string]string{"scanSummary": with(`"criticalFindings":0,"extra":"x"`)})); !got.Accepted {
+		t.Errorf("scanSummary with a seventh member on the v1.0 baseline, which signs no scanSummary: %s, want ACCEPT", got)
+	}
+}
+
 // runIn runs Run on args from dir and returns its exit code, stdout and
 // stderr.
 func runIn(t *testing.T, dir string, args ...string) (int, string, string) {

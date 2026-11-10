@@ -816,10 +816,10 @@ GO_FOLDED_NAME_VERDICTS = (
 )
 
 # The same for members only the v1.1 payload signs, on the v1.1 baseline. The
-# Go verifier reads the names of behavioralProfile's own members as written
-# (atx-conformance#277), so a member of it named in another case is not that
-# member: the profile is one no signature covers, refused as
-# SIGNATURE_INVALID before the signature is read.
+# Go verifier reads the names of behavioralProfile's own members, and of
+# scanSummary's, as written (atx-conformance#277), so a member of either named
+# in another case is not that member: the profile or scanSummary is one no
+# signature covers, refused as SIGNATURE_INVALID before the signature is read.
 GO_FOLDED_NAME_VERDICTS_V11 = (
     (("declaredPurpose",), "DeclaredPurpose", '{"x": 1}', "SIGNATURE_INVALID"),
     (("behavioralProfile",), "BEHAVIORALPROFILE", KEEP, "ACCEPT"),
@@ -829,7 +829,7 @@ GO_FOLDED_NAME_VERDICTS_V11 = (
     (("behavioralProfile", "generatedAt"), "GeneratedAt", '"2026-05-19"', "SIGNATURE_INVALID"),
     (("behavioralProfile", "observationDays"), "ObservationDays", KEEP, "SIGNATURE_INVALID"),
     (("scanSummary",), "ScanSummary", KEEP, "ACCEPT"),
-    (("scanSummary", "hma"), "HMA", KEEP, "ACCEPT"),
+    (("scanSummary", "hma"), "HMA", KEEP, "SIGNATURE_INVALID"),
     (("scanSummary", "criticalFindings"), "CRITICALFINDINGS", "3", "SIGNATURE_INVALID"),
     (("scanSummary", "secretless"), "SECRETLESS", '"dirty"', "SIGNATURE_INVALID"),
     (("capabilities",), "Capabilities", KEEP, "ACCEPT"),
@@ -1927,6 +1927,53 @@ class GoUndecodableProjection(unittest.TestCase):
         for path, literal, projection in GO_SCAN_SUMMARY_PROJECTIONS:
             with self.subTest(path=path, value=literal):
                 self.assertEqual(_projection_at(path, literal)["scanSummary"], projection)
+
+    def test_scan_summary_member_names_are_read_as_go_reads_them(self):
+        # The Go verifier's decodeScanSummaryV11 reads scanSummary's member
+        # names as written: a name other than its six returns
+        # errScanSummaryMember, and the credential rejects with the reason
+        # below, Go's words byte for byte, before the type of any member is
+        # read (TestScanSummaryMemberNames in
+        # verifiers/go/verifier/verify_test.go, atx-conformance#277). The
+        # projection reads the names as encoding/json does, so the baseline
+        # with a seventh member or a name in another case projects its signed
+        # scanSummary.
+        member_reason = "no signature covers scanSummary, which holds a member other than its six"
+        type_reason = "no signature covers scanSummary, which holds a member outside its type or is not an object"
+        def renamed(to: str) -> dict:
+            # The baseline's scanSummary with criticalFindings written as `to`.
+            return {(to if name == "criticalFindings" else name): v for name, v in SIGNED_SCAN.items()}
+
+        for label, scan, reason in (
+            ("the baseline's", SIGNED_SCAN, None),
+            ("a seventh member", {**SIGNED_SCAN, "extra": "x"}, member_reason),
+            ("CriticalFindings in place of criticalFindings", renamed("CriticalFindings"), member_reason),
+            ("criticalfindings in place of criticalFindings", renamed("criticalfindings"), member_reason),
+            ("techniques", {**SIGNED_SCAN, "techniques": []}, member_reason),
+            ("a seventh member and one outside its type", {"criticalFindings": "3", "extra": "x"}, member_reason),
+            ("the six, one outside its type", {**SIGNED_SCAN, "criticalFindings": "3"}, type_reason),
+        ):
+            with self.subTest(scanSummary=label):
+                if reason == member_reason:
+                    with self.assertRaises(verify._ScanSummaryMemberError):
+                        verify._decode_scan_summary(scan)
+                elif reason == type_reason:
+                    with self.assertRaises(verify._DecodeError) as raised:
+                        verify._decode_scan_summary(scan)
+                    self.assertNotIsInstance(raised.exception, verify._ScanSummaryMemberError)
+                else:
+                    self.assertEqual(verify._decode_scan_summary(scan), SIGNED_SCAN)
+                if label in ("the baseline's", "a seventh member", "CriticalFindings in place of criticalFindings"):
+                    self.assertEqual(verify._decode_scan_summary(scan, lenient=True), SIGNED_SCAN)
+                got = _at_verdict(BASELINE_V11, ("scanSummary",), json.dumps(scan))
+                if reason is None:
+                    self.assertTrue(got.accepted, got.reason)
+                else:
+                    self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+                    self.assertEqual(got.reason, reason)
+        # atcVersion 1.0 signs no scanSummary (core.md section 1.3a.1).
+        got = _at_verdict(BASELINE_V10, ("scanSummary",), json.dumps({**SIGNED_SCAN, "extra": "x"}))
+        self.assertTrue(got.accepted, got.reason)
 
     def test_baseline_projects_what_it_signs(self):
         payload = _projection_at(("createdAt",), KEEP)

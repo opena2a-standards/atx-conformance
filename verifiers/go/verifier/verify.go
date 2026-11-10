@@ -482,22 +482,47 @@ func escapedCodeUnit(digits []byte) rune {
 
 // decodeScanSummaryV11 decodes scanSummary into the six members the v1.1 TBS
 // carries (atx-spec §1.3a.2 rule 2). An absent or null scanSummary, or
-// member, is the zero value. A member outside its type, or a scanSummary
-// that is not an object, returns the decode error, with each member that
-// did not decode left at its zero value.
+// member, is the zero value. A member under a name other than hma,
+// criticalFindings, highFindings, secretless, cryptoServe and oasbLevel, the
+// names compared as written, returns errScanSummaryMember: the credential
+// schema core.md §1.1 points to gives scanSummary those six members and no
+// other (additionalProperties false). Otherwise a member outside its type,
+// or a scanSummary that is not an object, returns the decode error. The six
+// members hold what encoding/json's struct decode reads in every case: a
+// member that did not decode at its zero value, a name in another case
+// folded onto its field, and any other name dropped.
 func decodeScanSummaryV11(raw json.RawMessage) (tbsScanSummaryV11, error) {
 	var ss tbsScanSummaryV11
 	if len(raw) == 0 || string(raw) == "null" {
 		return ss, nil
 	}
+	// A map compares member names exactly, where the struct decode below
+	// matches them under encoding/json's folding and drops a member it has
+	// no field for. A scanSummary that is not an object does not decode
+	// into the map, and the struct decode returns its error.
+	var members map[string]json.RawMessage
+	var nameErr error
+	if json.Unmarshal(raw, &members) == nil {
+		for name := range members {
+			switch name {
+			case "hma", "criticalFindings", "highFindings", "secretless", "cryptoServe", "oasbLevel":
+			default:
+				nameErr = errScanSummaryMember
+			}
+		}
+	}
 	err := json.Unmarshal(raw, &ss)
+	if nameErr != nil {
+		return ss, nameErr
+	}
 	return ss, err
 }
 
 // projectScanSummaryV11 is scanSummary as the v1.1 TBS carries it. A member
-// that does not decode is left at its zero value; verifySignatures refuses
-// such a credential before it reads a signature, so no signature over that
-// zero value verifies it.
+// that does not decode is left at its zero value, a name in another case is
+// folded onto its field and any other name is dropped; verifySignatures
+// refuses such a credential before it reads a signature, so no signature
+// over that projection verifies it.
 func projectScanSummaryV11(raw json.RawMessage) tbsScanSummaryV11 {
 	ss, _ := decodeScanSummaryV11(raw)
 	return ss
@@ -550,6 +575,11 @@ func decodeBehavioralProfileV11(raw json.RawMessage) (bp tbsBehavioralProfileV11
 // errBehavioralProfileForm is the error projectBehavioralProfileV11 returns
 // for a present behavioralProfile the v1.1 TBS has no value for.
 var errBehavioralProfileForm = errors.New("behavioralProfile is not an object of exactly checksum (a string), generatedAt (a timestamp) and observationDays (an integer)")
+
+// errScanSummaryMember is the error decodeScanSummaryV11 returns for a
+// scanSummary holding a member under a name other than its six, which the
+// v1.1 TBS has no value for.
+var errScanSummaryMember = errors.New("scanSummary holds a member under a name other than hma, criticalFindings, highFindings, secretless, cryptoServe and oasbLevel")
 
 // projectBehavioralProfileV11 is behavioralProfile as the v1.1 TBS carries
 // it: null when the credential has none or carries null (atx-spec §1.3a.2
@@ -1249,16 +1279,24 @@ func verifySignatures(a *atx, state verifierState) result {
 	var payload []byte
 	if a.ATCVersion == "1.1" {
 		// scanSummary enters the TBS as six typed members (atx-spec §1.3a.2
-		// rule 2). A member outside its type, or a scanSummary that is not an
-		// object, has no value there, so no signature covers the credential:
-		// the projection would leave it at its zero value, and a signature
-		// over that zero value would verify a credential carrying another.
-		// The reason names no decode error, whose text the Go release sets,
-		// so the Python reference verifier writes the same line.
+		// rule 2), under the six names the credential schema gives it
+		// (§1.1, additionalProperties false). A member outside its type, a
+		// member under any other name, the names compared as written, or a
+		// scanSummary that is not an object has no value there, so no
+		// signature covers the credential: the projection would leave such
+		// a member at its zero value, fold a name in another case onto its
+		// field or drop any other name, and a signature over what it
+		// projects would verify a credential carrying another scanSummary.
+		// The reasons name no decode error, whose text the Go release sets,
+		// so the Python reference verifier writes the same lines.
 		if _, err := decodeScanSummaryV11(a.ScanSummary); err != nil {
+			reason := "no signature covers scanSummary, which holds a member outside its type or is not an object"
+			if errors.Is(err, errScanSummaryMember) {
+				reason = "no signature covers scanSummary, which holds a member other than its six"
+			}
 			return result{
 				RejectCategory: "SIGNATURE_INVALID",
-				Reason:         "no signature covers scanSummary, which holds a member outside its type or is not an object",
+				Reason:         reason,
 			}
 		}
 		// behavioralProfile enters the TBS as null when the credential has

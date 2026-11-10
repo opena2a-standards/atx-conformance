@@ -673,8 +673,10 @@ def _tbs_v11(atx: dict[str, Any]) -> dict[str, Any]:
     it."""
     # The Go verifier's projectScanSummaryV11 ignores a decode error, which
     # leaves each member it could not decode at its zero value; a scanSummary
-    # that is not an object leaves all six there. verify_fixture refuses such
-    # a credential before it reads a signature (_decode_scan_summary).
+    # that is not an object leaves all six there, and a name in another case
+    # is folded onto its member and any other name dropped. verify_fixture
+    # refuses such a credential before it reads a signature
+    # (_decode_scan_summary).
     scan_summary = _decode_scan_summary(atx.get("scanSummary"), lenient=True)
 
     # behavioralProfile as the Go verifier's projectBehavioralProfileV11
@@ -1106,22 +1108,46 @@ def _decode_members(
 # error, so a report over the fixtures reads the same under every Go release.
 _SCAN_SUMMARY_UNSIGNED = "no signature covers scanSummary, which holds a member outside its type or is not an object"
 
+# The reason a v1.1 credential whose scanSummary holds a member under a name
+# other than its six rejects with (_ScanSummaryMemberError), the Go reference
+# verifier's text for its errScanSummaryMember.
+_SCAN_SUMMARY_MEMBER_UNSIGNED = "no signature covers scanSummary, which holds a member other than its six"
+
+
+class _ScanSummaryMemberError(_DecodeError):
+    """A scanSummary member under a name other than its six, the names
+    compared as written: the Go reference verifier's errScanSummaryMember."""
+
 
 def _decode_scan_summary(scan: Any, lenient: bool = False) -> dict[str, Any]:
     """scanSummary as the Go reference verifier's decodeScanSummaryV11 decodes
     it into the six members the v1.1 signed payload holds, each the zero value
     when it is absent or null, as is all of an absent or null scanSummary. A
-    member outside its type, or a scanSummary that is not an object, raises
-    _DecodeError. With lenient, as in the Go verifier's projectScanSummaryV11,
-    such a member keeps the value decoded before it, the zero value when
-    there is none, and a scanSummary that is not an object leaves all six at
-    the zero value."""
+    member under a name other than hma, criticalFindings, highFindings,
+    secretless, cryptoServe and oasbLevel, the names compared as written,
+    raises _ScanSummaryMemberError: the credential schema gives scanSummary
+    those six members and no other. Otherwise a member outside its type, or a
+    scanSummary that is not an object, raises _DecodeError. With lenient, as
+    in the Go verifier's projectScanSummaryV11, the names are not checked: a
+    name in another case is read as the member it folds to and any other
+    name is left out, as _decode_members reads them; a member outside its
+    type keeps the value decoded before it, the zero value when there is
+    none, and a scanSummary that is not an object leaves all six at the zero
+    value."""
     if scan is None:
         scan = {}
     if not isinstance(scan, dict):
         if not lenient:
             raise _DecodeError(f"scanSummary {_value_repr(scan)} is not a JSON object")
         scan = {}
+    if not lenient:
+        # The Go verifier reads the names through a map, which compares them
+        # without encoding/json's folding, before its struct decode.
+        outside = sorted(name for name in scan if name not in _SCAN_SUMMARY_TYPES)
+        if outside:
+            raise _ScanSummaryMemberError(
+                f"scanSummary members {outside!r} are not among {sorted(_SCAN_SUMMARY_TYPES)!r}"
+            )
     return _decode_members(_SCAN_SUMMARY_TYPES, scan, "scanSummary.", lenient=lenient)
 
 
@@ -1370,14 +1396,20 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
     # Spec mandate: every declared signature MUST verify.
     if version == SUPPORTED_ATC_VERSION_V11:
         # scanSummary enters the TBS as six typed members (atx-spec §1.3a.2
-        # rule 2). A member outside its type, or a scanSummary that is not an
-        # object, has no value there, so no signature covers the credential:
-        # the projection would leave it at its zero value, and a signature
-        # over that zero value would verify a credential carrying another.
+        # rule 2), under the six names the credential schema gives it
+        # (section 1.1, additionalProperties false). A member outside its
+        # type, a member under any other name, the names compared as written,
+        # or a scanSummary that is not an object has no value there, so no
+        # signature covers the credential: the projection would leave such a
+        # member at its zero value, fold a name in another case onto its
+        # member or drop any other name, and a signature over what it
+        # projects would verify a credential carrying another scanSummary.
         # The Go reference verifier rejects it here too, before the checks
-        # below.
+        # below, with the same reason for each.
         try:
             _decode_scan_summary(atx.get("scanSummary"))
+        except _ScanSummaryMemberError:
+            return VerifyResult(reject_category="SIGNATURE_INVALID", reason=_SCAN_SUMMARY_MEMBER_UNSIGNED)
         except _DecodeError:
             return VerifyResult(reject_category="SIGNATURE_INVALID", reason=_SCAN_SUMMARY_UNSIGNED)
         # behavioralProfile enters the TBS as null when the credential has

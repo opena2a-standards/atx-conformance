@@ -135,6 +135,15 @@ PASS  fixtures/v1_1-no-transparency-log-index.json
        observed: ACCEPT
        signatures: 1/1 valid (ed25519=true mldsa65=false)
        trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+PASS  fixtures/v1_1-scan-summary-case-variant-member.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: no signature covers scanSummary, which holds a member other than its six]
+PASS  fixtures/v1_1-scan-summary-extra-member-signed.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: no signature covers scanSummary, which holds a member other than its six]
+PASS  fixtures/v1_1-scan-summary-extra-member.json
+       expected: REJECT [SIGNATURE_INVALID]
+       observed: REJECT[SIGNATURE_INVALID: no signature covers scanSummary, which holds a member other than its six]
 PASS  fixtures/v1_1-scan-summary-member-outside-type.json
        expected: REJECT [SIGNATURE_INVALID]
        observed: REJECT[SIGNATURE_INVALID: no signature covers scanSummary, which holds a member outside its type or is not an object]
@@ -151,4 +160,4 @@ PASS  fixtures/wrong-issuer.json
        expected: REJECT [UNTRUSTED_ISSUER]
        observed: REJECT[UNTRUSTED_ISSUER: issuer DID did:opena2a:authority:attacker.example is not in the verifier's trusted set (untrusted issuer)]
 
-summary: 44 pass, 0 fail (44 fixtures)
+summary: 47 pass, 0 fail (47 fixtures)

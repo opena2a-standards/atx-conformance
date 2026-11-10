@@ -231,6 +231,30 @@ func canonicalPayloadV11(a *ATX) []byte {
 	return out
 }
 
+// canonicalPayloadV11WithScanSummaryMember is JCS(TBS) of a with one more
+// scanSummary member, name, holding the JSON value raw: the bytes an issuer
+// that signs every scanSummary member it writes would sign. The TBS holds
+// scanSummary as its six members (atx-spec §1.3a.2 rule 2), so a verifier
+// that holds it to those six does not reach these bytes.
+func canonicalPayloadV11WithScanSummaryMember(a *ATX, name string, raw json.RawMessage) []byte {
+	var tbs map[string]json.RawMessage
+	must(json.Unmarshal(canonicalPayloadV11(a), &tbs))
+	var ss map[string]json.RawMessage
+	must(json.Unmarshal(tbs["scanSummary"], &ss))
+	if _, ok := ss[name]; ok {
+		panic("canonicalPayloadV11WithScanSummaryMember: scanSummary already holds " + name)
+	}
+	ss[name] = raw
+	b, err := json.Marshal(ss)
+	must(err)
+	tbs["scanSummary"] = b
+	b, err = json.Marshal(tbs)
+	must(err)
+	out, err := jcs.Transform(b)
+	must(err)
+	return out
+}
+
 // projectDeclaredPurposeV11 implements the presence-based rule for the optional
 // declaredPurpose TBS member (atx-spec §1.3a.2 rule 5, degenerate inputs pinned
 // per issue #11), mirrored in ../verifiers: emptiness is a JSON-parse-level
@@ -994,6 +1018,69 @@ func main() {
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
 				atx)
 		}},
+		// ---- scanSummary members (§1.1 schema, §1.3a.2 rule 2, atx-conformance#277) ----
+		{"fixtures/v1_1-scan-summary-extra-member.json", func() Fixture {
+			// A MEMBER OUTSIDE THE SIX. Sign the baseline, whose scanSummary
+			// holds hma, criticalFindings, highFindings, secretless,
+			// cryptoServe and oasbLevel, then add a seventh member, extra
+			// "x", AFTER signing (scanSummaryWrites, below: ATCScanSummary
+			// has no field for it, so it is written at the byte level). The
+			// credential schema gives scanSummary those six members and no
+			// other, so the TBS has no value for this scanSummary and no
+			// signature covers it. A verifier that decodes scanSummary into
+			// its six fields drops the seventh, projects the signed
+			// scanSummary and wrongly ACCEPTs.
+			atx := newBaselineV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/scan-summary-extra-member",
+				"An ATX v1.1 credential signed with the baseline scanSummary (hma, criticalFindings, highFindings, secretless, cryptoServe, oasbLevel), carrying a seventh member in it, extra \"x\", written AFTER signing. The credential schema of atx-spec §1.1 gives scanSummary exactly those six members (additionalProperties false), and JCS(TBS) holds scanSummary as those six members (§1.3a.2 rule 2), so no signature covers a scanSummary with a seventh. The verifier MUST REJECT with a signature-validation reason. A verifier that decodes scanSummary into its six fields drops the seventh member, projects the signed scanSummary and wrongly ACCEPTs a credential carrying a member its signature does not cover.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
+		{"fixtures/v1_1-scan-summary-extra-member-signed.json", func() Fixture {
+			// A MEMBER OUTSIDE THE SIX, SIGNED. The scanSummary of
+			// v1_1-scan-summary-extra-member.json, extra "x" included,
+			// signed over JCS(TBS) with that member in scanSummary as
+			// written (canonicalPayloadV11WithScanSummaryMember) and carried
+			// as signed (scanSummaryWrites, below). The TBS holds
+			// scanSummary as its six members, so it has no value for this
+			// one and no signature covers the credential, its own included.
+			// A verifier that writes every scanSummary member it reads into
+			// the TBS reaches the bytes the signature covers and wrongly
+			// ACCEPTs.
+			atx := newBaselineV11ATX()
+			sig := signEd25519(primary.SeedHex, canonicalPayloadV11WithScanSummaryMember(&atx, "extra", json.RawMessage(`"x"`)))
+			sig.KeyID = primary.KeyID
+			atx.Signatures = []ATCSignature{sig}
+			return wrap("atx-v1_1/scan-summary-extra-member-signed",
+				"An ATX v1.1 credential carrying the baseline scanSummary with a seventh member, extra \"x\", whose Ed25519 signature covers JCS(TBS) with that member in scanSummary as written. The credential schema of atx-spec §1.1 gives scanSummary exactly hma, criticalFindings, highFindings, secretless, cryptoServe and oasbLevel (additionalProperties false), and JCS(TBS) holds scanSummary as those six members (§1.3a.2 rule 2), so the TBS has no value for this scanSummary and no signature covers the credential, its own included. The verifier MUST REJECT with a signature-validation reason. A verifier that writes every scanSummary member it reads into the TBS reaches the bytes the signature covers and wrongly ACCEPTs a credential carrying a member the specification does not define.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
+		{"fixtures/v1_1-scan-summary-case-variant-member.json", func() Fixture {
+			// A NAME IN ANOTHER CASE. Sign the baseline, then rename its
+			// scanSummary.criticalFindings to CriticalFindings AFTER
+			// signing, the value 0 unchanged (scanSummaryWrites, below).
+			// Member names are compared exactly, so the scanSummary lacks
+			// criticalFindings and carries a member outside the six. Go's
+			// encoding/json matches the name to the criticalFindings field
+			// case-insensitively, so a verifier that decodes scanSummary
+			// into a struct projects the signed scanSummary and wrongly
+			// ACCEPTs. The renamed member stands alone, so the fold-aware
+			// duplicate check does not reject it.
+			atx := newBaselineV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/scan-summary-case-variant-member",
+				"An ATX v1.1 credential signed with the baseline scanSummary, carrying its criticalFindings member under the name CriticalFindings, value unchanged (0), renamed AFTER signing. Member names are compared exactly, and the credential schema of atx-spec §1.1 gives scanSummary exactly hma, criticalFindings, highFindings, secretless, cryptoServe and oasbLevel (additionalProperties false), so this scanSummary lacks criticalFindings and carries a member outside the six: JCS(TBS) has no value for it (§1.3a.2 rule 2) and no signature covers it. The verifier MUST REJECT with a signature-validation reason. Go's encoding/json matches a member name to a struct field case-insensitively, so a verifier that decodes scanSummary into a struct reads CriticalFindings as criticalFindings, projects the signed scanSummary and wrongly ACCEPTs. The renamed member is the only one of its name, so a duplicate-member check does not reject it.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
 		{"fixtures/v1_1-declared-purpose-valid.json", func() Fixture {
 			// PRESENT-CASE: a credential that actually CARRIES a declaredPurpose
 			// (atx-spec §1.5). The purpose object is part of JCS(TBS), so the single
@@ -1384,19 +1471,27 @@ func main() {
 			//nolint:gosec // G703: build-time tool rewriting the fixture it just wrote under outDir
 			must(os.WriteFile(path, replaced, 0o644))
 		}
-		if write, ok := behavioralProfileWrites[fs.writePath]; ok {
-			// ATCBehavioralProfile cannot hold the profile these fixtures
-			// carry, so it is written at the byte level after signing;
-			// every other byte is the credential the signature covers.
+		write, ok := behavioralProfileWrites[fs.writePath]
+		written, member := behavioralProfileWritten, "behavioralProfile"
+		if !ok {
+			write, ok = scanSummaryWrites[fs.writePath]
+			written, member = scanSummaryWritten, "scanSummary"
+		}
+		if ok {
+			// ATCBehavioralProfile and ATCScanSummary cannot hold the
+			// member these fixtures carry, so it is written at the byte
+			// level after signing. Every other byte is the credential the
+			// signature covers; in v1_1-scan-summary-extra-member-signed.json
+			// it covers the written member too.
 			b, err := os.ReadFile(path) //nolint:gosec // G304: file just written above
 			must(err)
 			if n := bytes.Count(b, []byte(write.from)); n != 1 {
-				panic(fmt.Sprintf("%s: %d behavioralProfile substitution targets, want 1", fs.writePath, n))
+				panic(fmt.Sprintf("%s: %d %s substitution targets, want 1", fs.writePath, n, member))
 			}
 			replaced := bytes.Replace(b, []byte(write.from), []byte(write.to), 1)
 			//nolint:gosec // G703: build-time tool rewriting the fixture it just wrote under outDir
 			must(os.WriteFile(path, replaced, 0o644))
-			behavioralProfileWritten[fs.writePath] = true
+			written[fs.writePath] = true
 		}
 		sha := sha256FileHex(path)
 		manifest = append(manifest, manifestEntry{path: fs.writePath, sha: sha})
@@ -1429,6 +1524,11 @@ func main() {
 	for path := range behavioralProfileWrites {
 		if !behavioralProfileWritten[path] {
 			panic("behavioralProfileWrites names no fixture: " + path)
+		}
+	}
+	for path := range scanSummaryWrites {
+		if !scanSummaryWritten[path] {
+			panic("scanSummaryWrites names no fixture: " + path)
 		}
 	}
 
@@ -1486,6 +1586,29 @@ var behavioralProfileWrites = map[string]struct{ from, to string }{
 // behavioralProfileWritten records which behavioralProfileWrites entries main
 // applied; main fails on an entry that names no fixture.
 var behavioralProfileWritten = map[string]bool{}
+
+// scanSummaryWrites is the byte-level write main makes after signing in each
+// scanSummary member fixture (atx-conformance#277): the text it replaces,
+// which the fixture must hold exactly once, and the text it writes in its
+// place. The baseline's scanSummary ends with oasbLevel "L1".
+var scanSummaryWrites = map[string]struct{ from, to string }{
+	"fixtures/v1_1-scan-summary-extra-member.json": {
+		"      \"oasbLevel\": \"L1\"\n    },",
+		"      \"oasbLevel\": \"L1\",\n      \"extra\": \"x\"\n    },",
+	},
+	"fixtures/v1_1-scan-summary-extra-member-signed.json": {
+		"      \"oasbLevel\": \"L1\"\n    },",
+		"      \"oasbLevel\": \"L1\",\n      \"extra\": \"x\"\n    },",
+	},
+	"fixtures/v1_1-scan-summary-case-variant-member.json": {
+		"      \"criticalFindings\": 0,\n",
+		"      \"CriticalFindings\": 0,\n",
+	},
+}
+
+// scanSummaryWritten records which scanSummaryWrites entries main applied;
+// main fails on an entry that names no fixture.
+var scanSummaryWritten = map[string]bool{}
 
 // logIndex returns a pointer to the log-assigned issuance index, so a fixture
 // can omit transparencyLogIndex entirely by leaving the field nil. The field is
@@ -1688,6 +1811,11 @@ var fixtureRequirements = map[string]string{
 	"atx-v1_1/behavioral-profile-case-variant-member": "§1.1: behavioralProfile member names are compared exactly, so observationDays renamed OBSERVATIONDAYS after signing leaves a profile the TBS has no value for, a signature failure",
 	"atx-v1_1/behavioral-profile-not-object":          "§1.3a.2 rule 1: the TBS holds null for a credential with no behavioralProfile and otherwise an object of its three members, so a string added as the profile after signing is a signature failure",
 	"atx-v1_1/behavioral-profile-member-outside-type": "§1.3a.2 rule 1: a behavioralProfile added after signing whose observationDays is a string has no value in the TBS, where a credential with no profile holds null, so it is a signature failure",
+
+	// scanSummary members (atx-conformance#277).
+	"atx-v1_1/scan-summary-extra-member":        "§1.1: the credential schema gives scanSummary exactly hma, criticalFindings, highFindings, secretless, cryptoServe and oasbLevel, so a seventh member added after signing leaves a scanSummary the TBS has no value for, a signature failure",
+	"atx-v1_1/scan-summary-extra-member-signed": "§1.3a.2 rule 2: the TBS holds scanSummary as its six members, so a seventh member leaves a scanSummary the TBS has no value for, a signature failure although the credential's signature covers that member as written",
+	"atx-v1_1/scan-summary-case-variant-member": "§1.1: scanSummary member names are compared exactly, so criticalFindings renamed CriticalFindings after signing leaves a scanSummary the TBS has no value for, a signature failure",
 
 	// declaredPurpose number form (atx-conformance#283).
 	"atx-v1_1/declared-purpose-integer-signed":                   "§1.3a.2 rule 5: declaredPurpose enters the TBS as written, and so does an integer in it written as its digits inside the I-JSON exact range, so a credential signed over {\"n\": 1000} that carries it as signed is accepted",
