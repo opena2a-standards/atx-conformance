@@ -13,7 +13,7 @@ A2A coordination map's criterion (c) thread
 |---|---|---|
 | `atx-conformance` (this repo) | ATX v1.0 + v1.1 credential schema | 47 fixtures (15 v1.0, 32 v1.1 JCS incl. 12 declaredPurpose), 2 verifiers (Go and Python, both full hybrid), `jcs-vectors/` byte-agreement gate (8 vectors, Go/Python/TS), `MANIFEST.sha256` pinned |
 | [`atp-conformance`](https://github.com/opena2a-standards/atp-conformance) | ATP v1.0.0-rc1 protocol | 14 fixtures (discovery, trust proof, Signed Tree Head, inclusion and consistency proof, revocation list, with must-reject controls), same 2-verifier pair, `MANIFEST.sha256` pinned |
-| [`aip-conformance`](https://github.com/opena2a-standards/aip-conformance) | AIP v1.0.0-draft identity protocol | §6.4 (VC `AgentTrustCredential`) covered by cross-linking this repo's fixtures; §5.1 challenge-response covered by 4 dedicated fixtures + Go/Python verifiers; §6.1 trust-score composition covered by 3 fixtures |
+| [`aip-conformance`](https://github.com/opena2a-standards/aip-conformance) | AIP v1.2.0-draft identity protocol | §6.4 (VC `AgentTrustCredential`) covered by cross-linking this repo's fixtures; §5.1 challenge-response covered by 14 dedicated fixtures + Go/Python verifiers; §6.1 trust-score composition covered by 3 fixtures |
 
 The three suites share the same MANIFEST-pinned byte-stable shape and are
 structurally comparable to A2A-IDF's
@@ -24,7 +24,10 @@ The fixture and verifier counts in the two sibling rows, any release
 version a sibling row names, and the spec version its Spec cell names, are
 measurements of those repositories, not of this one; the Spec cell is held
 to the `spec.id` and `spec.version` the repository's `conformance.json`
-declares. [`scripts/check_sibling_rows.py`](../scripts/check_sibling_rows.py)
+declares, and each fixture count is taken over the `fixtures/*.json` files
+directly in its `fixtures/` directory, so a file in a subdirectory of it,
+such as aip-conformance's `fixtures/load-errors/`, is not counted.
+[`scripts/check_sibling_rows.py`](../scripts/check_sibling_rows.py)
 reads both repositories through the GitHub API and fails when a row no
 longer matches them. It needs network access and is run by hand, not by the
 [continuous-verification gates](continuous-verification.md).

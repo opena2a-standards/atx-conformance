@@ -79,4 +79,8 @@ scripts/test_script_options.py   CI gate: every script's -h, --help and unknown-
                                  handling
 scripts/test_demo_recording.py   CI gate: adds docs/demo/test_record_atx_verify.py to the
                                  workflow's unittest discovery run over scripts/
+scripts/test_check_sibling_rows.py
+                                 CI gate: check_sibling_rows.py's self-test, and its
+                                 fixture count over a tree with a file in a
+                                 subdirectory of fixtures/ (no network)
 ```
