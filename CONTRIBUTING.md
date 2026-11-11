@@ -55,9 +55,11 @@ schemas/vendor/atx-spec/         vendored atx-spec credential schema and core.md
                                  (pinned ref)
 vectors/                         test keypair vectors (TEST-ONLY)
 verifiers/go/                    Go reference verifier (full hybrid): the package
-                                 verifiers/go/verifier and a main package that
+                                 verifiers/go/verifier, with its benchmark
+                                 (verify_bench_test.go), and a main package that
                                  runs it from a checkout
-verifiers/python/                Python reference verifier (full hybrid)
+verifiers/python/                Python reference verifier (full hybrid) and its
+                                 benchmark (bench_verify.py)
 scripts/generate-fixtures/       deterministic fixture generator (Go)
 scripts/parity/                  Go/Python per-fixture parity gate
 scripts/*.py                     CI gates: README counts, spec references, schema
@@ -74,9 +76,15 @@ scripts/capture_go_verifier.py   runs the README's Go command from the tree and
                                  --check holds them to the README excerpt and
                                  the sidecar's input tree ids to the working
                                  tree (run by hand)
+scripts/bench_report.py          runs the benchmark of each reference verifier and
+                                 prints each figure with the commit and the CPU
+                                 it ran on (run by hand)
 scripts/check_circl_pin.sh       CI gate: one cloudflare/circl version per Go module
 scripts/test_script_options.py   CI gate: every script's -h, --help and unknown-argument
                                  handling
+scripts/test_bench_report.py     CI gate: bench_report.py's figure lines and exit
+                                 status, and both benchmarks timing the same
+                                 fixtures
 scripts/test_demo_recording.py   CI gate: adds docs/demo/test_record_atx_verify.py to the
                                  workflow's unittest discovery run over scripts/
 scripts/test_check_sibling_rows.py

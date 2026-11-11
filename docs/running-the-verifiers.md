@@ -1,8 +1,9 @@
 # atx-conformance: running the verifiers
 
-What each reference verifier depends on, and where the toolchain release
-changes a result. The [README](../README.md#running-the-verifiers) runs both
-verifiers and says what they print.
+What each reference verifier depends on, where the toolchain release
+changes a result, and how each one's benchmark runs. The
+[README](../README.md#running-the-verifiers) runs both verifiers and says
+what they print.
 
 ## Exit code
 
@@ -293,3 +294,51 @@ Depends on:
   ([which commit a run verified](#which-commit-a-run-verified)).
 - `cryptography >= 42.0.0`
 - `dilithium-py >= 1.1.0` (ML-DSA-65 per FIPS 204)
+
+## Benchmarks
+
+Each reference verifier carries a benchmark that times the verification of
+one credential: the strict parse of its `atx` member, the checks and every
+signature it declares. Both time the same fixtures, the baseline credential
+of ATX v1.0 and of v1.1, each signed with Ed25519 alone and with Ed25519
+plus ML-DSA-65: `baseline-valid`, `baseline-valid-hybrid`,
+`v1_1-baseline-valid` and `v1_1-baseline-valid-hybrid`. Each reads its
+fixture before its timing starts, so reading the file is not timed, and
+first requires the verifier to accept the credential. The Go benchmark,
+`BenchmarkVerify` in `verifiers/go/verifier/verify_bench_test.go`, times
+`verify`, which parses the credential from its JSON bytes; the Python
+benchmark, `verifiers/python/bench_verify.py`, times `verify_fixture` on
+the fixture `load_fixture` decoded.
+
+From the repository root, with Go and the
+[Python verifier's dependencies](#python-full-hybrid-ed25519-plus-ml-dsa-65)
+installed:
+
+```bash
+python3 scripts/bench_report.py
+```
+
+runs both, for about one second per fixture (`--benchtime <seconds>` sets
+another time), and prints one line per figure, in this form:
+
+```
+verifier=go benchmark=BenchmarkVerify/v1_1-baseline-valid-hybrid msPerOp=<ms> calls=<n> commit=<sha> uncommittedChanges=false cpu="<CPU model>" cores=<n> runtime=<Go release>
+```
+
+Each line gives the verifier, the benchmark's name, the mean time of one
+verification in milliseconds and the number of timed verifications it is
+taken over, the commit `git rev-parse HEAD` names in the checkout the
+script is in, whether a tracked file there differs from that commit, the
+CPU model the operating system reports, the number of logical CPUs and the
+Go or Python release the benchmark ran on. A value that holds a blank is
+written as a JSON string. No exit status depends on a figure: the script
+exits 0 when each benchmark exited 0 and wrote at least one figure, 1 when
+one did not (the other one's figures are still printed), and 2 on an
+argument it does not read.
+
+Each benchmark also runs on its own, from the repository root:
+
+```bash
+go test -run '^$' -bench '^BenchmarkVerify$' -cpu 1 ./verifiers/go/verifier
+python3 verifiers/python/bench_verify.py
+```

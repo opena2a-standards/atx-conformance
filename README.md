@@ -247,7 +247,8 @@ The cosignature itself is recorded by pull request, as
   every fixture shares, and what each fixture exercises.
 - [Running the verifiers](docs/running-the-verifiers.md): the exit code,
   the module version `go run` fetches, toolchain minimums, pinned modules and
-  packages, and results that depend on the toolchain release.
+  packages, results that depend on the toolchain release, and the benchmark
+  of each verifier.
 - [Continuous verification](docs/continuous-verification.md): the gates CI
   runs on every pull request.
 - [Reproducing the fixtures](docs/reproducing-the-fixtures.md): what the
