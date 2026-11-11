@@ -17,6 +17,10 @@ conformance.yml, for the controls they must hold.
       - every actions/checkout sets persist-credentials: false and no ref;
       - no `${{ }}` expression inside a run: block (inputs reach a shell
         through env: only);
+      - no run: line of a `shell: cmd` step has a `%...%` expansion
+        directly before `>` (cmd expands the variable before it reads
+        redirections, so a one-digit value such as the exit code 0 is
+        read as a handle number and the file gets nothing);
       - publish creates the release as a draft, uploads the assets, then
         publishes with --latest=false, with gh only;
       - the stage job compiles before anything is written, and writes no
@@ -276,6 +280,13 @@ def cmd_release(path: Path) -> int:
             run = step.get("run")
             if isinstance(run, str) and "${{" in run:
                 problems.append(f"job {name}: an expression inside a run: block ({step.get('name', 'unnamed')})")
+            if step.get("shell") == "cmd" and isinstance(run, str):
+                for line in run.split("\n"):
+                    if re.search(r"%[^%\s]+%>", line):
+                        problems.append(f"job {name}: a %...% expansion directly before > in a cmd step"
+                                        f" ({step.get('name', 'unnamed')}); cmd expands the variable before it"
+                                        " reads redirections, so a one-digit value such as the exit code 0 is"
+                                        " read as a handle number and the file gets nothing")
             if name == "publish" and uses and not uses.startswith("actions/download-artifact@"):
                 problems.append(f"job publish uses {uses}; it runs gh on the runner and downloads its files, nothing else")
     publish_runs = "\n".join(str(s.get("run", "")) for s in steps_of(jobs.get("publish") or {}))

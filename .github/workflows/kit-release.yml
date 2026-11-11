@@ -138,7 +138,7 @@ jobs:
         working-directory: ${{ runner.temp }}\interop-day-kit
         run: |
           call verify.cmd > ..\capture.txt
-          echo %ERRORLEVEL%> ..\capture.rc
+          >..\capture.rc echo %ERRORLEVEL%
 
       - name: Exit 0, every fixture passed, and --version names the commit
         shell: bash
