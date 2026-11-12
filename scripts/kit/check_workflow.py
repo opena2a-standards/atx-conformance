@@ -17,10 +17,12 @@ conformance.yml, for the controls they must hold.
       - every actions/checkout sets persist-credentials: false and no ref;
       - no `${{ }}` expression inside a run: block (inputs reach a shell
         through env: only);
-      - no run: line of a `shell: cmd` step has a `%...%` expansion
-        directly before `>` (cmd expands the variable before it reads
-        redirections, so a one-digit value such as the exit code 0 is
-        read as a handle number and the file gets nothing);
+      - no run: line of a cmd step has a `%...%` expansion directly before
+        `>` (cmd expands the variable before it reads redirections, so a
+        one-digit value such as the exit code 0 is read as a handle number
+        and the file gets nothing); a step's shell is its own `shell:`, or,
+        when it sets none, its job's `defaults: run: shell:`, or, when the
+        job sets none either, the workflow's;
       - publish creates the release as a draft, uploads the assets, then
         publishes with --latest=false, with gh only;
       - the stage job compiles before anything is written, and writes no
@@ -226,6 +228,18 @@ def steps_of(job: dict) -> list[dict]:
     return steps
 
 
+def default_shell(holder: dict, where: str):
+    """The shell: under defaults: run: in a job, or at the top of the
+    workflow; None when it names none."""
+    defaults = holder.get("defaults")
+    if defaults is None:
+        return None
+    run = defaults.get("run") if isinstance(defaults, dict) else None
+    if not isinstance(defaults, dict) or not isinstance(run, (dict, type(None))):
+        raise Unreadable(f"{where}'s defaults: is not a mapping whose run: is a mapping")
+    return None if run is None else run.get("shell")
+
+
 def cmd_release(path: Path) -> int:
     doc, text = load(path)
     problems: list[str] = []
@@ -249,6 +263,7 @@ def cmd_release(path: Path) -> int:
     want_jobs = {"stage", "test", "build", "attest", "publish", "verify", "verify-candidate"}
     if set(jobs) != want_jobs:
         problems.append(f"jobs are {sorted(jobs)}, not {sorted(want_jobs)}")
+    workflow_shell = default_shell(doc, "the workflow")
     for name, job in jobs.items():
         if not isinstance(job, dict):
             problems.append(f"job {name} is not a mapping")
@@ -269,6 +284,7 @@ def cmd_release(path: Path) -> int:
             problems.append(f"job attest holds {perms!r}, not id-token: write, attestations: write, contents: read")
         if name == "publish" and perms != {"contents": "write"}:
             problems.append(f"job publish holds {perms!r}, not contents: write alone")
+        job_shell = default_shell(job, f"job {name}")
         for step in steps_of(job):
             uses = str(step.get("uses", ""))
             if uses.startswith("actions/checkout@"):
@@ -280,7 +296,9 @@ def cmd_release(path: Path) -> int:
             run = step.get("run")
             if isinstance(run, str) and "${{" in run:
                 problems.append(f"job {name}: an expression inside a run: block ({step.get('name', 'unnamed')})")
-            if step.get("shell") == "cmd" and isinstance(run, str):
+            # The step's own shell:, else its job's defaults: run: shell:, else the workflow's.
+            shell = next((s for s in (step.get("shell"), job_shell, workflow_shell) if s is not None), None)
+            if shell == "cmd" and isinstance(run, str):
                 for line in run.split("\n"):
                     if re.search(r"%[^%\s]+%>", line):
                         problems.append(f"job {name}: a %...% expansion directly before > in a cmd step"

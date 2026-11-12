@@ -158,6 +158,17 @@ def cells_pins() -> None:
          r.returncode == 1 and " 1 unpinned" in r.stdout, r.stdout.strip())
 
 
+# Edits to the test job's Windows step and to where it takes its shell from. An
+# entry below that lists several edits applies them in order (see edited()).
+STEP_ECHO_BEFORE_GT = ("          >..\\capture.rc echo %ERRORLEVEL%\n", "          echo %ERRORLEVEL%> ..\\capture.rc\n")
+WINDOWS_IF = "        if: runner.os == 'Windows'\n"
+STEP_NO_SHELL = (WINDOWS_IF + "        shell: cmd\n", WINDOWS_IF)
+STEP_BASH = (WINDOWS_IF + "        shell: cmd\n", WINDOWS_IF + "        shell: bash\n")
+TEST_JOB = "    needs: stage\n    runs-on: ${{ matrix.runner }}\n"
+JOB_CMD = (TEST_JOB, TEST_JOB + "    defaults:\n      run:\n        shell: cmd\n")
+JOB_BASH = (TEST_JOB, TEST_JOB + "    defaults:\n      run:\n        shell: bash\n")
+WORKFLOW_CMD = ("permissions: {}\n", "permissions: {}\ndefaults:\n  run:\n    shell: cmd\n")
+
 WORKFLOW_MUTANTS = [
     ("publish also holds id-token: write",
      ("    permissions:\n      contents: write\n", "    permissions:\n      contents: write\n      id-token: write\n"),
@@ -203,9 +214,43 @@ WORKFLOW_MUTANTS = [
       "        run: bash scripts/kit/assemble.sh stage \"$RUNNER_TEMP/stage\" && touch README-START-HERE.md\n"),
      "writes a generated text file"),
     ("a cmd step writes %ERRORLEVEL% directly before >",
-     ("          >..\\capture.rc echo %ERRORLEVEL%\n", "          echo %ERRORLEVEL%> ..\\capture.rc\n"),
+     STEP_ECHO_BEFORE_GT,
+     "directly before > in a cmd step"),
+    ("a step that sets no shell, under the job's defaults: run: shell: cmd, writes %ERRORLEVEL% directly before >",
+     [JOB_CMD, STEP_NO_SHELL, STEP_ECHO_BEFORE_GT],
+     "directly before > in a cmd step"),
+    ("a step that sets no shell, under the workflow's defaults: run: shell: cmd, writes %ERRORLEVEL% directly before >",
+     [WORKFLOW_CMD, STEP_NO_SHELL, STEP_ECHO_BEFORE_GT],
      "directly before > in a cmd step"),
 ]
+
+# Inputs the release check accepts: it reads a step's own shell: before its
+# job's defaults: run: shell:, and the job's before the workflow's, so it holds
+# neither Windows step below to the cmd rule.
+WORKFLOW_CONTROLS = [
+    ("a step that sets shell: bash, under the job's defaults: run: shell: cmd, writes %ERRORLEVEL% directly before >",
+     [JOB_CMD, STEP_BASH, STEP_ECHO_BEFORE_GT]),
+    ("a step that sets no shell, in a job whose defaults: run: shell: bash is under the workflow's cmd,"
+     " writes %ERRORLEVEL% directly before >",
+     [WORKFLOW_CMD, JOB_BASH, STEP_NO_SHELL, STEP_ECHO_BEFORE_GT]),
+]
+
+
+def edited(text: str, edits) -> str | None:
+    """text with edits applied: one (old, new) pair at the first place its
+    old text stands, or a list of pairs in turn, each at the one place its old
+    text stands in the text it is applied to. None when an old text is not
+    there, or, in a list, stands there more than once: an edit early in a list
+    can add a second copy of a later edit's old text, as a defaults: block
+    whose shell: line has the indentation of a step's does."""
+    if not isinstance(edits, list):
+        old, new = edits
+        return text.replace(old, new, 1) if old in text else None
+    for old, new in edits:
+        if text.count(old) != 1:
+            return None
+        text = text.replace(old, new)
+    return text
 
 
 def cells_workflow() -> None:
@@ -213,15 +258,28 @@ def cells_workflow() -> None:
     cell("b1 kit-release.yml: triggers, scopes, checkouts, env-only inputs, draft-then-publish, compile-first",
          r.returncode == 0 and "0 problems" in r.stdout, (r.stdout + r.stderr).strip().split("\n")[-1])
     text = WORKFLOW.read_text()
-    for i, (what, (old, new), expect) in enumerate(WORKFLOW_MUTANTS, 2):
+    for i, (what, edits, expect) in enumerate(WORKFLOW_MUTANTS, 2):
         d = scratch(f"b{i}")
-        if text.count(old) < 1:
-            cell(f"b{i} mutant input: {what}", False, "the mutant's anchor is not in the workflow")
+        mutant = edited(text, edits)
+        if mutant is None:
+            cell(f"b{i} mutant input: {what}", False,
+                 "an anchor of the mutant is not in the workflow, or, in a list of edits, not once")
             continue
-        (d / "kit-release.yml").write_text(text.replace(old, new, 1))
+        (d / "kit-release.yml").write_text(mutant)
         r = run([PY, "-I", KIT / "check_workflow.py", "release", d / "kit-release.yml"])
         cell(f"b{i} mutant input refused: {what}", r.returncode == 1 and expect in r.stderr,
              next((l for l in r.stderr.split("\n") if expect in l), r.stderr.strip()[:120]))
+    for i, (what, edits) in enumerate(WORKFLOW_CONTROLS, len(WORKFLOW_MUTANTS) + 2):
+        d = scratch(f"b{i}")
+        control = edited(text, edits)
+        if control is None:
+            cell(f"b{i} control input: {what}", False,
+                 "an anchor of the control is not in the workflow, or, in a list of edits, not once")
+            continue
+        (d / "kit-release.yml").write_text(control)
+        r = run([PY, "-I", KIT / "check_workflow.py", "release", d / "kit-release.yml"])
+        cell(f"b{i} control input accepted: {what}", r.returncode == 0 and "0 problems" in r.stdout,
+             (r.stdout + r.stderr).strip().split("\n")[-1])
 
 
 def cells_sums() -> None:
