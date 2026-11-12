@@ -6,7 +6,8 @@ check fail.
 
   test_kit.py --ci
       Cells that need no network and no gh: the action pins, the release
-      workflow's shape, SHA256SUMS and the file-list check, the label census,
+      workflow's shape, the one-line refusal of a workflow path the checks
+      cannot read, SHA256SUMS and the file-list check, the label census,
       the data protection kit check, the first-run screen's form, the
       release notes' --version claim, and check-capture as the release
       workflow's test job runs it: the kit's own copy, unpacked outside any
@@ -280,6 +281,37 @@ def cells_workflow() -> None:
         r = run([PY, "-I", KIT / "check_workflow.py", "release", d / "kit-release.yml"])
         cell(f"b{i} control input accepted: {what}", r.returncode == 0 and "0 problems" in r.stdout,
              (r.stdout + r.stderr).strip().split("\n")[-1])
+
+
+def cells_unreadable_path() -> None:
+    """A workflow path the checks cannot read is refused in one stderr line,
+    `check_workflow: cannot read the workflow: '<path>': <reason>`, with exit
+    1 and nothing on stdout. Each path is given to both commands."""
+    d = scratch("k")
+    missing = d / "no-such-file.yml"
+    folder = d / "a-folder.yml"
+    folder.mkdir()
+    latin1 = d / "latin-1.yml"
+    latin1.write_bytes(b"name: caf\xe9\n")
+    cases = [
+        (["release", missing], "a path that does not exist"),
+        (["pins", missing], "a path that does not exist"),
+        (["pins", missing, "--job", "sign-manifest"], "a path that does not exist"),
+        (["release", folder], "a directory"),
+        (["pins", folder], "a directory"),
+        (["release", latin1], "a file that is not UTF-8"),
+        (["pins", latin1], "a file that is not UTF-8"),
+    ]
+    for i, (args, what) in enumerate(cases, 1):
+        r = run([PY, "-I", KIT / "check_workflow.py", *args])
+        lines = r.stderr.splitlines()
+        want = f"check_workflow: cannot read the workflow: {str(args[1])!r}: "
+        ok = (r.returncode == 1 and r.stdout == "" and len(lines) == 1
+              and lines[0].startswith(want) and len(lines[0]) > len(want))
+        command = " ".join([args[0], *map(str, args[2:])])
+        cell(f"k{i} {command} on {what}: refused in one stderr line, exit 1", ok,
+             f"exit {r.returncode}, {len(lines)} stderr line(s), last: "
+             + (lines[-1].replace(str(d), "<scratch>")[:160] if lines else "none"))
 
 
 def cells_sums() -> None:
@@ -834,6 +866,7 @@ def main(argv: list[str]) -> int:
         if "--ci" in modes:
             cells_pins()
             cells_workflow()
+            cells_unreadable_path()
             cells_sums()
             cells_census()
             cells_kit_check()

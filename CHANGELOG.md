@@ -624,6 +624,19 @@ they should not.
   default and one that sets no shell in a job whose bash default sits under
   the workflow's cmd, which it accepts. No fixture, verifier or workflow
   file changes.
+- `scripts/kit/check_workflow.py` refuses a workflow path that does not
+  exist, a directory, a file it may not read and a file that is not UTF-8
+  text on one line of standard error, `check_workflow: cannot read the
+  workflow: '<path>': <reason>`, with exit 1 and nothing on standard output
+  (#366). For each of the four, `release` and `pins` printed a Python
+  traceback ending in `FileNotFoundError`, `IsADirectoryError`,
+  `PermissionError` or `UnicodeDecodeError`, and exited 1. A file whose YAML
+  the reader refuses was already refused with that prefix and exit 1.
+  `scripts/kit/test/test_kit.py --ci` adds 7 cells, which run both commands
+  on a path that does not exist, a directory and a file holding the Latin-1
+  byte `0xe9`, and `pins` with `--job` on a path that does not exist; run
+  against the script as it was before this change, each of the 7 fails. No
+  fixture changes.
 
 ## v0.1.0
 

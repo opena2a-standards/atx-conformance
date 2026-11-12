@@ -32,7 +32,10 @@ conformance.yml, for the controls they must hold.
 The reader accepts the YAML this repository writes (block mappings and
 sequences, plain and quoted scalars, one-level flow collections, block
 scalars) and refuses anything else, so a form it cannot read is a failure,
-never a pass.
+never a pass. A workflow path it cannot open, such as one that does not
+exist or a directory, and a file that is not UTF-8 text are refused the same
+way, on one stderr line, `check_workflow: cannot read the workflow:
+'<path>': <reason>`, with exit 1.
 """
 
 from __future__ import annotations
@@ -180,8 +183,20 @@ class Reader:
                 result.append(scalar(item))
 
 
+def read(path: Path) -> str:
+    """The workflow's text. An OSError from reading the path, or a file that
+    is not UTF-8, raises Unreadable naming the path as a quoted string, which
+    main prints on one line in place of a traceback."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as e:
+        raise Unreadable(f"{str(path)!r}: {e.strerror or e}")
+    except UnicodeDecodeError as e:
+        raise Unreadable(f"{str(path)!r}: {e}")
+
+
 def load(path: Path):
-    text = path.read_text(encoding="utf-8")
+    text = read(path)
     reader = Reader(text)
     doc = reader.block(0)
     if reader.next_content() is not None:
@@ -205,7 +220,7 @@ def job_text(text: str, job: str) -> str:
 
 
 def cmd_pins(path: Path, job: str | None) -> int:
-    text = path.read_text(encoding="utf-8")
+    text = read(path)
     if job:
         text = job_text(text, job)
     uses = uses_lines(text)
