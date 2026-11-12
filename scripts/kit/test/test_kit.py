@@ -202,6 +202,9 @@ WORKFLOW_MUTANTS = [
      ("        run: bash scripts/kit/assemble.sh stage \"$RUNNER_TEMP/stage\"\n",
       "        run: bash scripts/kit/assemble.sh stage \"$RUNNER_TEMP/stage\" && touch README-START-HERE.md\n"),
      "writes a generated text file"),
+    ("a cmd step writes %ERRORLEVEL% directly before >",
+     ("          >..\\capture.rc echo %ERRORLEVEL%\n", "          echo %ERRORLEVEL%> ..\\capture.rc\n"),
+     "directly before > in a cmd step"),
 ]
 
 
