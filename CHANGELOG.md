@@ -653,6 +653,23 @@ they should not.
   refuses, and a step that sets `shell: pwsh -command ". '{0}'"`, which it
   accepts; run against the script as it was before this change, each of the
   3 refusal cells fails. No fixture, verifier or workflow file changes.
+- README.md holds no paragraph over 69 words and at most one over 60. Five
+  of its paragraphs were over 60 words: the third bounty rule (69), the kit
+  section's paragraphs on `{file}` (70) and on a JSON answer (62), the
+  guided tour's opening (63) and the Python verifier's virtual-environment
+  note (83). The note keeps its sentence on what the install line downloads
+  and links `docs/running-the-verifiers.md`, which says what
+  `--disable-pip-version-check` does and what a system may provide outside
+  a virtual environment. The `{file}` paragraph drops its clause on the
+  `ATX-Fixture` header, which `examples/README.md` states, and links that
+  page's section on a verifier behind a URL. The tour's opening is split
+  above its Go minimum, and the JSON paragraph above its sentence on what
+  the report keeps, with no word changed. The bounty rules are unchanged;
+  the third, at 69 words, is the one left over 60.
+  `scripts/check_readme_counts.py` reads the length of each paragraph of
+  README.md and fails one over 69 words, or more than one over 60, naming
+  each; on the previous README.md it exits 1 naming the five. Its
+  self-test adds 12 cases. No fixture or verifier changes.
 
 ## v0.1.0
 

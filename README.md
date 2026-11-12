@@ -130,10 +130,10 @@ kill %1
 
 `{file}` becomes each fixture's path; the file holds the credential in `atx`
 and the settings to judge it by in `verifierState`. Without `{file}`, and
-through a URL (a JSON POST), your verifier gets the credential alone and
-judges it by its own settings; a URL request also names the fixture file in
-an `ATX-Fixture` header. The kit starts your command without a shell, so
-pipes and `$VARIABLES` are not expanded.
+through a URL ([a JSON POST](examples/README.md#a-verifier-behind-a-url)),
+your verifier gets the credential alone and judges it by its own settings.
+The kit starts your command without a shell, so pipes and `$VARIABLES` are
+not expanded.
 
 | Adapter | ACCEPT | REJECT | Couldn't read |
 |---|---|---|---|
@@ -144,6 +144,7 @@ pipes and `$VARIABLES` are not expanded.
 When the whole answer is one JSON object, a "verdict" of ACCEPT, REJECT or
 ERROR in any letter case decides; without one of those words, a boolean
 "valid" decides; without either, the exit or status code decides.
+
 An optional "reason" string is recorded, and the first 200 characters of each
 raw response are kept in the report, so a person can judge.
 
@@ -162,9 +163,11 @@ you need.
 
 [`cmd/atx-tour`](cmd/atx-tour/) walks through the suite step by step from a
 clone: each step says what is about to happen, runs the real commands and shows
-the lines that matter. The tour needs Go 1.22 or later; on macOS 26, Go 1.23 or
-later. Steps that need Python or Node are left out when those are not
-installed. This line needs the network once:
+the lines that matter. Steps that need Python or Node are left out when those
+are not installed.
+
+The tour needs Go 1.22 or later; on macOS 26, Go 1.23 or later. This line
+needs the network once:
 
 ```bash
 git clone https://github.com/opena2a-standards/atx-conformance.git && cd atx-conformance && git checkout 4f70281a00163ec898e9671ba9ab023907e402b2 && go run ./cmd/atx-tour --setup
@@ -213,11 +216,10 @@ python3 verify.py ../../fixtures
 The commands expect a virtual environment: the second and third lines
 create one in `verifiers/python/.venv` and activate it, and
 `python3 -m pip install` downloads the packages `requirements.txt` names,
-and their dependencies, into it. `--disable-pip-version-check` stops pip
-from looking up whether a newer release of pip exists; without it, pip
-writes a notice to standard error suggesting an upgrade of pip when there is
-one. Outside a virtual environment a system may provide `python3` and
-`pip3` only, with no `python` or `pip` on `PATH`.
+and their dependencies, into it.
+[docs/running-the-verifiers.md](docs/running-the-verifiers.md#python-full-hybrid-ed25519-plus-ml-dsa-65)
+says what `--disable-pip-version-check` does and what a system may provide
+outside a virtual environment.
 
 Each verifier needs a minimum toolchain release,
 and the release can change a result on inputs no fixture carries:

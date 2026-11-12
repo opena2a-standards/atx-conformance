@@ -363,6 +363,12 @@ sentence on what the kit sends stating 41 after one of them (`each fixture
 built into it (e.g. all 41)`, `(incl. 41 that must fail)`), the count fell
 outside the sentence it holds, and it exited 0.
 
+It also holds the paragraphs of README.md, read alone, to their length: none
+may be over 69 words, and at most one over 60. With its reference sections
+moved to the pages it links, its longest paragraph was 47 words at d8887e6;
+at 5f260e1 four were over 60 words, the longest 83, and no check read their
+length.
+
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
 declares, each signature-verification Scope row that claims a set of fixtures
@@ -394,7 +400,8 @@ coordination link points at a closed issue, every statement of the TBS
 numbers matches the vectors, the jcs-vectors README scopes signing to the
 TBS projection, the Ed25519-only ACCEPT count matches the fixtures, the
 workflow runs every script the layout calls a CI gate, README.md states no
-version or date and states each toolchain minimum above its first command,
+version or date, holds no paragraph over 69 words and at most one over 60,
+and states each toolchain minimum above its first command,
 every fenced `pip install` command passes --disable-pip-version-check, each
 `Agent Trust <word>` name in the README text is one core.md uses, and each
 fixture count the kit section's sentences on what the kit sends and when it
@@ -3079,6 +3086,86 @@ def front_page_failures(front_page):
     return failures
 
 
+# With its reference sections moved to the pages it links, README.md's
+# longest paragraph was 47 words at d8887e6, and none was over 60. No check
+# read that length: passages added since took one paragraph to 168 words at
+# 579e811, and at 5f260e1 four paragraphs were over 60 words, the longest
+# RETRACTED_PARAGRAPH at 83. README.md, read alone, may hold one paragraph of
+# more than PARAGRAPH_WORDS words and none of more than PARAGRAPH_MAX_WORDS.
+# A paragraph is a run of lines between blank lines outside fenced blocks (a
+# block opened by ``` closes at the next ```, and one opened by ~~~ at the
+# next ~~~): a heading (one to six `#`, then whitespace), a table row, an
+# HTML line or a line of three or more `-` or `=` ends one and is not part of
+# it, and a list item (`-`, `*`, `+` or `N.`, then whitespace) starts one. Its
+# words are what whitespace separates, list markers and link targets included.
+PARAGRAPH_WORDS = 60
+PARAGRAPH_MAX_WORDS = 69
+PARAGRAPHS_OVER = 1
+PARAGRAPH_FENCE = re.compile(r"\s*(```|~~~)")
+PARAGRAPH_BREAK = re.compile(r"\s*(?:#{1,6}\s|[|<]|(?:-{3,}|={3,})\s*$)")
+PARAGRAPH_ITEM = re.compile(r"\s*(?:[-*+]|\d+\.)\s")
+# The README.md paragraph the gate was written for, as it was wrapped.
+RETRACTED_PARAGRAPH = (
+    "The commands expect a virtual environment: the second and third lines\n"
+    "create one in `verifiers/python/.venv` and activate it, and\n"
+    "`python3 -m pip install` downloads the packages `requirements.txt` names,\n"
+    "and their dependencies, into it. `--disable-pip-version-check` stops pip\n"
+    "from looking up whether a newer release of pip exists; without it, pip\n"
+    "writes a notice to standard error suggesting an upgrade of pip when there is\n"
+    "one. Outside a virtual environment a system may provide `python3` and\n"
+    "`pip3` only, with no `python` or `pip` on `PATH`.\n")
+RETRACTED_PARAGRAPH_WORDS = 83
+
+
+def paragraph_words(text):
+    """(first line, words) for each paragraph of `text`, in order."""
+    paragraphs = []
+    start, words, fence = None, 0, None
+    for number, line in enumerate((text or "").splitlines(), 1):
+        marker = PARAGRAPH_FENCE.match(line)
+        fenced = fence is not None or marker is not None
+        if marker and fence in (None, marker.group(1)):
+            fence = None if fence else marker.group(1)
+        prose = not (fenced or not line.strip() or PARAGRAPH_BREAK.match(line))
+        if start is not None and (not prose or PARAGRAPH_ITEM.match(line)):
+            paragraphs.append((start, words))
+            start, words = None, 0
+        if prose:
+            start = number if start is None else start
+            words += len(line.split())
+    if start is not None:
+        paragraphs.append((start, words))
+    return paragraphs
+
+
+def paragraph_failures(front_page):
+    """One failure per paragraph of README.md, read alone, of more than
+    PARAGRAPH_MAX_WORDS words, and one naming each paragraph of more than
+    PARAGRAPH_WORDS when there are more than PARAGRAPHS_OVER of them."""
+    failures = []
+    read = paragraph_words(RETRACTED_PARAGRAPH)
+    if read != [(1, RETRACTED_PARAGRAPH_WORDS)]:
+        failures.append(
+            f"the paragraph reader reads the README.md paragraph it was written "
+            f"for as {read}, not as one paragraph of {RETRACTED_PARAGRAPH_WORDS} "
+            f"words; the gate cannot fire")
+    paragraphs = paragraph_words(front_page)
+    for line, words in paragraphs:
+        if words > PARAGRAPH_MAX_WORDS:
+            failures.append(
+                f"README.md:{line} opens a paragraph of {words} words, more than "
+                f"{PARAGRAPH_MAX_WORDS}; move the sentences a first run does not "
+                f"need to the page README.md links for them and keep the link, or "
+                f"split the paragraph where its subject changes")
+    over = [(line, words) for line, words in paragraphs if words > PARAGRAPH_WORDS]
+    if len(over) > PARAGRAPHS_OVER:
+        failures.append(
+            f"README.md holds {len(over)} paragraphs of more than {PARAGRAPH_WORDS} "
+            f"words, more than {PARAGRAPHS_OVER}: "
+            + ", ".join(f"README.md:{line} ({words} words)" for line, words in over))
+    return failures
+
+
 # README.md opened with `go run <module>/cmd/atx-verify@latest` and said
 # nothing above it about the toolchain the command needs, so on a machine
 # without Go the first thing a reader saw was the shell reporting that `go`
@@ -5442,6 +5529,61 @@ def _front_page_cases(front_page):
     return cases
 
 
+def _paragraph_cases(front_page):
+    """Append text to README.md alone, after a blank line. The paragraph the
+    gate was written for, one of PARAGRAPH_MAX_WORDS + 1 words, and as many
+    words on two lines with no blank line between them must each fail it on
+    their first line; one of PARAGRAPH_MAX_WORDS words must not.
+    PARAGRAPHS_OVER + 1 paragraphs of PARAGRAPH_WORDS + 1 words must fail it
+    naming each. A paragraph of PARAGRAPH_WORDS words, and words a fenced
+    block or a table row holds, or that list items or a heading separate,
+    must not fail it."""
+    baseline = set(paragraph_failures(front_page))
+    page = front_page.rstrip("\n") + "\n\n"
+    first = len(page.splitlines()) + 1
+
+    def words(count):
+        return " ".join(["word"] * count)
+
+    longest = PARAGRAPH_MAX_WORDS + 1
+    half = longest // 2
+    opens = f"README.md:{first} opens a paragraph of"
+    over = [words(PARAGRAPH_WORDS + 1)] * (PARAGRAPHS_OVER + 1)
+    cases = []
+    for label, added, want, reported in (
+            ("README.md restoring the virtual-environment paragraph the gate was "
+             "written for", RETRACTED_PARAGRAPH,
+             f"{opens} {RETRACTED_PARAGRAPH_WORDS} words", True),
+            (f"README.md with a paragraph of {longest} words", words(longest),
+             f"{opens} {longest} words", True),
+            (f"README.md with {longest} words on two lines and no blank line "
+             f"between them", words(half) + "\n" + words(longest - half),
+             f"{opens} {longest} words", True),
+            (f"README.md with {len(over)} more paragraphs of {PARAGRAPH_WORDS + 1} "
+             f"words", "\n\n".join(over),
+             ", ".join(f"README.md:{first + 2 * i} ({PARAGRAPH_WORDS + 1} words)"
+                       for i in range(len(over))), True),
+            (f"README.md with a paragraph of {PARAGRAPH_MAX_WORDS} words",
+             words(PARAGRAPH_MAX_WORDS), opens, False),
+            (f"README.md with a paragraph of {PARAGRAPH_WORDS} words",
+             words(PARAGRAPH_WORDS), "", False),
+            (f"README.md with {longest} words in a fenced block",
+             f"```text\n{words(longest)}\n```", "", False),
+            (f"README.md with {longest} words in a table row",
+             f"| {words(longest)} |", "", False),
+            (f"README.md with two list items of {PARAGRAPH_WORDS} words and no "
+             f"blank line between them",
+             f"- {words(PARAGRAPH_WORDS - 1)}\n- {words(PARAGRAPH_WORDS - 1)}", "",
+             False),
+            (f"README.md with a heading between two lines of {half} words",
+             f"{words(half)}\n## Heading\n{words(half)}", "", False)):
+        new = [f for f in paragraph_failures(page + added + "\n") if f not in baseline]
+        cases.append((any(want in f for f in new) == reported, label,
+                      f"expected {'a' if reported else 'no'} failure containing "
+                      f"{want!r}, got {new}"))
+    return cases
+
+
 def _prerequisite_cases(tree):
     """README.md with each paragraph above its first command that states a
     toolchain minimum removed, the opening it published, adds a failure
@@ -5917,6 +6059,11 @@ def _wire_front_page(tree):
             {"front_page": "Requires Go 9.9.9 or later.\n" + tree.front_page})
 
 
+def _wire_paragraph(tree):
+    return (f"opens a paragraph of {RETRACTED_PARAGRAPH_WORDS} words",
+            {"front_page": tree.front_page.rstrip("\n") + "\n\n" + RETRACTED_PARAGRAPH})
+
+
 def _wire_prerequisite(tree):
     return ("does not state `Go 9.9 or later`",
             {"readme": (tree.readme or "") + "\n- Go 9.9 or later\n"})
@@ -6014,6 +6161,8 @@ CHECKS = (
           _wire_kit_count),
     Check("README.md version or date", lambda t: front_page_failures(t.front_page),
           _wire_front_page),
+    Check("README.md paragraph length", lambda t: paragraph_failures(t.front_page),
+          _wire_paragraph),
 )
 
 
@@ -6380,6 +6529,7 @@ def self_test(tree, verbose):
          "the bound counts the time the process waits for a CPU"),)))
     cases.extend(_tbs_number_cases(tree.tbs_sites, tree.tbs_canonical))
     cases.extend(_front_page_cases(tree.front_page))
+    cases.extend(_paragraph_cases(tree.front_page))
     cases.extend(_prerequisite_cases(tree))
     cases.extend(_pip_notice_cases(tree))
     cases.extend(_spec_name_cases(tree))
@@ -6563,6 +6713,8 @@ def main():
           f"the Ed25519-only ACCEPT count matches the fixtures; "
           f"{WORKFLOW_NAME} runs each scripts/*.py the layout calls a CI gate; "
           f"README.md states no version or date; "
+          f"README.md holds no paragraph over {PARAGRAPH_MAX_WORDS} words and at "
+          f"most {PARAGRAPHS_OVER} over {PARAGRAPH_WORDS}; "
           f"README.md states {' and '.join(toolchain_minimums(tree.readme))} above "
           f"its first command; each {PIP_SITE} in the README and COSIGNERS.md "
           f"passes {PIP_VERSION_CHECK}; each `Agent Trust <word>` name in the "
