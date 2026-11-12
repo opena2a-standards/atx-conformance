@@ -51,6 +51,17 @@ log inclusion, build attestations or the content of behavioral profiles;
 [docs/scope.md](docs/scope.md) lists what it covers and the notes to read
 before relying on a result.
 
+## Bounty
+
+- 100 US dollars per confirmed bug in the fixtures, kit or spec
+- reported Nov 14 to 20, 2026
+- donated to the open-source project or nonprofit of the finder's choice
+- capped at 1,500 dollars in total
+- confirmed means we can reproduce it, and we fix it or agree the spec was unclear
+- first reporter of each bug counts; report as a GitHub issue
+
+A bug with security impact is reported in private, as [SECURITY.md](https://github.com/opena2a-standards/.github/blob/main/SECURITY.md) describes, and counts the same.
+
 ## Try your verifier in two minutes
 
 The kit sends each fixture built into it to your verifier and compares its
