@@ -304,6 +304,25 @@ def cells_kit_check() -> None:
         got = kit_check(km)
         cell(f"e{i} mutant input: {what}: line {line + 1} reads 2", got[line] == "2" and got.count("1") == 3,
              " ".join(got))
+    # e6 and e7: the address shapes the binaries of a real kit carried, built at run time so that no
+    # file of the repository, and so no kit, carries them: the contact address running into the next
+    # string, as compiled string data lies end to end, and six bytes of compressed debug data that
+    # match the address pattern. A real kit's binaries hold a NUL byte; e6 puts the shapes in such a
+    # file at the kit root, not under bin/, so line 3 passes only by skipping files by what they are.
+    shapes = (b"\n" + ("info" + chr(64) + "opena2a.org.These").encode("ascii") + b"\n"
+              + bytes.fromhex("2e40562e4d67") + b"\n")
+    d6 = scratch("e6")
+    k6 = scratch_kit(d6)
+    (k6 / "noise.bin").write_bytes(b"\0" * 8 + shapes + b"\0" * 8)
+    got = kit_check(k6)
+    cell("e6 a file with a NUL byte holding a real kit's address shapes: the kit check prints 1 1 1 1",
+         got == ["1", "1", "1", "1"], " ".join(got))
+    d7 = scratch("e7")
+    k7 = scratch_kit(d7)
+    (k7 / "noise.txt").write_bytes(shapes)
+    got = kit_check(k7)
+    cell("e7 control: the same shapes in a text file: line 3 reads 3", got[2] == "3" and got.count("1") == 3,
+         " ".join(got))
 
 
 def readme_text() -> tuple[str, str]:
