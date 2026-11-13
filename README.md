@@ -67,6 +67,8 @@ before relying on a result.
 - confirmed means we can reproduce it, and we fix it or agree the spec was unclear
 - first reporter of each bug counts; report as a GitHub issue
 
+The bounty is open to registered IETF 127 Hackathon participants. Registration is free and can be remote.
+
 A bug with security impact is reported in private, as [SECURITY.md](https://github.com/opena2a-standards/.github/blob/main/SECURITY.md) describes, and counts the same.
 
 ### Rules
