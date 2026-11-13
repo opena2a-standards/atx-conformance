@@ -62,6 +62,18 @@ before relying on a result.
 
 A bug with security impact is reported in private, as [SECURITY.md](https://github.com/opena2a-standards/.github/blob/main/SECURITY.md) describes, and counts the same.
 
+### Rules
+
+1. Who can take part: registered IETF 127 Hackathon participants. Registration is free and can be remote. People who work on OpenA2A are not eligible.
+2. How many: each person can earn the bounty for up to three confirmed bugs. More reports are always welcome and credited.
+3. What counts: a fault that makes a verifier, the kit or one of its own checks give a wrong answer, or a place where the spec contradicts itself or can fairly be read two ways. It must reproduce on the Hackathon kit release or on the main branch on the day you report it. Typos, formatting and wording preferences are welcome as issues but are not bounty bugs.
+4. One cause, one bug: reports that share a root cause count once.
+5. Known limits do not count: anything already stated in this README, the scope notes, the spec's coverage section or an open issue.
+6. Test your own copy: the bounty covers the files published in this repository and the ATX spec. Do not test OpenA2A's live services or websites. Reports that come from doing so do not count.
+7. Dates: from November 14 at 00:00 to November 20 at 23:59, Pacific time, by the time on the issue. If the 1,500 dollar cap is reached, reports count in the order they arrived.
+8. The donation: OpenA2A pays it directly to the recipient by January 15, 2027. The recipient must be an established open-source project or a registered nonprofit that can accept donations and is not run by the finder. We may ask for a different choice.
+9. OpenA2A decides whether a report is confirmed, and that decision is final.
+
 ## Try your verifier in two minutes
 
 The kit sends each fixture built into it to your verifier and compares its
