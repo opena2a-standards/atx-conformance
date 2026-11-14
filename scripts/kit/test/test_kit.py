@@ -532,6 +532,25 @@ def cells_claims() -> None:
          f"check-capture exit {taken.returncode} ({last}); check-claims exit "
          f"{passed.returncode if passed else 'not run'}, on the (devel) line exit {refused.returncode}")
 
+    # The Mac step in the notes as render.py writes them for HEAD, line feeds
+    # read as spaces: the command that names the three files that run stands
+    # after the check and before the paragraph on notarization, the dialog's
+    # Done follows it, and neither `xattr -dr` nor "turn off a protection"
+    # occurs.
+    d = scratch("i4")
+    scratch_kit(d)
+    text = (d / "dist" / "release-notes.md").read_text().replace("\n", " ")
+    step = "xattr -d com.apple.quarantine verify bin/darwin-arm64/atx-verify bin/darwin-amd64/atx-verify"
+    at, check, notarized = (text.find(s) for s in (step, "Check before you run", "The binaries are not notarized"))
+    done = at >= 0 and "click Done, never Move to Trash" in text[at + len(step):]
+    recursive, untrue = "xattr -dr" in text, "turn off a protection" in text
+    cell("i4 notes rendered for HEAD: the Mac step names its three files, after the check and before the "
+         "notarization paragraph, Done after it; no xattr -dr, no 'turn off a protection'",
+         0 <= check < at < notarized and done and not recursive and not untrue,
+         f"step at {at}, check at {check}, notarization paragraph at {notarized}, Done after the step {done}, "
+         f"xattr -dr {'present' if recursive else 'absent'}, "
+         f"'turn off a protection' {'present' if untrue else 'absent'}")
+
 
 def cells_capture_in_the_unpacked_kit() -> None:
     """check-capture as the release workflow's test job runs it: the kit's own
