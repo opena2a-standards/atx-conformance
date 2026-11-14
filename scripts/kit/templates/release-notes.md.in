@@ -4,7 +4,15 @@ Built by `<workflow file>` on GitHub-hosted runners, from the tag `<tag>` at com
 
 Check before you run. This folder is a copy of the release at <release URL>. Download SHA256SUMS from that page, not from this folder, and run `shasum -a 256 -c SHA256SUMS` here (Linux: `sha256sum -c SHA256SUMS`). Every line must say OK, and every file here must be listed in it. With the GitHub CLI: `gh attestation verify <file> -R <owner/repo>`.
 
-The binaries are not notarized by Apple or signed with a Windows code-signing certificate. Check them with SHA256SUMS and `gh attestation verify` as above. Nothing in this kit asks you to turn off a protection your system provides.
+On a Mac, if you downloaded this kit with a browser, macOS stops the verifier at its first run (the "atx-verify" Not Opened dialog), because the binaries are not notarized (see below). To let it run, after the check above passes, run this once in the kit folder; it names the three files that run and touches nothing else:
+
+    xattr -d com.apple.quarantine verify bin/darwin-arm64/atx-verify bin/darwin-amd64/atx-verify
+
+A download with curl in Terminal does not need it.
+
+If the "atx-verify" Not Opened dialog has already appeared, click Done, never Move to Trash, then run the line above and ./verify again. If the verifier was moved to the Trash, unpack the archive again to restore it, then run the line and ./verify.
+
+The binaries are not notarized by Apple or signed with a Windows code-signing certificate. Check them with SHA256SUMS and `gh attestation verify` as above. On a Mac, that is why the download mark has to come off the verifier before it runs: the Mac step above removes it from the three named files only, after the check above has matched them to the release. Nothing else in this kit asks you to change a setting or skip a check your system makes.
 
 After publishing, the workflow runs this check on every asset, and on a copy of each with one byte changed, which must fail:
 
