@@ -180,6 +180,14 @@ they should not.
   seed and the two fixtures that relabel a signature entry after signing.
   The fixture, accept and reject counts of the kit's self-tests in
   `interop/run_test.go` go from 47, 10 and 37 to 52, 11 and 41.
+- `scripts/check_step7_coverage.py` fails when `conformance.json` lists
+  §1.3 step 7 under `notCovered` and the Coverage paragraph of the vendored
+  `core.md` does not list it among the requirements no fixture exercises,
+  or the other way round, and, once neither lists it, unless a fixture with
+  `verifierState.requiredTrustLevel` 3 or higher expects `ACCEPT` and
+  another expects `REJECT [INSUFFICIENT_SIGNER_AUTHORITIES]`.
+  `scripts/conformance_profile.py --check` runs its self-test and check
+  after those of `scripts/check_spec_refs.py`.
 
 ### Changed
 

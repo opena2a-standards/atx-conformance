@@ -95,4 +95,6 @@ verifier also compares the asserted level with the required one; the suite
 does not pin that comparison. The §7 root cosignature at trust level 4 is not
 covered. `conformance.json` still lists step 7 under `notCovered`, because the
 Coverage paragraph of `core.md` at the pinned atx-spec commit still lists it
-among the requirements no fixture exercises; the two drop it together.
+among the requirements no fixture exercises; the two drop it together, and
+[`scripts/check_step7_coverage.py`](../scripts/check_step7_coverage.py) fails
+when one of them lists it and the other does not.

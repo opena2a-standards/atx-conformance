@@ -9,7 +9,11 @@ set: regeneration is deterministic and CI verifies the committed file matches.
 `--check` also runs scripts/check_spec_refs.py: every ATX citation must name a
 heading of the vendored, pinned core.md. The top-level `spec.ref` is that
 script's CORE_REF, core.md at the pinned atx-spec commit, so moving the pin
-makes the committed profile stale until it is regenerated.
+makes the committed profile stale until it is regenerated. It then runs
+scripts/check_step7_coverage.py: `notCovered` below names core.md section 1.3
+step 7 exactly when the Coverage paragraph of that core.md lists it among the
+requirements no fixture exercises, and the two drop it only while its
+fixtures exist.
 
 Each fixture names the requirement it tests in its `requirement` member: the
 § number of the core.md section the rule comes from, then the step or rule
@@ -29,7 +33,8 @@ a lone surrogate escape) fails by name, in both modes, and nothing is written.
 
 Usage:
     python3 scripts/conformance_profile.py              # (re)write conformance.json
-    python3 scripts/conformance_profile.py --check      # exit 1 if stale or a citation is not a core.md heading
+    python3 scripts/conformance_profile.py --check      # exit 1 if stale, a citation is not a core.md heading,
+                                                        # or notCovered and core.md disagree on step 7
     python3 scripts/conformance_profile.py --self-test  # prove a broken fixture fails by name
     python3 scripts/conformance_profile.py --help       # print this usage
 """
@@ -52,13 +57,15 @@ PROFILE = "conformance.json"
 USAGE = """\
 Usage:
     python3 scripts/conformance_profile.py              # (re)write conformance.json
-    python3 scripts/conformance_profile.py --check      # exit 1 if stale or a citation is not a core.md heading
+    python3 scripts/conformance_profile.py --check      # exit 1 if stale, a citation is not a core.md heading,
+                                                        # or notCovered and core.md disagree on step 7
     python3 scripts/conformance_profile.py --self-test  # prove a broken fixture fails by name
     python3 scripts/conformance_profile.py --help       # print this usage
 """
 
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import check_spec_refs  # noqa: E402
+import check_step7_coverage  # noqa: E402
 
 # --- suite metadata (hand-maintained; everything under `requirements` is derived) ---
 SUITE = {
@@ -649,6 +656,10 @@ def main(argv: list[str], root: Path = REPO_ROOT) -> int:
         # Every ATX citation must name a heading of the pinned core.md. The
         # self-test runs first so the check is proven able to fail.
         if check_spec_refs.self_test() or check_spec_refs.report(root):
+            return 1
+        # notCovered and the pinned Coverage paragraph drop step 7 together,
+        # and only while the step 7 fixtures exist.
+        if check_step7_coverage.self_test() or check_step7_coverage.report(root):
             return 1
         return 0
     out.write_text(rendered, encoding="utf-8")
