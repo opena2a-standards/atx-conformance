@@ -606,6 +606,37 @@ they should not.
   step of `conformance.yml` runs, holds the count to a tree with a file in
   `fixtures/load-errors/` and runs the self-test, with no network. No
   fixture changes.
+- `scripts/kit/check_workflow.py release` refuses a run: line with a `%...%`
+  expansion directly before `>` in a step that sets no `shell:` and takes
+  `cmd` from `defaults: run: shell:`, its job's or, when the job sets no
+  shell there, the workflow's (#365). It refused that line only in a step
+  that sets `shell: cmd` itself, so a copy of
+  `.github/workflows/kit-release.yml` whose Windows step in the test job
+  takes `cmd` from the job's defaults and writes
+  `echo %ERRORLEVEL%> ..\capture.rc` printed `7 jobs, 0 problems` and
+  exited 0; that copy now exits 1 naming the step. A step's own `shell:`
+  comes before its job's `defaults: run: shell:`, and the job's before the
+  workflow's. A `defaults:`, or a `run:` under it, whose value is neither a
+  mapping nor empty now exits 1 with `cannot read the workflow`.
+  `scripts/kit/test/test_kit.py --ci` adds 4 cells: a step that sets no
+  shell under the job's cmd default and one under the workflow's, which the
+  check refuses, and a step that sets `shell: bash` under the job's cmd
+  default and one that sets no shell in a job whose bash default sits under
+  the workflow's cmd, which it accepts. No fixture, verifier or workflow
+  file changes.
+- `scripts/kit/check_workflow.py` refuses a workflow path that does not
+  exist, a directory, a file it may not read and a file that is not UTF-8
+  text on one line of standard error, `check_workflow: cannot read the
+  workflow: '<path>': <reason>`, with exit 1 and nothing on standard output
+  (#366). For each of the four, `release` and `pins` printed a Python
+  traceback ending in `FileNotFoundError`, `IsADirectoryError`,
+  `PermissionError` or `UnicodeDecodeError`, and exited 1. A file whose YAML
+  the reader refuses was already refused with that prefix and exit 1.
+  `scripts/kit/test/test_kit.py --ci` adds 7 cells, which run both commands
+  on a path that does not exist, a directory and a file holding the Latin-1
+  byte `0xe9`, and `pins` with `--job` on a path that does not exist; run
+  against the script as it was before this change, each of the 7 fails. No
+  fixture changes.
 
 ## v0.1.0
 

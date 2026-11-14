@@ -17,10 +17,12 @@ conformance.yml, for the controls they must hold.
       - every actions/checkout sets persist-credentials: false and no ref;
       - no `${{ }}` expression inside a run: block (inputs reach a shell
         through env: only);
-      - no run: line of a `shell: cmd` step has a `%...%` expansion
-        directly before `>` (cmd expands the variable before it reads
-        redirections, so a one-digit value such as the exit code 0 is
-        read as a handle number and the file gets nothing);
+      - no run: line of a cmd step has a `%...%` expansion directly before
+        `>` (cmd expands the variable before it reads redirections, so a
+        one-digit value such as the exit code 0 is read as a handle number
+        and the file gets nothing); a step's shell is its own `shell:`, or,
+        when it sets none, its job's `defaults: run: shell:`, or, when the
+        job sets none either, the workflow's;
       - publish creates the release as a draft, uploads the assets, then
         publishes with --latest=false, with gh only;
       - the stage job compiles before anything is written, and writes no
@@ -30,7 +32,10 @@ conformance.yml, for the controls they must hold.
 The reader accepts the YAML this repository writes (block mappings and
 sequences, plain and quoted scalars, one-level flow collections, block
 scalars) and refuses anything else, so a form it cannot read is a failure,
-never a pass.
+never a pass. A workflow path it cannot open, such as one that does not
+exist or a directory, and a file that is not UTF-8 text are refused the same
+way, on one stderr line, `check_workflow: cannot read the workflow:
+'<path>': <reason>`, with exit 1.
 """
 
 from __future__ import annotations
@@ -178,8 +183,20 @@ class Reader:
                 result.append(scalar(item))
 
 
+def read(path: Path) -> str:
+    """The workflow's text. An OSError from reading the path, or a file that
+    is not UTF-8, raises Unreadable naming the path as a quoted string, which
+    main prints on one line in place of a traceback."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as e:
+        raise Unreadable(f"{str(path)!r}: {e.strerror or e}")
+    except UnicodeDecodeError as e:
+        raise Unreadable(f"{str(path)!r}: {e}")
+
+
 def load(path: Path):
-    text = path.read_text(encoding="utf-8")
+    text = read(path)
     reader = Reader(text)
     doc = reader.block(0)
     if reader.next_content() is not None:
@@ -203,7 +220,7 @@ def job_text(text: str, job: str) -> str:
 
 
 def cmd_pins(path: Path, job: str | None) -> int:
-    text = path.read_text(encoding="utf-8")
+    text = read(path)
     if job:
         text = job_text(text, job)
     uses = uses_lines(text)
@@ -224,6 +241,18 @@ def steps_of(job: dict) -> list[dict]:
     if not isinstance(steps, list) or not all(isinstance(s, dict) for s in steps):
         raise Unreadable("steps is not a list of mappings")
     return steps
+
+
+def default_shell(holder: dict, where: str):
+    """The shell: under defaults: run: in a job, or at the top of the
+    workflow; None when it names none."""
+    defaults = holder.get("defaults")
+    if defaults is None:
+        return None
+    run = defaults.get("run") if isinstance(defaults, dict) else None
+    if not isinstance(defaults, dict) or not isinstance(run, (dict, type(None))):
+        raise Unreadable(f"{where}'s defaults: is not a mapping whose run: is a mapping")
+    return None if run is None else run.get("shell")
 
 
 def cmd_release(path: Path) -> int:
@@ -249,6 +278,7 @@ def cmd_release(path: Path) -> int:
     want_jobs = {"stage", "test", "build", "attest", "publish", "verify", "verify-candidate"}
     if set(jobs) != want_jobs:
         problems.append(f"jobs are {sorted(jobs)}, not {sorted(want_jobs)}")
+    workflow_shell = default_shell(doc, "the workflow")
     for name, job in jobs.items():
         if not isinstance(job, dict):
             problems.append(f"job {name} is not a mapping")
@@ -269,6 +299,7 @@ def cmd_release(path: Path) -> int:
             problems.append(f"job attest holds {perms!r}, not id-token: write, attestations: write, contents: read")
         if name == "publish" and perms != {"contents": "write"}:
             problems.append(f"job publish holds {perms!r}, not contents: write alone")
+        job_shell = default_shell(job, f"job {name}")
         for step in steps_of(job):
             uses = str(step.get("uses", ""))
             if uses.startswith("actions/checkout@"):
@@ -280,7 +311,9 @@ def cmd_release(path: Path) -> int:
             run = step.get("run")
             if isinstance(run, str) and "${{" in run:
                 problems.append(f"job {name}: an expression inside a run: block ({step.get('name', 'unnamed')})")
-            if step.get("shell") == "cmd" and isinstance(run, str):
+            # The step's own shell:, else its job's defaults: run: shell:, else the workflow's.
+            shell = next((s for s in (step.get("shell"), job_shell, workflow_shell) if s is not None), None)
+            if shell == "cmd" and isinstance(run, str):
                 for line in run.split("\n"):
                     if re.search(r"%[^%\s]+%>", line):
                         problems.append(f"job {name}: a %...% expansion directly before > in a cmd step"
