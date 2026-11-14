@@ -1500,7 +1500,7 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
     if atx["issuerDid"] not in vs["trustedIssuers"]:
         return VerifyResult(
             reject_category="UNTRUSTED_ISSUER",
-            reason=f"issuer DID {atx['issuerDid']} is not in the verifier's trusted set (untrusted issuer)",
+            reason=f"issuer DID {_go_quote(atx['issuerDid'], ascii_only=True)} is not in the verifier's trusted set (untrusted issuer)",
         )
 
     # Step 5: signature verification.
@@ -1600,7 +1600,7 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
         except ValueError as exc:
             return VerifyResult(
                 reject_category="SIGNATURE_INVALID",
-                reason=f"signature {sig.get('keyId')} has invalid base64: {exc}",
+                reason=f"signature {_go_quote(sig['keyId'], ascii_only=True)} has invalid base64: {exc}",
             )
 
         if sig["algorithm"] == "Ed25519":
@@ -1616,7 +1616,7 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
             if not verified:
                 return VerifyResult(
                     reject_category="SIGNATURE_INVALID",
-                    reason=f"Ed25519 signature {sig.get('keyId')} did not verify against any configured public key",
+                    reason=f"Ed25519 signature {_go_quote(sig['keyId'], ascii_only=True)} did not verify against any configured public key",
                 )
             result.ed25519_valid = True
             result.sigs_valid += 1
@@ -1629,14 +1629,14 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
             if not verified:
                 return VerifyResult(
                     reject_category="SIGNATURE_INVALID",
-                    reason=f"ML-DSA-65 signature {sig.get('keyId')} did not verify against any configured public key",
+                    reason=f"ML-DSA-65 signature {_go_quote(sig['keyId'], ascii_only=True)} did not verify against any configured public key",
                 )
             result.mldsa65_valid = True
             result.sigs_valid += 1
         else:
             return VerifyResult(
                 reject_category="SIGNATURE_INVALID",
-                reason=f"unsupported signature algorithm {sig['algorithm']}",
+                reason=f"unsupported signature algorithm {_go_quote(sig['algorithm'], ascii_only=True)}",
             )
 
     if result.sigs_valid == 0:

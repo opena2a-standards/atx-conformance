@@ -238,6 +238,9 @@ they should not.
 ### Changed
 
 - Both reference verifiers print fixture fields and file names with control characters escaped.
+- Reason lines write the credential's `issuerDid`, signature `algorithm` and
+  `keyId` in double quotes, escaped as Go's `strconv.QuoteToASCII` escapes
+  them, so both verifiers print the same bytes.
 - README.md states above its first command the toolchain each verifier
   needs, Go 1.22 or later and Python 3.11 or later, the minimums the
   dependency lists of `docs/running-the-verifiers.md` state (#305). Its

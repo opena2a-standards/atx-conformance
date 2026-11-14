@@ -1309,7 +1309,7 @@ func verify(f fixture) result {
 	if !trusted {
 		return result{
 			RejectCategory: "UNTRUSTED_ISSUER",
-			Reason:         "issuer DID " + a.IssuerDID + " is not in the verifier's trusted set (untrusted issuer)",
+			Reason:         "issuer DID " + strconv.QuoteToASCII(a.IssuerDID) + " is not in the verifier's trusted set (untrusted issuer)",
 		}
 	}
 
@@ -1412,7 +1412,7 @@ func verifySignatures(a *atx, state verifierState) result {
 		if err != nil {
 			return result{
 				RejectCategory: "SIGNATURE_INVALID",
-				Reason:         fmt.Sprintf("signature %s has invalid base64: %v", sig.KeyID, err),
+				Reason:         fmt.Sprintf("signature %s has invalid base64: %v", strconv.QuoteToASCII(sig.KeyID), err),
 			}
 		}
 		switch sig.Algorithm {
@@ -1428,7 +1428,7 @@ func verifySignatures(a *atx, state verifierState) result {
 			if !ok {
 				return result{
 					RejectCategory: "SIGNATURE_INVALID",
-					Reason:         fmt.Sprintf("Ed25519 signature %s did not verify against any configured public key", sig.KeyID),
+					Reason:         fmt.Sprintf("Ed25519 signature %s did not verify against any configured public key", strconv.QuoteToASCII(sig.KeyID)),
 				}
 			}
 			res.Ed25519Valid = true
@@ -1444,7 +1444,7 @@ func verifySignatures(a *atx, state verifierState) result {
 			if !ok {
 				return result{
 					RejectCategory: "SIGNATURE_INVALID",
-					Reason:         fmt.Sprintf("ML-DSA-65 signature %s did not verify against any configured public key", sig.KeyID),
+					Reason:         fmt.Sprintf("ML-DSA-65 signature %s did not verify against any configured public key", strconv.QuoteToASCII(sig.KeyID)),
 				}
 			}
 			res.MLDSA65Valid = true
@@ -1452,7 +1452,7 @@ func verifySignatures(a *atx, state verifierState) result {
 		default:
 			return result{
 				RejectCategory: "SIGNATURE_INVALID",
-				Reason:         "unsupported signature algorithm " + sig.Algorithm,
+				Reason:         "unsupported signature algorithm " + strconv.QuoteToASCII(sig.Algorithm),
 			}
 		}
 	}

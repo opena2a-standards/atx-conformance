@@ -104,6 +104,8 @@ func reportWith(esc func(string) string) func(args []string, stdout, stderr io.W
 // file name, escaping C0 but not C1 fails "C1 escaped", dropping controls
 // fails "escaped, not dropped", and escaping in the Python verifier alone,
 // as writeAsIs does here, fails "the line the Python verifier writes".
+// Those three run on a file name: the reason writes the issuer DID quoted
+// (controlDIDQuoted), so it reaches the escaper with no control in it.
 func TestChecksFailOnEscapersThatWriteLess(t *testing.T) {
 	cases := map[string]controlCase{}
 	for _, c := range controlCases(t) {
@@ -122,9 +124,9 @@ func TestChecksFailOnEscapersThatWriteLess(t *testing.T) {
 		passesInput string   // an input this escaper passes every check on
 	}{
 		{"escapeDIDOnly", escapeDIDOnly, "a file name", "no raw control", nil, "an issuer DID"},
-		{"escapeC0Only", escapeC0Only, "an issuer DID", "C1 escaped", nil, ""},
-		{"dropControls", dropControls, "an issuer DID", "escaped, not dropped", []string{"no raw control"}, ""},
-		{"writeAsIs", writeAsIs, "an issuer DID", "the line the Python verifier writes", nil, ""},
+		{"escapeC0Only", escapeC0Only, "a file name", "C1 escaped", nil, ""},
+		{"dropControls", dropControls, "a file name", "escaped, not dropped", []string{"no raw control"}, ""},
+		{"writeAsIs", writeAsIs, "a file name", "the line the Python verifier writes", nil, ""},
 	} {
 		t.Run(m.escaper, func(t *testing.T) {
 			c, check := cases[m.input], checks[m.fails]
