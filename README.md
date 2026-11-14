@@ -40,7 +40,7 @@ cloned. The command exits 1 when any fixture's result differs from its
 expected outcome. On its first run, `go run` downloads the module and the
 modules listed in [`go.mod`](go.mod).
 
-This repository has no release tag, so `@latest` resolves to a
+This repository has no Go version tag, so `@latest` resolves to a
 pseudo-version (a version Go builds from a commit's time and hash) of the
 commit on `main` that the Go module proxy reports as latest.
 [Which version `go run` fetches](docs/running-the-verifiers.md#which-version-go-run-fetches)
@@ -92,6 +92,10 @@ one commit. This line needs the network once; the installed kit does not.
 ```bash
 go install github.com/opena2a-standards/atx-conformance/cmd/atx-verify@4f70281a00163ec898e9671ba9ab023907e402b2
 ```
+
+This commit carries 41 of the 52 fixtures on main; the Hackathon kit release
+carries 47. Without Go, download the kit from the
+[Hackathon kit release](https://github.com/opena2a-standards/atx-conformance/releases).
 
 Then point it at a verifier you run as a command, or at one you run as a
 service (yours goes in the angle brackets):
