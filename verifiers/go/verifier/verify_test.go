@@ -1660,6 +1660,121 @@ func TestSuiteCatchesThresholdBlindVerifier(t *testing.T) {
 	t.Logf("a threshold-blind verifier misses the pinned outcome of: %s", strings.Join(caughtBy, ", "))
 }
 
+// TestDistinctAuthorities pins the grouping step 7 counts with (core.md
+// section 1.3 step 7): signatures sharing an authority count once, signatures
+// sharing a public key count once whatever their keyIds, and the relation is
+// closed transitively.
+func TestDistinctAuthorities(t *testing.T) {
+	cases := []struct {
+		name  string
+		nodes []signerNode
+		want  int
+	}{
+		{"no counted signature", nil, 0},
+		{"one authority one key", []signerNode{{"A", "k1"}}, 1},
+		{"one authority, two keys", []signerNode{{"A", "k1"}, {"A", "k2"}}, 1},
+		{"one key under two authorities", []signerNode{{"A", "k1"}, {"B", "k1"}}, 1},
+		{"two authorities, two keys", []signerNode{{"A", "k1"}, {"B", "k2"}}, 2},
+		{"three authorities, three keys", []signerNode{{"A", "k1"}, {"B", "k2"}, {"C", "k3"}}, 3},
+		{"shared key joins two of three", []signerNode{{"A", "k1"}, {"B", "k1"}, {"C", "k3"}}, 2},
+		{"shared key then shared authority", []signerNode{{"A", "k1"}, {"B", "k1"}, {"B", "k2"}}, 1},
+		{"link found late", []signerNode{{"A", "k1"}, {"B", "k2"}, {"C", "k3"}, {"C", "k1"}, {"B", "k3"}}, 1},
+	}
+	for _, c := range cases {
+		if got := distinctAuthorities(c.nodes); got != c.want {
+			t.Errorf("%s: distinctAuthorities = %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+// TestStep7SignerAuthorityCount runs the step 7 fixtures, and the threshold
+// fixture whose three keys belong to one authority, through verify() and pins
+// the count each produces. It then clears the required trust level: every one
+// of them is then accepted with the same count, so the REJECTs come from the
+// requirement, not from any other step.
+func TestStep7SignerAuthorityCount(t *testing.T) {
+	cases := []struct {
+		file        string
+		authorities int
+		accepted    bool
+	}{
+		{"v1_1-two-authority-cosignature.json", 2, true},
+		{"v1_1-cosigner-named-not-signed.json", 1, false},
+		{"v1_1-one-authority-threshold-keys.json", 1, false},
+		{"v1_1-one-key-under-two-dids.json", 1, false},
+		{"v1_1-own-key-labelled-as-cosigner.json", 1, false},
+		{"threshold-2of3-cosignature.json", 1, true},
+	}
+	for _, c := range cases {
+		f, err := loadFixture(repoRoot + "/fixtures/" + c.file)
+		if err != nil {
+			t.Fatalf("%s: %v", c.file, err)
+		}
+		got := verify(f)
+		if !got.Step7Performed {
+			t.Errorf("%s: step 7 count not performed (%s)", c.file, got)
+			continue
+		}
+		if got.SignerAuthorities != c.authorities {
+			t.Errorf("%s: %d distinct signer authorities, want %d", c.file, got.SignerAuthorities, c.authorities)
+		}
+		if got.Accepted != c.accepted {
+			t.Errorf("%s: accepted=%v, want %v (%s)", c.file, got.Accepted, c.accepted, got)
+		}
+		if !c.accepted && got.RejectCategory != "INSUFFICIENT_SIGNER_AUTHORITIES" {
+			t.Errorf("%s: reject category %q, want INSUFFICIENT_SIGNER_AUTHORITIES", c.file, got.RejectCategory)
+		}
+
+		f.VerifierState.RequiredTrustLevel = 0
+		if got := verify(f); !got.Accepted || got.SignerAuthorities != c.authorities {
+			t.Errorf("%s with no required trust level: %s with %d authorities, want ACCEPT with %d",
+				c.file, got, got.SignerAuthorities, c.authorities)
+		}
+	}
+}
+
+// TestSuiteCatchesStep7BlindVerifier pins that the shipped fixture set holds
+// a verifier to the distinct signer-authority count: run with
+// requiredTrustLevel dropped from every fixture's verifier state, which is
+// what a verifier that omits step 7 sees, the reference verifier misses the
+// pinned outcome of exactly the four MUST-REJECT fixtures of that step.
+func TestSuiteCatchesStep7BlindVerifier(t *testing.T) {
+	paths, err := expandFixturePaths([]string{repoRoot + "/fixtures"})
+	if err != nil {
+		t.Fatalf("cannot list the shipped fixtures: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("no shipped fixtures found; refusing to pass vacuously")
+	}
+
+	var caughtBy []string
+	for _, p := range paths {
+		f, err := loadFixture(p)
+		if err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+		if got := verify(f); !matchesExpected(f.Expected, got) {
+			t.Errorf("%s: reference verifier observed %s, not the pinned outcome", p, got)
+			continue
+		}
+		blind := f
+		blind.VerifierState.RequiredTrustLevel = 0
+		if !matchesExpected(f.Expected, verify(blind)) {
+			caughtBy = append(caughtBy, f.Name)
+		}
+	}
+	sort.Strings(caughtBy)
+	want := []string{
+		"atx-v1_1/cosigner-named-not-signed",
+		"atx-v1_1/one-authority-threshold-keys",
+		"atx-v1_1/one-key-under-two-dids",
+		"atx-v1_1/own-key-labelled-as-cosigner",
+	}
+	if !slices.Equal(caughtBy, want) {
+		t.Fatalf("a verifier that omits step 7 misses the pinned outcome of %v, want %v", caughtBy, want)
+	}
+}
+
 // TestStrictParseDepthGuard is the regression for the unbounded-recursion DoS.
 // A credential nested past encoding/json's own depth limit (10000) must be
 // rejected without crashing. The strict-parse scan aborts at maxScanDepth and

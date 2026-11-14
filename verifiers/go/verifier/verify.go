@@ -39,10 +39,12 @@
 //   - Signature threshold (core.md §3.1 step 8, cosignatures from 2 of 3 key
 //     holders): when the verifier state sets requiredSignatures, the declared
 //     Ed25519 signatures must verify under at least that many distinct keys.
-//
-// Not performed: the distinct signer-authority count for trust level 3+
-// (core.md §1.3 step 7). The asserted trustLevel is reported, never checked;
-// see conformance.json notCovered.
+//   - Distinct signer-authority count (core.md §1.3 step 7): every credential
+//     that reaches step 7 has its distinct signer authorities counted and the
+//     count reported; when the verifier state sets requiredTrustLevel to 3 or
+//     higher, a count below 2 rejects (INSUFFICIENT_SIGNER_AUTHORITIES). The
+//     asserted trustLevel is reported beside the count, never checked against
+//     it.
 //
 // Usage, with nothing cloned (the module version go run fetches embeds
 // fixtures/*.json, which a run with no argument walks):
@@ -121,9 +123,13 @@ type keypairRef struct {
 }
 
 type verifierState struct {
-	ClockRFC3339   string       `json:"clockRfc3339"`
-	TrustedIssuers []string     `json:"trustedIssuers"`
-	PublicKeys     []keypairRef `json:"publicKeys"`
+	ClockRFC3339   string   `json:"clockRfc3339"`
+	TrustedIssuers []string `json:"trustedIssuers"`
+	// RequiredTrustLevel is the trust level the relying party requires; absent
+	// means none. At 3 or higher, step 7 rejects unless at least two distinct
+	// authorities each produced a signature this verifier verified.
+	RequiredTrustLevel int          `json:"requiredTrustLevel,omitempty"`
+	PublicKeys         []keypairRef `json:"publicKeys"`
 	// RequiredSignatures is the k of a k-of-n signature threshold: the number
 	// of distinct Ed25519 keys whose signatures must verify (verifySignatures).
 	// Nil, the member absent or null, sets no threshold.
@@ -872,9 +878,12 @@ func purposeNumbersV11(a *atx) []json.Number {
 // ---------------------------------------------------------------------------
 
 type result struct {
-	// Step7Performed is false: this verifier does not count distinct signer
-	// authorities (core.md section 1.3 step 7); see conformance.json notCovered.
-	Step7Performed bool
+	// Step7Performed records whether the distinct signer-authority count of
+	// core.md section 1.3 step 7 ran (it runs once every declared signature has
+	// verified), and SignerAuthorities is that count. Step 8 attaches both to an
+	// ACCEPT, so a reported count is always a measured one.
+	Step7Performed    bool
+	SignerAuthorities int
 	// TrustLevel is the credential's asserted level, carried for the report line.
 	TrustLevel     int
 	Accepted       bool
@@ -1170,8 +1179,8 @@ func noATXReason(schema json.RawMessage) string {
 }
 
 // verify runs the ATX v1.0 and v1.1 verification algorithm with hybrid
-// signing enforcement per AIP §3. Step 7 (distinct signer-authority count) is
-// not performed; see the comment at that step.
+// signing enforcement per AIP §3. Step 7 counts distinct signer authorities;
+// see the comment at that step.
 func verify(f fixture) result {
 	// A fixture with no atx member, such as one of another conformance
 	// suite, has no credential to parse. json.Unmarshal of no bytes reports
@@ -1443,13 +1452,20 @@ func verifySignatures(a *atx, state verifierState) result {
 
 	// Step 6: content hash. Content not supplied to this verifier; skipped.
 
-	// Step 7 (distinct signer-authority count for trust level 3+) is NOT
-	// performed by this verifier: no fixture carries verified signatures from
-	// more than one authority, and core.md section 1.3 step 7 forbids counting
-	// the length of issuerChain, which the signer writes. Recorded on the
-	// result so an ACCEPT never reads as a step-7 verdict.
-	res.Step7Performed = false
+	// Step 7: count distinct signer authorities (core.md section 1.3 step 7).
+	// Only signatures this verifier verified count, never the length of
+	// issuerChain or the names in it, which the signer writes. The count always
+	// runs; it rejects only when the verifier state requires trust level 3 or
+	// higher.
 	res.TrustLevel = a.TrustLevel
+	res.SignerAuthorities = countSignerAuthorities(a, payload, state)
+	res.Step7Performed = true
+	if state.RequiredTrustLevel >= 3 && res.SignerAuthorities < 2 {
+		res.RejectCategory = "INSUFFICIENT_SIGNER_AUTHORITIES"
+		res.Reason = fmt.Sprintf("required trust level %d needs at least 2 distinct signer authorities, %d verified (core.md section 1.3 step 7)",
+			state.RequiredTrustLevel, res.SignerAuthorities)
+		return res
+	}
 
 	// Step 8: all checks passed.
 	res.Accepted = true
@@ -1533,6 +1549,110 @@ func controllerDID(keyID string) string {
 		return keyID[:i]
 	}
 	return keyID
+}
+
+// signerNode is one signature that step 7 counts: the authority its keyId
+// names, and the public key (algorithm plus raw bytes) it verified under.
+type signerNode struct {
+	authority string
+	key       string
+}
+
+// countSignerAuthorities implements the count of core.md section 1.3 step 7
+// over the signatures step 5 has already verified. A signature counts only
+// when the DID its keyId names (the authority) is a trusted issuer eligible
+// for this credential (authoritySetFor, as step 4 requires of every signing
+// key) and the signature verifies, over the same canonical bytes, under a key
+// that verifierState.publicKeys publishes under that DID. A signature that
+// verifies only under some other DID's key, or under an unbound key with no
+// keyId, names no authority that published its key and is not counted.
+// issuerChain is never counted: it only decides eligibility, as in step 4.
+func countSignerAuthorities(a *atx, payload []byte, vs verifierState) int {
+	eligible := authoritySetFor(a, vs.TrustedIssuers)
+	trusted := make(map[string]bool, len(vs.TrustedIssuers))
+	for _, did := range vs.TrustedIssuers {
+		trusted[did] = true
+	}
+	var nodes []signerNode
+	for _, sig := range a.Signatures {
+		authority := controllerDID(sig.KeyID)
+		if sig.KeyID == "" || !trusted[authority] || !eligible[authority] {
+			continue
+		}
+		sigBytes, err := base64.StdEncoding.DecodeString(sig.Value)
+		if err != nil {
+			continue
+		}
+		key, ok := publishedKeyVerifying(vs.PublicKeys, authority, sig.Algorithm, payload, sigBytes)
+		if !ok {
+			continue
+		}
+		nodes = append(nodes, signerNode{authority: authority, key: sig.Algorithm + ":" + key})
+	}
+	return distinctAuthorities(nodes)
+}
+
+// publishedKeyVerifying returns the raw bytes of the first key published under
+// authority (a publicKeys entry whose keyId's controller DID is authority) for
+// algorithm that verifies sig over payload.
+func publishedKeyVerifying(refs []keypairRef, authority, algorithm string, payload, sig []byte) (string, bool) {
+	for _, r := range refs {
+		if r.KeyID == "" || controllerDID(r.KeyID) != authority || r.Algorithm != algorithm {
+			continue
+		}
+		raw, err := hex.DecodeString(r.PublicKeyHex)
+		if err != nil {
+			continue
+		}
+		switch algorithm {
+		case "Ed25519":
+			if len(raw) == ed25519.PublicKeySize && ed25519.Verify(ed25519.PublicKey(raw), payload, sig) {
+				return string(raw), true
+			}
+		case "ML-DSA-65":
+			pk := new(mldsa65.PublicKey)
+			if pk.UnmarshalBinary(raw) == nil && mldsa65.Verify(pk, payload, nil, sig) {
+				return string(raw), true
+			}
+		}
+	}
+	return "", false
+}
+
+// distinctAuthorities counts the signer authorities among the counted
+// signatures. Step 7 makes distinctness hold over keys as well as names: each
+// authority counts once however many of its keys signed, and two signatures
+// that verify under the same public key count once whatever keyId values they
+// carry. So two signatures count once when they share an authority or a key,
+// and that relation is closed transitively: if authority A and authority B
+// both publish the key one signature verified under, every signature of A or
+// B counts once between them. The count is the number of resulting groups.
+func distinctAuthorities(nodes []signerNode) int {
+	parent := make([]int, len(nodes))
+	for i := range parent {
+		parent[i] = i
+	}
+	find := func(i int) int {
+		for parent[i] != i {
+			parent[i] = parent[parent[i]]
+			i = parent[i]
+		}
+		return i
+	}
+	for i := range nodes {
+		for j := i + 1; j < len(nodes); j++ {
+			if nodes[i].authority == nodes[j].authority || nodes[i].key == nodes[j].key {
+				parent[find(j)] = find(i)
+			}
+		}
+	}
+	groups := 0
+	for i := range nodes {
+		if find(i) == i {
+			groups++
+		}
+	}
+	return groups
 }
 
 // ---------------------------------------------------------------------------
@@ -1745,8 +1865,8 @@ func run(args []string, stdout, stderr io.Writer, esc func(string) string) int {
 			fmt.Fprintf(stdout, "       signatures: %d/%d valid (ed25519=%t mldsa65=%t)\n",
 				got.SigsValid, got.SigsExpected, got.Ed25519Valid, got.MLDSA65Valid)
 		}
-		if got.Accepted && got.TrustLevel >= 3 && !got.Step7Performed {
-			fmt.Fprintf(stdout, "       trustLevel %d asserted; distinct-authority count (step 7) not performed by this verifier\n", got.TrustLevel)
+		if got.Step7Performed {
+			fmt.Fprintf(stdout, "       distinct signer authorities (step 7): %d; trustLevel %d asserted\n", got.SignerAuthorities, got.TrustLevel)
 		}
 	}
 

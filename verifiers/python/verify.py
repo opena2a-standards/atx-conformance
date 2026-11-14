@@ -35,11 +35,11 @@ Spec coverage:
     the Ed25519 signatures must verify under at least that many distinct
     keys, the k-of-n threshold of core.md section 3.1 step 8), expiry,
     revocation (the credential's revoked flag and the verifier's CRL),
-    issuer-trust.
-
-Not performed: the distinct signer-authority count for trust level 3+
-(core.md section 1.3 step 7). The asserted trustLevel is reported, never
-checked; see conformance.json notCovered.
+    issuer-trust, and the distinct signer-authority count of core.md section
+    1.3 step 7, which rejects when the verifier state requires trust level 3
+    or higher and fewer than two distinct authorities produced a verified
+    signature. The asserted trustLevel is reported beside the count, never
+    checked against it.
 
 Parsing rule (strict parse, ported from the aap-conformance protected-header
 lesson and scoped to the whole body because ATX signs it all):
@@ -562,9 +562,12 @@ class VerifyResult:
     mldsa65_valid: bool = False
     sigs_expected: int = 0
     sigs_valid: int = 0
-    # False: this verifier does not count distinct signer authorities
-    # (core.md section 1.3 step 7); see conformance.json notCovered.
+    # Whether the distinct signer-authority count of core.md section 1.3
+    # step 7 ran (it runs once every declared signature has verified), and
+    # that count. Step 8 attaches both to an ACCEPT, so a reported count is
+    # always a measured one.
     step7_performed: bool = False
+    signer_authorities: int = 0
     trust_level: int = 0
 
     def __str__(self) -> str:
@@ -883,6 +886,7 @@ _FIXTURE_TYPES = {
 _VERIFIER_STATE_TYPES = {
     "clockRfc3339": "string",
     "trustedIssuers": "[]string",
+    "requiredTrustLevel": "int64",
     "publicKeys": "[]keypairRef",
     "requiredSignatures": "*int64",
     "crl": "*crl",
@@ -1295,6 +1299,81 @@ def _scalars(value: Any):
                 yield node, key
 
 
+def _published_key_verifying(
+    refs: list[dict[str, Any]], authority: str, algorithm: str, payload: bytes, sig_bytes: bytes
+) -> bytes | None:
+    """Raw bytes of the first key published under `authority` (a publicKeys
+    entry whose keyId's controller DID is `authority`) for `algorithm` that
+    verifies the signature over `payload`, or None."""
+    for r in refs:
+        key_id = r["keyId"]
+        if not key_id or _controller_did(key_id) != authority or r["algorithm"] != algorithm:
+            continue
+        raw = _decode_hex(r["publicKeyHex"])
+        if raw is None:
+            continue
+        if algorithm == "Ed25519":
+            if len(raw) != 32:
+                continue
+            try:
+                Ed25519PublicKey.from_public_bytes(raw).verify(sig_bytes, payload)
+                return raw
+            except InvalidSignature:
+                continue
+        elif algorithm == "ML-DSA-65":
+            if len(raw) == MLDSA65_PUBLIC_KEY_SIZE and ML_DSA_65.verify(raw, payload, sig_bytes):
+                return raw
+    return None
+
+
+def count_signer_authorities(atx: dict[str, Any], payload: bytes, vs: dict[str, Any]) -> int:
+    """The count of core.md section 1.3 step 7 over the signatures step 5 has
+    already verified, mirroring countSignerAuthorities in ../go. A signature
+    counts only when the DID its keyId names (the authority) is a trusted
+    issuer eligible for this credential (_authority_set_for, as step 4
+    requires of every signing key) and the signature verifies, over the same
+    canonical bytes, under a key that verifierState.publicKeys publishes under
+    that DID. issuerChain is never counted: it only decides eligibility."""
+    trusted_issuers = vs["trustedIssuers"]
+    trusted = set(trusted_issuers)
+    eligible = _authority_set_for(atx, trusted_issuers)
+    nodes: list[tuple[str, tuple[str, bytes]]] = []
+    for sig in atx["signatures"]:
+        key_id = sig["keyId"]
+        authority = _controller_did(key_id)
+        if not key_id or authority not in trusted or authority not in eligible:
+            continue
+        try:
+            sig_bytes = _decode_base64(sig["value"])
+        except ValueError:
+            continue
+        algorithm = sig["algorithm"]
+        key = _published_key_verifying(vs["publicKeys"], authority, algorithm, payload, sig_bytes)
+        if key is None:
+            continue
+        nodes.append((authority, (algorithm, key)))
+    return _distinct_authorities(nodes)
+
+
+def _distinct_authorities(nodes: list[tuple[str, tuple[str, bytes]]]) -> int:
+    """Signatures that share an authority or a public key count once, and the
+    relation is closed transitively (step 7: distinctness is over keys as well
+    as names). Mirrors distinctAuthorities in ../go."""
+    parent = list(range(len(nodes)))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i in range(len(nodes)):
+        for j in range(i + 1, len(nodes)):
+            if nodes[i][0] == nodes[j][0] or nodes[i][1] == nodes[j][1]:
+                parent[find(j)] = find(i)
+    return sum(1 for i in range(len(nodes)) if find(i) == i)
+
+
 def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
     # The Go reference verifier decodes the verifier state into typed fields,
     # so its strings are read the way the credential's are: the CRL's agentId
@@ -1555,13 +1634,22 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
             reason=f"signature threshold not met: requiredSignatures is {required}, distinct Ed25519 keys that verified a declared signature: {len(ed_signers)}",
         )
 
-    # Step 7 (distinct signer-authority count for trust level 3+) is NOT
-    # performed by this verifier: no fixture carries verified signatures from
-    # more than one authority, and core.md section 1.3 step 7 forbids counting
-    # the length of issuerChain, which the signer writes. Recorded on the
-    # result so an ACCEPT never reads as a step-7 verdict.
-    result.step7_performed = False
+    # Step 7: count distinct signer authorities (core.md section 1.3 step 7).
+    # Only signatures this verifier verified count, never the length of
+    # issuerChain or the names in it, which the signer writes. The count
+    # always runs; it rejects only when the verifier state requires trust
+    # level 3 or higher.
     result.trust_level = atx["trustLevel"]
+    result.signer_authorities = count_signer_authorities(atx, payload, vs)
+    result.step7_performed = True
+    required_level = vs["requiredTrustLevel"]
+    if required_level >= 3 and result.signer_authorities < 2:
+        result.reject_category = "INSUFFICIENT_SIGNER_AUTHORITIES"
+        result.reason = (
+            f"required trust level {required_level} needs at least 2 distinct signer authorities, "
+            f"{result.signer_authorities} verified (core.md section 1.3 step 7)"
+        )
+        return result
 
     result.accepted = True
     return result
@@ -2196,9 +2284,9 @@ def main(argv: list[str]) -> int:
                 f"       signatures: {got.sigs_valid}/{got.sigs_expected} valid "
                 f"(ed25519={str(got.ed25519_valid).lower()} mldsa65={str(got.mldsa65_valid).lower()})"
             )
-        if got.accepted and got.trust_level >= 3 and not got.step7_performed:
+        if got.step7_performed:
             print(
-                f"       trustLevel {got.trust_level} asserted; distinct-authority count (step 7) not performed by this verifier"
+                f"       distinct signer authorities (step 7): {got.signer_authorities}; trustLevel {got.trust_level} asserted"
             )
 
     print()

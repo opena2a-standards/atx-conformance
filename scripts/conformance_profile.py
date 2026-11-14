@@ -75,12 +75,12 @@ SUITE = {
         {
             "language": "go",
             "path": "verifiers/go",
-            "coverage": "full: Ed25519 and ML-DSA-65 (FIPS 204) hybrid signatures, v1.0 pipe canonical form and v1.1 JCS(TBS)",
+            "coverage": "full: Ed25519 and ML-DSA-65 (FIPS 204) hybrid signatures, v1.0 pipe canonical form and v1.1 JCS(TBS), and the distinct signer-authority count of ATX core.md section 1.3 step 7",
         },
         {
             "language": "python",
             "path": "verifiers/python",
-            "coverage": "full: Ed25519 and ML-DSA-65 (FIPS 204, via dilithium-py) hybrid signatures, v1.0 pipe canonical form and v1.1 JCS(TBS) via vendored RFC 8785",
+            "coverage": "full: Ed25519 and ML-DSA-65 (FIPS 204, via dilithium-py) hybrid signatures, v1.0 pipe canonical form and v1.1 JCS(TBS) via vendored RFC 8785, and the distinct signer-authority count of ATX core.md section 1.3 step 7",
         },
     ],
     "additionalGates": [
@@ -93,7 +93,7 @@ SUITE = {
     "notCovered": [
         {
             "item": "Distinct signer-authority count (ATX core.md section 1.3 step 7)",
-            "reason": "no fixture carries verified signatures from more than one distinct authority, and the fixture format has no field for the required trust level that step 7's condition reads, so a verifier that omits step 7 entirely passes the suite; a length-of-issuerChain test is not step 7 (the spec says the chain length MUST NOT be counted) and implementations MUST self-attest this requirement until a fixture exists for it",
+            "reason": "the v1_1-two-authority-cosignature fixture and the four REJECT fixtures that share its credential exercise the count at a required trust level of 3 (verifierState.requiredTrustLevel), and both reference verifiers perform it; the entry stays because the Coverage paragraph of core.md at the pinned atx-spec commit still lists step 7 among the requirements no fixture exercises, and this list and that paragraph drop step 7 together",
         },
         {
             "item": "k-of-n threshold issuance, a threshold the credential meets (ATX core.md section 3.1 step 8: cosignatures from 2 of 3 key holders)",
@@ -101,7 +101,7 @@ SUITE = {
         },
         {
             "item": "Cosignature requirements (ATX core.md section 7: federation cosigning, and the root cosignature at trust level 4)",
-            "reason": "threshold-2of3-cosignature pins three signatures over the signing bytes, each of which must verify; no fixture asserts that a trust level 4 credential carries the root cosignature or that a federated issuance carries its peer's cosignature",
+            "reason": "threshold-2of3-cosignature pins three signatures over the signing bytes, made by three keys of one authority, each of which must verify; the v1_1-two-authority-cosignature fixture and the four REJECT fixtures that share its credential pin the section 1.3 step 7 count at a required trust level of 3; no fixture asserts that a trust level 4 credential carries the root cosignature (section 7 rule 4) or that a federated issuance carries its peer's cosignature, and none exercises the root's cross-org attestation for an issuer outside the verifier's trusted list (section 7 rule 3)",
         },
         {
             "item": "Revocation propagation timing (ATX core.md section 3.3)",

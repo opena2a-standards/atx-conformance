@@ -481,7 +481,10 @@ EARLY_REJECT_STEP = {
     "REVOKED": 3,
     "UNTRUSTED_ISSUER": 4,
 }
-SIGNATURE_STEP_REJECTS = {"SIGNATURE_INVALID"}
+# SIGNATURE_INVALID rejects at step 5, and INSUFFICIENT_SIGNER_AUTHORITIES at
+# step 7, which counts signer authorities once every declared signature has
+# verified: a fixture with either category reaches step 5.
+SIGNATURE_STEP_REJECTS = {"SIGNATURE_INVALID", "INSUFFICIENT_SIGNER_AUTHORITIES"}
 SIGNATURE_ROW = re.compile(r"signature verification", re.IGNORECASE)
 EVERY_FIXTURE = re.compile(r"\b(?:every|all|each)\s+fixtures?\b", re.IGNORECASE)
 N_OF_M = re.compile(r"\b(\d+) of (\d+)\b")

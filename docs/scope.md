@@ -25,9 +25,9 @@ What this suite verifies:
 | Revocation via the credential `revoked` flag | `fixtures/revoked.json` |
 | Revocation via CRL membership alone, the credential's own flag being false (§1.3 step 6, which both reference verifiers perform at their step 3, before any signature) | `fixtures/revoked-crl-only.json` |
 | Trusted-issuer DID set | `fixtures/wrong-issuer.json` |
-| Ed25519 signature verification over the canonical payload | every fixture that passes steps 0 to 4 of the reference verifiers (strict parse, schema version, expiry, revocation by the flag or the CRL, trusted issuer): 37 of 47. The others reject before step 5; `go test` in `verifiers/go` checks that their signatures verify once that gate is lifted. The count follows the reference verifiers' order, which checks the CRL (§1.3 step 6) before the signatures (§1.3 steps 4 and 5), so `fixtures/revoked-crl-only.json` is among the others. Both fixtures whose CRL lists their agent carry valid signatures, so in the spec's order they reject as `REVOKED` too |
+| Ed25519 signature verification over the canonical payload | every fixture that passes steps 0 to 4 of the reference verifiers (strict parse, schema version, expiry, revocation by the flag or the CRL, trusted issuer): 42 of 52. The others reject before step 5; `go test` in `verifiers/go` checks that their signatures verify once that gate is lifted. The count follows the reference verifiers' order, which checks the CRL (§1.3 step 6) before the signatures (§1.3 steps 4 and 5), so `fixtures/revoked-crl-only.json` is among the others. Both fixtures whose CRL lists their agent carry valid signatures, so in the spec's order they reject as `REVOKED` too |
 | Hybrid Ed25519 + ML-DSA-65 signature verification (FIPS 204) | `fixtures/baseline-valid-hybrid.json` |
-| Multi-signature: every declared signature must verify (three Ed25519 signatures from three distinct keys) | `fixtures/threshold-2of3-cosignature.json` |
+| Multi-signature: every declared signature must verify (three Ed25519 signatures from three keys of one authority, which §1.3 step 7 counts as one authority) | `fixtures/threshold-2of3-cosignature.json` |
 | k-of-n signature threshold, such as 2-of-3 (§3.1 step 8): with `requiredSignatures` set in the verifier state, a credential whose declared Ed25519 signatures verify under fewer distinct keys than it sets rejects | `fixtures/threshold-1of3-cosignature.json`; no fixture sets a threshold its credential meets, see conformance.json notCovered |
 | Tampered-signature rejection | `fixtures/tampered-signature.json` |
 | Key-to-issuer binding (a trusted authority cannot sign for another; a chain DID that is not a trusted issuer contributes no eligible key) | `fixtures/cross-issuer-key.json`, `fixtures/v1_1-cross-issuer-key.json`, `fixtures/v1_1-untrusted-chain-authority.json` |
@@ -41,13 +41,14 @@ What this suite verifies:
 | Strict credential parse: duplicate object members reject at any depth (RFC 8259 §4 parser-divergence smuggling) | `fixtures/v1_1-duplicate-purpose-member.json` |
 | Fold-aware strict parse: case-variant members that `encoding/json` collapses last-wins (e.g. `TRUSTLEVEL`/`trustLevel`) reject as PARSE_ERROR | `fixtures/v1_1-case-variant-member.json` |
 | Member-name strict parse: a member name outside printable ASCII (U+0020 to U+007E) in an object the verifier decodes (the credential, a signature entry, `scanSummary`, `behavioralProfile`) rejects as PARSE_ERROR, a rule that needs no case table: U+0130 followed by `d` beside `id`, and U+0131 followed by `ssuedAt` beside `issuedAt`, names Java 25's `String.equalsIgnoreCase` compares equal to the member beside them | `fixtures/v1_1-dotted-capital-i-member.json`, `fixtures/v1_1-dotless-i-member.json` |
-| Distinct signer-authority count for trust level 3 and above (§1.3 step 7) | not covered; see conformance.json notCovered |
+| Distinct signer-authority count at a required trust level of 3 (§1.3 step 7): two authorities' verified signatures accept; one authority's signature with a second authority only named in `issuerChain`, three keys of one authority, one key signing under two DIDs, and an issuer key's signature carrying the partner's `keyId` each count as one authority and reject | `fixtures/v1_1-two-authority-cosignature.json`, `fixtures/v1_1-cosigner-named-not-signed.json`, `fixtures/v1_1-one-authority-threshold-keys.json`, `fixtures/v1_1-one-key-under-two-dids.json`, `fixtures/v1_1-own-key-labelled-as-cosigner.json`; see [Required trust level](fixtures.md#required-trust-level-the-distinct-signer-authority-count) |
 
 What this suite does NOT verify:
 
 - Content hash matching the agent binary. The `contentHash` field is in every
-  fixture for byte-stability, but no agent binary is shipped; verifiers stop
-  at step 5 (signature) without consulting content.
+  fixture for byte-stability, but no agent binary is shipped; after step 5
+  (signature) the verifiers skip the content-hash check without consulting
+  content.
 - Transparency log inclusion proofs. The `transparencyLogIndex` is populated
   for byte-stability; the conformance verifiers do not consult a log.
 - Build attestation predicate verification. `buildAttestation` is a string
@@ -121,7 +122,7 @@ which is REJECTED precisely because capabilities are now signed.
 
 The ATX spec has every credential carry an Ed25519 and an ML-DSA-65
 signature (core.md §1.1). This suite does not require both: it accepts
-single-suite Ed25519 credentials, and 7 of its 10 ACCEPT fixtures
+single-suite Ed25519 credentials, and 8 of its 11 ACCEPT fixtures
 (`baseline-valid.json` among them) carry Ed25519 signatures only. What it
 requires is that every declared signature verifies, and that a credential
 which declares an ML-DSA-65 entry also carries a verifying Ed25519 entry

@@ -25,13 +25,13 @@ PASS  fixtures/baseline-valid-hybrid.json
        expected: ACCEPT
        observed: ACCEPT
        signatures: 2/2 valid (ed25519=true mldsa65=true)
-       trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+       distinct signer authorities (step 7): 1; trustLevel 4 asserted
 ...
 PASS  fixtures/wrong-issuer.json
        expected: REJECT [UNTRUSTED_ISSUER]
        observed: REJECT[UNTRUSTED_ISSUER: issuer DID did:opena2a:authority:attacker.example is not in the verifier's trusted set (untrusted issuer)]
 
-summary: 47 pass, 0 fail (47 fixtures)
+summary: 52 pass, 0 fail (52 fixtures)
 ```
 
 With no argument the verifier walks the fixture set built into the module
@@ -228,7 +228,7 @@ minimums, the modules and packages each verifier pins, and those inputs.
 
 ### Expected output
 
-Both verifiers report `summary: 47 pass, 0 fail (47 fixtures)` against the
+Both verifiers report `summary: 52 pass, 0 fail (52 fixtures)` against the
 shipped fixture set.
 
 A verifier prints a FAIL line when its result on a
@@ -255,8 +255,8 @@ modified fixture reads `FAILED` and the command exits non-zero. On Linux,
 
 | Implementation | Verifier | Status |
 |---|---|---|
-| `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 47 / 47 PASS |
-| `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 47 / 47 PASS |
+| `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 52 / 52 PASS |
+| `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 52 / 52 PASS |
 
 To list an independent second-party implementation here, or to arrange a
 cosignature, open an issue on this repository's

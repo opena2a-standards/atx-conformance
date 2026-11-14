@@ -45,6 +45,10 @@ distinct Ed25519 keys a credential's signatures verify under, each counted
 once whatever keyId names it and no ML-DSA-65 signature counted, against
 the count it sets, a count below 1 reported as a configuration error, and
 the member decoded as the Go reference verifier decodes it.
+They pin the distinct signer-authority count of core.md section 1.3 step 7:
+signatures that share an authority or a public key counted once, the count
+each step 7 fixture carries, and the four fixtures a verifier that omits the
+count accepts where they must reject.
 They hold the report to the Go reference verifier's text: a boolean, a
 string a reason quotes, and the whole report over fixtures/, which must be
 docs/captures/go-verifier.txt byte for byte. Two tests
@@ -3227,6 +3231,94 @@ class RequiredSignaturesThreshold(unittest.TestCase):
         self.assertEqual(str(raised.exception), 'the fixture repeats the member "RequiredSignatures"')
 
 
+# The fixtures whose verifier state sets requiredTrustLevel (3), each with the
+# distinct signer authorities it carries and whether it is accepted, and the
+# threshold fixture, whose three keys are one authority's and whose verifier
+# state sets no required trust level.
+STEP7_FIXTURES = (
+    ("v1_1-two-authority-cosignature.json", 2, True),
+    ("v1_1-cosigner-named-not-signed.json", 1, False),
+    ("v1_1-one-authority-threshold-keys.json", 1, False),
+    ("v1_1-one-key-under-two-dids.json", 1, False),
+    ("v1_1-own-key-labelled-as-cosigner.json", 1, False),
+    ("threshold-2of3-cosignature.json", 1, True),
+)
+
+
+def _without_required_trust_level(path: Path) -> verify.VerifyResult:
+    """The verdict on the fixture at path with requiredTrustLevel dropped from
+    its verifier state, which is what a verifier that omits step 7 sees."""
+    fixture = json.loads(path.read_text())
+    fixture["verifierState"].pop("requiredTrustLevel", None)
+    with tempfile.TemporaryDirectory() as tmp:
+        written = Path(tmp) / path.name
+        written.write_text(json.dumps(fixture))
+        return verify.verify_fixture(verify.load_fixture(written))
+
+
+class DistinctSignerAuthorities(unittest.TestCase):
+    """The distinct signer-authority count of core.md section 1.3 step 7: with
+    requiredTrustLevel 3 or higher in the verifier state, a credential rejects
+    as INSUFFICIENT_SIGNER_AUTHORITIES unless at least two distinct
+    authorities produced a signature the verifier verified. The tests mirror
+    TestDistinctAuthorities, TestStep7SignerAuthorityCount and
+    TestSuiteCatchesStep7BlindVerifier of the Go reference verifier."""
+
+    def test_signatures_sharing_an_authority_or_a_key_count_once(self):
+        cases = (
+            ("no counted signature", [], 0),
+            ("one authority one key", [("A", "k1")], 1),
+            ("one authority, two keys", [("A", "k1"), ("A", "k2")], 1),
+            ("one key under two authorities", [("A", "k1"), ("B", "k1")], 1),
+            ("two authorities, two keys", [("A", "k1"), ("B", "k2")], 2),
+            ("three authorities, three keys", [("A", "k1"), ("B", "k2"), ("C", "k3")], 3),
+            ("shared key joins two of three", [("A", "k1"), ("B", "k1"), ("C", "k3")], 2),
+            ("shared key then shared authority", [("A", "k1"), ("B", "k1"), ("B", "k2")], 1),
+            ("link found late", [("A", "k1"), ("B", "k2"), ("C", "k3"), ("C", "k1"), ("B", "k3")], 1),
+        )
+        for name, nodes, want in cases:
+            with self.subTest(name):
+                self.assertEqual(verify._distinct_authorities(nodes), want)
+
+    def test_each_fixture_counts_its_authorities(self):
+        # With requiredTrustLevel dropped, each fixture is accepted with the
+        # same count, so the REJECTs come from the requirement alone.
+        for name, authorities, accepted in STEP7_FIXTURES:
+            with self.subTest(fixture=name):
+                path = ROOT / "fixtures" / name
+                got = verify.verify_fixture(verify.load_fixture(path))
+                self.assertTrue(got.step7_performed, str(got))
+                self.assertEqual(got.signer_authorities, authorities)
+                self.assertEqual(got.accepted, accepted, str(got))
+                if not accepted:
+                    self.assertEqual(got.reject_category, "INSUFFICIENT_SIGNER_AUTHORITIES")
+                blind = _without_required_trust_level(path)
+                self.assertTrue(blind.accepted, str(blind))
+                self.assertEqual(blind.signer_authorities, authorities)
+
+    def test_suite_catches_a_verifier_that_omits_step7(self):
+        # Of the shipped fixtures, exactly the four that must reject at step 7
+        # are accepted once requiredTrustLevel is dropped; a fixture that does
+        # not set it is unaffected by dropping it.
+        caught = []
+        for path in sorted((ROOT / "fixtures").glob("*.json")):
+            fixture = json.loads(path.read_text())
+            if "requiredTrustLevel" not in fixture["verifierState"]:
+                continue
+            must_accept = fixture["expected"]["verifyResult"] == "ACCEPT"
+            if _without_required_trust_level(path).accepted != must_accept:
+                caught.append(path.name)
+        self.assertEqual(
+            caught,
+            [
+                "v1_1-cosigner-named-not-signed.json",
+                "v1_1-one-authority-threshold-keys.json",
+                "v1_1-one-key-under-two-dids.json",
+                "v1_1-own-key-labelled-as-cosigner.json",
+            ],
+        )
+
+
 class PublicKeyHex(unittest.TestCase):
     def test_hex_decodes_as_go_decodes_it(self):
         for text, decoded in GO_HEX_DECODES:
@@ -4201,17 +4293,18 @@ class HeaderDocs(unittest.TestCase):
             with self.subTest(version=version):
                 self.assertIn(f'atcVersion="{version}"', coverage)
 
-    def test_does_not_claim_the_step7_check(self):
-        # A trust level 3+ credential is accepted without the distinct
-        # signer-authority count, so the coverage list must not claim one.
+    def test_claims_the_step7_check_it_performs(self):
+        # A trust level 3+ credential reaches step 7 and is accepted with the
+        # distinct signer-authority count measured, so the coverage list
+        # claims that count, and no chain check.
         got = verify.verify_fixture(verify.load_fixture(ROOT / "fixtures" / "baseline-valid.json"))
         self.assertTrue(got.accepted)
         self.assertGreaterEqual(got.trust_level, 3)
-        self.assertFalse(got.step7_performed)
-        coverage = self._spec_coverage().lower()
-        for claim in ("trust level", "chain check"):
-            with self.subTest(claim=claim):
-                self.assertNotIn(claim, coverage)
+        self.assertTrue(got.step7_performed)
+        self.assertEqual(got.signer_authorities, 1)
+        coverage = " ".join(self._spec_coverage().split())
+        self.assertIn("the distinct signer-authority count of core.md section 1.3 step 7", coverage)
+        self.assertNotIn("chain check", coverage.lower())
 
     def test_readme_cross_references_resolve(self):
         # Join continuation lines so a reference split across two lines of a
