@@ -138,6 +138,56 @@ they should not.
   `docs/running-the-verifiers.md` gains a section, "Benchmarks". No
   fixture, expected verdict, verifier logic, schema or module dependency
   changed.
+- Five fixtures, built by the generator, exercise the distinct
+  signer-authority count of atx-spec `core.md` §1.3 step 7. The fixture
+  format gains `verifierState.requiredTrustLevel`, the trust level the
+  relying party requires (`schemas/fixture-v1.schema.json`: an integer from
+  0 to 4, absent meaning none), and the reject category
+  `INSUFFICIENT_SIGNER_AUTHORITIES`. Each fixture carries one ATX v1.1
+  credential at `trustLevel` 3 whose signed `issuerChain` names the partner
+  authority and the primary authority, under a verifier state that trusts
+  both and sets `requiredTrustLevel` 3.
+  `fixtures/v1_1-two-authority-cosignature.json`, signed by both
+  authorities, expects `ACCEPT`.
+  `fixtures/v1_1-cosigner-named-not-signed.json` (the primary's signature
+  alone), `fixtures/v1_1-one-authority-threshold-keys.json` (three keys of
+  the primary), `fixtures/v1_1-one-key-under-two-dids.json` (the primary
+  key's signature under its own `keyId` and under a partner `keyId` that
+  publishes the same key) and
+  `fixtures/v1_1-own-key-labelled-as-cosigner.json` (a second primary key's
+  signature carrying the partner's `keyId`) each expect
+  `REJECT [INSUFFICIENT_SIGNER_AUTHORITIES]` with a reason containing
+  `distinct signer authorities`. Before the change to the verifiers under
+  Changed, both reference verifiers accepted each of the four.
+  `vectors/issuer-primary-under-partner-did.json` holds the primary's
+  public key as `partner.example` publishes it, and no seed. The 47
+  existing fixtures keep their credential, signatures, verifier
+  state and expected outcome; the description of
+  `fixtures/threshold-2of3-cosignature.json` is corrected (under Changed),
+  so its `MANIFEST.sha256` line changes, and the manifest gains five lines.
+  `conformance.json` and the capture under `docs/captures/` are
+  regenerated; the capture's summary line's pass and fixture counts go from
+  47 to 52. The fixture counts in README.md (the first command's summary
+  line, the expected output and the implementation table), COSIGNERS.md,
+  CONTRIBUTING.md, `docs/continuous-verification.md` and
+  `docs/sibling-repositories.md` go from 47 to 52 (the sibling row's v1.1
+  count from 32 to 37), the count of fixtures reaching signature
+  verification in `docs/scope.md` goes from 37 of 47 to 42 of 52 and its
+  count of ACCEPT fixtures signed with Ed25519 alone from 7 of 10 to 8 of
+  11, `docs/fixtures.md` gains a row for each and a section, "Required
+  trust level: the distinct signer-authority count", and the reproduction
+  steps in `docs/reproducing-the-fixtures.md` name the vector that holds no
+  seed and the two fixtures that relabel a signature entry after signing.
+  The fixture, accept and reject counts of the kit's self-tests in
+  `interop/run_test.go` go from 47, 10 and 37 to 52, 11 and 41.
+- `scripts/check_step7_coverage.py` fails when `conformance.json` lists
+  §1.3 step 7 under `notCovered` and the Coverage paragraph of the vendored
+  `core.md` does not list it among the requirements no fixture exercises,
+  or the other way round, and, once neither lists it, unless a fixture with
+  `verifierState.requiredTrustLevel` 3 or higher expects `ACCEPT` and
+  another expects `REJECT [INSUFFICIENT_SIGNER_AUTHORITIES]`.
+  `scripts/conformance_profile.py --check` runs its self-test and check
+  after those of `scripts/check_spec_refs.py`.
 
 ### Changed
 
@@ -194,6 +244,33 @@ they should not.
   that defines it. `verifiers/python/test_verify.py` held `scanSummary.hma`
   renamed `HMA` on the v1.1 baseline to `ACCEPT`, the Go verdict before
   this change, and now holds it to `SIGNATURE_INVALID`.
+- Both reference verifiers perform the distinct signer-authority count of
+  atx-spec `core.md` §1.3 step 7. Once a credential's declared signatures
+  have verified and the Ed25519 companion and `requiredSignatures` checks
+  have passed, they count the authorities that produced a signature they
+  verified: a signature counts for the DID its `keyId` names only when that
+  DID is a trusted issuer eligible for the credential and publishes the
+  verifying key, and signatures that share an authority or a public key
+  count once. With `verifierState.requiredTrustLevel` 3 or higher, a count
+  below 2 rejects as `INSUFFICIENT_SIGNER_AUTHORITIES`. Under each fixture
+  that reaches step 7 they print `distinct signer authorities (step 7): N;
+  trustLevel T asserted`, where they printed `trustLevel T asserted;
+  distinct-authority count (step 7) not performed by this verifier` under
+  each accepted fixture at trust level 3 or higher: in the capture under
+  `docs/captures/`, lines of the first form go from 0 to 15 and lines of the
+  second from 10 to 0. The coverage of each verifier in `conformance.json`
+  names the count; its step 7 `notCovered` entry stays, with a reason that
+  says the Coverage paragraph of `core.md` at the pinned atx-spec commit
+  still lists step 7 and that the two drop it together.
+  `verifiers/python/test_verify.py` held the Python verifier's coverage list
+  to claiming no step 7 check, and now holds it to claiming the count it
+  performs.
+- The description of `fixtures/threshold-2of3-cosignature.json` is
+  corrected in place: it said a verifier must validate at least two of the
+  three signatures for trust level 4, while every declared signature must
+  verify and the three keys belong to one authority, which §1.3 step 7
+  counts once. Its credential, signatures, verifier state and expected
+  outcome are unchanged.
 
 ### Fixed
 
@@ -637,6 +714,39 @@ they should not.
   byte `0xe9`, and `pins` with `--job` on a path that does not exist; run
   against the script as it was before this change, each of the 7 fails. No
   fixture changes.
+- `scripts/kit/check_workflow.py release` holds a step whose shell's first
+  word is `cmd` to the rule against a `%...%` expansion directly before `>`,
+  so a step whose `shell:` is a custom template such as
+  `cmd /D /E:ON /V:OFF /S /C "CALL "{0}""` is held to it as one that sets
+  `shell: cmd` is (#370). It held a step to that rule only when its
+  shell was exactly `cmd`, so a copy of `.github/workflows/kit-release.yml`
+  whose Windows step in the test job sets that template as its `shell:` and
+  writes `echo %ERRORLEVEL%> ..\capture.rc` printed `7 jobs, 0 problems` and
+  exited 0; that copy now exits 1 naming the step. The template is read the
+  same way when it comes from the job's or the workflow's
+  `defaults: run: shell:`. `scripts/kit/test/test_kit.py --ci` adds 4 cells:
+  a step that sets the template, and a step that sets no shell under the
+  job's template default and one under the workflow's, which the check
+  refuses, and a step that sets `shell: pwsh -command ". '{0}'"`, which it
+  accepts; run against the script as it was before this change, each of the
+  3 refusal cells fails. No fixture, verifier or workflow file changes.
+- README.md holds no paragraph over 69 words and at most one over 60. Five
+  of its paragraphs were over 60 words: the third bounty rule (69), the kit
+  section's paragraphs on `{file}` (70) and on a JSON answer (62), the
+  guided tour's opening (63) and the Python verifier's virtual-environment
+  note (83). The note keeps its sentence on what the install line downloads
+  and links `docs/running-the-verifiers.md`, which says what
+  `--disable-pip-version-check` does and what a system may provide outside
+  a virtual environment. The `{file}` paragraph drops its clause on the
+  `ATX-Fixture` header, which `examples/README.md` states, and links that
+  page's section on a verifier behind a URL. The tour's opening is split
+  above its Go minimum, and the JSON paragraph above its sentence on what
+  the report keeps, with no word changed. The bounty rules are unchanged;
+  the third, at 69 words, is the one left over 60.
+  `scripts/check_readme_counts.py` reads the length of each paragraph of
+  README.md and fails one over 69 words, or more than one over 60, naming
+  each; on the previous README.md it exits 1 naming the five. Its
+  self-test adds 12 cases. No fixture or verifier changes.
 
 ## v0.1.0
 

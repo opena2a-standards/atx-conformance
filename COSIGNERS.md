@@ -4,7 +4,7 @@ Second-party cosigners attest that they have independently:
 
 1. Cloned this repository at a specific commit SHA
 2. Run BOTH reference verifiers against the published fixture set
-3. Observed `summary: 47 pass, 0 fail (47 fixtures)` from each verifier
+3. Observed `summary: 52 pass, 0 fail (52 fixtures)` from each verifier
 4. Produced a Sigstore keyless cosign signature over [`MANIFEST.sha256`](./MANIFEST.sha256)
 
 The signature attests to the fixture bytes; the entry below attests that
@@ -74,7 +74,7 @@ SHA-256 of `MANIFEST.sha256`.
 
 | Cosigner | Commit SHA | Go verifier | Python verifier | Sigstore artifact | Date |
 |---|---|---|---|---|---|
-| opena2a-org (self-cosigned baseline, CI) | every `main` push (see CI self-cosignature) | `47 pass, 0 fail` | `47 pass, 0 fail` | Rekor entry per push (keyless CI signature) | 2026-07-04 onward |
+| opena2a-org (self-cosigned baseline, CI) | every `main` push (see CI self-cosignature) | `52 pass, 0 fail` | `52 pass, 0 fail` | Rekor entry per push (keyless CI signature) | 2026-07-04 onward |
 
 Self-cosignature exists to anchor the baseline; second-party signatures are
 what close criterion (c). Recruiting at least one second-party cosigner per

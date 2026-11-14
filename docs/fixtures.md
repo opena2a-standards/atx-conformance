@@ -22,7 +22,7 @@ All fixtures use:
 | `fixtures/hybrid-pq-only.json` | REJECT (SIGNATURE_INVALID) | The `baseline-valid-hybrid.json` credential, ATX v1.0, with its Ed25519 signature removed: one ML-DSA-65 signature that verifies over the legacy canonical payload, and no Ed25519 signature. The rule that a credential which declares an ML-DSA-65 entry must also carry a verifying Ed25519 entry (core.md §13, Cryptographic agility) names no `atcVersion`; `fixtures/v1_1-hybrid-pq-only.json` pins it for v1.1. A verifier that checks only that every declared signature verifies, or applies the rule to v1.1 alone, wrongly accepts. |
 | `fixtures/revoked.json` | REJECT (REVOKED) | Credential `revoked: true`, with a CRL entry for the agent as well. This fixture pins the flag: both reference verifiers read it first and return, so the CRL entry is not what rejects it. |
 | `fixtures/revoked-crl-only.json` | REJECT (REVOKED) | The accepted v1.0 baseline credential (`revoked: false`, trusted issuer, unexpired, valid signature) with a CRL entry for its agent in the verifier state. CRL membership is the only thing that revokes it (§1.3 step 6). A verifier that reads the credential's own flag and never consults the CRL wrongly accepts. |
-| `fixtures/threshold-2of3-cosignature.json` | ACCEPT | Three Ed25519 signatures from three distinct keys (primary plus two cosigners). All three verify. Its verifier state sets no `requiredSignatures`, so no threshold applies: each declared signature must verify and one is enough, so under this verifier state the credential cut to any one of its signatures is also accepted. |
+| `fixtures/threshold-2of3-cosignature.json` | ACCEPT | ATX v1.0 at trust level 4 with three Ed25519 signatures from the three keys of one authority's key set (`opena2a.org` `#key-1`, `#key-2`, `#key-3`). All three verify. Its verifier state sets no `requiredSignatures`, so no threshold applies: each declared signature must verify and one is enough, so under this verifier state the credential cut to any one of its signatures is also accepted. It sets no required trust level either; under §1.3 step 7 the three keys count as one authority. |
 | `fixtures/threshold-1of3-cosignature.json` | REJECT (SIGNATURE_INVALID) | The `threshold-2of3-cosignature.json` credential cut to its first signature, the primary's, under the same verifier state with `requiredSignatures: 2`: the declared Ed25519 signatures must verify under at least two distinct keys of the three it holds. The one signature verifies, so a verifier that checks only that every declared signature verifies, and reads no threshold, wrongly accepts. |
 | `fixtures/expired.json` | REJECT (EXPIRED) | `expiresAt: 2025-01-01T00:00:00Z`, earlier than the pinned clock. Otherwise valid. |
 | `fixtures/expired-beyond-skew.json` | REJECT (EXPIRED) | The `baseline-valid.json` credential with `expiresAt: 2026-05-23T23:58:59Z`, 61 seconds earlier than the pinned clock, and its signature made over that value. Expiry is evaluated within the family clock-skew bound of ATP §10.2 (§1.3 step 2), at most 60 seconds, so every tolerance a verifier may apply leaves it expired. A verifier that tolerates more than 61 seconds of skew wrongly accepts; `expired.json`, 508 days past its `expiresAt`, does not tell that verifier from one inside the bound. |
@@ -62,3 +62,39 @@ All fixtures use:
 | `fixtures/v1_1-case-variant-member.json` | REJECT (PARSE_ERROR) | ATX v1.1 carrying a decoy top-level `TRUSTLEVEL` member (value 9) before the signed `trustLevel` member (value 4), two names that fold to the same field. Go's `encoding/json` matches field names case-insensitively and keeps the last, so a lenient Go verifier reads the signed value and wrongly ACCEPTs; a case-insensitive first-wins parser reads 9, and a case-sensitive parser keeps both as distinct members. A case-sensitive duplicate check flags neither. Verifiers MUST fold member names and reject fold-colliding members with PARSE_ERROR before interpreting any field. |
 | `fixtures/v1_1-dotted-capital-i-member.json` | REJECT (PARSE_ERROR) | The v1.1 baseline with one member its issuer did not write, added after signing directly after `id`: a member named U+0130 (LATIN CAPITAL LETTER I WITH DOT ABOVE) followed by `d`, holding `x`. `JCS(TBS)` holds no member the credential does not specify, so the signature verifies. Java 25's `String.equalsIgnoreCase` compares that name equal to `id`, so a relying party that binds the credential's JSON again by such a comparison, keeping the last of the members it joins, reads `x` as the id. Verifiers MUST reject a member name outside printable ASCII (U+0020 to U+007E) in an object they decode (the credential, a signature entry, `scanSummary` or `behavioralProfile`) with PARSE_ERROR before interpreting any field, a rule that needs no case table. A verifier that folds names by ASCII case, or by a table that keeps U+0130 apart from `i`, wrongly ACCEPTs. |
 | `fixtures/v1_1-dotless-i-member.json` | REJECT (PARSE_ERROR) | The same rule, with a member named U+0131 (LATIN SMALL LETTER DOTLESS I) followed by `ssuedAt`, holding `2099-01-01T00:00:00Z`, added after signing directly after the signed `issuedAt`. Java 25's `String.equalsIgnoreCase` compares that name equal to `issuedAt`, so such a relying party reads an `issuedAt` the signature does not cover. A verifier that folds names by ASCII case, or by a table that keeps U+0131 apart from `i`, wrongly ACCEPTs. |
+| `fixtures/v1_1-two-authority-cosignature.json` | ACCEPT | ATX v1.1 at trust level 3 whose signed `issuerChain` names the partner authority and the primary authority, signed by both authorities' keys, at a required trust level of 3. Two distinct authorities produced verified signatures, so the §1.3 step 7 count is 2. The control for the next four fixtures, which carry the same credential with other signature sets. |
+| `fixtures/v1_1-cosigner-named-not-signed.json` | REJECT (INSUFFICIENT_SIGNER_AUTHORITIES) | The same credential signed only by the primary authority. The chain names the trusted partner authority and the verifier holds its key, but presence in `issuerChain` is not a signature, so the count is 1. A verifier that omits step 7, or counts the chain, wrongly ACCEPTs. |
+| `fixtures/v1_1-one-authority-threshold-keys.json` | REJECT (INSUFFICIENT_SIGNER_AUTHORITIES) | The same credential signed by the three keys of the primary authority's key set, the keys of `threshold-2of3-cosignature.json`. Each authority counts once however many of its keys signed, so the count is 1. A verifier that counts signatures or keys wrongly ACCEPTs. |
+| `fixtures/v1_1-one-key-under-two-dids.json` | REJECT (INSUFFICIENT_SIGNER_AUTHORITIES) | The same credential carrying one Ed25519 signature value twice: under the primary authority's `keyId`, and under a partner `keyId` whose DID the verifier also publishes the primary authority's key under. Two signatures that verify under the same public key count once, so the count is 1. A verifier that counts distinct `keyId` DIDs wrongly ACCEPTs. |
+| `fixtures/v1_1-own-key-labelled-as-cosigner.json` | REJECT (INSUFFICIENT_SIGNER_AUTHORITIES) | The same credential signed by two keys of the primary authority (`#key-1`, `#key-2`), the second signature's entry carrying the partner authority's `keyId`. A signature counts for the authority its `keyId` names only when it verifies under a key that authority publishes, and the partner's key does not verify it, so the count is 1. A verifier that trusts the `keyId` label wrongly ACCEPTs, even if it counts each public key once. |
+
+## Required trust level: the distinct signer-authority count
+
+A fixture's `verifierState.requiredTrustLevel` is the trust level the relying
+party requires; a fixture that omits it requires none. At 3 or higher, both
+reference verifiers apply atx-spec `core.md` §1.3 step 7 and REJECT with
+`INSUFFICIENT_SIGNER_AUTHORITIES` unless at least two distinct authorities
+each produced a signature the verifier verified itself. Neither the length of
+`issuerChain` nor the names in it are counted.
+
+A signature counts for the authority its `keyId` names when that DID is a
+trusted issuer eligible for the credential (the issuer, or under v1.1 a
+trusted authority named in the signed `issuerChain`) and the signature
+verifies under a key that `verifierState.publicKeys` publishes under that DID.
+Signatures from one authority count once however many of its keys signed, and
+signatures that verify under the same public key count once whatever `keyId`
+they carry. Under v1.0 the chain is unsigned and makes no key eligible, so a
+v1.0 credential counts at most one authority.
+
+Both verifiers run the count once every declared signature has verified and
+the other signature checks (the Ed25519 companion of an ML-DSA-65 signature,
+and `requiredSignatures` when it is set) have passed, and print it, with the
+asserted `trustLevel`, under each fixture that reaches step 7. The five fixtures that set `requiredTrustLevel` assert `trustLevel` 3,
+equal to the required level, so their verdicts do not depend on whether a
+verifier also compares the asserted level with the required one; the suite
+does not pin that comparison. The §7 root cosignature at trust level 4 is not
+covered. `conformance.json` still lists step 7 under `notCovered`, because the
+Coverage paragraph of `core.md` at the pinned atx-spec commit still lists it
+among the requirements no fixture exercises; the two drop it together, and
+[`scripts/check_step7_coverage.py`](../scripts/check_step7_coverage.py) fails
+when one of them lists it and the other does not.

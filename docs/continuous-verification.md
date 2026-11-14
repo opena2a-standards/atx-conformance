@@ -12,7 +12,7 @@ claims the README and its pages under `docs/` make about them -- not every
 sentence below:
 
 1. Both reference verifiers run against `fixtures/` and must report
-   `47 pass, 0 fail`. `go test ./...` in `verifiers/go` runs the Go verifier in
+   `52 pass, 0 fail`. `go test ./...` in `verifiers/go` runs the Go verifier in
    the directory and with the arguments of the command the capture's
    sidecar records it ran (`ranAs`) and requires its standard output to
    equal [`docs/captures/go-verifier.txt`](captures/go-verifier.txt), the
@@ -85,7 +85,13 @@ sentence below:
    the same pinned atx-spec ref as the schema. That copy must carry the
    SHA-256 of `core.md` at that ref, and the ref recorded with it must be the
    one the schema drift gate checks out, so the copy cannot gain a heading by
-   being edited or fall behind a moved pin.
+   being edited or fall behind a moved pin. The same step runs
+   [`scripts/check_step7_coverage.py`](../scripts/check_step7_coverage.py):
+   `conformance.json` lists §1.3 step 7 under `notCovered` exactly when the
+   Coverage paragraph of that copy lists it among the requirements no
+   fixture exercises, and the two may drop it only while a fixture with
+   `verifierState.requiredTrustLevel` 3 or higher expects ACCEPT and another
+   expects REJECT `INSUFFICIENT_SIGNER_AUTHORITIES`.
 6. Schema validation
    ([`scripts/schema_validation.py`](../scripts/schema_validation.py)): every
    fixture's `atx` member must validate against the atx-spec machine-readable

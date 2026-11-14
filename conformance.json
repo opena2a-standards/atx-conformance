@@ -12,12 +12,12 @@
     {
       "language": "go",
       "path": "verifiers/go",
-      "coverage": "full: Ed25519 and ML-DSA-65 (FIPS 204) hybrid signatures, v1.0 pipe canonical form and v1.1 JCS(TBS)"
+      "coverage": "full: Ed25519 and ML-DSA-65 (FIPS 204) hybrid signatures, v1.0 pipe canonical form and v1.1 JCS(TBS), and the distinct signer-authority count of ATX core.md section 1.3 step 7"
     },
     {
       "language": "python",
       "path": "verifiers/python",
-      "coverage": "full: Ed25519 and ML-DSA-65 (FIPS 204, via dilithium-py) hybrid signatures, v1.0 pipe canonical form and v1.1 JCS(TBS) via vendored RFC 8785"
+      "coverage": "full: Ed25519 and ML-DSA-65 (FIPS 204, via dilithium-py) hybrid signatures, v1.0 pipe canonical form and v1.1 JCS(TBS) via vendored RFC 8785, and the distinct signer-authority count of ATX core.md section 1.3 step 7"
     }
   ],
   "additionalGates": [
@@ -30,7 +30,7 @@
   "notCovered": [
     {
       "item": "Distinct signer-authority count (ATX core.md section 1.3 step 7)",
-      "reason": "no fixture carries verified signatures from more than one distinct authority, and the fixture format has no field for the required trust level that step 7's condition reads, so a verifier that omits step 7 entirely passes the suite; a length-of-issuerChain test is not step 7 (the spec says the chain length MUST NOT be counted) and implementations MUST self-attest this requirement until a fixture exists for it"
+      "reason": "the v1_1-two-authority-cosignature fixture and the four REJECT fixtures that share its credential exercise the count at a required trust level of 3 (verifierState.requiredTrustLevel), and both reference verifiers perform it; the entry stays because the Coverage paragraph of core.md at the pinned atx-spec commit still lists step 7 among the requirements no fixture exercises, and this list and that paragraph drop step 7 together"
     },
     {
       "item": "k-of-n threshold issuance, a threshold the credential meets (ATX core.md section 3.1 step 8: cosignatures from 2 of 3 key holders)",
@@ -38,7 +38,7 @@
     },
     {
       "item": "Cosignature requirements (ATX core.md section 7: federation cosigning, and the root cosignature at trust level 4)",
-      "reason": "threshold-2of3-cosignature pins three signatures over the signing bytes, each of which must verify; no fixture asserts that a trust level 4 credential carries the root cosignature or that a federated issuance carries its peer's cosignature"
+      "reason": "threshold-2of3-cosignature pins three signatures over the signing bytes, made by three keys of one authority, each of which must verify; the v1_1-two-authority-cosignature fixture and the four REJECT fixtures that share its credential pin the section 1.3 step 7 count at a required trust level of 3; no fixture asserts that a trust level 4 credential carries the root cosignature (section 7 rule 4) or that a federated issuance carries its peer's cosignature, and none exercises the root's cross-org attestation for an issuer outside the verifier's trusted list (section 7 rule 3)"
     },
     {
       "item": "Revocation propagation timing (ATX core.md section 3.3)",
@@ -662,7 +662,7 @@
         }
       ],
       "expected": "ACCEPT",
-      "description": "An ATX cosigned by all three keys of a 2-of-3 threshold issuer (primary plus two cosigners). All three signatures are Ed25519 and cover the same canonical payload. Verifier MUST ACCEPT. A spec-conformant verifier additionally MUST validate at least two of the three signatures for trust level 4."
+      "description": "An ATX v1.0 credential at trustLevel 4 signed by all three keys of one authority's threshold key set: did:opena2a:authority:opena2a.org#key-1 (primary) plus #key-2 and #key-3 (cosigners). All three signatures are Ed25519 over the same canonical payload, and every declared signature MUST verify. The verifier state sets no required trust level. Verifier MUST ACCEPT. The three keys belong to one authority, so the distinct signer-authority count of atx-spec core.md §1.3 step 7 counts them once; fixtures/v1_1-one-authority-threshold-keys.json signs with the same three keys at a required trust level of 3, where the verifier MUST REJECT."
     },
     {
       "fixture": "fixtures/v1_1-baseline-valid-hybrid.json",
@@ -955,6 +955,47 @@
       ],
       "expected": "REJECT[PARSE_ERROR]",
       "description": "An ATX v1.1 credential carrying a decoy top-level TRUSTLEVEL member (value 9) injected before the signed trustLevel member (value 4) — two names that fold to the same field. Go's encoding/json resolves struct fields case-insensitively last-wins, so it collapses the pair to the signed trustLevel=4: a lenient Go verifier ACCEPTs, silently carrying a stray fold-colliding TRUSTLEVEL member. The same bytes read differently under other conforming parsers: a case-insensitive first-wins parser reads 9, and a case-sensitive parser (this suite's Python json.loads) keeps both as distinct members, reading trustLevel=4 alongside a separate TRUSTLEVEL=9. A case-SENSITIVE duplicate check flags neither. Because encoding/json's field folding makes the credential mean different things to different conforming parsers — the RFC 8259 §4 first-wins/last-wins parser divergence the strict parse exists to close — verifiers MUST fold member names and REJECT fold-colliding members with PARSE_ERROR before interpreting any field. Reference: foldKey in verifiers/go and verifiers/python (atx-conformance#16)."
+    },
+    {
+      "fixture": "fixtures/v1_1-cosigner-named-not-signed.json",
+      "name": "atx-v1_1/cosigner-named-not-signed",
+      "requirement": "§1.3 step 7: presence in the signed issuerChain is not a signature, so at a required trust level of 3 a credential only its issuer signed is rejected although the chain names a second trusted authority",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "REJECT[INSUFFICIENT_SIGNER_AUTHORITIES]",
+      "description": "The credential of v1_1-two-authority-cosignature (ATX v1.1, trustLevel 3, a signed two-element issuerChain naming the partner authority did:opena2a:authority:partner.example and the primary authority did:opena2a:authority:opena2a.org) carrying only the primary authority's Ed25519 signature. The verifier trusts both authorities, holds the partner authority's key, and requires trust level 3. The chain names a second authority, but presence in issuerChain is not a signature and its length is not counted: one authority has produced a signature the verifier verifies, so the distinct signer-authority count of atx-spec core.md §1.3 step 7 is 1 and the verifier MUST REJECT. A verifier that omits step 7, or counts the issuerChain or the trusted authorities it names, wrongly ACCEPTs."
     },
     {
       "fixture": "fixtures/v1_1-cross-issuer-key.json",
@@ -1805,6 +1846,129 @@
       "description": "An ATX v1.1 credential that omits the optional transparencyLogIndex. The field is assigned by the log after signing and is outside JCS(TBS), so its absence changes no canonical bytes and no signature; this credential's JCS(TBS) is byte-identical to the v1.1 baseline's. Verifier MUST ACCEPT. A verifier that requires the field, or that reads its presence as evidence of transparency-log inclusion, wrongly REJECTs."
     },
     {
+      "fixture": "fixtures/v1_1-one-authority-threshold-keys.json",
+      "name": "atx-v1_1/one-authority-threshold-keys",
+      "requirement": "§1.3 step 7: each authority counts once however many of its keys signed, so at a required trust level of 3 a credential signed by three keys of one authority is rejected",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "REJECT[INSUFFICIENT_SIGNER_AUTHORITIES]",
+      "description": "The credential of v1_1-two-authority-cosignature (ATX v1.1, trustLevel 3, a signed issuerChain naming the partner authority and the primary authority) signed by the three keys of one authority's threshold key set: did:opena2a:authority:opena2a.org#key-1, #key-2 and #key-3, the keys of threshold-2of3-cosignature. All three Ed25519 signatures verify over JCS(TBS), and the verifier requires trust level 3. Each authority counts once however many of its keys signed, and a threshold key set held by one authority is one authority (atx-spec core.md §1.3 step 7), so the distinct signer-authority count is 1 and the verifier MUST REJECT. A verifier that counts verified signatures or distinct keys instead of distinct authorities wrongly ACCEPTs."
+    },
+    {
+      "fixture": "fixtures/v1_1-one-key-under-two-dids.json",
+      "name": "atx-v1_1/one-key-under-two-dids",
+      "requirement": "§1.3 step 7: two signatures that verify under the same public key count once whatever keyId values they carry, so at a required trust level of 3 one key's signature carried under two trusted DIDs is rejected",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "REJECT[INSUFFICIENT_SIGNER_AUTHORITIES]",
+      "description": "The credential of v1_1-two-authority-cosignature (ATX v1.1, trustLevel 3, a signed issuerChain naming the partner authority and the primary authority) carrying two signature entries with the same Ed25519 value, made by the primary authority's key: one with keyId did:opena2a:authority:opena2a.org#key-1 and one with keyId did:opena2a:authority:partner.example#key-2. The verifier trusts both authorities and publishes the primary authority's public key under both DIDs, so each entry verifies under a key published by the DID its keyId names, and the verifier requires trust level 3. Distinctness is over keys as well as names: two signatures that verify under the same public key count once whatever keyId values they carry (atx-spec core.md §1.3 step 7), so the distinct signer-authority count is 1 and the verifier MUST REJECT. A verifier that counts distinct keyId DIDs wrongly ACCEPTs."
+    },
+    {
+      "fixture": "fixtures/v1_1-own-key-labelled-as-cosigner.json",
+      "name": "atx-v1_1/own-key-labelled-as-cosigner",
+      "requirement": "§1.3 step 7: a signature counts for the authority its keyId names only when it verifies under a key that authority publishes, so at a required trust level of 3 a signature by a second key of the issuer carrying the partner authority's keyId is rejected",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "REJECT[INSUFFICIENT_SIGNER_AUTHORITIES]",
+      "description": "The credential of v1_1-two-authority-cosignature (ATX v1.1, trustLevel 3, a signed issuerChain naming the partner authority and the primary authority) carrying two Ed25519 signatures made by two keys of the primary authority: one by did:opena2a:authority:opena2a.org#key-1 under that keyId, and one by #key-2 whose entry carries the partner authority's keyId, did:opena2a:authority:partner.example#key-1. Both verify over JCS(TBS) under keys of an authority the verifier trusts for this credential, and the verifier requires trust level 3. A signature counts for the authority its keyId names only when it verifies under a key published by that authority (atx-spec core.md §1.3 step 7): the partner authority publishes one key, and it does not verify the second signature. One authority is counted, so the verifier MUST REJECT. A verifier that attributes a signature to the DID its keyId names without checking that the verifying key is published under that DID wrongly ACCEPTs, even if it counts each public key once."
+    },
+    {
       "fixture": "fixtures/v1_1-scan-summary-case-variant-member.json",
       "name": "atx-v1_1/scan-summary-case-variant-member",
       "requirement": "§1.1: scanSummary member names are compared exactly, so criticalFindings renamed CriticalFindings after signing leaves a scanSummary the TBS has no value for, a signature failure",
@@ -2064,6 +2228,47 @@
       ],
       "expected": "REJECT[SIGNATURE_INVALID]",
       "description": "An ATX v1.1 credential whose declaredPurpose.category was rewritten from financial-operations to agent-orchestration AFTER signing. Because v1.1 signs JCS(TBS) and declaredPurpose is part of it, the verifier recomputes the canonical bytes, finds they no longer match the signature, and MUST REJECT. This is the integrity property that makes a declared purpose binding and non-repudiable (§1.5)."
+    },
+    {
+      "fixture": "fixtures/v1_1-two-authority-cosignature.json",
+      "name": "atx-v1_1/two-authority-cosignature",
+      "requirement": "§1.3 step 7: at a required trust level of 3, a credential carrying signatures by two distinct trusted authorities, each verifying under a key its own DID publishes, is accepted",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "ACCEPT",
+      "description": "An ATX v1.1 credential issued by the primary authority (did:opena2a:authority:opena2a.org) at trustLevel 3, whose signed root-first issuerChain names the partner authority (did:opena2a:authority:partner.example) and the primary authority, carrying two Ed25519 signatures over the same JCS(TBS) bytes: one by the primary authority's key (#key-1) and one by the partner authority's key (#key-1). The verifier trusts both authorities, publishes each key under its own DID, and requires trust level 3 (verifierState.requiredTrustLevel). Two distinct authorities have each produced a signature the verifier verifies itself, so the distinct signer-authority count of atx-spec core.md §1.3 step 7 is 2. Verifier MUST ACCEPT. This is the control for the four fixtures that carry the same credential with a different signature set and MUST REJECT: v1_1-cosigner-named-not-signed, v1_1-one-authority-threshold-keys, v1_1-one-key-under-two-dids and v1_1-own-key-labelled-as-cosigner."
     },
     {
       "fixture": "fixtures/v1_1-untrusted-chain-authority.json",

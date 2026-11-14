@@ -356,10 +356,17 @@ type SpecRef struct {
 }
 
 // VerifierState is the configuration the verifier MUST apply before running.
+//
+// RequiredTrustLevel is the trust level the relying party requires, the input
+// atx-spec core.md §1.3 step 7 reads: at 3 or higher the verifier MUST reject
+// unless at least two distinct authorities have each produced a signature it
+// verified itself. Zero means no level is required, and omitempty keeps it out
+// of every fixture that does not set it, so those fixtures' bytes are unchanged.
 type VerifierState struct {
-	ClockRFC3339   string       `json:"clockRfc3339"`
-	TrustedIssuers []string     `json:"trustedIssuers"`
-	PublicKeys     []KeypairRef `json:"publicKeys"`
+	ClockRFC3339       string       `json:"clockRfc3339"`
+	TrustedIssuers     []string     `json:"trustedIssuers"`
+	RequiredTrustLevel int          `json:"requiredTrustLevel,omitempty"`
+	PublicKeys         []KeypairRef `json:"publicKeys"`
 	// RequiredSignatures is the k of a k-of-n signature threshold: the number
 	// of distinct Ed25519 keys whose signatures must verify. Zero is left out,
 	// so a fixture that sets no threshold carries no such member.
@@ -549,6 +556,42 @@ func main() {
 		Signature: "TEST_ONLY_UNSIGNED_CRL",
 	}
 
+	// Required-trust-level verifier state: the cross-issuer state (the primary
+	// and partner authorities trusted, each key published under its own DID)
+	// plus a required trust level of 3, which makes atx-spec core.md §1.3 step 7
+	// reject unless two distinct authorities each produced a verified signature.
+	// Used by the distinct signer-authority fixtures.
+	requiredLevel3VerifierState := crossIssuerVerifierState
+	requiredLevel3VerifierState.RequiredTrustLevel = 3
+
+	// The same state, additionally publishing the primary authority's Ed25519
+	// public key under the partner authority's DID (#key-2), as
+	// vectors/issuer-primary-under-partner-did.json records it. One key
+	// published by two trusted DIDs is still one key: step 7 counts two
+	// signatures that verify under the same public key once, whatever keyId
+	// values they carry.
+	const primaryUnderPartnerPath = "vectors/issuer-primary-under-partner-did.json"
+	primaryKeyUnderPartnerDID := keypairRefFor(
+		mustLoadPublishedKey(primaryUnderPartnerPath, primary, secondary.IssuerDID),
+		primaryUnderPartnerPath)
+	oneKeyTwoDIDsVerifierState := requiredLevel3VerifierState
+	oneKeyTwoDIDsVerifierState.PublicKeys = append(append([]KeypairRef{},
+		requiredLevel3VerifierState.PublicKeys...),
+		primaryKeyUnderPartnerDID)
+
+	// newTwoAuthorityV11ATX is the credential the step 7 fixtures share,
+	// differing only in their signatures: the v1.1 baseline at trustLevel 3
+	// (below 4, so the §7 rule 4 root cosignature is not in play) with a signed,
+	// root-first two-element issuerChain naming the partner authority and the
+	// primary authority (the issuer). Naming the partner in the signed chain
+	// makes its key eligible under step 4, so its signature can be counted.
+	newTwoAuthorityV11ATX := func() ATX {
+		a := newBaselineV11ATX()
+		a.TrustLevel = 3
+		a.IssuerChain = []string{secondary.IssuerDID, primary.IssuerDID}
+		return a
+	}
+
 	type fixtureSpec struct {
 		writePath string
 		build     func() Fixture
@@ -693,8 +736,14 @@ func main() {
 			ed2 := signWithKey(cos1, atx)
 			ed3 := signWithKey(cos2, atx)
 			atx.Signatures = []ATCSignature{ed1, ed2, ed3}
+			// The description was corrected in place (README, Versioning and
+			// stability): it said a verifier MUST validate at least two of the
+			// three signatures for trust level 4, but every declared signature
+			// must verify (§1.3 step 5) and the three keys are one authority's,
+			// which §1.3 step 7 counts once. The credential, signatures,
+			// verifier state and expected outcome are unchanged.
 			return wrap("atx-v1/threshold-2of3-cosignature",
-				"An ATX cosigned by all three keys of a 2-of-3 threshold issuer (primary plus two cosigners). All three signatures are Ed25519 and cover the same canonical payload. Verifier MUST ACCEPT. A spec-conformant verifier additionally MUST validate at least two of the three signatures for trust level 4.",
+				"An ATX v1.0 credential at trustLevel 4 signed by all three keys of one authority's threshold key set: did:opena2a:authority:opena2a.org#key-1 (primary) plus #key-2 and #key-3 (cosigners). All three signatures are Ed25519 over the same canonical payload, and every declared signature MUST verify. The verifier state sets no required trust level. Verifier MUST ACCEPT. The three keys belong to one authority, so the distinct signer-authority count of atx-spec core.md §1.3 step 7 counts them once; fixtures/v1_1-one-authority-threshold-keys.json signs with the same three keys at a required trust level of 3, where the verifier MUST REJECT.",
 				[]KeypairRef{
 					keypairRefFor(primary, "vectors/issuer-primary.json"),
 					keypairRefFor(cos1, "vectors/issuer-cosigner-1.json"),
@@ -1402,6 +1451,98 @@ func main() {
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "PARSE_ERROR", ReasonContains: "printable ASCII"},
 				atx)
 		}},
+		// ---- distinct signer-authority count (atx-spec core.md §1.3 step 7) ----
+		// One credential (newTwoAuthorityV11ATX), five signature sets, all at a
+		// required trust level of 3. Only the first carries signatures from two
+		// distinct authorities; the other four are ways a count that is not over
+		// distinct verified signer authorities goes wrong.
+		{"fixtures/v1_1-two-authority-cosignature.json", func() Fixture {
+			// The MUST-ACCEPT control: the primary authority and the partner
+			// authority each sign JCS(TBS) with their own key.
+			atx := newTwoAuthorityV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx), signV11WithKey(secondary, atx)}
+			return wrap("atx-v1_1/two-authority-cosignature",
+				"An ATX v1.1 credential issued by the primary authority (did:opena2a:authority:opena2a.org) at trustLevel 3, whose signed root-first issuerChain names the partner authority (did:opena2a:authority:partner.example) and the primary authority, carrying two Ed25519 signatures over the same JCS(TBS) bytes: one by the primary authority's key (#key-1) and one by the partner authority's key (#key-1). The verifier trusts both authorities, publishes each key under its own DID, and requires trust level 3 (verifierState.requiredTrustLevel). Two distinct authorities have each produced a signature the verifier verifies itself, so the distinct signer-authority count of atx-spec core.md §1.3 step 7 is 2. Verifier MUST ACCEPT. This is the control for the four fixtures that carry the same credential with a different signature set and MUST REJECT: v1_1-cosigner-named-not-signed, v1_1-one-authority-threshold-keys, v1_1-one-key-under-two-dids and v1_1-own-key-labelled-as-cosigner.",
+				[]KeypairRef{
+					keypairRefFor(primary, "vectors/issuer-primary.json"),
+					keypairRefFor(secondary, "vectors/issuer-secondary.json"),
+				},
+				requiredLevel3VerifierState,
+				ExpectedOutcome{VerifyResult: "ACCEPT"},
+				atx)
+		}},
+		{"fixtures/v1_1-cosigner-named-not-signed.json", func() Fixture {
+			// MUST-REJECT: the chain names the partner authority, which is
+			// trusted and whose key the verifier holds, but only the primary
+			// authority signed. Presence in issuerChain is not a signature.
+			atx := newTwoAuthorityV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/cosigner-named-not-signed",
+				"The credential of v1_1-two-authority-cosignature (ATX v1.1, trustLevel 3, a signed two-element issuerChain naming the partner authority did:opena2a:authority:partner.example and the primary authority did:opena2a:authority:opena2a.org) carrying only the primary authority's Ed25519 signature. The verifier trusts both authorities, holds the partner authority's key, and requires trust level 3. The chain names a second authority, but presence in issuerChain is not a signature and its length is not counted: one authority has produced a signature the verifier verifies, so the distinct signer-authority count of atx-spec core.md §1.3 step 7 is 1 and the verifier MUST REJECT. A verifier that omits step 7, or counts the issuerChain or the trusted authorities it names, wrongly ACCEPTs.",
+				[]KeypairRef{
+					keypairRefFor(primary, "vectors/issuer-primary.json"),
+					keypairRefFor(secondary, "vectors/issuer-secondary.json"),
+				},
+				requiredLevel3VerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "INSUFFICIENT_SIGNER_AUTHORITIES", ReasonContains: "distinct signer authorities"},
+				atx)
+		}},
+		{"fixtures/v1_1-one-authority-threshold-keys.json", func() Fixture {
+			// MUST-REJECT, distinctness over names: three keys of ONE
+			// authority, the key set of threshold-2of3-cosignature.json.
+			atx := newTwoAuthorityV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx), signV11WithKey(cos1, atx), signV11WithKey(cos2, atx)}
+			return wrap("atx-v1_1/one-authority-threshold-keys",
+				"The credential of v1_1-two-authority-cosignature (ATX v1.1, trustLevel 3, a signed issuerChain naming the partner authority and the primary authority) signed by the three keys of one authority's threshold key set: did:opena2a:authority:opena2a.org#key-1, #key-2 and #key-3, the keys of threshold-2of3-cosignature. All three Ed25519 signatures verify over JCS(TBS), and the verifier requires trust level 3. Each authority counts once however many of its keys signed, and a threshold key set held by one authority is one authority (atx-spec core.md §1.3 step 7), so the distinct signer-authority count is 1 and the verifier MUST REJECT. A verifier that counts verified signatures or distinct keys instead of distinct authorities wrongly ACCEPTs.",
+				[]KeypairRef{
+					keypairRefFor(primary, "vectors/issuer-primary.json"),
+					keypairRefFor(cos1, "vectors/issuer-cosigner-1.json"),
+					keypairRefFor(cos2, "vectors/issuer-cosigner-2.json"),
+				},
+				requiredLevel3VerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "INSUFFICIENT_SIGNER_AUTHORITIES", ReasonContains: "distinct signer authorities"},
+				atx)
+		}},
+		{"fixtures/v1_1-one-key-under-two-dids.json", func() Fixture {
+			// MUST-REJECT, distinctness over keys: Ed25519 is deterministic, so
+			// the primary key's signature over these bytes is one value; it is
+			// carried twice, once under each DID that publishes that key.
+			atx := newTwoAuthorityV11ATX()
+			primarySig := signV11WithKey(primary, atx)
+			republished := primarySig
+			republished.KeyID = primaryKeyUnderPartnerDID.KeyID
+			atx.Signatures = []ATCSignature{primarySig, republished}
+			return wrap("atx-v1_1/one-key-under-two-dids",
+				"The credential of v1_1-two-authority-cosignature (ATX v1.1, trustLevel 3, a signed issuerChain naming the partner authority and the primary authority) carrying two signature entries with the same Ed25519 value, made by the primary authority's key: one with keyId did:opena2a:authority:opena2a.org#key-1 and one with keyId did:opena2a:authority:partner.example#key-2. The verifier trusts both authorities and publishes the primary authority's public key under both DIDs, so each entry verifies under a key published by the DID its keyId names, and the verifier requires trust level 3. Distinctness is over keys as well as names: two signatures that verify under the same public key count once whatever keyId values they carry (atx-spec core.md §1.3 step 7), so the distinct signer-authority count is 1 and the verifier MUST REJECT. A verifier that counts distinct keyId DIDs wrongly ACCEPTs.",
+				[]KeypairRef{
+					keypairRefFor(primary, "vectors/issuer-primary.json"),
+					primaryKeyUnderPartnerDID,
+				},
+				oneKeyTwoDIDsVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "INSUFFICIENT_SIGNER_AUTHORITIES", ReasonContains: "distinct signer authorities"},
+				atx)
+		}},
+		{"fixtures/v1_1-own-key-labelled-as-cosigner.json", func() Fixture {
+			// MUST-REJECT, the published-key check: a second key of the primary
+			// authority (#key-2) signs, and its entry carries the partner
+			// authority's keyId. A different key from the first signature, so
+			// counting distinct keys does not catch it; only checking that the
+			// verifying key is published under the DID the keyId names does.
+			atx := newTwoAuthorityV11ATX()
+			relabelled := signV11WithKey(cos1, atx)
+			relabelled.KeyID = secondary.KeyID
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx), relabelled}
+			return wrap("atx-v1_1/own-key-labelled-as-cosigner",
+				"The credential of v1_1-two-authority-cosignature (ATX v1.1, trustLevel 3, a signed issuerChain naming the partner authority and the primary authority) carrying two Ed25519 signatures made by two keys of the primary authority: one by did:opena2a:authority:opena2a.org#key-1 under that keyId, and one by #key-2 whose entry carries the partner authority's keyId, did:opena2a:authority:partner.example#key-1. Both verify over JCS(TBS) under keys of an authority the verifier trusts for this credential, and the verifier requires trust level 3. A signature counts for the authority its keyId names only when it verifies under a key published by that authority (atx-spec core.md §1.3 step 7): the partner authority publishes one key, and it does not verify the second signature. One authority is counted, so the verifier MUST REJECT. A verifier that attributes a signature to the DID its keyId names without checking that the verifying key is published under that DID wrongly ACCEPTs, even if it counts each public key once.",
+				[]KeypairRef{
+					keypairRefFor(primary, "vectors/issuer-primary.json"),
+					keypairRefFor(cos1, "vectors/issuer-cosigner-1.json"),
+					keypairRefFor(secondary, "vectors/issuer-secondary.json"),
+				},
+				requiredLevel3VerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "INSUFFICIENT_SIGNER_AUTHORITIES", ReasonContains: "distinct signer authorities"},
+				atx)
+		}},
 	}
 
 	type manifestEntry struct {
@@ -1830,6 +1971,13 @@ var fixtureRequirements = map[string]string{
 
 	// Expiry one second past the family clock-skew bound.
 	"atx-v1/expired-beyond-skew": "§1.3 step 2: expiry is evaluated within the family clock-skew bound of ATP §10.2, at most 60 seconds, so a credential whose expiresAt is 61 seconds earlier than the verifier's clock is rejected at every tolerance the bound allows",
+
+	// Distinct signer-authority count at a required trust level of 3.
+	"atx-v1_1/two-authority-cosignature":    "§1.3 step 7: at a required trust level of 3, a credential carrying signatures by two distinct trusted authorities, each verifying under a key its own DID publishes, is accepted",
+	"atx-v1_1/cosigner-named-not-signed":    "§1.3 step 7: presence in the signed issuerChain is not a signature, so at a required trust level of 3 a credential only its issuer signed is rejected although the chain names a second trusted authority",
+	"atx-v1_1/one-authority-threshold-keys": "§1.3 step 7: each authority counts once however many of its keys signed, so at a required trust level of 3 a credential signed by three keys of one authority is rejected",
+	"atx-v1_1/one-key-under-two-dids":       "§1.3 step 7: two signatures that verify under the same public key count once whatever keyId values they carry, so at a required trust level of 3 one key's signature carried under two trusted DIDs is rejected",
+	"atx-v1_1/own-key-labelled-as-cosigner": "§1.3 step 7: a signature counts for the authority its keyId names only when it verifies under a key that authority publishes, so at a required trust level of 3 a signature by a second key of the issuer carrying the partner authority's keyId is rejected",
 }
 
 // fixtureRequirementsUsed records which fixtureRequirements entries wrap consumed.
@@ -1953,6 +2101,23 @@ func mustLoadKeyVector(relPath string) keyVector {
 		if string(pub) != string(want) {
 			panic(fmt.Sprintf("keypair vector mismatch in %s: seed-derived pubkey does not match", relPath))
 		}
+	}
+	return v
+}
+
+// mustLoadPublishedKey loads a vector that holds a public key only: the key
+// of signer as another DID, publisherDID, publishes it under a keyId of its
+// own. It panics unless the vector carries no seed, has signer's algorithm and
+// public key, and names publisherDID as its issuerDid and in its keyId, so a
+// fixture that cites it names a key whose signatures signer's seed makes.
+func mustLoadPublishedKey(relPath string, signer keyVector, publisherDID string) keyVector {
+	b, err := os.ReadFile(filepath.Join(outDir, relPath)) //nolint:gosec // G304: build-time tool; outDir + constant relPath, no untrusted input
+	must(err)
+	var v keyVector
+	must(json.Unmarshal(b, &v))
+	if v.SeedHex != "" || v.Algorithm != signer.Algorithm || v.PublicKeyHex != signer.PublicKeyHex ||
+		v.IssuerDID != publisherDID || !strings.HasPrefix(v.KeyID, publisherDID+"#") {
+		panic(fmt.Sprintf("published-key vector %s is not the %s key under %s", relPath, signer.Role, publisherDID))
 	}
 	return v
 }

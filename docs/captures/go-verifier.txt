@@ -2,12 +2,12 @@ PASS  fixtures/baseline-valid-hybrid.json
        expected: ACCEPT
        observed: ACCEPT
        signatures: 2/2 valid (ed25519=true mldsa65=true)
-       trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+       distinct signer authorities (step 7): 1; trustLevel 4 asserted
 PASS  fixtures/baseline-valid.json
        expected: ACCEPT
        observed: ACCEPT
        signatures: 1/1 valid (ed25519=true mldsa65=false)
-       trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+       distinct signer authorities (step 7): 1; trustLevel 4 asserted
 PASS  fixtures/cross-issuer-key.json
        expected: REJECT [SIGNATURE_INVALID]
        observed: REJECT[SIGNATURE_INVALID: Ed25519 signature did:opena2a:authority:partner.example#key-1 did not verify against any configured public key]
@@ -24,7 +24,7 @@ PASS  fixtures/foreign-did-method-valid.json
        expected: ACCEPT
        observed: ACCEPT
        signatures: 2/2 valid (ed25519=true mldsa65=true)
-       trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+       distinct signer authorities (step 7): 1; trustLevel 4 asserted
 PASS  fixtures/hybrid-pq-only.json
        expected: REJECT [SIGNATURE_INVALID]
        observed: REJECT[SIGNATURE_INVALID: ML-DSA-65 signature declared without a verifying Ed25519 signature (an ML-DSA-65 entry requires an Ed25519 companion)]
@@ -47,17 +47,17 @@ PASS  fixtures/threshold-2of3-cosignature.json
        expected: ACCEPT
        observed: ACCEPT
        signatures: 3/3 valid (ed25519=true mldsa65=false)
-       trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+       distinct signer authorities (step 7): 1; trustLevel 4 asserted
 PASS  fixtures/v1_1-baseline-valid-hybrid.json
        expected: ACCEPT
        observed: ACCEPT
        signatures: 2/2 valid (ed25519=true mldsa65=true)
-       trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+       distinct signer authorities (step 7): 1; trustLevel 4 asserted
 PASS  fixtures/v1_1-baseline-valid.json
        expected: ACCEPT
        observed: ACCEPT
        signatures: 1/1 valid (ed25519=true mldsa65=false)
-       trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+       distinct signer authorities (step 7): 1; trustLevel 4 asserted
 PASS  fixtures/v1_1-behavioral-profile-case-variant-member.json
        expected: REJECT [SIGNATURE_INVALID]
        observed: REJECT[SIGNATURE_INVALID: no signature covers behavioralProfile, which is not an object of exactly checksum (a string), generatedAt (a timestamp) and observationDays (an integer)]
@@ -73,6 +73,11 @@ PASS  fixtures/v1_1-behavioral-profile-not-object.json
 PASS  fixtures/v1_1-case-variant-member.json
        expected: REJECT [PARSE_ERROR]
        observed: REJECT[PARSE_ERROR: credential contains duplicate member "trustLevel" (strict parse: the whole ATX credential is a signed body; RFC 8259 §4 duplicate names are parser-divergent)]
+PASS  fixtures/v1_1-cosigner-named-not-signed.json
+       expected: REJECT [INSUFFICIENT_SIGNER_AUTHORITIES]
+       observed: REJECT[INSUFFICIENT_SIGNER_AUTHORITIES: required trust level 3 needs at least 2 distinct signer authorities, 1 verified (core.md section 1.3 step 7)]
+       signatures: 1/1 valid (ed25519=true mldsa65=false)
+       distinct signer authorities (step 7): 1; trustLevel 3 asserted
 PASS  fixtures/v1_1-cross-issuer-key.json
        expected: REJECT [SIGNATURE_INVALID]
        observed: REJECT[SIGNATURE_INVALID: Ed25519 signature did:opena2a:authority:partner.example#key-1 did not verify against any configured public key]
@@ -83,7 +88,7 @@ PASS  fixtures/v1_1-declared-purpose-empty-whitespace.json
        expected: ACCEPT
        observed: ACCEPT
        signatures: 1/1 valid (ed25519=true mldsa65=false)
-       trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+       distinct signer authorities (step 7): 1; trustLevel 4 asserted
 PASS  fixtures/v1_1-declared-purpose-integer-outside-range.json
        expected: REJECT [SIGNATURE_INVALID]
        observed: REJECT[SIGNATURE_INVALID: no signature covers declaredPurpose: the integer 9007199254740993 is outside the I-JSON exact range, -(2^53-1) to 2^53-1]
@@ -100,7 +105,7 @@ PASS  fixtures/v1_1-declared-purpose-integer-signed.json
        expected: ACCEPT
        observed: ACCEPT
        signatures: 1/1 valid (ed25519=true mldsa65=false)
-       trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+       distinct signer authorities (step 7): 1; trustLevel 4 asserted
 PASS  fixtures/v1_1-declared-purpose-number-injected.json
        expected: REJECT [SIGNATURE_INVALID]
        observed: REJECT[SIGNATURE_INVALID: no signature covers declaredPurpose: the number 1.5 is written with a fraction or an exponent part, not as an integer]
@@ -111,7 +116,7 @@ PASS  fixtures/v1_1-declared-purpose-valid.json
        expected: ACCEPT
        observed: ACCEPT
        signatures: 1/1 valid (ed25519=true mldsa65=false)
-       trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+       distinct signer authorities (step 7): 1; trustLevel 4 asserted
 PASS  fixtures/v1_1-dotless-i-member.json
        expected: REJECT [PARSE_ERROR]
        observed: REJECT[PARSE_ERROR: credential member name "\u0131ssuedAt" holds U+0131, outside printable ASCII (strict parse: a member name in the credential, a signature entry, scanSummary or behavioralProfile must be printable ASCII, U+0020 to U+007E)]
@@ -134,7 +139,22 @@ PASS  fixtures/v1_1-no-transparency-log-index.json
        expected: ACCEPT
        observed: ACCEPT
        signatures: 1/1 valid (ed25519=true mldsa65=false)
-       trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+       distinct signer authorities (step 7): 1; trustLevel 4 asserted
+PASS  fixtures/v1_1-one-authority-threshold-keys.json
+       expected: REJECT [INSUFFICIENT_SIGNER_AUTHORITIES]
+       observed: REJECT[INSUFFICIENT_SIGNER_AUTHORITIES: required trust level 3 needs at least 2 distinct signer authorities, 1 verified (core.md section 1.3 step 7)]
+       signatures: 3/3 valid (ed25519=true mldsa65=false)
+       distinct signer authorities (step 7): 1; trustLevel 3 asserted
+PASS  fixtures/v1_1-one-key-under-two-dids.json
+       expected: REJECT [INSUFFICIENT_SIGNER_AUTHORITIES]
+       observed: REJECT[INSUFFICIENT_SIGNER_AUTHORITIES: required trust level 3 needs at least 2 distinct signer authorities, 1 verified (core.md section 1.3 step 7)]
+       signatures: 2/2 valid (ed25519=true mldsa65=false)
+       distinct signer authorities (step 7): 1; trustLevel 3 asserted
+PASS  fixtures/v1_1-own-key-labelled-as-cosigner.json
+       expected: REJECT [INSUFFICIENT_SIGNER_AUTHORITIES]
+       observed: REJECT[INSUFFICIENT_SIGNER_AUTHORITIES: required trust level 3 needs at least 2 distinct signer authorities, 1 verified (core.md section 1.3 step 7)]
+       signatures: 2/2 valid (ed25519=true mldsa65=false)
+       distinct signer authorities (step 7): 1; trustLevel 3 asserted
 PASS  fixtures/v1_1-scan-summary-case-variant-member.json
        expected: REJECT [SIGNATURE_INVALID]
        observed: REJECT[SIGNATURE_INVALID: no signature covers scanSummary, which holds a member other than its six]
@@ -153,6 +173,11 @@ PASS  fixtures/v1_1-tampered-capabilities.json
 PASS  fixtures/v1_1-tampered-declared-purpose.json
        expected: REJECT [SIGNATURE_INVALID]
        observed: REJECT[SIGNATURE_INVALID: Ed25519 signature did:opena2a:authority:opena2a.org#key-1 did not verify against any configured public key]
+PASS  fixtures/v1_1-two-authority-cosignature.json
+       expected: ACCEPT
+       observed: ACCEPT
+       signatures: 2/2 valid (ed25519=true mldsa65=false)
+       distinct signer authorities (step 7): 2; trustLevel 3 asserted
 PASS  fixtures/v1_1-untrusted-chain-authority.json
        expected: REJECT [SIGNATURE_INVALID]
        observed: REJECT[SIGNATURE_INVALID: Ed25519 signature did:opena2a:authority:attacker.example#key-1 did not verify against any configured public key]
@@ -160,4 +185,4 @@ PASS  fixtures/wrong-issuer.json
        expected: REJECT [UNTRUSTED_ISSUER]
        observed: REJECT[UNTRUSTED_ISSUER: issuer DID did:opena2a:authority:attacker.example is not in the verifier's trusted set (untrusted issuer)]
 
-summary: 47 pass, 0 fail (47 fixtures)
+summary: 52 pass, 0 fail (52 fixtures)
