@@ -637,6 +637,22 @@ they should not.
   byte `0xe9`, and `pins` with `--job` on a path that does not exist; run
   against the script as it was before this change, each of the 7 fails. No
   fixture changes.
+- `scripts/kit/check_workflow.py release` holds a step whose shell's first
+  word is `cmd` to the rule against a `%...%` expansion directly before `>`,
+  so a step whose `shell:` is a custom template such as
+  `cmd /D /E:ON /V:OFF /S /C "CALL "{0}""` is held to it as one that sets
+  `shell: cmd` is (#370). It held a step to that rule only when its
+  shell was exactly `cmd`, so a copy of `.github/workflows/kit-release.yml`
+  whose Windows step in the test job sets that template as its `shell:` and
+  writes `echo %ERRORLEVEL%> ..\capture.rc` printed `7 jobs, 0 problems` and
+  exited 0; that copy now exits 1 naming the step. The template is read the
+  same way when it comes from the job's or the workflow's
+  `defaults: run: shell:`. `scripts/kit/test/test_kit.py --ci` adds 4 cells:
+  a step that sets the template, and a step that sets no shell under the
+  job's template default and one under the workflow's, which the check
+  refuses, and a step that sets `shell: pwsh -command ". '{0}'"`, which it
+  accepts; run against the script as it was before this change, each of the
+  3 refusal cells fails. No fixture, verifier or workflow file changes.
 
 ## v0.1.0
 

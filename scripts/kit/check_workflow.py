@@ -22,7 +22,9 @@ conformance.yml, for the controls they must hold.
         one-digit value such as the exit code 0 is read as a handle number
         and the file gets nothing); a step's shell is its own `shell:`, or,
         when it sets none, its job's `defaults: run: shell:`, or, when the
-        job sets none either, the workflow's;
+        job sets none either, the workflow's; a cmd step is a step whose
+        shell's first word is `cmd`, as in `shell: cmd` and in a custom
+        template such as `cmd /D /E:ON /V:OFF /S /C "CALL "{0}""`;
       - publish creates the release as a draft, uploads the assets, then
         publishes with --latest=false, with gh only;
       - the stage job compiles before anything is written, and writes no
@@ -255,6 +257,13 @@ def default_shell(holder: dict, where: str):
     return None if run is None else run.get("shell")
 
 
+def is_cmd(shell) -> bool:
+    """Whether a step whose shell is this value is a cmd step: the value is a
+    string whose first whitespace-delimited word is cmd, as in `cmd` and in a
+    custom template such as `cmd /D /E:ON /V:OFF /S /C "CALL "{0}""`."""
+    return isinstance(shell, str) and shell.split()[:1] == ["cmd"]
+
+
 def cmd_release(path: Path) -> int:
     doc, text = load(path)
     problems: list[str] = []
@@ -313,7 +322,7 @@ def cmd_release(path: Path) -> int:
                 problems.append(f"job {name}: an expression inside a run: block ({step.get('name', 'unnamed')})")
             # The step's own shell:, else its job's defaults: run: shell:, else the workflow's.
             shell = next((s for s in (step.get("shell"), job_shell, workflow_shell) if s is not None), None)
-            if shell == "cmd" and isinstance(run, str):
+            if is_cmd(shell) and isinstance(run, str):
                 for line in run.split("\n"):
                     if re.search(r"%[^%\s]+%>", line):
                         problems.append(f"job {name}: a %...% expansion directly before > in a cmd step"

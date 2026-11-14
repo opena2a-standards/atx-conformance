@@ -169,6 +169,13 @@ TEST_JOB = "    needs: stage\n    runs-on: ${{ matrix.runner }}\n"
 JOB_CMD = (TEST_JOB, TEST_JOB + "    defaults:\n      run:\n        shell: cmd\n")
 JOB_BASH = (TEST_JOB, TEST_JOB + "    defaults:\n      run:\n        shell: bash\n")
 WORKFLOW_CMD = ("permissions: {}\n", "permissions: {}\ndefaults:\n  run:\n    shell: cmd\n")
+# A custom shell: template whose first word is cmd, and one whose first word is pwsh.
+CMD_TEMPLATE = 'cmd /D /E:ON /V:OFF /S /C "CALL "{0}""'
+PWSH_TEMPLATE = "pwsh -command \". '{0}'\""
+STEP_CMD_TEMPLATE = (WINDOWS_IF + "        shell: cmd\n", WINDOWS_IF + "        shell: " + CMD_TEMPLATE + "\n")
+STEP_PWSH_TEMPLATE = (WINDOWS_IF + "        shell: cmd\n", WINDOWS_IF + "        shell: " + PWSH_TEMPLATE + "\n")
+JOB_CMD_TEMPLATE = (TEST_JOB, TEST_JOB + "    defaults:\n      run:\n        shell: " + CMD_TEMPLATE + "\n")
+WORKFLOW_CMD_TEMPLATE = ("permissions: {}\n", "permissions: {}\ndefaults:\n  run:\n    shell: " + CMD_TEMPLATE + "\n")
 
 WORKFLOW_MUTANTS = [
     ("publish also holds id-token: write",
@@ -223,17 +230,31 @@ WORKFLOW_MUTANTS = [
     ("a step that sets no shell, under the workflow's defaults: run: shell: cmd, writes %ERRORLEVEL% directly before >",
      [WORKFLOW_CMD, STEP_NO_SHELL, STEP_ECHO_BEFORE_GT],
      "directly before > in a cmd step"),
+    ("a step that sets shell: " + CMD_TEMPLATE + " writes %ERRORLEVEL% directly before >",
+     [STEP_CMD_TEMPLATE, STEP_ECHO_BEFORE_GT],
+     "directly before > in a cmd step"),
+    ("a step that sets no shell, under the job's defaults: run: shell: " + CMD_TEMPLATE
+     + ", writes %ERRORLEVEL% directly before >",
+     [JOB_CMD_TEMPLATE, STEP_NO_SHELL, STEP_ECHO_BEFORE_GT],
+     "directly before > in a cmd step"),
+    ("a step that sets no shell, under the workflow's defaults: run: shell: " + CMD_TEMPLATE
+     + ", writes %ERRORLEVEL% directly before >",
+     [WORKFLOW_CMD_TEMPLATE, STEP_NO_SHELL, STEP_ECHO_BEFORE_GT],
+     "directly before > in a cmd step"),
 ]
 
 # Inputs the release check accepts: it reads a step's own shell: before its
-# job's defaults: run: shell:, and the job's before the workflow's, so it holds
-# neither Windows step below to the cmd rule.
+# job's defaults: run: shell:, and the job's before the workflow's, and holds a
+# step to the cmd rule only when the first word of that shell is cmd, so it
+# holds none of the Windows steps below to the cmd rule.
 WORKFLOW_CONTROLS = [
     ("a step that sets shell: bash, under the job's defaults: run: shell: cmd, writes %ERRORLEVEL% directly before >",
      [JOB_CMD, STEP_BASH, STEP_ECHO_BEFORE_GT]),
     ("a step that sets no shell, in a job whose defaults: run: shell: bash is under the workflow's cmd,"
      " writes %ERRORLEVEL% directly before >",
      [WORKFLOW_CMD, JOB_BASH, STEP_NO_SHELL, STEP_ECHO_BEFORE_GT]),
+    ("a step that sets shell: " + PWSH_TEMPLATE + " writes %ERRORLEVEL% directly before >",
+     [STEP_PWSH_TEMPLATE, STEP_ECHO_BEFORE_GT]),
 ]
 
 
