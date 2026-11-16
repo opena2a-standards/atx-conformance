@@ -372,6 +372,12 @@ type VerifierState struct {
 	// so a fixture that sets no threshold carries no such member.
 	RequiredSignatures int  `json:"requiredSignatures,omitempty"`
 	CRL                *CRL `json:"crl,omitempty"`
+	// RevocationListRequired is true when the verifier under test is required
+	// to hold a revocation list: with no CRL the verdict is REJECT
+	// REVOCATION_UNKNOWN. False is left out, so a fixture that does not set it
+	// carries no such member, and one of those that holds no CRL does not
+	// exercise core.md §1.3 step 6.
+	RevocationListRequired bool `json:"revocationListRequired,omitempty"`
 }
 
 // CRL is the same shape as opena2a-registry/pkg/atcverify CRL.
@@ -420,6 +426,10 @@ const (
 	testContentSha = "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff"
 	testBuildAtt   = "https://slsa.dev/provenance/v1#opena2a-conformance"
 )
+
+// testOtherAgentID is the one agent a revocation list names when it does not
+// name the test agent.
+const testOtherAgentID = "agent_conformance_test_other"
 
 // The subject of the foreign-did-method fixtures, named under the did:web
 // method rather than the issuer's did:opena2a: an agent and its publisher on a
@@ -554,6 +564,68 @@ func main() {
 			Reason:    "key compromise (test)",
 		}},
 		Signature: "TEST_ONLY_UNSIGNED_CRL",
+	}
+
+	// Revocation-list verifier states: the hybrid state, the one
+	// fixtures/v1_1-baseline-valid-hybrid.json runs under, plus a CRL in the
+	// revoking state's form (version 1, one entry, TEST_ONLY_UNSIGNED_CRL)
+	// with the dates and the listed agent each fixture gives it. A verifier
+	// reads a held list's entries first, whatever its dates, and then its
+	// freshness: a list whose nextUpdate is more than atpMaxSkew before the
+	// clock, or whose issuedAt is more than atpMaxSkew after it, is no
+	// evidence about an agent it does not list. Used by the v1_1-crl-*
+	// fixtures.
+	hybridStateHoldingCRL := func(issued, next time.Time, listedAgentID string) VerifierState {
+		vs := hybridVerifierState
+		vs.CRL = &CRL{
+			Version:    1,
+			IssuedAt:   issued,
+			NextUpdate: next,
+			Entries: []CRLEntry{{
+				AgentID:   listedAgentID,
+				RevokedAt: revokedTime,
+				Reason:    "key compromise (test)",
+			}},
+			Signature: "TEST_ONLY_UNSIGNED_CRL",
+		}
+		return vs
+	}
+	// The fresh list: the revoking state's dates, issued before the clock and
+	// not yet due for its next update.
+	freshCRLIssuedAt := mustParseTime("2026-05-23T12:00:00Z")
+	freshCRLNextUpdate := mustParseTime("2026-05-30T12:00:00Z")
+	// The list past its nextUpdate: due 61 seconds before the clock
+	// (2026-05-23T23:58:59Z), one second past atpMaxSkew, and issued an hour
+	// before that.
+	staleCRLNextUpdate := mustParseTime(fixedClockRFC3339).Add(-(atpMaxSkew + time.Second))
+	staleCRLIssuedAt := staleCRLNextUpdate.Add(-time.Hour)
+	// The list issued after the clock: issued 61 seconds after it
+	// (2026-05-24T00:01:01Z), one second past atpMaxSkew, and due seven days
+	// after that.
+	futureCRLIssuedAt := mustParseTime(fixedClockRFC3339).Add(atpMaxSkew + time.Second)
+	futureCRLNextUpdate := futureCRLIssuedAt.Add(7 * 24 * time.Hour)
+	// The verifier state that holds no CRL where one is required.
+	listRequiredNoneHeldVerifierState := hybridVerifierState
+	listRequiredNoneHeldVerifierState.RevocationListRequired = true
+
+	// newBaselineV11HybridATX is the credential of
+	// fixtures/v1_1-baseline-valid-hybrid.json, which the v1_1-crl-* fixtures
+	// carry byte for byte: the v1.1 baseline with an Ed25519 signature and an
+	// ML-DSA-65 signature over the same JCS(TBS). Both signatures are
+	// deterministic (RFC 8032 Ed25519; ML-DSA-65 with randomized signing off),
+	// so the values are the baseline's own. Only the verifier state, outside
+	// the signed bytes, differs from that fixture.
+	newBaselineV11HybridATX := func() ATX {
+		atx := newBaselineV11ATX()
+		ed := signV11WithKey(primary, atx)
+		pq, _ := signMLDSA65(mldsa.SeedHex, canonicalPayloadV11(&atx))
+		pq.KeyID = mldsa.KeyID
+		atx.Signatures = []ATCSignature{ed, pq}
+		return atx
+	}
+	hybridKeypairRefs := []KeypairRef{
+		keypairRefFor(primary, "vectors/issuer-primary.json"),
+		{Role: mldsa.Role, Path: "vectors/mldsa65-seed.json", Algorithm: mldsa.Algorithm, PublicKeyHex: mldsa.PublicKeyHex, KeyID: mldsa.KeyID},
 	}
 
 	// Required-trust-level verifier state: the cross-issuer state (the primary
@@ -1543,6 +1615,56 @@ func main() {
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "INSUFFICIENT_SIGNER_AUTHORITIES", ReasonContains: "distinct signer authorities"},
 				atx)
 		}},
+		// ---- revocation list freshness (core.md §1.3 step 6) ----
+		// The v1_1-baseline-valid-hybrid credential, byte for byte, under a
+		// verifier state that holds a revocation list, or is required to hold
+		// one and holds none. The order the verifier reads them in: the
+		// credential's revoked flag, then the agent's entry on a held list,
+		// which revokes whatever the list's dates, then the list's freshness
+		// within atpMaxSkew, then a list required and not held. No fixture
+		// sits at exactly 60 seconds: ATP §10.2 bounds the skew a verifier
+		// tolerates at 60 seconds, and a verifier that tolerates none is
+		// conformant.
+		{"fixtures/v1_1-crl-fresh-agent-absent-hybrid.json", func() Fixture {
+			return wrap("atx-v1_1/crl-fresh-agent-absent-hybrid",
+				"The v1_1-baseline-valid-hybrid credential, byte for byte, under a verifier state that holds a CRL issued 2026-05-23T12:00:00Z whose nextUpdate is 2026-05-30T12:00:00Z, so the list is current at the verifier clock, and whose one entry names another agent, agent_conformance_test_other. A current list that does not name the agent is evidence that the agent is not revoked (atx-spec core.md §1.3 step 6), and every other step passes. Verifier MUST ACCEPT. A verifier that rejects whenever it holds a revocation list, or that reads a current list as saying nothing, wrongly REJECTs.",
+				hybridKeypairRefs,
+				hybridStateHoldingCRL(freshCRLIssuedAt, freshCRLNextUpdate, testOtherAgentID),
+				ExpectedOutcome{VerifyResult: "ACCEPT"},
+				newBaselineV11HybridATX())
+		}},
+		{"fixtures/v1_1-crl-past-nextupdate-beyond-skew-hybrid.json", func() Fixture {
+			return wrap("atx-v1_1/crl-past-nextupdate-beyond-skew-hybrid",
+				"The v1_1-baseline-valid-hybrid credential, byte for byte, under a verifier state that holds a CRL issued 2026-05-23T22:58:59Z whose nextUpdate, 2026-05-23T23:58:59Z, is 61 seconds before the verifier clock: one second past the family clock-skew bound of ATP §10.2, at most 60 seconds. Its one entry names another agent, agent_conformance_test_other. A list past its nextUpdate beyond the skew bound is no evidence that an agent it does not name is not revoked, so revocation is unknown (atx-spec core.md §1.3 step 6). Verifier MUST REJECT with a reason that names nextUpdate. A verifier that reads a held list's entries and never its nextUpdate, or that tolerates more than 60 seconds of skew, wrongly ACCEPTs.",
+				hybridKeypairRefs,
+				hybridStateHoldingCRL(staleCRLIssuedAt, staleCRLNextUpdate, testOtherAgentID),
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "REVOCATION_UNKNOWN", ReasonContains: "nextUpdate"},
+				newBaselineV11HybridATX())
+		}},
+		{"fixtures/v1_1-crl-issued-after-clock-beyond-skew-hybrid.json", func() Fixture {
+			return wrap("atx-v1_1/crl-issued-after-clock-beyond-skew-hybrid",
+				"The v1_1-baseline-valid-hybrid credential, byte for byte, under a verifier state that holds a CRL whose issuedAt, 2026-05-24T00:01:01Z, is 61 seconds after the verifier clock, one second past the family clock-skew bound of ATP §10.2, and whose nextUpdate is 2026-05-31T00:01:01Z. Its one entry names another agent, agent_conformance_test_other. A list issued after the clock beyond the skew bound is one its producer cannot have issued at that clock: it is no evidence about the agent, not a revocation of it, so revocation is unknown (atx-spec core.md §1.3 step 6). Verifier MUST REJECT with a reason that names issuedAt. A verifier that never reads a held list's issuedAt wrongly ACCEPTs.",
+				hybridKeypairRefs,
+				hybridStateHoldingCRL(futureCRLIssuedAt, futureCRLNextUpdate, testOtherAgentID),
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "REVOCATION_UNKNOWN", ReasonContains: "issuedAt"},
+				newBaselineV11HybridATX())
+		}},
+		{"fixtures/v1_1-crl-past-nextupdate-lists-agent-hybrid.json", func() Fixture {
+			return wrap("atx-v1_1/crl-past-nextupdate-lists-agent-hybrid",
+				"The v1_1-baseline-valid-hybrid credential, byte for byte, under a verifier state that holds the CRL of v1_1-crl-past-nextupdate-beyond-skew-hybrid, issued 2026-05-23T22:58:59Z with its nextUpdate 61 seconds before the verifier clock, except that its one entry names this credential's agentId. An entry stays true after its list ages: only the silence of a list past its nextUpdate stops being evidence. A verifier reads a held list's entries before its freshness (atx-spec core.md §1.3 step 6), so the agent is revoked and the verdict is REVOKED, not unknown. Verifier MUST REJECT with a revocation reason that names the CRL. A verifier that sets a list past its nextUpdate aside before reading its entries, or that reports such a list as unknown before reading them, reports the wrong category.",
+				hybridKeypairRefs,
+				hybridStateHoldingCRL(staleCRLIssuedAt, staleCRLNextUpdate, testAgentID),
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "REVOKED", ReasonContains: "CRL"},
+				newBaselineV11HybridATX())
+		}},
+		{"fixtures/v1_1-crl-required-none-held-hybrid.json", func() Fixture {
+			return wrap("atx-v1_1/crl-required-none-held-hybrid",
+				"The v1_1-baseline-valid-hybrid credential, byte for byte, under a verifier state that holds no CRL and sets revocationListRequired: the verifier under test is required to hold a revocation list. With none held, nothing says the agent is not revoked, so revocation is unknown (atx-spec core.md §1.3 step 6). Verifier MUST REJECT with a reason that names the missing revocation list. A verifier that reads no list as no revocation, or that sets aside a list it cannot use and then proceeds as if none were required, wrongly ACCEPTs.",
+				hybridKeypairRefs,
+				listRequiredNoneHeldVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "REVOCATION_UNKNOWN", ReasonContains: "no revocation list"},
+				newBaselineV11HybridATX())
+		}},
 	}
 
 	type manifestEntry struct {
@@ -1978,6 +2100,13 @@ var fixtureRequirements = map[string]string{
 	"atx-v1_1/one-authority-threshold-keys": "§1.3 step 7: each authority counts once however many of its keys signed, so at a required trust level of 3 a credential signed by three keys of one authority is rejected",
 	"atx-v1_1/one-key-under-two-dids":       "§1.3 step 7: two signatures that verify under the same public key count once whatever keyId values they carry, so at a required trust level of 3 one key's signature carried under two trusted DIDs is rejected",
 	"atx-v1_1/own-key-labelled-as-cosigner": "§1.3 step 7: a signature counts for the authority its keyId names only when it verifies under a key that authority publishes, so at a required trust level of 3 a signature by a second key of the issuer carrying the partner authority's keyId is rejected",
+
+	// Revocation list freshness, and a revocation list required and not held.
+	"atx-v1_1/crl-fresh-agent-absent-hybrid":             "§1.3 step 6: a CRL the verifier holds that is current at its clock and does not list the agentId is evidence that the agent is not revoked, so a credential that passes every other step is accepted",
+	"atx-v1_1/crl-past-nextupdate-beyond-skew-hybrid":    "§1.3 step 6: a held CRL whose nextUpdate is more than the family clock-skew bound of ATP §10.2, at most 60 seconds, before the verifier's clock is no evidence for an agentId it does not list, so revocation is unknown and the credential is rejected",
+	"atx-v1_1/crl-issued-after-clock-beyond-skew-hybrid": "§1.3 step 6: a held CRL whose issuedAt is more than the family clock-skew bound of ATP §10.2, at most 60 seconds, after the verifier's clock is no evidence for an agentId it does not list, so revocation is unknown and the credential is rejected",
+	"atx-v1_1/crl-past-nextupdate-lists-agent-hybrid":    "§1.3 step 6: an agentId listed on a held CRL is revoked whatever the list's dates, so a list past its nextUpdate that lists the agent rejects the credential as revoked, not as revocation unknown",
+	"atx-v1_1/crl-required-none-held-hybrid":             "§1.3 step 6: a verifier required to hold a revocation list that holds none has nothing that says the agent is not revoked, so revocation is unknown and the credential is rejected",
 }
 
 // fixtureRequirementsUsed records which fixtureRequirements entries wrap consumed.

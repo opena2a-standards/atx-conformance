@@ -19,27 +19,27 @@
   ],
   "inputTrees": {
     "cmd/atx-verify": "c99b36589a830fcaeab28f453660ee8a3fd41790",
-    "interop": "962fa13fae82c9fc00d8231aa4e5bfbf406e2867",
-    "verifiers/go/verifier": "39b05f441238ac435f119cbda5f991c47f0ddeef",
+    "interop": "a85f0e8cbc88e33395881f364c47bfc1e790c847",
+    "verifiers/go/verifier": "e1475a775b817b8dae4a0accbfd917c084e890a9",
     "go.mod": "667011a74ec65d88b16a2c7093b6e62bb4b97690",
     "go.sum": "436e141fa3870ee84f73fe087c3929df8948c07c",
     "answerkey.go": "f4f0311bb0e2a6ec5d350ce6ff8cec730245eed8",
-    "conformance.json": "f098b09fbaeae22da136e48888b7ee712549e0d9",
-    "MANIFEST.sha256": "e720f3b16acdf2c8e314049b82595ef07a7fe332",
+    "conformance.json": "9a82f36caf6ae1730400a6b4df2dd03c9a0f5bb2",
+    "MANIFEST.sha256": "da1d8d2e077750b59027747401b4dc7e572c89c4",
     "fixtures.go": "6b2be479eaa48b5d81d87df1840e6bd0de4238c9",
-    "fixtures": "4a6779122b78f1f287f73af104b9c3e95e064034"
+    "fixtures": "df47d7c1a6bc206f7cc1ab7bbfbb2a0695a4ff95"
   },
   "inputsUncommitted": [],
-  "ranAtUtc": "2026-11-14T00:48:18Z",
+  "ranAtUtc": "2026-11-16T01:48:55Z",
   "exitCode": 0,
   "stderrLines": 0,
-  "summary": "summary: 52 pass, 0 fail (52 fixtures)",
+  "summary": "summary: 57 pass, 0 fail (57 fixtures)",
   "outputs": {
     "capture": {
       "path": "docs/captures/go-verifier.txt",
-      "sha256": "507d5e94e9f981336280bed72699ff135efb0b4b7cbefa0b1cd93490256d935c",
-      "bytes": 13332,
-      "lines": 188
+      "sha256": "ae6d1ec0af596b75480237ae488dc42c55c25a608b839ad0ba08a39cf59cbad7",
+      "bytes": 14511,
+      "lines": 205
     }
   }
 }

@@ -42,7 +42,7 @@
     },
     {
       "item": "Revocation propagation timing (ATX core.md section 3.3)",
-      "reason": "the revoked-crl-only fixture pins the verdict for an agentId that is on the verifier's CRL; no fixture exercises the 5-minute cache bound or a stale-CRL window"
+      "reason": "the revoked-crl-only fixture pins the verdict for an agentId that is on the verifier's CRL, and v1_1-crl-past-nextupdate-beyond-skew-hybrid pins the freshness rule of section 1.3 step 6 for a list that carries its own nextUpdate; no fixture exercises the 5-minute window counted from the verifier's own fetch, which the fixture format has no member for"
     },
     {
       "item": "Transparency-log monitor behavior (ATX core.md section 6.4)",
@@ -996,6 +996,236 @@
       ],
       "expected": "REJECT[INSUFFICIENT_SIGNER_AUTHORITIES]",
       "description": "The credential of v1_1-two-authority-cosignature (ATX v1.1, trustLevel 3, a signed two-element issuerChain naming the partner authority did:opena2a:authority:partner.example and the primary authority did:opena2a:authority:opena2a.org) carrying only the primary authority's Ed25519 signature. The verifier trusts both authorities, holds the partner authority's key, and requires trust level 3. The chain names a second authority, but presence in issuerChain is not a signature and its length is not counted: one authority has produced a signature the verifier verifies, so the distinct signer-authority count of atx-spec core.md §1.3 step 7 is 1 and the verifier MUST REJECT. A verifier that omits step 7, or counts the issuerChain or the trusted authorities it names, wrongly ACCEPTs."
+    },
+    {
+      "fixture": "fixtures/v1_1-crl-fresh-agent-absent-hybrid.json",
+      "name": "atx-v1_1/crl-fresh-agent-absent-hybrid",
+      "requirement": "§1.3 step 6: a CRL the verifier holds that is current at its clock and does not list the agentId is evidence that the agent is not revoked, so a credential that passes every other step is accepted",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (hybrid Ed25519 + ML-DSA-65 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "ACCEPT",
+      "description": "The v1_1-baseline-valid-hybrid credential, byte for byte, under a verifier state that holds a CRL issued 2026-05-23T12:00:00Z whose nextUpdate is 2026-05-30T12:00:00Z, so the list is current at the verifier clock, and whose one entry names another agent, agent_conformance_test_other. A current list that does not name the agent is evidence that the agent is not revoked (atx-spec core.md §1.3 step 6), and every other step passes. Verifier MUST ACCEPT. A verifier that rejects whenever it holds a revocation list, or that reads a current list as saying nothing, wrongly REJECTs."
+    },
+    {
+      "fixture": "fixtures/v1_1-crl-issued-after-clock-beyond-skew-hybrid.json",
+      "name": "atx-v1_1/crl-issued-after-clock-beyond-skew-hybrid",
+      "requirement": "§1.3 step 6: a held CRL whose issuedAt is more than the family clock-skew bound of ATP §10.2, at most 60 seconds, after the verifier's clock is no evidence for an agentId it does not list, so revocation is unknown and the credential is rejected",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (hybrid Ed25519 + ML-DSA-65 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "REJECT[REVOCATION_UNKNOWN]",
+      "description": "The v1_1-baseline-valid-hybrid credential, byte for byte, under a verifier state that holds a CRL whose issuedAt, 2026-05-24T00:01:01Z, is 61 seconds after the verifier clock, one second past the family clock-skew bound of ATP §10.2, and whose nextUpdate is 2026-05-31T00:01:01Z. Its one entry names another agent, agent_conformance_test_other. A list issued after the clock beyond the skew bound is one its producer cannot have issued at that clock: it is no evidence about the agent, not a revocation of it, so revocation is unknown (atx-spec core.md §1.3 step 6). Verifier MUST REJECT with a reason that names issuedAt. A verifier that never reads a held list's issuedAt wrongly ACCEPTs."
+    },
+    {
+      "fixture": "fixtures/v1_1-crl-past-nextupdate-beyond-skew-hybrid.json",
+      "name": "atx-v1_1/crl-past-nextupdate-beyond-skew-hybrid",
+      "requirement": "§1.3 step 6: a held CRL whose nextUpdate is more than the family clock-skew bound of ATP §10.2, at most 60 seconds, before the verifier's clock is no evidence for an agentId it does not list, so revocation is unknown and the credential is rejected",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (hybrid Ed25519 + ML-DSA-65 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "REJECT[REVOCATION_UNKNOWN]",
+      "description": "The v1_1-baseline-valid-hybrid credential, byte for byte, under a verifier state that holds a CRL issued 2026-05-23T22:58:59Z whose nextUpdate, 2026-05-23T23:58:59Z, is 61 seconds before the verifier clock: one second past the family clock-skew bound of ATP §10.2, at most 60 seconds. Its one entry names another agent, agent_conformance_test_other. A list past its nextUpdate beyond the skew bound is no evidence that an agent it does not name is not revoked, so revocation is unknown (atx-spec core.md §1.3 step 6). Verifier MUST REJECT with a reason that names nextUpdate. A verifier that reads a held list's entries and never its nextUpdate, or that tolerates more than 60 seconds of skew, wrongly ACCEPTs."
+    },
+    {
+      "fixture": "fixtures/v1_1-crl-past-nextupdate-lists-agent-hybrid.json",
+      "name": "atx-v1_1/crl-past-nextupdate-lists-agent-hybrid",
+      "requirement": "§1.3 step 6: an agentId listed on a held CRL is revoked whatever the list's dates, so a list past its nextUpdate that lists the agent rejects the credential as revoked, not as revocation unknown",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (hybrid Ed25519 + ML-DSA-65 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "REJECT[REVOKED]",
+      "description": "The v1_1-baseline-valid-hybrid credential, byte for byte, under a verifier state that holds the CRL of v1_1-crl-past-nextupdate-beyond-skew-hybrid, issued 2026-05-23T22:58:59Z with its nextUpdate 61 seconds before the verifier clock, except that its one entry names this credential's agentId. An entry stays true after its list ages: only the silence of a list past its nextUpdate stops being evidence. A verifier reads a held list's entries before its freshness (atx-spec core.md §1.3 step 6), so the agent is revoked and the verdict is REVOKED, not unknown. Verifier MUST REJECT with a revocation reason that names the CRL. A verifier that sets a list past its nextUpdate aside before reading its entries, or that reports such a list as unknown before reading them, reports the wrong category."
+    },
+    {
+      "fixture": "fixtures/v1_1-crl-required-none-held-hybrid.json",
+      "name": "atx-v1_1/crl-required-none-held-hybrid",
+      "requirement": "§1.3 step 6: a verifier required to hold a revocation list that holds none has nothing that says the agent is not revoked, so revocation is unknown and the credential is rejected",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (hybrid Ed25519 + ML-DSA-65 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "REJECT[REVOCATION_UNKNOWN]",
+      "description": "The v1_1-baseline-valid-hybrid credential, byte for byte, under a verifier state that holds no CRL and sets revocationListRequired: the verifier under test is required to hold a revocation list. With none held, nothing says the agent is not revoked, so revocation is unknown (atx-spec core.md §1.3 step 6). Verifier MUST REJECT with a reason that names the missing revocation list. A verifier that reads no list as no revocation, or that sets aside a list it cannot use and then proceeds as if none were required, wrongly ACCEPTs."
     },
     {
       "fixture": "fixtures/v1_1-cross-issuer-key.json",

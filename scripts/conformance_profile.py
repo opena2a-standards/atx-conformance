@@ -112,7 +112,7 @@ SUITE = {
         },
         {
             "item": "Revocation propagation timing (ATX core.md section 3.3)",
-            "reason": "the revoked-crl-only fixture pins the verdict for an agentId that is on the verifier's CRL; no fixture exercises the 5-minute cache bound or a stale-CRL window",
+            "reason": "the revoked-crl-only fixture pins the verdict for an agentId that is on the verifier's CRL, and v1_1-crl-past-nextupdate-beyond-skew-hybrid pins the freshness rule of section 1.3 step 6 for a list that carries its own nextUpdate; no fixture exercises the 5-minute window counted from the verifier's own fetch, which the fixture format has no member for",
         },
         {
             "item": "Transparency-log monitor behavior (ATX core.md section 6.4)",

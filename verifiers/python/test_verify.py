@@ -103,6 +103,14 @@ BASELINE_V11 = ROOT / "fixtures" / "v1_1-baseline-valid.json"
 BASELINE_V10 = ROOT / "fixtures" / "baseline-valid.json"
 # The fixture whose verifier state carries a CRL.
 BASELINE_CRL = ROOT / "fixtures" / "revoked-crl-only.json"
+# The revocation-list fixtures that share the v1.1 hybrid baseline credential:
+# a current CRL that does not list the agent, a CRL past its nextUpdate beyond
+# the skew bound, a CRL issued after the clock beyond it, and a verifier state
+# that requires a CRL and holds none.
+CRL_FRESH = ROOT / "fixtures" / "v1_1-crl-fresh-agent-absent-hybrid.json"
+CRL_PAST_NEXT_UPDATE = ROOT / "fixtures" / "v1_1-crl-past-nextupdate-beyond-skew-hybrid.json"
+CRL_ISSUED_AFTER_CLOCK = ROOT / "fixtures" / "v1_1-crl-issued-after-clock-beyond-skew-hybrid.json"
+CRL_REQUIRED_NONE_HELD = ROOT / "fixtures" / "v1_1-crl-required-none-held-hybrid.json"
 # The fixture whose verifier state sets requiredSignatures (2), and the
 # fixture whose credential it carries cut to the first of three signatures.
 THRESHOLD_1OF3 = ROOT / "fixtures" / "threshold-1of3-cosignature.json"
@@ -1141,6 +1149,9 @@ GO_UNLOADABLE_WRAPPERS = (
         "verifierState.crl.entries[0].revokedAt",
     ),
     (("verifierState", "crl", "signature"), "7", "verifierState.crl.signature"),
+    # Recorded from the Go reference verifier built with Go 1.26.3.
+    (("verifierState", "revocationListRequired"), '"true"', "verifierState.revocationListRequired"),
+    (("verifierState", "revocationListRequired"), "1", "verifierState.revocationListRequired"),
 )
 
 # The verdict when a fixture member is renamed to another case (rename), holds
@@ -1167,6 +1178,24 @@ GO_WRAPPER_VERDICTS = (
     (BASELINE_CRL, ("verifierState", "crl"), "null", None, "ACCEPT"),
     (BASELINE_CRL, ("verifierState", "crl", "entries"), "[null]", None, "ACCEPT"),
     (BASELINE_CRL, ("verifierState", "crl", "revokedAt"), '"not-a-date"', None, "REVOKED"),
+    # Recorded from the Go reference verifier built with Go 1.26.3. A null
+    # nextUpdate is Go's zero time, long past; a null issuedAt is too, and a
+    # CRL issued in the past is usable. The nextUpdate pair, written with an
+    # offset, is 60 and then 61 seconds before the clock; the issuedAt pair is
+    # 60 seconds after it and then one nanosecond more.
+    (CRL_REQUIRED_NONE_HELD, ("verifierState", "revocationListRequired"), KEEP, "RevocationListRequired", "REVOCATION_UNKNOWN"),
+    (CRL_REQUIRED_NONE_HELD, ("verifierState", "revocationListRequired"), "null", None, "ACCEPT"),
+    (CRL_REQUIRED_NONE_HELD, ("verifierState", "revocationListRequired"), "false", None, "ACCEPT"),
+    # A held list meets the requirement; its dates still decide.
+    (CRL_FRESH, ("verifierState", "revocationListRequired"), "true", None, "ACCEPT"),
+    (CRL_PAST_NEXT_UPDATE, ("verifierState", "revocationListRequired"), "true", None, "REVOCATION_UNKNOWN"),
+    (CRL_PAST_NEXT_UPDATE, ("verifierState", "crl", "nextUpdate"), KEEP, "NEXTUPDATE", "REVOCATION_UNKNOWN"),
+    (CRL_FRESH, ("verifierState", "crl", "nextUpdate"), "null", None, "REVOCATION_UNKNOWN"),
+    (CRL_FRESH, ("verifierState", "crl", "nextUpdate"), '"2026-05-24T01:59:00+02:00"', None, "ACCEPT"),
+    (CRL_FRESH, ("verifierState", "crl", "nextUpdate"), '"2026-05-24T01:58:59+02:00"', None, "REVOCATION_UNKNOWN"),
+    (CRL_ISSUED_AFTER_CLOCK, ("verifierState", "crl", "issuedAt"), "null", None, "ACCEPT"),
+    (CRL_ISSUED_AFTER_CLOCK, ("verifierState", "crl", "issuedAt"), '"2026-05-24T00:01:00Z"', None, "ACCEPT"),
+    (CRL_ISSUED_AFTER_CLOCK, ("verifierState", "crl", "issuedAt"), '"2026-05-24T00:01:00.000000001Z"', None, "REVOCATION_UNKNOWN"),
 )
 
 # An expected member that repeats a name, with a case variant between the

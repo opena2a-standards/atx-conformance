@@ -78,6 +78,23 @@ PASS  fixtures/v1_1-cosigner-named-not-signed.json
        observed: REJECT[INSUFFICIENT_SIGNER_AUTHORITIES: required trust level 3 needs at least 2 distinct signer authorities, 1 verified (core.md section 1.3 step 7)]
        signatures: 1/1 valid (ed25519=true mldsa65=false)
        distinct signer authorities (step 7): 1; trustLevel 3 asserted
+PASS  fixtures/v1_1-crl-fresh-agent-absent-hybrid.json
+       expected: ACCEPT
+       observed: ACCEPT
+       signatures: 2/2 valid (ed25519=true mldsa65=true)
+       distinct signer authorities (step 7): 1; trustLevel 4 asserted
+PASS  fixtures/v1_1-crl-issued-after-clock-beyond-skew-hybrid.json
+       expected: REJECT [REVOCATION_UNKNOWN]
+       observed: REJECT[REVOCATION_UNKNOWN: revocation unknown: CRL issuedAt 2026-05-24T00:01:01Z is more than 60 seconds after the verifier clock 2026-05-24T00:00:00Z]
+PASS  fixtures/v1_1-crl-past-nextupdate-beyond-skew-hybrid.json
+       expected: REJECT [REVOCATION_UNKNOWN]
+       observed: REJECT[REVOCATION_UNKNOWN: revocation unknown: CRL nextUpdate 2026-05-23T23:58:59Z is more than 60 seconds before the verifier clock 2026-05-24T00:00:00Z]
+PASS  fixtures/v1_1-crl-past-nextupdate-lists-agent-hybrid.json
+       expected: REJECT [REVOKED]
+       observed: REJECT[REVOKED: agent appears on CRL: key compromise (test)]
+PASS  fixtures/v1_1-crl-required-none-held-hybrid.json
+       expected: REJECT [REVOCATION_UNKNOWN]
+       observed: REJECT[REVOCATION_UNKNOWN: revocation unknown: no revocation list held where one is required]
 PASS  fixtures/v1_1-cross-issuer-key.json
        expected: REJECT [SIGNATURE_INVALID]
        observed: REJECT[SIGNATURE_INVALID: Ed25519 signature did:opena2a:authority:partner.example#key-1 did not verify against any configured public key]
@@ -185,4 +202,4 @@ PASS  fixtures/wrong-issuer.json
        expected: REJECT [UNTRUSTED_ISSUER]
        observed: REJECT[UNTRUSTED_ISSUER: issuer DID did:opena2a:authority:attacker.example is not in the verifier's trusted set (untrusted issuer)]
 
-summary: 52 pass, 0 fail (52 fixtures)
+summary: 57 pass, 0 fail (57 fixtures)
