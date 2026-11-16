@@ -23,8 +23,11 @@ conformance.yml, for the controls they must hold.
         and the file gets nothing); a step's shell is its own `shell:`, or,
         when it sets none, its job's `defaults: run: shell:`, or, when the
         job sets none either, the workflow's; a cmd step is a step whose
-        shell's first word is `cmd`, as in `shell: cmd` and in a custom
-        template such as `cmd /D /E:ON /V:OFF /S /C "CALL "{0}""`;
+        shell's first word, less any directory part up to its last `\\` or
+        `/`, is `cmd` or `cmd.exe` in any letter case, as in `shell: cmd`
+        and in custom templates such as
+        `cmd /D /E:ON /V:OFF /S /C "CALL "{0}""`, `Cmd.exe /C {0}` and
+        `C:\\Windows\\System32\\cmd.exe /D /S /C "CALL "{0}""`;
       - publish creates the release as a draft, uploads the assets, then
         publishes with --latest=false, with gh only;
       - the stage job compiles before anything is written, and writes no
@@ -259,9 +262,15 @@ def default_shell(holder: dict, where: str):
 
 def is_cmd(shell) -> bool:
     """Whether a step whose shell is this value is a cmd step: the value is a
-    string whose first whitespace-delimited word is cmd, as in `cmd` and in a
-    custom template such as `cmd /D /E:ON /V:OFF /S /C "CALL "{0}""`."""
-    return isinstance(shell, str) and shell.split()[:1] == ["cmd"]
+    string whose first whitespace-delimited word, less any directory part up
+    to its last \\ or /, is cmd or cmd.exe in any letter case. `cmd` is one,
+    as are custom templates such as `cmd /D /E:ON /V:OFF /S /C "CALL "{0}""`,
+    `CMD /D /E:ON /V:OFF /S /C "CALL "{0}""`, `Cmd.exe /C {0}` and
+    `C:\\Windows\\System32\\cmd.exe /D /S /C "CALL "{0}""`; a template such as
+    `C:\\cmd\\pwsh.exe -command ". '{0}'"`, whose first word names pwsh.exe
+    in a directory named cmd, is not."""
+    words = shell.split() if isinstance(shell, str) else []
+    return bool(words) and re.split(r"[\\/]", words[0])[-1].lower() in ("cmd", "cmd.exe")
 
 
 def cmd_release(path: Path) -> int:

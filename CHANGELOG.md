@@ -841,6 +841,23 @@ they should not.
   the docstring this change starts from, its test fails, as the repository
   root holds no file named README. The script changes in its docstring
   alone. No fixture changes.
+- `scripts/kit/check_workflow.py release` holds a step to the rule against a
+  `%...%` expansion directly before `>` when its shell's first word, less
+  any directory part up to its last `\` or `/`, is `cmd` or `cmd.exe` in
+  any letter case (#372). It held a step to that rule only when that word
+  was exactly `cmd`, so a copy of `.github/workflows/kit-release.yml` whose
+  Windows step in the test job writes `echo %ERRORLEVEL%> ..\capture.rc`
+  and sets as its `shell:` any of
+  `cmd.exe /D /E:ON /V:OFF /S /C "CALL "{0}""`,
+  `CMD /D /E:ON /V:OFF /S /C "CALL "{0}""`, `Cmd.exe /C {0}` or
+  `C:\Windows\System32\cmd.exe /D /S /C "CALL "{0}""` printed
+  `7 jobs, 0 problems` and exited 0; each of those copies now exits 1
+  naming the step. `scripts/kit/test/test_kit.py --ci` adds 5 cells: a step
+  that sets each of those four templates, which the check refuses, and a
+  step that sets `shell: C:\cmd\pwsh.exe -command ". '{0}'"`, whose first
+  word names `pwsh.exe` in a directory named `cmd`, which it accepts; run
+  against the script as it was before this change, each of the 4 refusal
+  cells fails. No fixture, verifier or workflow file changes.
 
 ## v0.1.0
 
