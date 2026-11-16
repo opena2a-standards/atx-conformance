@@ -292,7 +292,10 @@ it says no version tag or no Go version tag and none of the tags names a
 version; and while it carries one that names no version, a sentence naming
 a pseudo-version that says a commit has or carries no tag or no release tag
 fails. A shallow clone, or a tree with no repository, is not held to it,
-and the closing line says so.
+and the closing line says so. There, a sentence of that text that a
+release-tag case of the self-test adds and expects the check to fail, and
+that the check fails held to that case's tags, is reported as a failure
+opening with the file that holds it (#385).
 
 It also holds what CHANGELOG.md's top section says the Go release still
 changes to the Go verifier's tests. Its #259 entry said that outside the RFC
@@ -3852,8 +3855,8 @@ Tree = collections.namedtuple("Tree", (
     "key_vectors used_key_ids versions go_mod verify_go py_requirements "
     "py_dependency_texts jcs_sites tbs_sites tbs_canonical jcs_readme "
     "gate_sites gate_libraries profile outcomes suites scripts front_page "
-    "module_start nested_modules changelog release_tags verify_go_test "
-    "spec_text pinned_fixtures"))
+    "readme_pages module_start nested_modules changelog release_tags "
+    "verify_go_test spec_text pinned_fixtures"))
 
 # One check tree_failures() runs: its name, the call (`run(tree)` returns
 # failures) and the alteration the self-test makes to prove the call is still
@@ -4568,7 +4571,18 @@ RETRACTED_NO_TAG_YET = (
     "its first tag, `v0.1.0`, is to carry.")
 
 
-def _release_tag_cases(tree):
+def _sentence_files(tree, sentence):
+    """The files of `tree` whose text holds `sentence`, a sentence as
+    statements() reads it, among README.md, its pages and CHANGELOG.md's
+    opening, joined with ` and `; "README.md or one of its pages" when none
+    of them holds it."""
+    texts = {"README.md": tree.front_page, **(tree.readme_pages or {}),
+             CHANGELOG_NAME: changelog_opening(tree.changelog)}
+    files = [name for name, text in texts.items() if sentence in statements(text or "")]
+    return " and ".join(files) or "README.md or one of its pages"
+
+
+def _release_tag_cases(tree, published=None):
     """Held to no version tag, the retracted README sentence appended to the
     README adds a failure naming the pseudo-version, as does the README's own
     `@latest` sentence with its pseudo-version made a version, and the
@@ -4587,24 +4601,53 @@ def _release_tag_cases(tree):
     the same sentences saying no Go version tag add none, and one sentence
     saying the repository has no Go version tag and has no release tag adds
     one. Held to `v0.1.0` and that tag, the commit clause adds a failure;
-    with no tag, the no-release-tag clause adds none. Each case
-    counts only the failures its text adds over the published text held to
-    the same tags. carried_tags() names no tag, one tag that names no
-    version, one version tag, and a mix. Then version_tags() and
-    repository_tags() are read off temporary repositories."""
+    with no tag, the no-release-tag clause adds none. carried_tags() names no
+    tag, one tag that names no version, one version tag, and a mix. Then
+    version_tags() and repository_tags() are read off temporary
+    repositories.
+
+    A case counts the failures that name a sentence its text adds, the
+    sentences of the README and of CHANGELOG.md counted with repeats. It
+    counted the failures absent from those of the published text held to
+    the same tags, so a sentence the published text already held added
+    none, and the case was reported as not caught by the check, which fails
+    that sentence (#385). Where this checkout's tags cannot be read and
+    `published` is a list, each failure a case expects that the published
+    text held to the case's tags yields too is appended to it once, opening
+    with the file that holds the sentence: main() reports it with the
+    check's failures, which hold no sentence to the tags there."""
     readme, changelog = tree.readme, tree.changelog or ""
     cases = []
+    reported = set()
+
+    def sentences(text, log):
+        return collections.Counter(statements(text)) + collections.Counter(statements(log))
+
+    held = sentences(readme, changelog)
 
     def case(label, needle, text=readme, log=changelog, tags=()):
         tags = None if tags is None else list(tags)
-        baseline = set(release_tag_failures(readme, changelog, tags))
-        new = [f for f in release_tag_failures(text, log, tags) if f not in baseline]
+        added = sentences(text, log) - held
+        # Each failure ends with the sentence it is for, quoted.
+        named = {f: s for f in release_tag_failures(text, log, tags)
+                 for s in added if f.endswith(f": {s!r}")}
         if needle is None:
-            cases.append((not new, label, f"expected no new failure, got {new}"))
-        else:
-            cases.append((any(f.startswith(TAG_SITE) and needle in f for f in new),
-                          label, f"expected a {TAG_SITE} failure naming {needle!r}, "
-                                 f"got {new}"))
+            cases.append((not named, label,
+                          f"expected no failure naming a sentence it adds, got {list(named)}"))
+            return
+        caught = [f for f in named if f.startswith(TAG_SITE) and needle in f]
+        cases.append((bool(caught), label, f"expected a {TAG_SITE} failure naming "
+                                           f"{needle!r}, got {list(named)}"))
+        if published is None or tree.release_tags is not None:
+            return
+        already = set(release_tag_failures(readme, changelog, tags))
+        for f in caught:
+            if f in already and f not in reported:
+                reported.add(f)
+                published.append(
+                    f"{_sentence_files(tree, named[f])}: held to the tags of the self-test "
+                    f"case {label!r}, which adds the same sentence, as this checkout's "
+                    f"tags cannot be read: {f}")
 
     with_latest = readme + "\n\n" + RETRACTED_LATEST + "\n"
     with_first_tag = _opening_with(changelog, RETRACTED_FIRST_TAG)
@@ -4699,6 +4742,72 @@ def _release_tag_cases(tree):
         cases.append((carried_tags(tags) == want, f"carried_tags({tags})",
                       f"expected {want!r}, got {carried_tags(tags)!r}"))
     cases.extend(_version_tags_cases())
+    return cases
+
+
+# Clauses #375 retracted, each with the file _held_sentence_cases() places it
+# in, so that the published text holds the sentence a release-tag case adds;
+# the failure reported for it opens with that file.
+HELD_CLAUSES = (
+    ("docs/running-the-verifiers.md", RETRACTED_NO_RELEASE_TAG),
+    ("README.md", RETRACTED_NO_TAGS),
+    (CHANGELOG_NAME, RETRACTED_NO_TAG_YET),
+)
+# A sentence a case adds that the check passes held to the tag `kit-2026-11-14`.
+HELD_PASSING = ("This repository has no Go version tag, so `@latest` resolves to a "
+                "pseudo-version of a commit on `main`.")
+
+
+def _held_sentence_cases(tree):
+    """With docs/running-the-verifiers.md saying the repository has no
+    release tag in the words the no-release-tag case adds, the self-test
+    reported that case as not caught by the check, which fails the sentence;
+    with the tags unread, as in a shallow clone, no line named the page or
+    the sentence (#385). Over the published text with the clauses of HELD_CLAUSES
+    placed in their files (appended to the page and to README.md, made the
+    last paragraph of CHANGELOG.md's opening) and HELD_PASSING appended to
+    the page: with the tags unread, each release-tag case is green and one
+    failure is reported for each clause, naming its file and its sentence,
+    and none for HELD_PASSING; with the tag `kit-2026-11-14` read, each case
+    is green, none is reported, and the check names each clause."""
+    label = "release-tag cases over a published text holding the sentences three of them add"
+    pages = dict(tree.readme_pages or {})
+    page = HELD_CLAUSES[0][0]
+    if page not in pages:
+        return [(False, label, f"{page} is missing")]
+    if tree.readme != "\n".join([tree.front_page, *pages.values()]):
+        return [(False, label, "the README text is not README.md and its pages, joined")]
+    pages[page] += f"\n{HELD_CLAUSES[0][1]}\n\n{HELD_PASSING}\n"
+    front = f"{tree.front_page}\n{HELD_CLAUSES[1][1]}\n"
+    held = tree._replace(readme="\n".join([front, *pages.values()]), front_page=front,
+                         readme_pages=pages,
+                         changelog=_opening_with(tree.changelog or "", HELD_CLAUSES[2][1]))
+    unread = []
+    red = [name for ok, name, _ in
+           _release_tag_cases(held._replace(release_tags=None), unread) if not ok]
+    cases = [(not red, f"{label}, with the tags unread", f"red: {red}")]
+    for where, clause in HELD_CLAUSES:
+        sentence = " ".join(clause.split())
+        cases.append((
+            sum(line.startswith(f"{where}: held to the tags of the self-test case ")
+                and "says the repository has no tag" in line
+                and line.endswith(f": {sentence!r}") for line in unread) == 1,
+            f"one failure reported for {where} holding the sentence a case adds, with "
+            f"the tags unread", f"got {unread}"))
+    cases.append((len(unread) == len(HELD_CLAUSES),
+                  "no other failure reported, none for a held sentence the check "
+                  "passes, with the tags unread", f"got {unread}"))
+    read = []
+    red = [name for ok, name, _ in
+           _release_tag_cases(held._replace(release_tags=list(KIT_TAGGED)), read) if not ok]
+    cases.append((not red and not read, f"{label}, with the tag `kit-2026-11-14` read",
+                  f"red: {red}; reported: {read}"))
+    failures = release_tag_failures(held.readme, held.changelog, list(KIT_TAGGED))
+    unnamed = [where for where, clause in HELD_CLAUSES
+               if not any(f.endswith(f": {' '.join(clause.split())!r}") for f in failures)]
+    cases.append((not unnamed, "the check over that text held to the tag "
+                               "`kit-2026-11-14` naming each held clause",
+                  f"names none in {unnamed}: {failures}"))
     return cases
 
 
@@ -6928,7 +7037,13 @@ def self_test(tree, verbose):
     cases.extend(_latest_run_cases(readme, tree.go_mod, tree.nested_modules))
     cases.extend(_failing_latest_run_cases(tree))
     cases.extend(_changelog_first_command_cases(tree))
-    cases.extend(_release_tag_cases(tree))
+    # Where this checkout's tags cannot be read, each sentence the published
+    # text holds that a release-tag case adds and expects the check to fail,
+    # and that the check fails held to the case's tags, is named here; main()
+    # reports it with the check's failures.
+    published = []
+    cases.extend(_release_tag_cases(tree, published))
+    cases.extend(_held_sentence_cases(tree))
     cases.extend(_release_difference_cases(tree))
     cases.extend(_changelog_total_cases(tree))
     cases.extend(_python_dependency_cases(tree.py_requirements, tree.py_dependency_texts))
@@ -7095,7 +7210,7 @@ def self_test(tree, verbose):
         if not ok:
             print(f"          {detail}")
             failed += 1
-    return failed, len(cases)
+    return failed, len(cases), published
 
 
 def main():
@@ -7154,6 +7269,8 @@ def main():
         scripts={path.name: path.read_text(encoding="utf-8")
                  for path in sorted(SCRIPTS.glob("*.py"))},
         front_page=README.read_text(encoding="utf-8"),
+        readme_pages={rel.as_posix(): (ROOT / rel).read_text(encoding="utf-8")
+                      for rel in README_PAGES if (ROOT / rel).exists()},
         module_start=first_module_commit(ROOT, go_mod),
         nested_modules=nested_module_dirs(ROOT),
         changelog=CHANGELOG.read_text(encoding="utf-8") if CHANGELOG.exists() else None,
@@ -7164,7 +7281,7 @@ def main():
         pinned_fixtures=pinned_fixture_counts(ROOT, install_pins(readme)),
     )
 
-    failed, total = self_test(tree, only_self_test)
+    failed, total, published = self_test(tree, only_self_test)
     if failed:
         print(f"self-test FAILED: {failed} of {total} case(s) not caught by the check",
               file=sys.stderr)
@@ -7175,7 +7292,9 @@ def main():
 
     # The check runs even when the self-test failed: a site the self-test
     # cannot find is often a count the README dropped, and the check names it.
-    failures += tree_failures(tree)
+    # A sentence the self-test found the published text holding, where the
+    # tags cannot be read, follows the check's own failures.
+    failures += tree_failures(tree) + published
 
     if failures:
         sys.stdout.flush()

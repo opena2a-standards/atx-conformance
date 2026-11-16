@@ -880,6 +880,36 @@ they should not.
   commit's page and opening, in a checkout carrying `kit-2026-11-14`, it
   names the four sentences and exits 1. Its self-test adds 22 cases. No
   fixture or verifier changes.
+- `scripts/check_readme_counts.py` counts a release-tag self-test case as
+  caught when the check fails the sentence the case adds and the README,
+  one of its pages or this file's opening already holds that sentence,
+  where it reported the case as not caught by the check (#385). Each such
+  case counted the failures absent from those of the published text held
+  to the case's tags, so a sentence the published text already held added
+  none: with `This repository has no Go version tag, so` on line 144 of
+  `docs/running-the-verifiers.md` changed to `This repository has no
+  release tag, so`, the run printed `self-test FAILED: 1 of 562 case(s) not
+  caught by the check` and a red line for the case "README restating the
+  no-release-tag clause held to the tag `kit-2026-11-14`", and exited 1,
+  and in a shallow clone, which is what the conformance workflow checks
+  out, no line named the page or the sentence. A case now counts the
+  failures that name a sentence it adds, that sentence counted once more
+  when the published text already holds it. Where the checkout's tags
+  cannot be read, a sentence the published text holds that a case adds and
+  expects the check to fail, and that the check fails held to that case's
+  tags, is reported with the check's failures, opening with the file that
+  holds it and naming the case. On that edit, a shallow clone prints
+  `self-test passed`, then a failure opening with
+  `docs/running-the-verifiers.md` that names the sentence, and exits 1; a
+  clone carrying `kit-2026-11-14` prints `self-test passed`, then the
+  check's failure naming the sentence, and exits 1. Its self-test adds 7
+  cases over the published text with three of the clauses #375 retracted
+  placed in `docs/running-the-verifiers.md`, README.md and this file's
+  opening, and beside the first a sentence the check passes held to
+  `kit-2026-11-14`: the release-tag cases stay green; with the tags unread,
+  one failure is reported for each clause and none for that sentence; with
+  `kit-2026-11-14` read, none is reported and the check names each clause.
+  No fixture or verifier changes.
 - `scripts/check_readme_counts.py` holds the fixture counts README.md's kit
   section states under its install line (#377). That sentence says how many
   fixtures the commit the line pins carries, how many are on main and how
