@@ -3425,7 +3425,7 @@ func TestDeclaredPurposeNumberOutsideFloat64Range(t *testing.T) {
 	// Controls: an integer in the exact range, and 1e400 written in a string
 	// or as a member name, which is no number, reach the signature check. The
 	// baseline signs no declaredPurpose, so the signature fails.
-	const notVerified = "Ed25519 signature did:opena2a:authority:opena2a.org#key-1 did not verify against any configured public key"
+	const notVerified = `Ed25519 signature "did:opena2a:authority:opena2a.org#key-1" did not verify against any configured public key`
 	for _, purpose := range []string{`0`, `-0`, `1`, `-1`, `{"n": "1e400"}`, `{"1e400": 1}`} {
 		refused(purpose, notVerified)
 	}

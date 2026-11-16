@@ -1176,7 +1176,7 @@ TAG_CLAIM = re.compile(
 LATEST_RESOLVES = re.compile(r"`@latest`\s+resolves\s+to\b")
 PSEUDO_VERSION = "pseudo-version"
 UNTAGGED_CLAIM = re.compile(
-    r"\brepository\s+(?:has|carries)\s+no\s+(?:release\s+|version\s+)?tags?\b")
+    r"\brepository\s+(?:has|carries)\s+no\s+(?:[\w-]+\s+){0,2}tags?\b")
 TAG_SITE = f"README or {CHANGELOG_NAME} opening-paragraph sentence on this repository's tags"
 # The two sentences the check was written for, as they were wrapped.
 RETRACTED_LATEST = (
@@ -4338,7 +4338,8 @@ def _release_tag_cases(tree):
     adds one naming `v0.1.0`. Held to a `v0.1.0` tag, that sentence adds none
     and one naming `v9.9.9` adds a failure, the retracted README sentence
     adds none, and a README sentence saying the repository has no release tag
-    adds a failure, one saying a commit has no tag none. With the tags unread
+    adds a failure, as does one saying it has no Go version tag, one saying a
+    commit has no tag none. With the tags unread
     both retracted sentences add none, and the retracted CHANGELOG.md
     sentence in the top section, below the opening, adds none. Each case
     counts only the failures its text adds over the published text held to
@@ -4385,6 +4386,9 @@ def _release_tag_cases(tree):
     case("README saying the repository has no release tag held to a `v0.1.0` tag",
          "says the repository has no tag",
          text=readme + "\n\nThis repository has no release tag.\n", tags=TAGGED)
+    case("README saying the repository has no Go version tag held to a `v0.1.0` tag",
+         "says the repository has no tag",
+         text=readme + "\n\nThis repository has no Go version tag.\n", tags=TAGGED)
     case("README saying a commit has no tag held to a `v0.1.0` tag", None,
          text=readme + "\n\n`go run` resolves the commit to a version, or to a "
                        "pseudo-version when the commit has no tag.\n", tags=TAGGED)

@@ -4,8 +4,8 @@
 WHAT HAPPENED. conformance.json lists the distinct signer-authority count of
 ATX core.md §1.3 step 7 under `notCovered`, because the Coverage paragraph of
 core.md at the pinned atx-spec commit lists step 7 among the requirements no
-fixture exercises, and the README says the two drop it together. No script
-compared them: with the step 7 entry removed from the profile,
+fixture exercises, and docs/fixtures.md says the two drop it together. No
+script compared them: with the step 7 entry removed from the profile,
 `scripts/conformance_profile.py --check` still reported the profile current.
 
 WHAT THIS ENFORCES.

@@ -29,7 +29,7 @@ PASS  fixtures/baseline-valid-hybrid.json
 ...
 PASS  fixtures/wrong-issuer.json
        expected: REJECT [UNTRUSTED_ISSUER]
-       observed: REJECT[UNTRUSTED_ISSUER: issuer DID did:opena2a:authority:attacker.example is not in the verifier's trusted set (untrusted issuer)]
+       observed: REJECT[UNTRUSTED_ISSUER: issuer DID "did:opena2a:authority:attacker.example" is not in the verifier's trusted set (untrusted issuer)]
 
 summary: 57 pass, 0 fail (57 fixtures)
 ```

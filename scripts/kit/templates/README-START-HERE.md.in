@@ -1,8 +1,7 @@
 @title atx-conformance interop day kit|pinned commit <sha7>, <date>
 ================================================================================
-This kit carries atx-conformance at commit
-<sha>: <N> fixtures, and both reference
-verifiers pass all <N>.
+This kit carries commit <sha>
+of atx-conformance: <N> fixtures, and both reference verifiers pass all <N>.
 Running a verifier needs no network. Building one needs it once, to fetch
 dependencies, so this kit carries prebuilt Go binaries for <platforms>.
 
@@ -12,6 +11,7 @@ Download SHA256SUMS from that page, not from this folder, and run
 shasum -a 256 -c SHA256SUMS here (Linux: sha256sum -c SHA256SUMS). Every line
 must say OK, and every file here must be listed in it. With the GitHub CLI:
 gh attestation verify <file> -R <owner/repo>
+On a Mac, after the check, see the Mac step in the release notes on that page.
 
 Run the fixtures, one command, from this folder:
   macOS or Linux:  open Terminal, type cd and a space, drag this folder onto

@@ -91,4 +91,8 @@ scripts/test_check_sibling_rows.py
                                  CI gate: check_sibling_rows.py's self-test, and its
                                  fixture count over a tree with a file in a
                                  subdirectory of fixtures/ (no network)
+scripts/test_check_step7_coverage.py
+                                 CI gate: the file check_step7_coverage.py's
+                                 docstring names as saying "the two drop it
+                                 together" holds that sentence
 ```

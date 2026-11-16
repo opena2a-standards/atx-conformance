@@ -30,8 +30,10 @@ import (
 // BEL, ESC, DEL and the C1 control U+009B.
 const controlDID = "did:opena2a:authority:a\x00b\tc\nd\re\x07f\x1bg\x7fh\u009bi"
 
-// controlDIDEscaped is controlDID as the report writes it.
-const controlDIDEscaped = `did:opena2a:authority:a\x00b\x09c\x0ad\x0de\x07f\x1bg\x7fh\u009bi`
+// controlDIDQuoted is controlDID as the report writes it: the reason of an
+// untrusted issuer writes the issuer DID in double quotes, escaped as
+// strconv.QuoteToASCII escapes it, so no control reaches escapeControls.
+const controlDIDQuoted = `"did:opena2a:authority:a\x00b\tc\nd\re\af\x1bg\x7fh\u009bi"`
 
 // controlName is a name holding one character of each kind the report
 // escapes that a file name can hold, each after a letter: a tab, a line
@@ -48,7 +50,7 @@ const nonUTF8Name = "b\x9b\xff.json"
 
 // shippedIssuerLine is the observed line of the report of
 // fixtures/wrong-issuer.json, whose issuer DID holds no control.
-const shippedIssuerLine = "       observed: REJECT[UNTRUSTED_ISSUER: issuer DID did:opena2a:authority:attacker.example is not in the verifier's trusted set (untrusted issuer)]"
+const shippedIssuerLine = `       observed: REJECT[UNTRUSTED_ISSUER: issuer DID "did:opena2a:authority:attacker.example" is not in the verifier's trusted set (untrusted issuer)]`
 
 // controlCase is one input the escaping is checked on: the files and
 // directories it lays out in an empty working directory, the arguments it
@@ -118,8 +120,8 @@ func controlCases(t *testing.T) []controlCase {
 			files:     map[string][]byte{"issuer.json": withIssuerDID(t, controlDID)},
 			args:      []string{"issuer.json"},
 			raw:       controlDID,
-			escaped:   controlDIDEscaped,
-			line:      "       observed: REJECT[UNTRUSTED_ISSUER: issuer DID " + controlDIDEscaped + " is not in the verifier's trusted set (untrusted issuer)]",
+			escaped:   controlDIDQuoted,
+			line:      "       observed: REJECT[UNTRUSTED_ISSUER: issuer DID " + controlDIDQuoted + " is not in the verifier's trusted set (untrusted issuer)]",
 			lineFeeds: 5,
 		},
 		{

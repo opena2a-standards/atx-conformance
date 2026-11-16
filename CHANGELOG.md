@@ -238,6 +238,9 @@ they should not.
 ### Changed
 
 - Both reference verifiers print fixture fields and file names with control characters escaped.
+- Reason lines write the credential's `issuerDid`, signature `algorithm` and
+  `keyId` in double quotes, escaped as Go's `strconv.QuoteToASCII` escapes
+  them, so both verifiers print the same bytes.
 - README.md states above its first command the toolchain each verifier
   needs, Go 1.22 or later and Python 3.11 or later, the minimums the
   dependency lists of `docs/running-the-verifiers.md` state (#305). Its
@@ -344,6 +347,15 @@ they should not.
 
 ### Fixed
 
+- `scripts/check_readme_counts.py` fails a README sentence saying this
+  repository has no Go version tag once the repository carries a version tag
+  (#376). Its pattern allowed only `release` or `version` between `no` and
+  `tag`, so the README sentence "This repository has no Go version tag, so
+  `@latest` resolves to a pseudo-version ..." was not held: called with the
+  tag `v0.1.0`, `release_tag_failures()` returned no failure for the README.
+  It now allows up to two words there and returns one failure for that
+  sentence. The self-test adds a case for the wording `no Go version tag`.
+  No fixture changes.
 - The Python unit tests step of `conformance.yml` runs the tests of
   `docs/demo/test_record_atx_verify.py`, among them the ones that hold
   `docs/demo/record-atx-verify.sh` to refusing a Dockerfile that references an
@@ -817,6 +829,18 @@ they should not.
   README.md and fails one over 69 words, or more than one over 60, naming
   each; on the previous README.md it exits 1 naming the five. Its
   self-test adds 12 cases. No fixture or verifier changes.
+- The module docstring of `scripts/check_step7_coverage.py` names
+  `docs/fixtures.md` as the file that says `conformance.json`'s
+  `notCovered` and the Coverage paragraph of the vendored `core.md` drop
+  §1.3 step 7 together (#373). It named the README, and README.md holds no
+  such sentence; `docs/fixtures.md` holds it in the section "Required trust
+  level: the distinct signer-authority count".
+  `scripts/test_check_step7_coverage.py`, which the Python unit tests step
+  of `conformance.yml` discovers, holds the file the docstring names as
+  saying "the two drop it together" to holding that sentence; run against
+  the docstring this change starts from, its test fails, as the repository
+  root holds no file named README. The script changes in its docstring
+  alone. No fixture changes.
 
 ## v0.1.0
 

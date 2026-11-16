@@ -60,7 +60,19 @@ Two more read the docstrings of verify.py that say a line writes an
 argument or a path that is not UTF-8 as its bytes: each must name the
 bytes 0x80 to 0x9f, which _escape_controls writes as \\xHH where they are
 not UTF-8, as that section names them, and each line one of them quotes
-for the byte 0x9b must be the line the verifier writes.
+for the byte 0x9b must be the line the verifier writes. One more reads that
+section's sentence on the credential members a reason writes in double
+quotes: each escape it gives and the line it quotes must be what the
+verifier writes. The output cell (ReportOfEachCredentialMember) appends
+each of nine characters to each string member of the credential of
+fixtures/tampered-signature.json and fixtures/wrong-issuer.json in turn,
+and each report must be printable ASCII plus line feeds, with one
+block-marker line and one summary line, the last. A second cell
+(KeyIdInTheBase64AndMlDsa65Reasons) sets the value or the algorithm of
+the first signature of fixtures/tampered-signature.json, so that the
+reason is the invalid base64 one or the ML-DSA-65 one, and reads that
+signature's keyId in it, as shipped and with each string of the output
+cell appended.
 One test imports this file with an os whose name is "nt" and which has no
 geteuid, as Python's os is on Windows: it must import, with NonUTF8Argument
 and ArgumentContract's test of a directory that cannot be listed skipped.
@@ -752,7 +764,7 @@ GO_VERDICTS = (
     ("signatures", '["x"]', "PARSE_ERROR", "signatures"),
     ("signatures", '[{"value": 7}]', "PARSE_ERROR", "signatures"),
     ("signatures", "null", "SIGNATURE_INVALID", "no valid signatures"),
-    ("signatures", "[null]", "SIGNATURE_INVALID", "unsupported signature algorithm"),
+    ("signatures", "[null]", "SIGNATURE_INVALID", 'unsupported signature algorithm ""'),
     ("signatures", None, "SIGNATURE_INVALID", "no valid signatures"),
     ("trustScore", "null", "SIGNATURE_INVALID", ""),
     ("trustLevel", "null", "SIGNATURE_INVALID", ""),
@@ -2654,7 +2666,7 @@ class UnencodableReportLine(unittest.TestCase):
             (directory / "b-baseline-valid.json").write_text(BASELINE_V11.read_text())
             code, text = _run_main_utf8(str(directory))
         self.assertEqual(code, 0, text)
-        self.assertIn("issuer DID did:x:\ufffd is not in the verifier's trusted set", text)
+        self.assertIn('issuer DID "did:x:\\ufffd" is not in the verifier\'s trusted set', text)
         self.assertEqual(text.splitlines()[-1], "summary: 2 pass, 0 fail (2 fixtures)")
 
     def test_line_standard_output_cannot_encode_is_escaped(self):
@@ -4449,9 +4461,11 @@ class ReportWording(unittest.TestCase):
 # An issuer DID holding one character of each kind the report escapes, each
 # after a letter: NUL, a tab, a line feed, a carriage return, BEL, ESC, DEL
 # and the C1 control U+009B (controlDID in the Go suite), and the text the
-# report writes for it.
+# report writes for it: the reason of an untrusted issuer writes the issuer
+# DID in double quotes, escaped as strconv.QuoteToASCII escapes it
+# (controlDIDQuoted), so no control reaches _escape_controls.
 CONTROL_DID = "did:opena2a:authority:a\x00b\tc\nd\re\x07f\x1bg\x7fh" + chr(0x9B) + "i"
-CONTROL_DID_ESCAPED = r"did:opena2a:authority:a\x00b\x09c\x0ad\x0de\x07f\x1bg\x7fh\u009bi"
+CONTROL_DID_QUOTED = r'"did:opena2a:authority:a\x00b\tc\nd\re\af\x1bg\x7fh\u009bi"'
 # A name holding each of those a file name can hold, each after a letter (a
 # tab, a line feed, a carriage return, BEL, ESC, DEL and U+009B), and its text.
 CONTROL_NAME = "a\tb\nc\rd\x07e\x1bf\x7fg" + chr(0x9B) + "h"
@@ -4538,10 +4552,10 @@ def _control_cases() -> list[ControlCase]:
     name, escaped = CONTROL_NAME + ".json", CONTROL_NAME_ESCAPED + ".json"
     return [
         ControlCase(
-            "an issuer DID", ("issuer.json",), _utf8(CONTROL_DID), _utf8(CONTROL_DID_ESCAPED),
+            "an issuer DID", ("issuer.json",), _utf8(CONTROL_DID), _utf8(CONTROL_DID_QUOTED),
             _utf8(
                 "       observed: REJECT[UNTRUSTED_ISSUER: issuer DID "
-                + CONTROL_DID_ESCAPED
+                + CONTROL_DID_QUOTED
                 + " is not in the verifier's trusted set (untrusted issuer)]"
             ),
             5, files=(("issuer.json", issuer),),
@@ -4776,15 +4790,17 @@ class ChecksFailOnEscapersThatWriteLess(unittest.TestCase):
     issuer DID but not a file name fails "no raw control" on a file name,
     escaping C0 but not C1 fails "C1 escaped", dropping controls fails
     "escaped, not dropped", and escaping in the Go verifier alone, as
-    _write_as_is does here, fails "the line the Go verifier writes"."""
+    _write_as_is does here, fails "the line the Go verifier writes". Those
+    three run on a file name: the reason writes the issuer DID quoted
+    (CONTROL_DID_QUOTED), so it reaches the escaper with no control in it."""
 
     # (escaper, input, the check it fails, checks it passes on that input,
     # an input it passes every check on)
     MUTANTS = (
         ("escape_did_only", "a file name", "no raw control", (), "an issuer DID"),
-        ("escape_c0_only", "an issuer DID", "C1 escaped", (), None),
-        ("drop_controls", "an issuer DID", "escaped, not dropped", ("no raw control",), None),
-        ("write_as_is", "an issuer DID", "the line the Go verifier writes", (), None),
+        ("escape_c0_only", "a file name", "C1 escaped", (), None),
+        ("drop_controls", "a file name", "escaped, not dropped", ("no raw control",), None),
+        ("write_as_is", "a file name", "the line the Go verifier writes", (), None),
     )
 
     def _report_with(self, escaper, case: ControlCase) -> bytes:
@@ -4828,7 +4844,7 @@ class BothVerifiersWriteTheSameReport(unittest.TestCase):
     standard output and standard error, the unknown option's compared on its
     first line, where each names its own usage, and that report holds the
     case's escaped line. With _escape_controls writing each string as it is,
-    this verifier's report of the issuer DID case differs from the Go
+    this verifier's report of the file name case differs from the Go
     verifier's: escaping in one verifier alone fails the check. Skipped with
     no go on PATH."""
 
@@ -4867,7 +4883,7 @@ class BothVerifiersWriteTheSameReport(unittest.TestCase):
                 self.assertIn(case.line, go_out.split(b"\n"), go_out)
 
     def test_escaping_in_one_verifier_alone_differs(self):
-        case = _control_cases()[0]
+        case = {case.name: case for case in _control_cases()}["a file name"]
         with tempfile.TemporaryDirectory() as tmp:
             _lay_out(case, Path(tmp))
             go_out, _ = _report_as_a_process([self.go_verifier], case, Path(tmp))
@@ -4961,6 +4977,247 @@ class DocstringsNameTheEscapedBytes(unittest.TestCase):
             with self.subTest(docstring=name):
                 self.assertEqual(written[name].splitlines()[0], line.encode("ascii"), written[name])
                 self.assertIn(f"`{line}`", docs[name])
+
+
+# --- the credential's strings in the report ----------------------------------
+# A reason line that shows a string member of the credential writes it so
+# that the report stays one block of printable ASCII lines, and two values
+# that differ are written differently. ReportOfEachCredentialMember walks the
+# credential of each fixture it runs on and finds the members itself, so a
+# line that shows a member is held to the rule whether or not a test names
+# it. The literals below are JSON, the literals of
+# verifiers/go/verifier/member_output_test.go, which holds the Go reference
+# verifier to the same checks.
+
+# The shipped fixtures the cell runs on: one a signature rejects, whose
+# reason shows the signature's keyId, and one the issuer DID rejects, whose
+# reason shows the issuerDid (memberCellFixtures in the Go suite).
+MEMBER_CELL_FIXTURES = json.loads(r'["fixtures/tampered-signature.json", "fixtures/wrong-issuer.json"]')
+# The strings the cell appends to a member, one at a time: a line feed, a
+# carriage return, ESC then [2K, NUL, DEL, the C1 control U+0085, the zero
+# width space U+200B, the line separator U+2028 and the right-to-left
+# override U+202E (memberCellSuffixes).
+MEMBER_CELL_SUFFIXES = json.loads(r'["\n", "\r", "\u001b[2K", "\u0000", "\u007f", "\u0085", "\u200b", "\u2028", "\u202e"]')
+# The four characters backslash, x, 0 and a: the text _escape_controls
+# writes for a line feed (memberCellLiteral).
+MEMBER_CELL_LITERAL = json.loads(r'"\\x0a"')
+# The observed line of fixtures/tampered-signature.json with its signature's
+# keyId removed or null: the decode reads either as the empty string, and
+# the reason writes it as "" (noKeyIDLine).
+NO_KEY_ID_LINE = b'       observed: REJECT[SIGNATURE_INVALID: Ed25519 signature "" did not verify against any configured public key]'
+# Two reasons that write a signature's keyId, each as the edit of the first
+# signature of fixtures/tampered-signature.json that leads to it: the member
+# the edit sets, the string it sets it to, and the observed line the
+# verifier then writes, as start, which runs to the end of the keyId as
+# shipped, and end, which runs from the closing quote on.
+# ReportOfEachCredentialMember changes one member per run, and these lines
+# show a changed keyId only when the run changes this second member too.
+# With the value * the signature is not base64, and end stops before the
+# decode error: the Go verifier goes on
+# `illegal base64 data at input byte 0]`, the Python one
+# `illegal base64 data]`. With the algorithm ML-DSA-65 the signature
+# verifies under no configured key (keyIDLineEdits).
+KEY_ID_LINE_EDITS = json.loads(r'''[
+  {"member": "value", "to": "*",
+   "start": "       observed: REJECT[SIGNATURE_INVALID: signature \"did:opena2a:authority:opena2a.org#key-1",
+   "end": "\" has invalid base64: "},
+  {"member": "algorithm", "to": "ML-DSA-65",
+   "start": "       observed: REJECT[SIGNATURE_INVALID: ML-DSA-65 signature \"did:opena2a:authority:opena2a.org#key-1",
+   "end": "\" did not verify against any configured public key]"}
+]''')
+# The text Go's strconv.QuoteToASCII writes, between its quotes, for each
+# string of MEMBER_CELL_SUFFIXES, in that order, and then for
+# MEMBER_CELL_LITERAL: the Go suite holds this list to that function
+# (keyIDLineEscapes).
+KEY_ID_LINE_ESCAPES = json.loads(r'["\\n", "\\r", "\\x1b[2K", "\\x00", "\\x7f", "\\u0085", "\\u200b", "\\u2028", "\\u202e", "\\\\x0a"]')
+
+
+def _string_members(value: object, at: tuple = ()) -> list[tuple]:
+    """The path of each string the JSON value holds: an object's members in
+    name order, and an array's items in index order (stringMembers in the Go
+    suite)."""
+    if isinstance(value, str):
+        return [at]
+    if isinstance(value, dict):
+        return [path for name in sorted(value) for path in _string_members(value[name], at + (name,))]
+    if isinstance(value, list):
+        return [path for i, item in enumerate(value) for path in _string_members(item, at + (i,))]
+    return []
+
+
+def _with_suffix(doc: dict, at: tuple, suffix: str) -> dict:
+    """A copy of the fixture doc with suffix appended to the string at the
+    path at in its credential."""
+    copy = json.loads(json.dumps(doc))
+    node = copy["atx"]
+    for key in at[:-1]:
+        node = node[key]
+    node[at[-1]] += suffix
+    return copy
+
+
+def _path_name(at: tuple) -> str:
+    """The path at as the messages below name it, for example
+    signatures[0].keyId (pathName in the Go suite)."""
+    name = ""
+    for key in at:
+        name += f"[{key}]" if isinstance(key, int) else (f".{key}" if name else key)
+    return name
+
+
+def _member_cell_run(name: str, doc: dict) -> tuple[bytes, int]:
+    """doc written as name in the working directory and main run on that
+    name: what main wrote to standard output, and its exit code."""
+    Path(name).write_text(json.dumps(doc))
+    code, out = _run_main_stdout_bytes(name)
+    return out, code
+
+
+def _member_cell_failures(out: bytes, code: int) -> list[str]:
+    """Each check that out, the standard output of one run, and code, its
+    exit code, fail: standard output is printable ASCII plus line feeds; it
+    holds exactly one block-marker line (PASS, FAIL or SKIP, then two
+    spaces, at column 0); it holds exactly one summary: line, and that line
+    is the last; and the exit code is 0 or 1 (memberCellFailures in the Go
+    suite)."""
+    failures = []
+    outside = next((byte for byte in out if byte != 0x0A and not 0x20 <= byte <= 0x7E), None)
+    if outside is not None:
+        failures.append(f"standard output holds the byte 0x{outside:02x}, outside printable ASCII")
+    lines = out.removesuffix(b"\n").split(b"\n")
+    blocks = sum(1 for line in lines if line.startswith((b"PASS  ", b"FAIL  ", b"SKIP  ")))
+    summaries = sum(1 for line in lines if line.startswith(b"summary: "))
+    if blocks != 1:
+        failures.append(f"{blocks} block-marker lines, want 1")
+    if summaries != 1 or not lines[-1].startswith(b"summary: "):
+        failures.append(f"{summaries} summary: lines, want 1, the last line")
+    if code not in (0, 1):
+        failures.append(f"exit code {code}, want 0 or 1")
+    return failures
+
+
+class ReportOfEachCredentialMember(unittest.TestCase):
+    """main on copies of each fixture of MEMBER_CELL_FIXTURES, each with one
+    suffix of MEMBER_CELL_SUFFIXES appended to one string member of its
+    credential, every member and every suffix in turn: each report passes
+    each check of _member_cell_failures. A member for which a suffix changes
+    the report is one a line shows. For each such member, the run with a
+    line feed appended and the run with MEMBER_CELL_LITERAL appended print
+    different standard output, so the report tells a line feed in the
+    credential from text that reads as its escape
+    (TestReportOfEachCredentialMember in the Go suite)."""
+
+    def test_each_member(self):
+        for fixture in MEMBER_CELL_FIXTURES:
+            doc = json.loads((ROOT / fixture).read_text())
+            name = Path(fixture).name
+            with self.subTest(fixture=fixture), tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+                control, code = _member_cell_run(name, doc)
+                self.assertEqual(_member_cell_failures(control, code), [], f"as shipped\nreport: {control!r}")
+                shown = 0
+                for at in _string_members(doc["atx"]):
+                    member = _path_name(at)
+                    changed, line_feed = False, None
+                    for suffix in MEMBER_CELL_SUFFIXES:
+                        out, code = _member_cell_run(name, _with_suffix(doc, at, suffix))
+                        with self.subTest(member=member, suffix=suffix):
+                            self.assertEqual(_member_cell_failures(out, code), [], f"report: {out!r}")
+                        changed = changed or out != control
+                        if suffix == "\n":
+                            line_feed = out
+                    if not changed:
+                        continue
+                    shown += 1
+                    out, code = _member_cell_run(name, _with_suffix(doc, at, MEMBER_CELL_LITERAL))
+                    with self.subTest(member=member, suffix=MEMBER_CELL_LITERAL):
+                        self.assertEqual(_member_cell_failures(out, code), [], f"report: {out!r}")
+                        self.assertNotEqual(
+                            out, line_feed,
+                            f"the report with a line feed appended is the report with {MEMBER_CELL_LITERAL} appended",
+                        )
+                self.assertGreater(shown, 0, "no suffix on any member of its credential changes the report")
+
+
+class SignatureWithNoKeyId(unittest.TestCase):
+    """main on fixtures/tampered-signature.json with its signature's keyId
+    removed, and with it null. The decode reads either as the empty string,
+    and the reason writes it as "": NO_KEY_ID_LINE, the line the Go
+    reference verifier writes for the same input
+    (TestSignatureWithNoKeyIDIsWrittenAsEmptyQuotes in the Go suite)."""
+
+    def test_reason_writes_empty_quotes(self):
+        doc = json.loads((ROOT / "fixtures" / "tampered-signature.json").read_text())
+        for label, edit in (
+            ("no keyId", lambda signature: signature.pop("keyId")),
+            ("a null keyId", lambda signature: signature.update(keyId=None)),
+        ):
+            with self.subTest(label), tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+                copy = json.loads(json.dumps(doc))
+                edit(copy["atx"]["signatures"][0])
+                out, code = _member_cell_run("tampered-signature.json", copy)
+                self.assertEqual(code, 0, out)
+                self.assertIn(NO_KEY_ID_LINE, out.split(b"\n"), out)
+
+
+class KeyIdInTheBase64AndMlDsa65Reasons(unittest.TestCase):
+    """main on copies of fixtures/tampered-signature.json, each with one
+    edit of KEY_ID_LINE_EDITS made to its first signature and with nothing,
+    or one string of MEMBER_CELL_SUFFIXES or MEMBER_CELL_LITERAL, appended
+    to that signature's keyId, every edit and every string in turn. Each
+    report must pass each check of _member_cell_failures and hold exactly
+    one line that starts with the edit's start, then the appended string as
+    KEY_ID_LINE_ESCAPES writes it, then the edit's end. The test also holds
+    verify._go_quote with ascii_only, the call these two reasons make, to
+    KEY_ID_LINE_ESCAPES (TestKeyIDInTheBase64AndMLDSA65Reasons in the Go
+    suite, which holds that list to strconv.QuoteToASCII)."""
+
+    def test_each_edit(self):
+        appended = [*MEMBER_CELL_SUFFIXES, MEMBER_CELL_LITERAL]
+        self.assertEqual(len(KEY_ID_LINE_ESCAPES), len(appended))
+        for suffix, escape in zip(appended, KEY_ID_LINE_ESCAPES):
+            with self.subTest(suffix=suffix):
+                self.assertEqual(verify._go_quote(suffix, ascii_only=True), f'"{escape}"')
+        doc = json.loads((ROOT / "fixtures" / "tampered-signature.json").read_text())
+        for edit in KEY_ID_LINE_EDITS:
+            # The first run of each edit appends nothing: the keyId as shipped.
+            for suffix, escape in zip(["", *appended], ["", *KEY_ID_LINE_ESCAPES]):
+                with self.subTest(member=edit["member"], suffix=suffix), tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+                    copy = json.loads(json.dumps(doc))
+                    signature = copy["atx"]["signatures"][0]
+                    signature[edit["member"]] = edit["to"]
+                    signature["keyId"] += suffix
+                    out, code = _member_cell_run("tampered-signature.json", copy)
+                    self.assertEqual(_member_cell_failures(out, code), [], f"report: {out!r}")
+                    want = (edit["start"] + escape + edit["end"]).encode("ascii")
+                    found = sum(1 for line in out.split(b"\n") if line.startswith(want))
+                    self.assertEqual(found, 1, f"{found} lines start with {want!r}, want 1\nreport: {out!r}")
+
+
+class ArgumentsSectionQuotesTheCredentialMembers(unittest.TestCase):
+    """The "Arguments" section of docs/running-the-verifiers.md says a
+    reason writes the credential's issuerDid, a signature's algorithm or its
+    keyId in double quotes, gives the escape of a line feed, U+2028, a
+    double quote and a backslash, and quotes the reason both verifiers write
+    for fixtures/wrong-issuer.json. Each escape must be what main writes for
+    an issuer DID that ends in that character, and the quoted reason must be
+    in main's report of that fixture."""
+
+    def test_section_quotes_what_main_writes(self):
+        text = _doc_section("docs/running-the-verifiers.md", "Arguments")
+        doc = json.loads(WRONG_ISSUER.read_text())
+        for char, escape in (("\n", "\\n"), (chr(0x2028), "\\u2028"), ('"', '\\"'), ("\\", "\\\\")):
+            with self.subTest(char=char), tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+                copy = json.loads(json.dumps(doc))
+                copy["atx"]["issuerDid"] = "did:x:a" + char
+                out, code = _member_cell_run("wrong-issuer.json", copy)
+                self.assertEqual(code, 0, out)
+                self.assertIn(f'issuer DID "did:x:a{escape}" is not'.encode(), out)
+                self.assertIn(f"as `{escape}`", text)
+        reason = 'issuer DID "did:opena2a:authority:attacker.example" is not in the verifier\'s trusted set (untrusted issuer)'
+        self.assertIn(f"`{reason}`", text)
+        code, out = _run_main_stdout_bytes(str(WRONG_ISSUER))
+        self.assertEqual(code, 0, out)
+        self.assertIn(reason.encode(), out)
 
 
 if __name__ == "__main__":

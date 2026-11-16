@@ -103,6 +103,13 @@ them) and DEL (U+007F) as `\xHH`, a C1 control (U+0080 to U+009F) as
 `\u00HH`, and a byte 0x80 to 0x9f that is not UTF-8 as `\xHH`. For a copy of
 `fixtures/baseline-valid.json` named `a`, a tab, then `b.json`, both
 verifiers write `PASS  a\x09b.json`.
+A reason that names the credential's `issuerDid`, a signature's `algorithm`
+or its `keyId` writes that value in double quotes, escaped as Go's
+`strconv.QuoteToASCII` escapes it: a line feed as `\n`, U+2028 as
+`\u2028`, a double quote as `\"` and a backslash as `\\`. A missing or null
+`keyId` is written `""`. For `fixtures/wrong-issuer.json` both verifiers
+write
+`issuer DID "did:opena2a:authority:attacker.example" is not in the verifier's trusted set (untrusted issuer)`.
 A fixture file that cannot be read is a load error worded as the error Go's
 `os.ReadFile` returns, which names the step that failed and the path as
 spelled. Run as a user other than root, with `d/x.json` a copy of
