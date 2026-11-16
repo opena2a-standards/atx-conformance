@@ -1186,6 +1186,9 @@ GO_WRAPPER_VERDICTS = (
     (CRL_REQUIRED_NONE_HELD, ("verifierState", "revocationListRequired"), KEEP, "RevocationListRequired", "REVOCATION_UNKNOWN"),
     (CRL_REQUIRED_NONE_HELD, ("verifierState", "revocationListRequired"), "null", None, "ACCEPT"),
     (CRL_REQUIRED_NONE_HELD, ("verifierState", "revocationListRequired"), "false", None, "ACCEPT"),
+    # A held list meets the requirement; its dates still decide.
+    (CRL_FRESH, ("verifierState", "revocationListRequired"), "true", None, "ACCEPT"),
+    (CRL_PAST_NEXT_UPDATE, ("verifierState", "revocationListRequired"), "true", None, "REVOCATION_UNKNOWN"),
     (CRL_PAST_NEXT_UPDATE, ("verifierState", "crl", "nextUpdate"), KEEP, "NEXTUPDATE", "REVOCATION_UNKNOWN"),
     (CRL_FRESH, ("verifierState", "crl", "nextUpdate"), "null", None, "REVOCATION_UNKNOWN"),
     (CRL_FRESH, ("verifierState", "crl", "nextUpdate"), '"2026-05-24T01:59:00+02:00"', None, "ACCEPT"),
