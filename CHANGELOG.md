@@ -344,6 +344,15 @@ they should not.
 
 ### Fixed
 
+- `scripts/check_readme_counts.py` fails a README sentence saying this
+  repository has no Go version tag once the repository carries a version tag
+  (#376). Its pattern allowed only `release` or `version` between `no` and
+  `tag`, so the README sentence "This repository has no Go version tag, so
+  `@latest` resolves to a pseudo-version ..." was not held: called with the
+  tag `v0.1.0`, `release_tag_failures()` returned no failure for the README.
+  It now allows up to two words there and returns one failure for that
+  sentence. The self-test adds a case for the wording `no Go version tag`.
+  No fixture changes.
 - The Python unit tests step of `conformance.yml` runs the tests of
   `docs/demo/test_record_atx_verify.py`, among them the ones that hold
   `docs/demo/record-atx-verify.sh` to refusing a Dockerfile that references an
