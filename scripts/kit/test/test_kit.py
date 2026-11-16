@@ -483,6 +483,32 @@ def cells_readme() -> None:
         cell(f"h{i} first-run screen mutant refused: {what}", r.returncode == 1 and expect in r.stderr,
              next((l.strip() for l in r.stderr.split("\n") if expect in l), r.stderr.strip()[:100]))
 
+    # render.py writes the release notes, which carry the Mac step (cell i4),
+    # to its dist folder, not into the kit, so the kit's own screen says where
+    # the step is. In both renderings: one line names the Mac step, after the
+    # check paragraph's gh attestation line and before "Run the fixtures", and
+    # says it is in the release notes on the release page; the notes rendered
+    # for HEAD carry the step's command and call it the Mac step.
+    step = "xattr -d com.apple.quarantine verify bin/darwin-arm64/atx-verify bin/darwin-amd64/atx-verify"
+    notes = (d5 / "dist" / "release-notes.md").read_text().replace("\n", " ")
+    places = []
+    for rendering in (text, t5):
+        ls = rendering.split("\n")[:-1]
+        mac = [n for n, l in enumerate(ls, 1) if "Mac step" in l]
+        check = [n for n, l in enumerate(ls, 1) if l.startswith("gh attestation verify ")]
+        run_at = [n for n, l in enumerate(ls, 1) if l.startswith("Run the fixtures")]
+        placed = (len(mac) == 1 and len(check) == 1 and len(run_at) == 1 and check[0] < mac[0] < run_at[0]
+                  and "the release notes on that page" in ls[mac[0] - 1])
+        places.append((placed, mac, check, run_at))
+    in_notes = step in notes and "the Mac step" in notes
+    cell(f"h{len(mutants) + 4} first-run screen: one line after the check paragraph, before Run the fixtures, "
+         "names the Mac step and the release notes on that page, with and without the terminal-safety lines; "
+         "the notes carry the step",
+         all(p[0] for p in places) and in_notes,
+         "; ".join(f"{label}: Mac step line(s) {mac}, gh attestation line {check}, Run the fixtures {run_at}"
+                   for label, (_, mac, check, run_at) in zip(("without", "with"), places))
+         + f"; the notes carry the step's command and its name: {in_notes}")
+
 
 def cells_claims() -> None:
     d = scratch("i")
