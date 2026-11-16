@@ -363,6 +363,19 @@ sentence on what the kit sends stating 41 after one of them (`each fixture
 built into it (e.g. all 41)`, `(incl. 41 that must fail)`), the count fell
 outside the sentence it holds, and it exited 0.
 
+It also holds the fixture counts that section states under its install line.
+It said "This commit carries 41 of the 52 fixtures on main; the Hackathon kit
+release carries 47", and the check held none of them: with the 52 taken to
+51, or the 41 to 40, it exited 0 (#377). A count stated as `N fixtures on
+main` must be the number of fixtures/*.json, so it goes stale as soon as a
+fixture is added. The N of `This commit carries N` must be the number of
+fixtures/*.json in the tree of the commit the last `go install
+<path>@<commit>` above it names, the set fixtures.go embeds in the kit built
+from that commit. That count is held where the checkout holds the commit; a
+copy of the tree outside the repository, or a shallow clone that does not
+hold the commit, is not held to it, and the closing line says so. The kit
+release's count names no tag and is not held.
+
 It also holds the paragraphs of README.md, read alone, to their length: none
 may be over 69 words, and at most one over 60. With its reference sections
 moved to the pages it links, its longest paragraph was 47 words at d8887e6;
@@ -403,10 +416,12 @@ workflow runs every script the layout calls a CI gate, README.md states no
 version or date, holds no paragraph over 69 words and at most one over 60,
 and states each toolchain minimum above its first command,
 every fenced `pip install` command passes --disable-pip-version-check, each
-`Agent Trust <word>` name in the README text is one core.md uses, and each
+`Agent Trust <word>` name in the README text is one core.md uses, each
 fixture count the kit section's sentences on what the kit sends and when it
-exits 0 state is the number of fixtures, 1 otherwise, 2 on an unknown
-argument.
+exits 0 state is the number of fixtures, and that section's count for main
+is the number of fixtures and its count for the commit its install line pins
+is the number in that commit's tree (where the history can be read), 1
+otherwise, 2 on an unknown argument.
 """
 
 import argparse
@@ -3363,6 +3378,137 @@ def kit_count_failures(readme, fixtures):
     return failures
 
 
+# README.md's kit section said, under its install line, "This commit carries
+# 41 of the 52 fixtures on main; the Hackathon kit release carries 47" (#374),
+# and the check held none of the three counts: with the 52 taken to 51, or
+# the 41 to 40, it exited 0 (#377). The count for main goes stale as soon as
+# a fixture is added, so each `N fixtures on main` the section states must be
+# the number of fixtures/*.json. The N of each `This commit carries N` must be
+# the number of fixtures/*.json in the tree of the commit named by the last
+# `go install <path>@<commit>` above it in the section: fixtures.go embeds
+# fixtures/*.json, so that is the set the kit built from that commit sends.
+# pinned_fixture_counts() reads that tree; where the checkout does not hold
+# the commit, the count is not held, and the closing line says so. A count in
+# a code span, or wrapped onto the next line, is read. The kit release's count
+# names no tag, so it is not held. No count for main, no `This commit carries
+# N`, or one with no install line above it fails the check rather than pass
+# having read none.
+INSTALL_PIN = re.compile(r"\bgo\s+install\s+\S+?@([0-9a-f]{7,40})(?![0-9A-Za-z_])")
+PINNED_CLAIM = re.compile(r"\bthis\s+commit\s+carries\s+`?(\d+)(?!\w)", re.I)
+MAIN_CLAIM = re.compile(r"(?<![\w.`])`?(\d+)`?\s+fixtures\s+on\s+`?main(?!\w)", re.I)
+PINNED_SITE = f"README `{KIT_SECTION}` sentence"
+# A fixture of a commit's tree: a file directly under fixtures/ named *.json,
+# as `ls-tree` prints its path.
+TREE_FIXTURE = re.compile(r"fixtures/[^/]+\.json")
+
+
+def install_line_claims(body):
+    """Each `This commit carries N` in `body`, the README kit section, as
+    (the commit id the last `go install <path>@<commit>` above it names, or
+    None, N, the sentence on one line), in the order the section states them."""
+    claims, commit = [], None
+    for sentence in statements(body):
+        found = sorted([(m.start(), True, m.group(1)) for m in INSTALL_PIN.finditer(sentence)]
+                       + [(m.start(), False, m.group(1))
+                          for m in PINNED_CLAIM.finditer(sentence)])
+        for _, pin, value in found:
+            if pin:
+                commit = value
+            else:
+                claims.append((commit, value, sentence))
+    return claims
+
+
+def install_pins(readme):
+    """Each commit id a `go install <path>@<commit>` of the README kit section
+    names, in order, or [] when the README has no such section."""
+    body = section(readme, KIT_SECTION)
+    return [] if body is None else [m.group(1) for sentence in statements(body)
+                                    for m in INSTALL_PIN.finditer(sentence)]
+
+
+def pinned_fixture_counts(root, commits):
+    """The number of fixtures/*.json in the tree of each commit of `commits`
+    the repository at `root` holds, by the id as given. A commit git cannot
+    read there is left out: git cannot run, `root` is not a repository's top
+    level, or the clone does not hold the commit (a shallow clone cut after
+    it). git runs as _history_git() runs it, so a copy of the tree outside
+    the repository reads as holding no commit."""
+    git = _history_git(root)
+    counts = {}
+    for commit in dict.fromkeys(commits):
+        try:
+            listed = git("ls-tree", "-z", f"{commit}^{{commit}}", "--", "fixtures/")
+        except OSError:
+            return {}
+        if listed.returncode != 0:
+            continue
+        entries = (entry.partition("\t") for entry in listed.stdout.split("\0") if entry)
+        counts[commit] = sum(1 for meta, _, path in entries
+                             if meta.split()[1:2] == ["blob"] and TREE_FIXTURE.fullmatch(path))
+    return counts
+
+
+def pinned_count_failures(readme, fixtures, pinned):
+    """The counts the README kit section states under its install line: each
+    `N fixtures on main` must be the number of fixtures/*.json (`fixtures`
+    is the map load_fixtures returns), and the N of each `This commit
+    carries N` the count `pinned` (pinned_fixture_counts()) gives the commit
+    of the last `go install <path>@<commit>` above it, where it gives one. A
+    missing section, no count for main, no `This commit carries N`, or one
+    with no install line above it, fails the check rather than pass having
+    read none."""
+    body = section(readme, KIT_SECTION)
+    if body is None:
+        return [f"no `{KIT_SECTION}` section found in the README; the fixture "
+                f"counts stated under its install line cannot be held"]
+    failures, actual = [], len(fixtures)
+    mains = [(m.group(1), sentence) for sentence in statements(body)
+             for m in MAIN_CLAIM.finditer(sentence)]
+    if not mains:
+        failures.append(f"no `N fixtures on main` count found in the README "
+                        f"`{KIT_SECTION}` section; the count of fixtures on main "
+                        f"stated under its install line cannot be held to fixtures/")
+    for stated, sentence in mains:
+        if int(stated) != actual:
+            failures.append(
+                f"{PINNED_SITE} states {stated} fixtures on main, but fixtures/ "
+                f"holds {actual}; state {actual}: {sentence!r}")
+    claims = install_line_claims(body)
+    if not claims:
+        failures.append(f"no `This commit carries N` sentence found in the README "
+                        f"`{KIT_SECTION}` section; the count of fixtures stated for "
+                        f"the commit its install line pins cannot be held to that commit")
+    for commit, stated, sentence in claims:
+        if commit is None:
+            failures.append(
+                f"{PINNED_SITE} says what this commit carries, but no `go install "
+                f"<path>@<commit>` above it in the section names a commit: {sentence!r}")
+        elif commit in pinned and int(stated) != pinned[commit]:
+            failures.append(
+                f"{PINNED_SITE} says {commit[:7]}, the commit the install line above "
+                f"it pins, carries {stated} fixtures, but that commit's tree holds "
+                f"{pinned[commit]} fixtures/*.json; state {pinned[commit]}: {sentence!r}")
+    return failures
+
+
+def pinned_count_line(readme, fixtures, pinned):
+    """How the closing line names what the README kit section's counts under
+    its install line were held to."""
+    body = section(readme, KIT_SECTION) or ""
+    held = []
+    for commit in dict.fromkeys(c for c, _, _ in install_line_claims(body)):
+        if commit in pinned:
+            held.append(f"{pinned[commit]} for {commit[:7]}, the commit its install line "
+                        f"pins, as that commit's tree holds")
+        else:
+            held.append(f"a count for {commit[:7]}, the commit its install line pins, "
+                        f"not held to the history: that commit could not be read in "
+                        f"this checkout")
+    return (f"the README kit section states {len(fixtures)} fixtures on main, and "
+            f"{', '.join(held)}")
+
+
 # CHANGELOG.md's #325 entry said the Python unit tests step runs the 2 tests of
 # docs/demo/test_record_atx_verify.py, and its #327 entry said 319 altered count
 # sites, where a3ead8a, the commit that carried both, held 8 tests in that file
@@ -3634,7 +3780,7 @@ Tree = collections.namedtuple("Tree", (
     "py_dependency_texts jcs_sites tbs_sites tbs_canonical jcs_readme "
     "gate_sites gate_libraries profile outcomes suites scripts front_page "
     "module_start nested_modules changelog release_tags verify_go_test "
-    "spec_text"))
+    "spec_text pinned_fixtures"))
 
 # One check tree_failures() runs: its name, the call (`run(tree)` returns
 # failures) and the alteration the self-test makes to prove the call is still
@@ -5884,6 +6030,197 @@ def _kit_count_cases(tree):
     return cases
 
 
+# Counts no fixture set or commit here holds, and not ones the other cases write.
+PINNED_BAD_MAIN = "9306"
+PINNED_BAD_COMMIT = "9307"
+PINNED_BAD_RELEASE = "9308"
+# A commit id no install line here names.
+PINNED_OTHER_COMMIT = "1" * 40
+# The sentence under the kit section's install line as README.md published it
+# (#374), as it was wrapped, with its three counts as fields; the counts it
+# published; and the opening words a reader finds it by.
+PINNED_SENTENCE = ("This commit carries {pinned} of the {main} fixtures on main; the "
+                   "Hackathon kit release\ncarries {release}.")
+PUBLISHED_PINNED = PINNED_SENTENCE.format(pinned=41, main=52, release=47)
+PINNED_OPENING = "This commit carries"
+
+
+def _install_pin(readme):
+    """(start, end) of what the first `go install ` line of the README kit
+    section names after its `@`, up to the end of that line, or None."""
+    heading = re.search(rf"^{re.escape(KIT_SECTION)}$", readme, re.M)
+    if heading is None:
+        return None
+    end = readme.find("\n## ", heading.end())
+    end = len(readme) if end < 0 else end
+    at = readme.find("go install ", heading.end(), end)
+    if at < 0:
+        return None
+    eol = readme.find("\n", at, end)
+    eol = end if eol < 0 else eol
+    pin = readme.find("@", at, eol)
+    return None if pin < 0 else (pin + 1, eol)
+
+
+def _pinned_count_cases(tree):
+    """The README kit section's sentence under its install line, put back as
+    README.md published it, adds no failure while fixtures/ holds 52 and the
+    tree of the commit the install line pins is read as holding 41. Stating
+    for main a count no fixture set holds, inline, on the line after `of
+    the`, wrapped before `fixtures on main`, in a code span or in another
+    sentence of the section, adds a failure naming it; stating the number of
+    fixtures/*.json adds none. Stating for the commit a count no tree holds,
+    inline, on the line after its opening words or in a code span, adds a
+    failure naming it, and adds none while the commit cannot be read; the
+    install line naming another commit, read as holding 40, adds a failure
+    naming that commit. The kit release's count stated as another adds none.
+    The install line pinning no commit, the sentence moved above it, the
+    sentence removed, its count for main removed and the section heading
+    renamed each add the failure saying so."""
+    readme, fixtures = tree.readme, tree.fixtures
+    actual = str(len(fixtures))
+    baseline = set(pinned_count_failures(readme, fixtures, tree.pinned_fixtures))
+    cases = [(not baseline, f"the README `{KIT_SECTION}` counts under its install line, "
+                            f"as this checkout reads them",
+              f"the published text fails: {sorted(baseline)}")]
+    cases.extend(_pinned_fixture_counts_cases())
+    label = "the kit section sentence on what the pinned commit carries"
+    span, pin = _kit_sentence(readme, PINNED_OPENING), _install_pin(readme)
+    if span is None or pin is None or pin[1] > span[0]:
+        missing = (f"no sentence opening `{PINNED_OPENING}`" if span is None
+                   else "no `go install ` line naming an `@` version" if pin is None
+                   else f"no `go install ` line above the sentence opening `{PINNED_OPENING}`")
+        cases.append((False, label, f"{missing} found in the README `{KIT_SECTION}` "
+                                    f"section: a count stated there is not covered by "
+                                    f"this self-test"))
+        return cases
+    commit = readme[pin[0]:pin[1]]
+    reading = {commit: 41}
+
+    def case(label, needle, text, pinned=reading):
+        base = set(pinned_count_failures(readme, fixtures, pinned))
+        new = [f for f in pinned_count_failures(text, fixtures, pinned) if f not in base]
+        if needle is None:
+            cases.append((not new, label, f"expected no new failure, got {new}"))
+        else:
+            cases.append((any(needle in f for f in new), label,
+                          f"expected a failure naming {needle!r}, got {new}"))
+
+    def put(sentence):
+        return readme[:span[0]] + sentence + readme[span[1]:]
+
+    def pinned_to(text, version):
+        # The install line stands above the sentence, so put() leaves its offsets.
+        return text[:pin[0]] + version + text[pin[1]:]
+
+    held = PINNED_SENTENCE.format(pinned=41, main=actual, release=47)
+    bad_main = PINNED_SENTENCE.format(pinned=41, main=PINNED_BAD_MAIN, release=47)
+    bad_commit = PINNED_SENTENCE.format(pinned=PINNED_BAD_COMMIT, main=actual, release=47)
+    on_main = f"states {PINNED_BAD_MAIN} fixtures on main"
+    on_commit = f"carries {PINNED_BAD_COMMIT} fixtures, but"
+    no_commit = "above it in the section names a commit"
+    case(f"{label} as README.md published it, stating 41 for {commit[:7]} and 52 for main",
+         None if actual == "52" else "states 52 fixtures on main", put(PUBLISHED_PINNED))
+    case(f"{label} stating {PINNED_BAD_MAIN} for main", on_main, put(bad_main))
+    case(f"{label} stating {PINNED_BAD_MAIN} for main on the line after `of the`", on_main,
+         put(bad_main.replace(f" {PINNED_BAD_MAIN} ", f"\n{PINNED_BAD_MAIN} ")))
+    case(f"{label} stating {PINNED_BAD_MAIN} for main wrapped before `fixtures on main`",
+         on_main,
+         put(bad_main.replace(f"{PINNED_BAD_MAIN} fixtures", f"{PINNED_BAD_MAIN}\nfixtures")))
+    case(f"{label} stating {PINNED_BAD_MAIN} for main in a code span", on_main,
+         put(bad_main.replace(f" {PINNED_BAD_MAIN} ", f" `{PINNED_BAD_MAIN}` ")))
+    case(f"another sentence of the kit section stating {PINNED_BAD_MAIN} fixtures on main",
+         on_main, readme[:span[1]] + f" Main holds {PINNED_BAD_MAIN} fixtures on main."
+         + readme[span[1]:])
+    case(f"{label} stating {actual} for main, the number of fixtures/*.json", None, put(held))
+    case(f"{label} stating {PINNED_BAD_COMMIT} for {commit[:7]}", on_commit, put(bad_commit))
+    case(f"{label} stating {PINNED_BAD_COMMIT} for {commit[:7]} on the line after its "
+         f"opening words", on_commit,
+         put(bad_commit.replace(f"carries {PINNED_BAD_COMMIT} ",
+                                f"carries\n{PINNED_BAD_COMMIT} ")))
+    case(f"{label} stating {PINNED_BAD_COMMIT} for {commit[:7]} in a code span", on_commit,
+         put(bad_commit.replace(f" {PINNED_BAD_COMMIT} ", f" `{PINNED_BAD_COMMIT}` ")))
+    case(f"{label} stating {PINNED_BAD_COMMIT} for {commit[:7]}, a commit this checkout "
+         f"cannot read", None, put(bad_commit), pinned={})
+    case(f"{label}, with the install line above it naming {PINNED_OTHER_COMMIT[:7]}, read "
+         f"as holding 40",
+         f"says {PINNED_OTHER_COMMIT[:7]}, the commit the install line above it pins, "
+         f"carries 41 fixtures, but that commit's tree holds 40",
+         pinned_to(put(held), PINNED_OTHER_COMMIT), pinned={**reading, PINNED_OTHER_COMMIT: 40})
+    case(f"{label} stating {PINNED_BAD_RELEASE} for the kit release, which names no tag",
+         None, put(PINNED_SENTENCE.format(pinned=41, main=actual, release=PINNED_BAD_RELEASE)))
+    case(f"{label}, with the install line above it pinning `@latest`", no_commit,
+         pinned_to(put(held), "latest"))
+    heading = re.search(rf"^{re.escape(KIT_SECTION)}$", readme, re.M)
+    moved = put("")
+    case(f"{label} moved above the install line", no_commit,
+         moved[:heading.end()] + "\n\n" + held + moved[heading.end():])
+    case(f"{label} removed", "no `This commit carries N` sentence found", put(""))
+    case(f"{label} with its count for main removed", "no `N fixtures on main` count found",
+         put("This commit carries 41 fixtures; the Hackathon kit release\ncarries 47."))
+    case(f"the README with its `{KIT_SECTION}` heading renamed",
+         f"no `{KIT_SECTION}` section found",
+         re.sub(rf"^{re.escape(KIT_SECTION)}$", "## Try a verifier", readme, flags=re.M))
+    return cases
+
+
+def _pinned_fixture_counts_cases():
+    """pinned_fixture_counts() over a repository whose first commit holds
+    fixtures/a.json and fixtures/b.json beside fixtures/README.md,
+    fixtures/sub/c.json and a directory fixtures/d.json, and whose second
+    adds fixtures/f.json: 2 for the first, by its id and by its first 7
+    characters, 3 for the second, and a commit the repository does not hold
+    left out; a shallow clone of it holds the second alone, and a directory
+    that is no repository holds none. A git command that fails is a red case."""
+    label = "pinned_fixture_counts() over a temporary repository"
+    env = {name: value for name, value in os.environ.items()
+           if not name.startswith("GIT_")}
+    config = ("-c", "user.name=self-test", "-c", "user.email=self-test@example.invalid",
+              "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null")
+
+    def git(cwd, *args):
+        return subprocess.run(["git", *config, *args], cwd=cwd, env=env, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    def commit(repo, files, message):
+        for rel, text in files.items():
+            (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+            (repo / rel).write_text(text, encoding="utf-8")
+        git(repo, "add", "--", *files)
+        git(repo, "commit", "-q", "-m", message)
+        return git(repo, "rev-parse", "HEAD")
+
+    with tempfile.TemporaryDirectory(prefix="readme-counts-pinned-") as tmp:
+        repo = pathlib.Path(tmp) / "repo"
+        repo.mkdir()
+        try:
+            git(repo, "-c", "init.defaultBranch=main", "init", "-q")
+            first = commit(repo, {"fixtures/a.json": "{}\n", "fixtures/b.json": "{}\n",
+                                  "fixtures/README.md": "x\n", "fixtures/sub/c.json": "{}\n",
+                                  "fixtures/d.json/e.json": "{}\n"}, "two fixtures")
+            second = commit(repo, {"fixtures/f.json": "{}\n"}, "a third fixture")
+            shallow = pathlib.Path(tmp) / "shallow"
+            git(tmp, "clone", "-q", "--depth", "1", repo.resolve().as_uri(), str(shallow))
+            plain = pathlib.Path(tmp) / "plain"
+            plain.mkdir()
+        except (OSError, subprocess.CalledProcessError) as exc:
+            detail = getattr(exc, "stderr", None) or exc
+            return [(False, label, f"git failed building the repository: {detail}")]
+        want = {first: 2, first[:7]: 2, second: 3}
+        got = pinned_fixture_counts(repo, [first, first[:7], second, "0" * 40])
+        shallow_got = pinned_fixture_counts(shallow, [first, second])
+        plain_got = pinned_fixture_counts(plain, [first])
+        return [
+            (got == want, f"{label}: two commits, the first also by 7 characters, and "
+                          f"one it does not hold",
+             f"expected {want}, got {got}"),
+            (shallow_got == {second: 3}, f"{label}: a shallow clone of it",
+             f"expected {{{second!r}: 3}}, got {shallow_got}"),
+            (plain_got == {}, f"{label}: a directory that is no repository",
+             f"expected {{}}, got {plain_got}"),
+        ]
+
+
 def _wire_count(tree):
     row = FIXTURE_ROW.search(tree.readme)
     if row is None:
@@ -6098,6 +6435,17 @@ def _wire_kit_count(tree):
                         + tree.readme[span[1]:])})
 
 
+def _wire_pinned_count(tree):
+    span = _kit_sentence(tree.readme, PINNED_OPENING)
+    if span is None:
+        return (f"no sentence opening `{PINNED_OPENING}` found in the README "
+                f"`{KIT_SECTION}` section")
+    return (f"states {PINNED_BAD_MAIN} fixtures on main",
+            {"readme": (tree.readme[:span[0]]
+                        + PINNED_SENTENCE.format(pinned=41, main=PINNED_BAD_MAIN, release=47)
+                        + tree.readme[span[1]:])})
+
+
 CHECKS = (
     Check("count",
           lambda t: check(t.readme, t.cosigners, t.fixtures, t.vectors, t.signing),
@@ -6167,6 +6515,9 @@ CHECKS = (
           _wire_spec_name),
     Check("kit fixture count", lambda t: kit_count_failures(t.readme, t.fixtures),
           _wire_kit_count),
+    Check("kit install-line fixture counts",
+          lambda t: pinned_count_failures(t.readme, t.fixtures, t.pinned_fixtures),
+          _wire_pinned_count),
     Check("README.md version or date", lambda t: front_page_failures(t.front_page),
           _wire_front_page),
     Check("README.md paragraph length", lambda t: paragraph_failures(t.front_page),
@@ -6542,6 +6893,7 @@ def self_test(tree, verbose):
     cases.extend(_pip_notice_cases(tree))
     cases.extend(_spec_name_cases(tree))
     cases.extend(_kit_count_cases(tree))
+    cases.extend(_pinned_count_cases(tree))
 
     jcs_readme = tree.jcs_readme
     jcs_text = jcs_readme or ""
@@ -6592,8 +6944,9 @@ def main():
     failures += vector_failures
     fixture_paths = sorted(FIXTURES.glob("*.json"))
     go_mod = GO_MOD.read_text(encoding="utf-8") if GO_MOD.exists() else None
+    readme = read_readme(ROOT)
     tree = Tree(
-        readme=read_readme(ROOT),
+        readme=readme,
         cosigners=COSIGNERS.read_text(encoding="utf-8") if COSIGNERS.exists() else None,
         fixtures=fixtures,
         vectors=count_vectors(ROOT),
@@ -6636,6 +6989,7 @@ def main():
         verify_go_test=(VERIFY_GO_TEST.read_text(encoding="utf-8")
                         if VERIFY_GO_TEST.exists() else None),
         spec_text=SPEC_TEXT.read_text(encoding="utf-8") if SPEC_TEXT.exists() else None,
+        pinned_fixtures=pinned_fixture_counts(ROOT, install_pins(readme)),
     )
 
     failed, total = self_test(tree, only_self_test)
@@ -6728,7 +7082,8 @@ def main():
           f"passes {PIP_VERSION_CHECK}; each `Agent Trust <word>` name in the "
           f"README is one {SPEC_TEXT_NAME} uses; the README kit section's sentences "
           f"on what the kit sends and when it exits 0 state no fixture count but "
-          f"{len(fixtures)}")
+          f"{len(fixtures)}; "
+          + pinned_count_line(tree.readme, fixtures, tree.pinned_fixtures))
     return 0
 
 

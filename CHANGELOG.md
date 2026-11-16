@@ -841,6 +841,39 @@ they should not.
   the docstring this change starts from, its test fails, as the repository
   root holds no file named README. The script changes in its docstring
   alone. No fixture changes.
+- `scripts/kit/check_workflow.py release` holds a step to the rule against a
+  `%...%` expansion directly before `>` when its shell's first word, less
+  any directory part up to its last `\` or `/`, is `cmd` or `cmd.exe` in
+  any letter case (#372). It held a step to that rule only when that word
+  was exactly `cmd`, so a copy of `.github/workflows/kit-release.yml` whose
+  Windows step in the test job writes `echo %ERRORLEVEL%> ..\capture.rc`
+  and sets as its `shell:` any of
+  `cmd.exe /D /E:ON /V:OFF /S /C "CALL "{0}""`,
+  `CMD /D /E:ON /V:OFF /S /C "CALL "{0}""`, `Cmd.exe /C {0}` or
+  `C:\Windows\System32\cmd.exe /D /S /C "CALL "{0}""` printed
+  `7 jobs, 0 problems` and exited 0; each of those copies now exits 1
+  naming the step. `scripts/kit/test/test_kit.py --ci` adds 5 cells: a step
+  that sets each of those four templates, which the check refuses, and a
+  step that sets `shell: C:\cmd\pwsh.exe -command ". '{0}'"`, whose first
+  word names `pwsh.exe` in a directory named `cmd`, which it accepts; run
+  against the script as it was before this change, each of the 4 refusal
+  cells fails. No fixture, verifier or workflow file changes.
+- `scripts/check_readme_counts.py` holds the fixture counts README.md's kit
+  section states under its install line (#377). That sentence says how many
+  fixtures the commit the line pins carries, how many are on main and how
+  many the Hackathon kit release carries, and the script held none of them:
+  it exited 0 with the count for main taken to 51, and, in a clone with
+  history, with the count for the commit taken to 40. A count the section
+  states as fixtures on main must now be the number of `fixtures/*.json`,
+  so it is named as soon as a fixture is added, and the count `This commit
+  carries` states must be the number of `fixtures/*.json` in the tree of
+  the commit the install line above it names, where the checkout holds that
+  commit. With either count altered so on the previous commit's README, the
+  script names it and exits 1. A copy of the tree outside the repository,
+  and a shallow clone that does not hold the commit, are not held to the
+  count for the commit, and the closing line says so. The kit release's
+  count names no tag and is not held. Its self-test adds 24 cases. No
+  fixture or verifier changes.
 
 ## v0.1.0
 

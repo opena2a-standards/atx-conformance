@@ -176,6 +176,20 @@ STEP_CMD_TEMPLATE = (WINDOWS_IF + "        shell: cmd\n", WINDOWS_IF + "        
 STEP_PWSH_TEMPLATE = (WINDOWS_IF + "        shell: cmd\n", WINDOWS_IF + "        shell: " + PWSH_TEMPLATE + "\n")
 JOB_CMD_TEMPLATE = (TEST_JOB, TEST_JOB + "    defaults:\n      run:\n        shell: " + CMD_TEMPLATE + "\n")
 WORKFLOW_CMD_TEMPLATE = ("permissions: {}\n", "permissions: {}\ndefaults:\n  run:\n    shell: " + CMD_TEMPLATE + "\n")
+# Custom templates whose first word names cmd other than as the word cmd: with
+# the .exe extension, in capitals, in mixed case, and by a full path. And one
+# whose first word is pwsh.exe in a directory named cmd, which is not cmd.
+CMD_EXE_TEMPLATE = 'cmd.exe /D /E:ON /V:OFF /S /C "CALL "{0}""'
+CMD_CAPITALS_TEMPLATE = 'CMD /D /E:ON /V:OFF /S /C "CALL "{0}""'
+CMD_MIXED_CASE_TEMPLATE = "Cmd.exe /C {0}"
+CMD_PATH_TEMPLATE = 'C:\\Windows\\System32\\cmd.exe /D /S /C "CALL "{0}""'
+PWSH_IN_CMD_DIRECTORY_TEMPLATE = "C:\\cmd\\pwsh.exe -command \". '{0}'\""
+
+
+def step_shell(shell: str) -> tuple[str, str]:
+    """The edit that sets shell: of the test job's Windows step to shell."""
+    return (WINDOWS_IF + "        shell: cmd\n", WINDOWS_IF + "        shell: " + shell + "\n")
+
 
 WORKFLOW_MUTANTS = [
     ("publish also holds id-token: write",
@@ -241,12 +255,25 @@ WORKFLOW_MUTANTS = [
      + ", writes %ERRORLEVEL% directly before >",
      [WORKFLOW_CMD_TEMPLATE, STEP_NO_SHELL, STEP_ECHO_BEFORE_GT],
      "directly before > in a cmd step"),
+    ("a step that sets shell: " + CMD_EXE_TEMPLATE + " writes %ERRORLEVEL% directly before >",
+     [step_shell(CMD_EXE_TEMPLATE), STEP_ECHO_BEFORE_GT],
+     "directly before > in a cmd step"),
+    ("a step that sets shell: " + CMD_CAPITALS_TEMPLATE + " writes %ERRORLEVEL% directly before >",
+     [step_shell(CMD_CAPITALS_TEMPLATE), STEP_ECHO_BEFORE_GT],
+     "directly before > in a cmd step"),
+    ("a step that sets shell: " + CMD_MIXED_CASE_TEMPLATE + " writes %ERRORLEVEL% directly before >",
+     [step_shell(CMD_MIXED_CASE_TEMPLATE), STEP_ECHO_BEFORE_GT],
+     "directly before > in a cmd step"),
+    ("a step that sets shell: " + CMD_PATH_TEMPLATE + " writes %ERRORLEVEL% directly before >",
+     [step_shell(CMD_PATH_TEMPLATE), STEP_ECHO_BEFORE_GT],
+     "directly before > in a cmd step"),
 ]
 
 # Inputs the release check accepts: it reads a step's own shell: before its
 # job's defaults: run: shell:, and the job's before the workflow's, and holds a
-# step to the cmd rule only when the first word of that shell is cmd, so it
-# holds none of the Windows steps below to the cmd rule.
+# step to the cmd rule only when the first word of that shell, less any
+# directory part, is cmd or cmd.exe in any letter case, so it holds none of the
+# Windows steps below to the cmd rule.
 WORKFLOW_CONTROLS = [
     ("a step that sets shell: bash, under the job's defaults: run: shell: cmd, writes %ERRORLEVEL% directly before >",
      [JOB_CMD, STEP_BASH, STEP_ECHO_BEFORE_GT]),
@@ -255,6 +282,8 @@ WORKFLOW_CONTROLS = [
      [WORKFLOW_CMD, JOB_BASH, STEP_NO_SHELL, STEP_ECHO_BEFORE_GT]),
     ("a step that sets shell: " + PWSH_TEMPLATE + " writes %ERRORLEVEL% directly before >",
      [STEP_PWSH_TEMPLATE, STEP_ECHO_BEFORE_GT]),
+    ("a step that sets shell: " + PWSH_IN_CMD_DIRECTORY_TEMPLATE + " writes %ERRORLEVEL% directly before >",
+     [step_shell(PWSH_IN_CMD_DIRECTORY_TEMPLATE), STEP_ECHO_BEFORE_GT]),
 ]
 
 
