@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -23,7 +24,8 @@ import (
 // held to the rule whether or not a test names it. The literals below are
 // JSON, and verifiers/python/test_verify.py holds the Python reference
 // verifier to the same checks with the same literals (MEMBER_CELL_FIXTURES,
-// MEMBER_CELL_SUFFIXES, MEMBER_CELL_LITERAL and NO_KEY_ID_LINE).
+// MEMBER_CELL_SUFFIXES, MEMBER_CELL_LITERAL, NO_KEY_ID_LINE,
+// KEY_ID_LINE_EDITS and KEY_ID_LINE_ESCAPES).
 
 // memberCellFixtures is the shipped fixtures the cell runs on: one a
 // signature rejects, whose reason shows the signature's keyId, and one the
@@ -44,6 +46,32 @@ const memberCellLiteral = `"\\x0a"`
 // its signature's keyId removed or null: the verifier reads either as the
 // empty string, and the reason writes it as "".
 const noKeyIDLine = `       observed: REJECT[SIGNATURE_INVALID: Ed25519 signature "" did not verify against any configured public key]`
+
+// keyIDLineEdits is two reasons that write a signature's keyId, each as the
+// edit of the first signature of fixtures/tampered-signature.json that
+// leads to it: the member the edit sets, the string it sets it to, and the
+// observed line the verifier then writes, as start, which runs to the end
+// of the keyId as shipped, and end, which runs from the closing quote on.
+// TestReportOfEachCredentialMember changes one member per run, and these
+// lines show a changed keyId only when the run changes this second member
+// too. With the value * the signature is not base64, and end stops before
+// the decode error: the Go verifier goes on
+// `illegal base64 data at input byte 0]`, the Python one
+// `illegal base64 data]`. With the algorithm ML-DSA-65 the signature
+// verifies under no configured key.
+const keyIDLineEdits = `[
+  {"member": "value", "to": "*",
+   "start": "       observed: REJECT[SIGNATURE_INVALID: signature \"did:opena2a:authority:opena2a.org#key-1",
+   "end": "\" has invalid base64: "},
+  {"member": "algorithm", "to": "ML-DSA-65",
+   "start": "       observed: REJECT[SIGNATURE_INVALID: ML-DSA-65 signature \"did:opena2a:authority:opena2a.org#key-1",
+   "end": "\" did not verify against any configured public key]"}
+]`
+
+// keyIDLineEscapes is the text strconv.QuoteToASCII writes, between its
+// quotes, for each string of memberCellSuffixes, in that order, and then
+// for memberCellLiteral.
+const keyIDLineEscapes = `["\\n", "\\r", "\\x1b[2K", "\\x00", "\\x7f", "\\u0085", "\\u200b", "\\u2028", "\\u202e", "\\\\x0a"]`
 
 // fromJSON decodes text, one of the JSON literals above, into v.
 func fromJSON(t *testing.T, text string, v any) {
@@ -293,5 +321,75 @@ func TestSignatureWithNoKeyIDIsWrittenAsEmptyQuotes(t *testing.T) {
 				t.Errorf("exit %d, report %q; want exit 0 and the line %q", code, out, noKeyIDLine)
 			}
 		})
+	}
+}
+
+// TestKeyIDInTheBase64AndMLDSA65Reasons runs Run on copies of
+// fixtures/tampered-signature.json, each with one edit of keyIDLineEdits
+// made to its first signature and with nothing, or one string of
+// memberCellSuffixes or memberCellLiteral, appended to that signature's
+// keyId, every edit and every string in turn. Each report must pass
+// memberCellFailures and hold exactly one line that starts with the edit's
+// start, then the appended string as keyIDLineEscapes writes it, then the
+// edit's end. The test also holds keyIDLineEscapes to strconv.QuoteToASCII,
+// and KeyIdInTheBase64AndMlDsa65Reasons in the Python suite holds the
+// Python reference verifier to the same lines.
+func TestKeyIDInTheBase64AndMLDSA65Reasons(t *testing.T) {
+	var edits []struct {
+		Member string `json:"member"`
+		To     string `json:"to"`
+		Start  string `json:"start"`
+		End    string `json:"end"`
+	}
+	var suffixes, escapes []string
+	var literal string
+	fromJSON(t, keyIDLineEdits, &edits)
+	fromJSON(t, memberCellSuffixes, &suffixes)
+	fromJSON(t, memberCellLiteral, &literal)
+	fromJSON(t, keyIDLineEscapes, &escapes)
+	appended := append(append([]string(nil), suffixes...), literal)
+	if len(escapes) != len(appended) {
+		t.Fatalf("keyIDLineEscapes holds %d strings, want %d: memberCellSuffixes and memberCellLiteral", len(escapes), len(appended))
+	}
+	for i, suffix := range appended {
+		if quoted := strconv.QuoteToASCII(suffix); quoted != `"`+escapes[i]+`"` {
+			t.Errorf("keyIDLineEscapes writes %+q as %s, strconv.QuoteToASCII writes %s", suffix, escapes[i], quoted)
+		}
+	}
+	// The first run of each edit appends nothing: the keyId as shipped.
+	appended = append([]string{""}, appended...)
+	escapes = append([]string{""}, escapes...)
+	f := loadMemberCellFixture(t, "fixtures/tampered-signature.json")
+	chdir(t, t.TempDir())
+	for _, edit := range edits {
+		for i, suffix := range appended {
+			credential := f.credential(t)
+			signatures, ok := credential.(map[string]any)["signatures"].([]any)
+			if !ok || len(signatures) == 0 {
+				t.Fatal("fixtures/tampered-signature.json carries no signature")
+			}
+			signature := signatures[0].(map[string]any)
+			keyID, ok := signature["keyId"].(string)
+			if !ok {
+				t.Fatal("the first signature of fixtures/tampered-signature.json carries no keyId")
+			}
+			signature[edit.Member] = edit.To
+			signature["keyId"] = keyID + suffix
+			run := fmt.Sprintf("%s set to %q, %+q appended to the keyId", edit.Member, edit.To, suffix)
+			out, code := memberCellRun(t, "tampered-signature.json", f.with(t, credential))
+			for _, failure := range memberCellFailures(out, code) {
+				t.Errorf("%s: %s\nreport: %q", run, failure, out)
+			}
+			want := edit.Start + escapes[i] + edit.End
+			found := 0
+			for _, line := range strings.Split(string(out), "\n") {
+				if strings.HasPrefix(line, want) {
+					found++
+				}
+			}
+			if found != 1 {
+				t.Errorf("%s: %d lines start with %q, want 1\nreport: %q", run, found, want, out)
+			}
+		}
 	}
 }

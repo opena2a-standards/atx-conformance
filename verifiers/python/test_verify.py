@@ -67,7 +67,12 @@ verifier writes. The output cell (ReportOfEachCredentialMember) appends
 each of nine characters to each string member of the credential of
 fixtures/tampered-signature.json and fixtures/wrong-issuer.json in turn,
 and each report must be printable ASCII plus line feeds, with one
-block-marker line and one summary line, the last.
+block-marker line and one summary line, the last. A second cell
+(KeyIdInTheBase64AndMlDsa65Reasons) sets the value or the algorithm of
+the first signature of fixtures/tampered-signature.json, so that the
+reason is the invalid base64 one or the ML-DSA-65 one, and reads that
+signature's keyId in it, as shipped and with each string of the output
+cell appended.
 One test imports this file with an os whose name is "nt" and which has no
 geteuid, as Python's os is on Windows: it must import, with NonUTF8Argument
 and ArgumentContract's test of a directory that cannot be listed skipped.
@@ -5000,6 +5005,31 @@ MEMBER_CELL_LITERAL = json.loads(r'"\\x0a"')
 # keyId removed or null: the decode reads either as the empty string, and
 # the reason writes it as "" (noKeyIDLine).
 NO_KEY_ID_LINE = b'       observed: REJECT[SIGNATURE_INVALID: Ed25519 signature "" did not verify against any configured public key]'
+# Two reasons that write a signature's keyId, each as the edit of the first
+# signature of fixtures/tampered-signature.json that leads to it: the member
+# the edit sets, the string it sets it to, and the observed line the
+# verifier then writes, as start, which runs to the end of the keyId as
+# shipped, and end, which runs from the closing quote on.
+# ReportOfEachCredentialMember changes one member per run, and these lines
+# show a changed keyId only when the run changes this second member too.
+# With the value * the signature is not base64, and end stops before the
+# decode error: the Go verifier goes on
+# `illegal base64 data at input byte 0]`, the Python one
+# `illegal base64 data]`. With the algorithm ML-DSA-65 the signature
+# verifies under no configured key (keyIDLineEdits).
+KEY_ID_LINE_EDITS = json.loads(r'''[
+  {"member": "value", "to": "*",
+   "start": "       observed: REJECT[SIGNATURE_INVALID: signature \"did:opena2a:authority:opena2a.org#key-1",
+   "end": "\" has invalid base64: "},
+  {"member": "algorithm", "to": "ML-DSA-65",
+   "start": "       observed: REJECT[SIGNATURE_INVALID: ML-DSA-65 signature \"did:opena2a:authority:opena2a.org#key-1",
+   "end": "\" did not verify against any configured public key]"}
+]''')
+# The text Go's strconv.QuoteToASCII writes, between its quotes, for each
+# string of MEMBER_CELL_SUFFIXES, in that order, and then for
+# MEMBER_CELL_LITERAL: the Go suite holds this list to that function
+# (keyIDLineEscapes).
+KEY_ID_LINE_ESCAPES = json.loads(r'["\\n", "\\r", "\\x1b[2K", "\\x00", "\\x7f", "\\u0085", "\\u200b", "\\u2028", "\\u202e", "\\\\x0a"]')
 
 
 def _string_members(value: object, at: tuple = ()) -> list[tuple]:
@@ -5127,6 +5157,40 @@ class SignatureWithNoKeyId(unittest.TestCase):
                 out, code = _member_cell_run("tampered-signature.json", copy)
                 self.assertEqual(code, 0, out)
                 self.assertIn(NO_KEY_ID_LINE, out.split(b"\n"), out)
+
+
+class KeyIdInTheBase64AndMlDsa65Reasons(unittest.TestCase):
+    """main on copies of fixtures/tampered-signature.json, each with one
+    edit of KEY_ID_LINE_EDITS made to its first signature and with nothing,
+    or one string of MEMBER_CELL_SUFFIXES or MEMBER_CELL_LITERAL, appended
+    to that signature's keyId, every edit and every string in turn. Each
+    report must pass each check of _member_cell_failures and hold exactly
+    one line that starts with the edit's start, then the appended string as
+    KEY_ID_LINE_ESCAPES writes it, then the edit's end. The test also holds
+    verify._go_quote with ascii_only, the call these two reasons make, to
+    KEY_ID_LINE_ESCAPES (TestKeyIDInTheBase64AndMLDSA65Reasons in the Go
+    suite, which holds that list to strconv.QuoteToASCII)."""
+
+    def test_each_edit(self):
+        appended = [*MEMBER_CELL_SUFFIXES, MEMBER_CELL_LITERAL]
+        self.assertEqual(len(KEY_ID_LINE_ESCAPES), len(appended))
+        for suffix, escape in zip(appended, KEY_ID_LINE_ESCAPES):
+            with self.subTest(suffix=suffix):
+                self.assertEqual(verify._go_quote(suffix, ascii_only=True), f'"{escape}"')
+        doc = json.loads((ROOT / "fixtures" / "tampered-signature.json").read_text())
+        for edit in KEY_ID_LINE_EDITS:
+            # The first run of each edit appends nothing: the keyId as shipped.
+            for suffix, escape in zip(["", *appended], ["", *KEY_ID_LINE_ESCAPES]):
+                with self.subTest(member=edit["member"], suffix=suffix), tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+                    copy = json.loads(json.dumps(doc))
+                    signature = copy["atx"]["signatures"][0]
+                    signature[edit["member"]] = edit["to"]
+                    signature["keyId"] += suffix
+                    out, code = _member_cell_run("tampered-signature.json", copy)
+                    self.assertEqual(_member_cell_failures(out, code), [], f"report: {out!r}")
+                    want = (edit["start"] + escape + edit["end"]).encode("ascii")
+                    found = sum(1 for line in out.split(b"\n") if line.startswith(want))
+                    self.assertEqual(found, 1, f"{found} lines start with {want!r}, want 1\nreport: {out!r}")
 
 
 class ArgumentsSectionQuotesTheCredentialMembers(unittest.TestCase):
