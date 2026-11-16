@@ -347,6 +347,26 @@ they should not.
 
 ### Fixed
 
+- `scripts/check_readme_counts.py` reads in either letter case the words by
+  which two of its rules find a sentence that gives a pseudo-version to a
+  commit with no tag (#389): the rule on the whole-line comments of the four
+  files that say what version `go run` resolves, and the rule on the README
+  and this file's opening paragraph while the repository carries a tag that
+  names no version. Both read those words in lower case only, so a sentence
+  opening with one of them passed. Appended to
+  `verifiers/go/verifier/verify.go` with a line of code after each, the
+  comments `// Untagged commits resolve to a pseudo-version.`, `// Commits
+  that carry no tag resolve to a pseudo-version.`, `// Pseudo-versions name
+  untagged commits.` and `// It has no tag, so Go resolves the commit to a
+  pseudo-version.` left the script at exit 0, with `Commits that carry no tag
+  resolve to a pseudo-version.` and `Pseudo-versions name commits that have no
+  tag.` appended to `README.md` as well. With the same six it now exits 1 and
+  lists one failure quoting each, those for the comments naming `verify.go`.
+  The self-test adds 10 cases: six comments, each opening with a word of the
+  comment rule's patterns capitalized, the four above among them; the two
+  README sentences; and a comment and a README sentence opening with
+  `Commits` that say the commits carry no Go version tag, which pass. No
+  fixture, expected verdict or workflow file changes.
 - The comment above `versionLine` in `verifiers/go/verifier/verify.go` and the
   comment above `version_line()` in `scripts/kit/assemble.sh` say a commit
   resolves to a pseudo-version while the commit carries no Go version tag

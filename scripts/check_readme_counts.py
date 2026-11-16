@@ -1237,7 +1237,7 @@ NO_VERSION_TAG_CLAIM = re.compile(
     r"\brepository\s+(?:has|carries)\s+no\s+(?:Go\s+)?version\s+tags?\b")
 UNTAGGED_COMMIT_CLAIM = re.compile(
     r"\bcommits?\s+(?:that\s+|which\s+)?(?:has|have|carries|carry)\s+no\s+"
-    r"(?:release\s+)?tags?\b")
+    r"(?:release\s+)?tags?\b", re.IGNORECASE)
 TAG_SITE = f"README or {CHANGELOG_NAME} opening-paragraph sentence on this repository's tags"
 # The two sentences the check was written for, as they were wrapped.
 RETRACTED_LATEST = (
@@ -1339,7 +1339,7 @@ def release_tag_failures(readme, changelog, tags):
             failures.append(
                 f"{TAG_SITE} says the repository has no tag, but it carries "
                 f"{carried}{say_go_version}: {sentence!r}")
-        if (unversioned and PSEUDO_VERSION in sentence
+        if (unversioned and PSEUDO_VERSION in sentence.lower()
                 and UNTAGGED_COMMIT_CLAIM.search(sentence)):
             failures.append(
                 f"{TAG_SITE} gives a {PSEUDO_VERSION} to a commit with no tag, but "
@@ -1364,6 +1364,18 @@ def release_tag_failures(readme, changelog, tags):
 # This rule reads none of the repository's tags: these comments state Go's
 # resolution rule, which does not depend on the tags this repository carries,
 # so a shallow clone is held to it too.
+#
+# PSEUDO_VERSION_FORM, NAMES_A_COMMIT, the two claim patterns below and
+# UNTAGGED_COMMIT_CLAIM matched their words in lower case only, and
+# release_tag_failures() looked for the pseudo-version the same way. So the
+# comments `// Untagged commits resolve to a pseudo-version.`, `// Commits that
+# carry no tag resolve to a pseudo-version.`, `// Pseudo-versions name untagged
+# commits.` and `// It has no tag, so Go resolves the commit to a
+# pseudo-version.` passed, and so did the README sentences `Commits that carry
+# no tag resolve to a pseudo-version.` and `Pseudo-versions name commits that
+# have no tag.` (#389). Each pattern matches in either letter case, and
+# release_tag_failures() looks for the pseudo-version in the lower-cased
+# sentence.
 GO_TAG_SITE = "verifiers/go/verifier/verify.go"
 ASSEMBLE_TAG_SITE = "scripts/kit/assemble.sh"
 SOURCE_TAG_SITES = (
@@ -1378,13 +1390,13 @@ SOURCE_TAG_SITES = (
 # line of a `/* ... */` block, which these files do not use for prose.
 COMMENT_LINE = re.compile(r"[ \t]*(?://|#)[ \t]?(.*)")
 # A pseudo-version named by that word, or written as Go builds it.
-PSEUDO_VERSION_FORM = re.compile(rf"{PSEUDO_VERSION}|\bv0\.0\.0-")
-NAMES_A_COMMIT = re.compile(r"\bcommits?\b")
+PSEUDO_VERSION_FORM = re.compile(rf"{PSEUDO_VERSION}|\bv0\.0\.0-", re.IGNORECASE)
+NAMES_A_COMMIT = re.compile(r"\bcommits?\b", re.IGNORECASE)
 # The two shapes of the claim that UNTAGGED_COMMIT_CLAIM does not match: a
 # pronoun standing for the commit, and the word untagged.
 UNTAGGED_PRONOUN_CLAIM = re.compile(
-    r"\bit\s+(?:has|carries)\s+no\s+(?:release\s+)?tags?\b")
-UNTAGGED_WORD_CLAIM = re.compile(r"\buntagged\b")
+    r"\bit\s+(?:has|carries)\s+no\s+(?:release\s+)?tags?\b", re.IGNORECASE)
+UNTAGGED_WORD_CLAIM = re.compile(r"\buntagged\b", re.IGNORECASE)
 SOURCE_TAG_SITE = "comment on the version `go run` resolves in"
 
 
@@ -4670,6 +4682,17 @@ RETRACTED_NO_TAGS = (
 RETRACTED_NO_TAG_YET = (
     "This repository carries no tag yet: the section `v0.1.0` lists the changes\n"
     "its first tag, `v0.1.0`, is to carry.")
+# Two README sentences release_tag_failures() fails while the repository
+# carries a tag that names no version: one opening with the word
+# UNTAGGED_COMMIT_CLAIM opens with, one with the pseudo-version that function
+# looks for, each capitalized and the other in lower case (#389). The first is
+# the sentence #389 names.
+OPENING_WORD_SENTENCES = (
+    ("`Commits`, the word UNTAGGED_COMMIT_CLAIM opens with",
+     "Commits that carry no tag resolve to a pseudo-version."),
+    (f"`Pseudo-versions`, holding the {PSEUDO_VERSION} the rule looks for",
+     "Pseudo-versions name commits that have no tag."),
+)
 
 
 def _sentence_files(tree, sentence):
@@ -4701,7 +4724,10 @@ def _release_tag_cases(tree, published=None):
     to a commit that carries no tag and the retracted README sentence, while
     the same sentences saying no Go version tag add none, and one sentence
     saying the repository has no Go version tag and has no release tag adds
-    one. Held to `v0.1.0` and that tag, the commit clause adds a failure;
+    one. Held to that tag, the sentences of OPENING_WORD_SENTENCES, each
+    opening with a word the rule reads, capitalized, add a failure each, and
+    one opening with `Commits` that says the commits carry no Go version tag
+    adds none. Held to `v0.1.0` and that tag, the commit clause adds a failure;
     with no tag, the no-release-tag clause adds none. carried_tags() names no
     tag, one tag that names no version, one version tag, and a mix. Then
     version_tags() and repository_tags() are read off temporary
@@ -4805,6 +4831,10 @@ def _release_tag_cases(tree, published=None):
          "the tag `kit-2026-11-14`", untagged_commit,
          text=readme + "\n\nA pseudo-version is the version Go gives a commit that "
                        "carries no tag.\n", tags=KIT_TAGGED)
+    for reads, sentence in OPENING_WORD_SENTENCES:
+        case(f"README sentence opening with {reads}, held to the tag "
+             f"`kit-2026-11-14`: {sentence!r}", untagged_commit,
+             text=readme + "\n\n" + sentence + "\n", tags=KIT_TAGGED)
     case("README restating the clause giving a pseudo-version to a commit with no "
          "tag, held to `v0.1.0` and `kit-2026-11-14`", untagged_commit,
          text=readme + "\n\n" + RETRACTED_UNTAGGED_COMMIT + "\n",
@@ -4820,7 +4850,8 @@ def _release_tag_cases(tree, published=None):
             "`go run` resolves the commit to its Go version tag, or to a "
             "pseudo-version when the commit has no Go version tag.",
             "A pseudo-version is the version Go gives a commit that carries no Go "
-            "version tag."):
+            "version tag.",
+            "Commits that carry no Go version tag resolve to a pseudo-version."):
         case(f"README clause {clause!r} held to the tag `kit-2026-11-14`", None,
              text=readme + "\n\n" + clause + "\n", tags=KIT_TAGGED)
     case(f"{CHANGELOG_NAME} opening saying the repository carries no Go version tag "
@@ -4987,6 +5018,23 @@ RETRACTED_GO_VERSION_COMMENT = (
 RETRACTED_ASSEMBLE_COMMENT = (
     "  # Go stamps a build from a clean clone of an untagged commit with the version\n"
     "  # v0.0.0-<committer time, UTC, %Y%m%d%H%M%S>-<first 12 hex of the commit>.")
+# One comment sentence for each pattern source_tag_failures() reads, opening
+# with that pattern's word capitalized, each other word a pattern needs in
+# lower case (#389). The first four are the comments #389 names. The second
+# opens with the word of two patterns, so the last two hold each of those
+# alone: the fifth says untagged in lower case, and the sixth names the commit
+# again in lower case.
+OPENING_WORD_COMMENTS = (
+    ("UNTAGGED_WORD_CLAIM", "Untagged commits resolve to a pseudo-version."),
+    ("NAMES_A_COMMIT and UNTAGGED_COMMIT_CLAIM",
+     "Commits that carry no tag resolve to a pseudo-version."),
+    ("PSEUDO_VERSION_FORM", "Pseudo-versions name untagged commits."),
+    ("UNTAGGED_PRONOUN_CLAIM",
+     "It has no tag, so Go resolves the commit to a pseudo-version."),
+    ("NAMES_A_COMMIT", "Commits resolve to a pseudo-version while untagged."),
+    ("UNTAGGED_COMMIT_CLAIM",
+     "Commits that carry no tag resolve to a pseudo-version naming the commit."),
+)
 
 
 def _source_tag_cases(tree):
@@ -4996,8 +5044,10 @@ def _source_tag_cases(tree):
     retracted sentence written as a Go string literal rather than a comment. A
     claim wrapped so the pseudo-version and the untagged words fall on
     different comment lines of one run adds a failure; the same two lines with
-    a line of code between them add none. A site that is missing is reported.
-    Each case counts only the failures its text adds over the published text."""
+    a line of code between them add none. Each comment of OPENING_WORD_COMMENTS
+    adds a failure, and one opening with `Commits` that says the commits carry
+    no Go version tag adds none. A site that is missing is reported. Each case
+    counts only the failures its text adds over the published text."""
     comments = tree.source_comments
     cases = []
 
@@ -5041,6 +5091,13 @@ def _source_tag_cases(tree):
          (comments[GO_TAG_SITE] or "")
          + "\n// Go gives the commit a pseudo-version\nvar between = 1\n"
            "// when it has no tag.\n")
+    for patterns, comment in OPENING_WORD_COMMENTS:
+        case(f"{GO_TAG_SITE} comment opening with the word of {patterns}, "
+             f"capitalized: {comment!r}", gives_pseudo(GO_TAG_SITE), GO_TAG_SITE,
+             (comments[GO_TAG_SITE] or "") + f"\n// {comment}\n")
+    case(f"{GO_TAG_SITE} comment opening with `Commits` that says the commits carry "
+         f"no Go version tag", None, GO_TAG_SITE, (comments[GO_TAG_SITE] or "")
+         + "\n// Commits that carry no Go version tag resolve to a pseudo-version.\n")
     case(f"{GO_TAG_SITE} missing", f"{GO_TAG_SITE} is missing", GO_TAG_SITE, None)
     return cases
 
