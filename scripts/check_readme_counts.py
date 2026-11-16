@@ -297,6 +297,18 @@ release-tag case of the self-test adds and expects the check to fail, and
 that the check fails held to that case's tags, is reported as a failure
 opening with the file that holds it (#385).
 
+It also holds what the comments of the files that say what version `go run`
+resolves say about an untagged commit. The comment above versionLine in
+verifiers/go/verifier/verify.go said the version is the commit's release tag
+"or a pseudo-version naming the commit when it has no tag", and the comment
+above version_line() in scripts/kit/assemble.sh called the commit Go stamps
+that way "an untagged commit", while commit a38e000, whose only tag is
+kit-2026-11-14, resolves to a pseudo-version. So a sentence of a whole-line
+comment in one of those files that names a pseudo-version, by that word or by
+the version form Go builds, names a commit, and says a commit has no tag,
+carries no tag or is untagged, fails. This rule reads none of the
+repository's tags, so a shallow clone is held to it too.
+
 It also holds what CHANGELOG.md's top section says the Go release still
 changes to the Go verifier's tests. Its #259 entry said that outside the RFC
 3339 layout the Go verifier's error can still differ by release, built with
@@ -1334,6 +1346,95 @@ def release_tag_failures(readme, changelog, tags):
                 f"the repository carries {carried}, and `go list -m` resolves a "
                 f"commit whose only tag names no version to a {PSEUDO_VERSION} "
                 f"too; say the commit has no Go version tag: {sentence!r}")
+    return failures
+
+
+# The comment above versionLine in verifiers/go/verifier/verify.go said the
+# version `go run <module>/cmd/atx-verify@<version>` resolves is the commit's
+# release tag "or a pseudo-version naming the commit when it has no tag", and
+# the comment above version_line() in scripts/kit/assemble.sh called the commit
+# Go stamps that way "an untagged commit" (#386). Go resolves a commit to a
+# pseudo-version unless the commit carries a Go version tag, so commit
+# `a38e000`, whose only tag is `kit-2026-11-14`, resolves to the pseudo-version
+# v0.0.0-20261112212443-a38e00017076. release_tag_failures() holds the README,
+# its pages and CHANGELOG.md's opening to that wording (#375) and reads no
+# comment. So each sentence of a whole-line comment in SOURCE_TAG_SITES that
+# names a pseudo-version, by that word or by the version form Go builds, names
+# a commit, and says a commit has no tag, carries no tag or is untagged, fails.
+# This rule reads none of the repository's tags: these comments state Go's
+# resolution rule, which does not depend on the tags this repository carries,
+# so a shallow clone is held to it too.
+GO_TAG_SITE = "verifiers/go/verifier/verify.go"
+ASSEMBLE_TAG_SITE = "scripts/kit/assemble.sh"
+SOURCE_TAG_SITES = (
+    GO_TAG_SITE,
+    "interop/suite.go",
+    ASSEMBLE_TAG_SITE,
+    "docs/demo/record-atx-verify.sh",
+)
+# A whole-line comment, Go's `//` or a shell or Python `#`, with the marker and
+# one blank after it removed. A `//` or `#` inside a string literal does not
+# open its line, so a line holding one is not read as a comment; neither is a
+# line of a `/* ... */` block, which these files do not use for prose.
+COMMENT_LINE = re.compile(r"[ \t]*(?://|#)[ \t]?(.*)")
+# A pseudo-version named by that word, or written as Go builds it.
+PSEUDO_VERSION_FORM = re.compile(rf"{PSEUDO_VERSION}|\bv0\.0\.0-")
+NAMES_A_COMMIT = re.compile(r"\bcommits?\b")
+# The two shapes of the claim that UNTAGGED_COMMIT_CLAIM does not match: a
+# pronoun standing for the commit, and the word untagged.
+UNTAGGED_PRONOUN_CLAIM = re.compile(
+    r"\bit\s+(?:has|carries)\s+no\s+(?:release\s+)?tags?\b")
+UNTAGGED_WORD_CLAIM = re.compile(r"\buntagged\b")
+SOURCE_TAG_SITE = "comment on the version `go run` resolves in"
+
+
+def comment_prose(source):
+    """Each run of adjacent whole-line comments in `source` as one block, the
+    markers removed, so statements() reads a sentence a comment wrapped over
+    several lines whole. A line that is not a whole-line comment ends the run,
+    so two runs are never read as one sentence."""
+    runs, run = [], []
+    for line in source.split("\n"):
+        body = COMMENT_LINE.fullmatch(line)
+        if body is None:
+            if run:
+                runs.append(" ".join(run))
+                run = []
+            continue
+        run.append(body.group(1).strip())
+    if run:
+        runs.append(" ".join(run))
+    return runs
+
+
+def source_tag_failures(comments):
+    """Each sentence of a whole-line comment of a file in SOURCE_TAG_SITES
+    (comment_prose()) that names a pseudo-version and a commit and says a
+    commit has no tag, carries no tag or is untagged. `comments` maps each site
+    to its text, None when the file is missing."""
+    failures = []
+    for site in SOURCE_TAG_SITES:
+        text = comments.get(site)
+        if text is None:
+            failures.append(
+                f"{site} is missing; what its comments say about the version "
+                f"`go run` resolves cannot be checked")
+            continue
+        for run in comment_prose(text):
+            for sentence in statements(run):
+                if not (PSEUDO_VERSION_FORM.search(sentence)
+                        and NAMES_A_COMMIT.search(sentence)):
+                    continue
+                if not (UNTAGGED_COMMIT_CLAIM.search(sentence)
+                        or UNTAGGED_PRONOUN_CLAIM.search(sentence)
+                        or UNTAGGED_WORD_CLAIM.search(sentence)):
+                    continue
+                failures.append(
+                    f"{SOURCE_TAG_SITE} {site} gives a {PSEUDO_VERSION} to a commit "
+                    f"with no tag, but Go resolves a commit to a {PSEUDO_VERSION} "
+                    f"unless the commit carries a Go version tag, a tag named for a "
+                    f"semantic version; say the commit has no Go version tag: "
+                    f"{sentence!r}")
     return failures
 
 
@@ -3856,7 +3957,7 @@ Tree = collections.namedtuple("Tree", (
     "py_dependency_texts jcs_sites tbs_sites tbs_canonical jcs_readme "
     "gate_sites gate_libraries profile outcomes suites scripts front_page "
     "readme_pages module_start nested_modules changelog release_tags "
-    "verify_go_test spec_text pinned_fixtures"))
+    "verify_go_test spec_text pinned_fixtures source_comments"))
 
 # One check tree_failures() runs: its name, the call (`run(tree)` returns
 # failures) and the alteration the self-test makes to prove the call is still
@@ -4874,6 +4975,74 @@ def _version_tags_cases():
              "repository_tags() over a directory that is no repository",
              f"expected None, got {repository_tags(plain)}"),
         ]
+
+
+# The two comments source_tag_failures() was written for (#386), each cut to
+# the sentence a case needs and wrapped as it stood: the first above versionLine
+# in verifiers/go/verifier/verify.go, the second above version_line() in
+# scripts/kit/assemble.sh.
+RETRACTED_GO_VERSION_COMMENT = (
+    "// the highest release tag for @latest, and for @<commit> the commit's release\n"
+    "// tag, or a pseudo-version naming the commit when it has no tag.")
+RETRACTED_ASSEMBLE_COMMENT = (
+    "  # Go stamps a build from a clean clone of an untagged commit with the version\n"
+    "  # v0.0.0-<committer time, UTC, %Y%m%d%H%M%S>-<first 12 hex of the commit>.")
+
+
+def _source_tag_cases(tree):
+    """Each retracted comment appended to the file it stood in adds a failure
+    naming that file; the sentence each was corrected to adds none, and so does
+    one saying a commit has no tag that names no pseudo-version, and the
+    retracted sentence written as a Go string literal rather than a comment. A
+    claim wrapped so the pseudo-version and the untagged words fall on
+    different comment lines of one run adds a failure; the same two lines with
+    a line of code between them add none. A site that is missing is reported.
+    Each case counts only the failures its text adds over the published text."""
+    comments = tree.source_comments
+    cases = []
+
+    def case(label, needle, site, text):
+        baseline = set(source_tag_failures(comments))
+        new = [f for f in source_tag_failures({**comments, site: text})
+               if f not in baseline]
+        if needle is None:
+            cases.append((not new, label, f"expected no new failure, got {new}"))
+        else:
+            cases.append((any(needle in f for f in new), label,
+                          f"expected a failure naming {needle!r}, got {new}"))
+
+    def gives_pseudo(site):
+        return f"{site} gives a {PSEUDO_VERSION} to a commit with no tag"
+
+    for site, retracted in ((GO_TAG_SITE, RETRACTED_GO_VERSION_COMMENT),
+                            (ASSEMBLE_TAG_SITE, RETRACTED_ASSEMBLE_COMMENT)):
+        case(f"{site} restating the comment it was corrected from",
+             gives_pseudo(site), site, (comments[site] or "") + "\n" + retracted + "\n")
+    case(f"{GO_TAG_SITE} saying the commit carries no Go version tag", None,
+         GO_TAG_SITE, (comments[GO_TAG_SITE] or "")
+         + "\n// or a pseudo-version naming the commit when the commit carries\n"
+           "// no Go version tag.\n")
+    case(f"{ASSEMBLE_TAG_SITE} saying the commit carries no Go version tag", None,
+         ASSEMBLE_TAG_SITE, (comments[ASSEMBLE_TAG_SITE] or "")
+         + "\n  # Go stamps a build from a clean clone of the commit with the version\n"
+           "  # v0.0.0-<date>-<sha12> while the commit carries no Go version tag.\n")
+    case(f"{GO_TAG_SITE} saying a commit has no tag and naming no "
+         f"{PSEUDO_VERSION}", None, GO_TAG_SITE, (comments[GO_TAG_SITE] or "")
+         + "\n// A commit that has no tag is named by its hash.\n")
+    case(f"{GO_TAG_SITE} holding the retracted sentence as a string literal, not "
+         f"a comment", None, GO_TAG_SITE, (comments[GO_TAG_SITE] or "")
+         + "\nvar retracted = \"a pseudo-version naming the commit when it has no "
+           "tag\"\n")
+    case(f"{GO_TAG_SITE} wrapping the claim over two lines of one comment run",
+         gives_pseudo(GO_TAG_SITE), GO_TAG_SITE, (comments[GO_TAG_SITE] or "")
+         + "\n// Go gives the commit a pseudo-version\n// when it has no tag.\n")
+    case(f"{GO_TAG_SITE} wrapping the same claim over two comment runs with a "
+         f"line of code between them", None, GO_TAG_SITE,
+         (comments[GO_TAG_SITE] or "")
+         + "\n// Go gives the commit a pseudo-version\nvar between = 1\n"
+           "// when it has no tag.\n")
+    case(f"{GO_TAG_SITE} missing", f"{GO_TAG_SITE} is missing", GO_TAG_SITE, None)
+    return cases
 
 
 # A timestamp the published verify_test.go does not write. The wiring case
@@ -6603,6 +6772,14 @@ def _wire_release_tag(tree):
             {"readme": tree.readme + "\n\n" + RETRACTED_LATEST + "\n", "release_tags": []})
 
 
+def _wire_source_tag(tree):
+    return (f"{GO_TAG_SITE} gives a {PSEUDO_VERSION} to a commit with no tag",
+            {"source_comments": {
+                **tree.source_comments,
+                GO_TAG_SITE: ((tree.source_comments[GO_TAG_SITE] or "")
+                              + "\n" + RETRACTED_GO_VERSION_COMMENT + "\n")}})
+
+
 def _wire_release_difference(tree):
     stamp = INVENTED_DIFFERENCE_TIMESTAMP
     return (f"result on `{stamp}` can still differ by release",
@@ -6761,6 +6938,9 @@ CHECKS = (
     Check("release tag",
           lambda t: release_tag_failures(t.readme, t.changelog, t.release_tags),
           _wire_release_tag),
+    Check("source comment on the version `go run` resolves",
+          lambda t: source_tag_failures(t.source_comments),
+          _wire_source_tag),
     Check("Go release difference",
           lambda t: release_difference_failures(t.changelog, t.verify_go_test),
           _wire_release_difference),
@@ -7044,6 +7224,7 @@ def self_test(tree, verbose):
     published = []
     cases.extend(_release_tag_cases(tree, published))
     cases.extend(_held_sentence_cases(tree))
+    cases.extend(_source_tag_cases(tree))
     cases.extend(_release_difference_cases(tree))
     cases.extend(_changelog_total_cases(tree))
     cases.extend(_python_dependency_cases(tree.py_requirements, tree.py_dependency_texts))
@@ -7279,6 +7460,9 @@ def main():
                         if VERIFY_GO_TEST.exists() else None),
         spec_text=SPEC_TEXT.read_text(encoding="utf-8") if SPEC_TEXT.exists() else None,
         pinned_fixtures=pinned_fixture_counts(ROOT, install_pins(readme)),
+        source_comments={site: (ROOT / site).read_text(encoding="utf-8")
+                         if (ROOT / site).exists() else None
+                         for site in SOURCE_TAG_SITES},
     )
 
     failed, total, published = self_test(tree, only_self_test)
@@ -7342,7 +7526,10 @@ def main():
              if tree.release_tags is not None else
              f"sentences on this repository's tags not held to them: none could be "
              f"read in this checkout; ")
-          + f"no {CHANGELOG_NAME} top-section sentence saying a result can still "
+          + f"no whole-line comment of the {len(SOURCE_TAG_SITES)} files that say "
+          f"what version `go run` resolves gives a {PSEUDO_VERSION} to a commit "
+          f"with no tag; "
+          f"no {CHANGELOG_NAME} top-section sentence saying a result can still "
           f"differ by release quotes a timestamp {VERIFY_GO_TEST_NAME} writes; "
           f"no {CHANGELOG_NAME} top-section sentence states a total of tests, of a "
           f"self-test or of fixtures as {totals} or `{TOTAL_FORMS[-1]}`; "
