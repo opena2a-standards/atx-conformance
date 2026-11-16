@@ -817,6 +817,18 @@ they should not.
   README.md and fails one over 69 words, or more than one over 60, naming
   each; on the previous README.md it exits 1 naming the five. Its
   self-test adds 12 cases. No fixture or verifier changes.
+- The module docstring of `scripts/check_step7_coverage.py` names
+  `docs/fixtures.md` as the file that says `conformance.json`'s
+  `notCovered` and the Coverage paragraph of the vendored `core.md` drop
+  §1.3 step 7 together (#373). It named the README, and README.md holds no
+  such sentence; `docs/fixtures.md` holds it in the section "Required trust
+  level: the distinct signer-authority count".
+  `scripts/test_check_step7_coverage.py`, which the Python unit tests step
+  of `conformance.yml` discovers, holds the file the docstring names as
+  saying "the two drop it together" to holding that sentence; run against
+  the docstring this change starts from, its test fails, as the repository
+  root holds no file named README. The script changes in its docstring
+  alone. No fixture changes.
 
 ## v0.1.0
 
