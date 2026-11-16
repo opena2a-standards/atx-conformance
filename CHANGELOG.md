@@ -858,6 +858,22 @@ they should not.
   word names `pwsh.exe` in a directory named `cmd`, which it accepts; run
   against the script as it was before this change, each of the 4 refusal
   cells fails. No fixture, verifier or workflow file changes.
+- `scripts/check_readme_counts.py` holds the fixture counts README.md's kit
+  section states under its install line (#377). That sentence says how many
+  fixtures the commit the line pins carries, how many are on main and how
+  many the Hackathon kit release carries, and the script held none of them:
+  it exited 0 with the count for main taken to 51, and, in a clone with
+  history, with the count for the commit taken to 40. A count the section
+  states as fixtures on main must now be the number of `fixtures/*.json`,
+  so it is named as soon as a fixture is added, and the count `This commit
+  carries` states must be the number of `fixtures/*.json` in the tree of
+  the commit the install line above it names, where the checkout holds that
+  commit. With either count altered so on the previous commit's README, the
+  script names it and exits 1. A copy of the tree outside the repository,
+  and a shallow clone that does not hold the commit, are not held to the
+  count for the commit, and the closing line says so. The kit release's
+  count names no tag and is not held. Its self-test adds 24 cases. No
+  fixture or verifier changes.
 
 ## v0.1.0
 
