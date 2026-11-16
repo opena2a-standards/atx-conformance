@@ -34,7 +34,10 @@ Spec coverage:
     Ed25519 companion; with requiredSignatures set in the verifier state,
     the Ed25519 signatures must verify under at least that many distinct
     keys, the k-of-n threshold of core.md section 3.1 step 8), expiry,
-    revocation (the credential's revoked flag and the verifier's CRL),
+    revocation (the credential's revoked flag, the agent's entry on the
+    verifier's CRL whatever the list's dates, then the list's nextUpdate and
+    issuedAt within the 60 seconds of skew of ATP-SPEC section 10.2, and a
+    list required and not held; the list's signature is not verified),
     issuer-trust, and the distinct signer-authority count of core.md section
     1.3 step 7, which rejects when the verifier state requires trust level 3
     or higher and fewer than two distinct authorities produced a verified
@@ -225,6 +228,11 @@ MLDSA65_PUBLIC_KEY_SIZE = 1952
 
 SUPPORTED_ATC_VERSION = "1.0"
 SUPPORTED_ATC_VERSION_V11 = "1.1"
+
+# The family clock-skew bound of ATP-SPEC section 10.2: a verifier tolerates
+# at most 60 seconds of clock skew. Step 3 reads a held CRL's nextUpdate and
+# issuedAt within it (atpMaxSkew in the Go reference verifier).
+ATP_MAX_SKEW_SECONDS = 60
 
 # The date-time layout of Go's time.Parse(time.RFC3339, s), which the Go
 # reference verifier's time.Time decoder applies (the Go standard library has
@@ -890,6 +898,7 @@ _VERIFIER_STATE_TYPES = {
     "publicKeys": "[]keypairRef",
     "requiredSignatures": "*int64",
     "crl": "*crl",
+    "revocationListRequired": "bool",
 }
 _KEYPAIR_REF_TYPES = {
     "role": "string",
@@ -1452,7 +1461,13 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
             reason=f"expired at {_format_rfc3339(expires)}, verifier clock is {_format_rfc3339(now)}",
         )
 
-    # Step 3: revocation.
+    # Step 3: revocation (core.md section 1.3 step 6). The revoked flag, then
+    # the agent's entry on a held CRL, which revokes whatever the list's
+    # dates: an entry stays true after its list ages, and only the silence of
+    # a list past its nextUpdate stops being evidence. Then the list's
+    # freshness within ATP_MAX_SKEW_SECONDS, nextUpdate before issuedAt, then
+    # a list required and not held. The list's signature member is not
+    # verified.
     if atx["revoked"]:
         return VerifyResult(reject_category="REVOKED", reason="credential revoked field is true")
     crl = vs["crl"]
@@ -1463,6 +1478,23 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
                     reject_category="REVOKED",
                     reason=f"agent appears on CRL: {entry['reason']}",
                 )
+        next_update = crl["nextUpdate"]
+        if now > _Instant(next_update.seconds + ATP_MAX_SKEW_SECONDS, next_update.nanos):
+            return VerifyResult(
+                reject_category="REVOCATION_UNKNOWN",
+                reason=f"revocation unknown: CRL nextUpdate {_format_rfc3339(next_update)} is more than {ATP_MAX_SKEW_SECONDS} seconds before the verifier clock {_format_rfc3339(now)}",
+            )
+        issued_at = crl["issuedAt"]
+        if issued_at > _Instant(now.seconds + ATP_MAX_SKEW_SECONDS, now.nanos):
+            return VerifyResult(
+                reject_category="REVOCATION_UNKNOWN",
+                reason=f"revocation unknown: CRL issuedAt {_format_rfc3339(issued_at)} is more than {ATP_MAX_SKEW_SECONDS} seconds after the verifier clock {_format_rfc3339(now)}",
+            )
+    elif vs["revocationListRequired"]:
+        return VerifyResult(
+            reject_category="REVOCATION_UNKNOWN",
+            reason="revocation unknown: no revocation list held where one is required",
+        )
 
     # Step 4: issuer trust.
     if atx["issuerDid"] not in vs["trustedIssuers"]:

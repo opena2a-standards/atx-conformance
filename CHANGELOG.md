@@ -188,6 +188,52 @@ they should not.
   another expects `REJECT [INSUFFICIENT_SIGNER_AUTHORITIES]`.
   `scripts/conformance_profile.py --check` runs its self-test and check
   after those of `scripts/check_spec_refs.py`.
+- Five fixtures, built by the generator, exercise the revocation list a
+  verifier holds (atx-spec `core.md` §1.3 step 6): its dates, read within
+  the family clock-skew bound of ATP §10.2, at most 60 seconds; the order of
+  its entries and its dates; and a list required and not held. Each carries
+  the `fixtures/v1_1-baseline-valid-hybrid.json` credential byte for byte,
+  and only its verifier state differs from that fixture's.
+  `fixtures/v1_1-crl-fresh-agent-absent-hybrid.json`, a current list that
+  names another agent, expects `ACCEPT`.
+  `fixtures/v1_1-crl-past-nextupdate-beyond-skew-hybrid.json`, a list whose
+  `nextUpdate` is 61 seconds before the verifier clock, and
+  `fixtures/v1_1-crl-issued-after-clock-beyond-skew-hybrid.json`, a list
+  whose `issuedAt` is 61 seconds after it, each naming another agent, expect
+  `REJECT [REVOCATION_UNKNOWN]` with a reason containing `nextUpdate` and
+  `issuedAt` respectively.
+  `fixtures/v1_1-crl-past-nextupdate-lists-agent-hybrid.json`, the first of
+  those lists naming the credential's agent, expects `REJECT [REVOKED]` with
+  a reason containing `CRL`.
+  `fixtures/v1_1-crl-required-none-held-hybrid.json`, a verifier state that
+  holds no list and sets `revocationListRequired`,
+  expects `REJECT [REVOCATION_UNKNOWN]` with a reason containing
+  `no revocation list`. `schemas/fixture-v1.schema.json` gains two members
+  and one enum value, a minor version of the fixture format
+  (`docs/versioning.md`): `verifierState.revocationListRequired`, a boolean
+  that, absent or false, leaves a fixture with no `crl` outside step 6; a
+  `description` of `verifierState.crl.signature`, which says the reference
+  verifiers do not verify it; and the reject category `REVOCATION_UNKNOWN`.
+  The 52 existing fixtures and their `MANIFEST.sha256` lines are
+  byte-identical; the manifest gains five lines. `conformance.json` and the
+  capture under `docs/captures/` are regenerated; the capture's summary
+  line's pass and fixture counts go from 52 to 57, and the reason of the
+  `notCovered` entry for `core.md` §3.3 names the fixture that pins a
+  list's `nextUpdate` and the window counted from the verifier's own fetch,
+  which no fixture exercises. The fixture counts in README.md (the first
+  command's summary line, the count beside the pinned install command, the
+  expected output and the implementation table), COSIGNERS.md,
+  CONTRIBUTING.md, `docs/continuous-verification.md` and
+  `docs/sibling-repositories.md` go from 52 to 57 (the sibling row's v1.1
+  count from 37 to 42), the count of fixtures reaching signature
+  verification in `docs/scope.md` goes from 42 of 52 to 43 of 57 and its
+  count of ACCEPT fixtures signed with Ed25519 alone from 8 of 11 to 8 of
+  12, `docs/scope.md` gains two rows and lists the list's `signature` among
+  what the suite does not verify, and `docs/fixtures.md` gains a row for
+  each, a sentence on the `revoked.json` row and a section, "Revocation
+  lists: freshness and a list required". The fixture, accept and reject
+  counts of the kit's self-tests in `interop/run_test.go` go from 52, 11 and
+  41 to 57, 12 and 45.
 
 ### Changed
 
@@ -271,6 +317,30 @@ they should not.
   verify and the three keys belong to one authority, which §1.3 step 7
   counts once. Its credential, signatures, verifier state and expected
   outcome are unchanged.
+- Both reference verifiers read a held CRL's dates at their step 3
+  (atx-spec `core.md` §1.3 step 6), after the credential's `revoked` flag
+  and the agent's entry on the list, which revokes whatever the list's
+  dates: a list whose `nextUpdate` is more than 60 seconds before the
+  verifier clock, or whose `issuedAt` is more than 60 seconds after it,
+  rejects as `REVOCATION_UNKNOWN`, and so does no list where the verifier
+  state sets `revocationListRequired`. The 60 seconds is one constant in each
+  verifier, `atpMaxSkew` in Go and `ATP_MAX_SKEW_SECONDS` in Python, named
+  for ATP §10.2. Each reason opens with `revocation unknown:` and names the
+  date and the verifier clock, or the missing list. Neither verifier reads
+  the list's `signature`. The Python verifier type-checks
+  `verifierState.revocationListRequired` as the Go verifier decodes it: a
+  value that is not a JSON boolean fails to load. In the capture under
+  `docs/captures/`, the lines of the 52 existing fixtures are unchanged.
+  `go test` in `verifiers/go` holds
+  `fixtures/v1_1-crl-past-nextupdate-beyond-skew-hybrid.json` and
+  `fixtures/v1_1-crl-issued-after-clock-beyond-skew-hybrid.json` to
+  rejecting at every tolerance from 0 to 60 seconds and accepting at 61,
+  and each of the five to carrying the baseline credential byte for byte;
+  rows added to `verifiers/python/test_verify.py` hold the Python
+  verifier's reading of `revocationListRequired` and of the list's dates to
+  the Go verifier's.
+  `scripts/check_readme_counts.py` places `REVOCATION_UNKNOWN` at step 3,
+  before signature verification.
 
 ### Fixed
 

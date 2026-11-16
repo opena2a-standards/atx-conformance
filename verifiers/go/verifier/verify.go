@@ -45,6 +45,14 @@
 //     higher, a count below 2 rejects (INSUFFICIENT_SIGNER_AUTHORITIES). The
 //     asserted trustLevel is reported beside the count, never checked against
 //     it.
+//   - Revocation (core.md §1.3 step 6): the credential's revoked flag, then
+//     the agent's entry on the CRL the verifier state holds, which revokes
+//     whatever the list's dates (REVOKED), then the list's freshness: a list
+//     whose nextUpdate is more than atpMaxSkew, the 60 seconds of ATP-SPEC
+//     §10.2, before the clock, or whose issuedAt is more than atpMaxSkew after
+//     it, says nothing about an agent it does not list (REVOCATION_UNKNOWN),
+//     and so does no list where the verifier state sets
+//     revocationListRequired. The list's signature member is not verified.
 //
 // Usage, with nothing cloned (the module version go run fetches embeds
 // fixtures/*.json, which a run with no argument walks):
@@ -135,7 +143,17 @@ type verifierState struct {
 	// Nil, the member absent or null, sets no threshold.
 	RequiredSignatures *int `json:"requiredSignatures,omitempty"`
 	CRL                *crl `json:"crl,omitempty"`
+	// RevocationListRequired is true when the relying party requires this
+	// verifier to hold a revocation list: with no CRL, step 3 rejects as
+	// REVOCATION_UNKNOWN. Absent or false, a verifier state with no CRL is
+	// not read at step 3.
+	RevocationListRequired bool `json:"revocationListRequired,omitempty"`
 }
+
+// atpMaxSkew is the family clock-skew bound of ATP-SPEC §10.2: a verifier
+// tolerates at most 60 seconds of clock skew. Step 3 reads a held CRL's
+// nextUpdate and issuedAt within it.
+const atpMaxSkew = 60 * time.Second
 
 type crl struct {
 	Version    int        `json:"version"`
@@ -1249,16 +1267,35 @@ func verify(f fixture) result {
 		}
 	}
 
-	// Step 3: revocation (Revoked flag, then CRL).
+	// Step 3: revocation (core.md section 1.3 step 6). The revoked flag, then
+	// the agent's entry on a held CRL, which revokes whatever the list's
+	// dates: an entry stays true after its list ages, and only the silence of
+	// a list past its nextUpdate stops being evidence. Then the list's
+	// freshness within atpMaxSkew, nextUpdate before issuedAt, then a list
+	// required and not held. The list's signature member is not verified.
 	if a.Revoked {
 		return result{RejectCategory: "REVOKED", Reason: "credential revoked field is true"}
 	}
-	if f.VerifierState.CRL != nil {
-		for _, e := range f.VerifierState.CRL.Entries {
+	if c := f.VerifierState.CRL; c != nil {
+		for _, e := range c.Entries {
 			if e.AgentID == a.AgentID {
 				return result{RejectCategory: "REVOKED", Reason: "agent appears on CRL: " + e.Reason}
 			}
 		}
+		if now.After(c.NextUpdate.Add(atpMaxSkew)) {
+			return result{
+				RejectCategory: "REVOCATION_UNKNOWN",
+				Reason:         fmt.Sprintf("revocation unknown: CRL nextUpdate %s is more than %d seconds before the verifier clock %s", c.NextUpdate.UTC().Format(time.RFC3339), atpMaxSkew/time.Second, now.Format(time.RFC3339)),
+			}
+		}
+		if c.IssuedAt.After(now.Add(atpMaxSkew)) {
+			return result{
+				RejectCategory: "REVOCATION_UNKNOWN",
+				Reason:         fmt.Sprintf("revocation unknown: CRL issuedAt %s is more than %d seconds after the verifier clock %s", c.IssuedAt.UTC().Format(time.RFC3339), atpMaxSkew/time.Second, now.Format(time.RFC3339)),
+			}
+		}
+	} else if f.VerifierState.RevocationListRequired {
+		return result{RejectCategory: "REVOCATION_UNKNOWN", Reason: "revocation unknown: no revocation list held where one is required"}
 	}
 
 	// Step 4: issuer DID trust.

@@ -129,7 +129,11 @@
           "type": "integer",
           "minimum": 1
         },
-        "crl": { "$ref": "#/$defs/crl" }
+        "crl": { "$ref": "#/$defs/crl" },
+        "revocationListRequired": {
+          "description": "True when the verifier under test is required to hold a revocation list: with no `crl` the verdict is REJECT `REVOCATION_UNKNOWN`. Absent or false, a fixture without `crl` does not exercise core.md §1.3 step 6.",
+          "type": "boolean"
+        }
       }
     },
     "crl": {
@@ -154,7 +158,10 @@
             }
           }
         },
-        "signature": { "type": "string" }
+        "signature": {
+          "description": "Not verified by the reference verifiers: the suite's own fixture format has no normative signing form, and the fixtures carry `TEST_ONLY_UNSIGNED_CRL`. The signed revocation list is ATP 1.1 work (ATX core.md §2 item 5); when the suite carries it, the signature is verified before any entry is read.",
+          "type": "string"
+        }
       }
     },
     "expected": {
@@ -172,7 +179,8 @@
             "EXPIRED",
             "UNTRUSTED_ISSUER",
             "SIGNATURE_INVALID",
-            "INSUFFICIENT_SIGNER_AUTHORITIES"
+            "INSUFFICIENT_SIGNER_AUTHORITIES",
+            "REVOCATION_UNKNOWN"
           ]
         },
         "reasonContains": { "$ref": "#/$defs/nonEmptyString" }

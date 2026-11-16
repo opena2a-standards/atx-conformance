@@ -1812,6 +1812,7 @@ var earlyRejectCategories = map[string]bool{
 	"UNSUPPORTED_VERSION": true, // step 1
 	"EXPIRED":             true, // step 2
 	"REVOKED":             true, // step 3
+	"REVOCATION_UNKNOWN":  true, // step 3
 	"UNTRUSTED_ISSUER":    true, // step 4
 }
 
@@ -1942,6 +1943,116 @@ func TestExpiredBeyondSkewPinsTheSkewBound(t *testing.T) {
 	old, oldClock := load("expired.json")
 	if got := at(old, oldClock, bound+time.Second); got.Accepted || got.RejectCategory != "EXPIRED" {
 		t.Errorf("expired.json, clock %s earlier: got %s, want REJECT[EXPIRED]", bound+time.Second, got)
+	}
+}
+
+// TestRevocationListFixturesPinTheSkewBound pins what the two beyond-skew
+// revocation-list fixtures test. Step 3 reads a held CRL's nextUpdate and
+// issuedAt within the family clock-skew bound of ATP-SPEC section 10.2: a
+// verifier tolerates at most 60 seconds of clock skew. This verifier
+// tolerates atpMaxSkew, so a verifier that tolerates s seconds decides the
+// nextUpdate check as this one does at a clock 60-s seconds later, and the
+// issuedAt check as this one does at a clock 60-s seconds earlier. Each
+// fixture's stamp lies 61 seconds beyond its clock: at every whole s from 0
+// to 60 the credential is rejected as REVOCATION_UNKNOWN, and at 61 it is
+// accepted, so the list's freshness is the one gate it fails.
+func TestRevocationListFixturesPinTheSkewBound(t *testing.T) {
+	if atpMaxSkew != 60*time.Second {
+		t.Fatalf("atpMaxSkew is %s; ATP-SPEC section 10.2 bounds the tolerated skew at 60 seconds", atpMaxSkew)
+	}
+	cases := []struct {
+		file string
+		// stamp is the CRL member the fixture puts beyond the bound.
+		stamp func(c *crl) time.Time
+		// toward is 1 when a verifier that tolerates less skew decides as
+		// this one does at a later clock, and -1 at an earlier one.
+		toward int
+	}{
+		{"v1_1-crl-past-nextupdate-beyond-skew-hybrid.json", func(c *crl) time.Time { return c.NextUpdate.Time }, 1},
+		{"v1_1-crl-issued-after-clock-beyond-skew-hybrid.json", func(c *crl) time.Time { return c.IssuedAt.Time }, -1},
+	}
+	for _, c := range cases {
+		f, err := loadFixture(repoRoot + "/fixtures/" + c.file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.VerifierState.CRL == nil {
+			t.Fatalf("%s: the verifier state holds no CRL", c.file)
+		}
+		clock, err := parseRFC3339(f.VerifierState.ClockRFC3339)
+		if err != nil {
+			t.Fatal(err)
+		}
+		clock = clock.UTC()
+		toward := time.Duration(c.toward)
+		if gap := clock.Sub(c.stamp(f.VerifierState.CRL)) * toward; gap != atpMaxSkew+time.Second {
+			t.Fatalf("%s: the CRL stamp lies %s beyond the clock, want %s", c.file, gap, atpMaxSkew+time.Second)
+		}
+		for s := time.Duration(0); s <= atpMaxSkew+time.Second; s += time.Second {
+			g := f
+			g.VerifierState.ClockRFC3339 = clock.Add((atpMaxSkew - s) * toward).Format(time.RFC3339)
+			got := verify(g)
+			switch {
+			case s <= atpMaxSkew && (got.Accepted || got.RejectCategory != "REVOCATION_UNKNOWN"):
+				t.Errorf("%s, a verifier that tolerates %s: got %s, want REJECT[REVOCATION_UNKNOWN]", c.file, s, got)
+			case s > atpMaxSkew && !got.Accepted:
+				t.Errorf("%s, a verifier that tolerates %s: got %s, want ACCEPT", c.file, s, got)
+			}
+		}
+	}
+}
+
+// TestRevocationListFixturesCarryTheBaselineCredential pins that the five
+// revocation-list fixtures differ from fixtures/v1_1-baseline-valid-hybrid.json,
+// which is accepted, in the revocation members of the verifier state alone:
+// the credential byte for byte, the keypair references and every other member
+// of the verifier state are the baseline's. Each fixture's verdict is then
+// the verdict of the list it holds, or of the list it is required to hold.
+func TestRevocationListFixturesCarryTheBaselineCredential(t *testing.T) {
+	load := func(name string) fixture {
+		t.Helper()
+		f, err := loadFixture(repoRoot + "/fixtures/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	// rest is the fixture's keypair references and verifier state without
+	// its revocation members, as JSON.
+	rest := func(f fixture) string {
+		t.Helper()
+		state := f.VerifierState
+		state.CRL, state.RevocationListRequired = nil, false
+		b, err := json.Marshal(struct {
+			KeypairRefs   []keypairRef
+			VerifierState verifierState
+		}{f.KeypairRefs, state})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	base := load("v1_1-baseline-valid-hybrid.json")
+	if got := verify(base); !got.Accepted {
+		t.Fatalf("v1_1-baseline-valid-hybrid.json: got %s, want ACCEPT", got)
+	}
+	for _, name := range []string{
+		"v1_1-crl-fresh-agent-absent-hybrid.json",
+		"v1_1-crl-past-nextupdate-beyond-skew-hybrid.json",
+		"v1_1-crl-issued-after-clock-beyond-skew-hybrid.json",
+		"v1_1-crl-past-nextupdate-lists-agent-hybrid.json",
+		"v1_1-crl-required-none-held-hybrid.json",
+	} {
+		f := load(name)
+		if !bytes.Equal(f.ATX, base.ATX) {
+			t.Errorf("%s: its credential is not the baseline's byte for byte", name)
+		}
+		if rest(f) != rest(base) {
+			t.Errorf("%s: it differs from the baseline outside the revocation members of its verifier state", name)
+		}
+		if f.VerifierState.CRL == nil && !f.VerifierState.RevocationListRequired {
+			t.Errorf("%s: its verifier state neither holds a CRL nor requires one", name)
+		}
 	}
 }
 
