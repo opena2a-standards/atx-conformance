@@ -141,20 +141,24 @@ and `--` alone included, which it holds to this difference
 
 ## Which version `go run` fetches
 
-This repository has no release tag, so `@latest` resolves to a
+This repository has no Go version tag, so `@latest` resolves to a
 pseudo-version of a commit on `main`, the one the Go module proxy reports
-as latest. A pseudo-version is the version Go gives a commit that carries no
-version tag, built from the commit's time in UTC and the first 12 characters
-of its hash: at `20799e3`, `v0.0.0-20261018142916-20799e3db50c`.
+as latest. A Go version tag is a tag named for a semantic version, such as
+`v0.1.0`. A pseudo-version is the version Go gives a commit that carries no
+Go version tag, built from the commit's time in UTC and the first 12
+characters of its hash: at `20799e3`, `v0.0.0-20261018142916-20799e3db50c`.
 
 `@<commit>` in place of `@latest` runs the verifier and fixtures of that
 commit: `cmd/atx-verify@<commit>` for a commit that has `cmd/atx-verify`,
 and `verifiers/go@<commit>` for `ea4b485` or a later commit on `main`;
-`go run` resolves the commit to its release tag, or to a pseudo-version when
-the commit has no tag. `ea4b485` is the first commit with `go.mod` at the
-repository root. Before it, `verifiers/go` was a module of its own; the
-module proxy answers `verifiers/go@latest` with a version of that module,
-and `go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest`
+`go run` resolves the commit to its Go version tag, or to a pseudo-version
+when the commit has no Go version tag. Commit `a38e000` carries the tag
+`kit-2026-11-14`, which is not a Go version tag, and resolves to the
+pseudo-version `v0.0.0-20261112212443-a38e00017076`. `ea4b485` is the first
+commit with `go.mod` at the repository root. Before it, `verifiers/go` was a
+module of its own; the module proxy answers `verifiers/go@latest` with a
+version of that module, and
+`go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest`
 exits 1, so `@latest` goes with `cmd/atx-verify`.
 
 ## Which commit a run verified
@@ -167,7 +171,7 @@ version is `(devel)`, the commit the binary records after it, or
 - Run through the module proxy, as
   `go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@<version> --version`,
   it names the version `go run` resolved, a pseudo-version naming the commit
-  while the repository has no tags: at `20799e3`,
+  while the repository has no Go version tag: at `20799e3`,
   `v0.0.0-20261018142916-20799e3db50c`.
 - Run with `go run` from a checkout without `-buildvcs=true`, the form of
   the commands the README and this page give for running the Go verifier on

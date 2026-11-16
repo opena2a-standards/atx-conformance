@@ -1,11 +1,11 @@
 # Changelog
 
-This repository carries no tag yet: the section `v0.1.0` lists the changes
-its first tag, `v0.1.0`, is to carry, and the section below it, named for
-commit `e2f9dc4`, lists the fixtures that commit changed. Until that tag
-exists, a consumer pins this repository at a commit. Changes to an existing
-fixture's credential, signatures, verifier state or expected outcome are
-listed here whenever one lands;
+This repository carries no Go version tag yet: the section `v0.1.0` lists
+the changes its first Go version tag, `v0.1.0`, is to carry, and the
+section below it, named for commit `e2f9dc4`, lists the fixtures that
+commit changed. Until that tag exists, a consumer pins this repository at a
+commit. Changes to an existing fixture's credential, signatures, verifier
+state or expected outcome are listed here whenever one lands;
 [`docs/versioning.md`](docs/versioning.md) "Versioning and stability" says
 they should not.
 
@@ -858,6 +858,28 @@ they should not.
   word names `pwsh.exe` in a directory named `cmd`, which it accepts; run
   against the script as it was before this change, each of the 4 refusal
   cells fails. No fixture, verifier or workflow file changes.
+- `docs/running-the-verifiers.md` and this file's opening paragraph say
+  this repository, or a commit, has no Go version tag where they said it
+  has no tag (#375). The repository carries the tag `kit-2026-11-14`, which
+  is not a Go version tag: `git ls-remote --tags` of the repository prints
+  that one tag, on commit `a38e000`, and `go list -m` of the module at that
+  commit, like `go run` of its `cmd/atx-verify` with `--version`, names the
+  pseudo-version `v0.0.0-20261112212443-a38e00017076`. The page said the
+  repository has no release tag and no tags, and that `go run` resolves a
+  commit to its release tag, or to a pseudo-version when the commit has no
+  tag, and this file said the repository carries no tag yet. The page also
+  says what a Go version tag is and gives that commit as an example.
+  `scripts/check_readme_counts.py` reads every tag the checkout carries,
+  where it read the version tags alone. While the repository carries a
+  tag, a sentence of the README, its pages or this file's opening that says
+  the repository has or carries no tag, no tags or no release tag fails;
+  one that says it has no version tag or no Go version tag fails only
+  while one of its tags is a version tag, as it did; and while it carries
+  a tag that is not a version tag, one that names a pseudo-version and says
+  a commit has or carries no tag or no release tag fails. On the previous
+  commit's page and opening, in a checkout carrying `kit-2026-11-14`, it
+  names the four sentences and exits 1. Its self-test adds 22 cases. No
+  fixture or verifier changes.
 - `scripts/check_readme_counts.py` holds the fixture counts README.md's kit
   section states under its install line (#377). That sentence says how many
   fixtures the commit the line pins carries, how many are on main and how
