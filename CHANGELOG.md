@@ -347,6 +347,29 @@ they should not.
 
 ### Fixed
 
+- The comment above `versionLine` in `verifiers/go/verifier/verify.go` and the
+  comment above `version_line()` in `scripts/kit/assemble.sh` say a commit
+  resolves to a pseudo-version while the commit carries no Go version tag
+  (#386). The first said "a pseudo-version naming the commit when it has no
+  tag", the second "a clean clone of an untagged commit". This repository
+  carries one tag, `kit-2026-11-14`, on commit `a38e000`, and it is not a Go
+  version tag: `go list -m` of the module at that commit answers the
+  pseudo-version `v0.0.0-20261112212443-a38e00017076`.
+  `docs/running-the-verifiers.md` and this file's opening paragraph were
+  corrected to this wording (#375); these two comments were not.
+  `scripts/check_readme_counts.py` holds the whole-line comments of the four
+  files that say what version `go run` resolves, `verify.go`,
+  `interop/suite.go`, `assemble.sh` and `docs/demo/record-atx-verify.sh`, to
+  it: a sentence of such a comment that names a pseudo-version, by that word
+  or by the `v0.0.0-` form Go builds, names a commit, and says a commit has no
+  tag, carries no tag or is untagged, fails. The rule reads none of the
+  repository's tags, so a shallow clone is held to it too. Run against the two
+  comments this change starts from, the script names both and exits 1. Its
+  self-test adds 11 cases. The Go verifier and the kit script change in one
+  comment each. `docs/captures/go-verifier.txt` is unchanged byte for byte;
+  its sidecar, `docs/captures/go-verifier.json`, records the new tree id of
+  `verifiers/go/verifier`, so `scripts/capture_go_verifier.py --check`
+  passes. No fixture, expected verdict or workflow file changes.
 - `scripts/check_readme_counts.py` fails a README sentence saying this
   repository has no Go version tag once the repository carries a version tag
   (#376). Its pattern allowed only `release` or `version` between `no` and

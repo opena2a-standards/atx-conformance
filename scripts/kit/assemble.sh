@@ -80,8 +80,9 @@ outside_checkout() {
   case "$p/" in "$r/"*) die "$1 is inside the checkout; the kit is written outside it" ;; esac
 }
 version_line() { # <module> <commit>
-  # Go stamps a build from a clean clone of an untagged commit with the version
-  # v0.0.0-<committer time, UTC, %Y%m%d%H%M%S>-<first 12 hex of the commit>.
+  # Go stamps a build from a clean clone of the commit with the version
+  # v0.0.0-<committer time, UTC, %Y%m%d%H%M%S>-<first 12 hex of the commit>
+  # while the commit carries no Go version tag.
   # The time is the commit's, read with git; never this machine's clock.
   local line ct date
   ct=$(git -C "$here" show -s --format=%ct "$2") || die "cannot read the committer time of $2 with git in $here"

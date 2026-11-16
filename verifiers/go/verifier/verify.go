@@ -1710,9 +1710,10 @@ const usage = `usage: atx-verify [fixture.json|dir]...
 // module this binary was built from, as runtime/debug.ReadBuildInfo reports
 // them, and the Go release that built it. Built by `go run
 // <module>/cmd/atx-verify@<version>`, the version is the one go run resolved:
-// the highest release tag for @latest, and for @<commit> the commit's release
-// tag, or a pseudo-version naming the commit when it has no tag. A build from
-// a checkout or a source archive can record (devel) instead;
+// the highest Go version tag for @latest, and for @<commit> the commit's Go
+// version tag, or a pseudo-version naming the commit when the commit carries
+// no Go version tag, a tag named for a semantic version. A build from a
+// checkout or a source archive can record (devel) instead;
 // docs/running-the-verifiers.md says which builds do. After (devel) the line
 // names the commit the vcs.revision build setting records, adding "with
 // uncommitted changes" when vcs.modified is true, or writes "no commit
