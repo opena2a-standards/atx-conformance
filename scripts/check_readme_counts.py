@@ -279,9 +279,20 @@ repository carried no tag and `go list -m <module>@latest` answered a
 pseudo-version of a commit on main. A sentence naming a tag as this
 repository's (`v0.1.0` is this repository's first tag) must name a version
 tag the repository carries; while it carries none, a sentence saying what
-`@latest` resolves to must name the pseudo-version; once it carries one, no
-sentence may say the repository has no tag. A shallow clone, or a tree with
-no repository, is not held to it, and the closing line says so.
+`@latest` resolves to must name the pseudo-version; once it carries one, a
+sentence saying the repository has or carries no tag, with up to two words
+before `tag` (no release tag, no Go version tag), fails. Once the
+repository carried `kit-2026-11-14`, a tag that names no version,
+docs/running-the-verifiers.md still said it has no release tag and no tags
+and that `go run` resolves a commit to a pseudo-version when the commit has
+no tag, and CHANGELOG.md said it carries no tag yet, while `go list -m`
+answered a pseudo-version for the commit that tag names. So the check reads
+every tag: while the repository carries one, such a sentence fails, unless
+it says no version tag or no Go version tag and none of the tags names a
+version; and while it carries one that names no version, a sentence naming
+a pseudo-version that says a commit has or carries no tag or no release tag
+fails. A shallow clone, or a tree with no repository, is not held to it,
+and the closing line says so.
 
 It also holds what CHANGELOG.md's top section says the Go release still
 changes to the Go verifier's tests. Its #259 entry said that outside the RFC
@@ -399,8 +410,8 @@ package under no directory that held a go.mod in HEAD's history (where the
 history can be read), each `go run` command the top `## ` section of
 CHANGELOG.md names as README.md's first command is the one README.md opens
 with, each README and CHANGELOG.md opening-paragraph sentence on this
-repository's tags matches the version tags it carries (where they can be
-read), no sentence of CHANGELOG.md's top section saying a result can still
+repository's tags matches the tags it carries (where they can be read), no
+sentence of CHANGELOG.md's top section saying a result can still
 differ by release quotes a timestamp verify_test.go writes, no sentence of that
 section states a running total of tests, of a self-test or of fixtures, no
 Python dependency site calls the Python verifier zero-dependency while requirements.txt names a package, each jcs-vectors
@@ -1181,9 +1192,24 @@ def changelog_first_command_failures(changelog, front_page, go_mod):
 # of CHANGELOG.md's opening paragraph (the text above its first `## ` heading)
 # is held to them: one naming a tag as this repository's must name one the
 # repository carries; while it carries no version tag, one saying what
-# `@latest` resolves to must name the pseudo-version; once it carries one, none
-# may say the repository has no tag. The sections below the opening paragraph
-# record past changes and are not held to it.
+# `@latest` resolves to must name the pseudo-version; once it carries one, a
+# sentence saying the repository has or carries no tag, with up to two words
+# before `tag` (no release tag, no Go version tag: UNTAGGED_CLAIM), fails.
+# The sections below the opening paragraph record past changes and are not
+# held to it.
+#
+# Once the repository carried `kit-2026-11-14`, a tag that names no version,
+# docs/running-the-verifiers.md still said the repository has no release tag
+# and no tags and that `go run` resolves a commit to a pseudo-version when the
+# commit has no tag, and CHANGELOG.md's opening said the repository carries no
+# tag yet, while `go list -m <module>@<commit>` answered a pseudo-version for
+# the commit that tag names. So the check reads every tag: while the
+# repository carries one, a sentence matching UNTAGGED_CLAIM fails, unless it
+# says the repository has or carries no version tag or no Go version tag
+# (NO_VERSION_TAG_CLAIM) and none of the tags names a version; and while it
+# carries one that names no version, a sentence naming a pseudo-version that
+# says a commit has or carries no tag or no release tag (UNTAGGED_COMMIT_CLAIM)
+# fails.
 VERSION_TAG = re.compile(r"v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?")
 TAG_CLAIM = re.compile(
     r"`(v\d+\.\d+\.\d+[0-9A-Za-z.+-]*)`\s+is\s+(?:this|the)\s+repository['’]s\s+"
@@ -1192,6 +1218,11 @@ LATEST_RESOLVES = re.compile(r"`@latest`\s+resolves\s+to\b")
 PSEUDO_VERSION = "pseudo-version"
 UNTAGGED_CLAIM = re.compile(
     r"\brepository\s+(?:has|carries)\s+no\s+(?:[\w-]+\s+){0,2}tags?\b")
+NO_VERSION_TAG_CLAIM = re.compile(
+    r"\brepository\s+(?:has|carries)\s+no\s+(?:Go\s+)?version\s+tags?\b")
+UNTAGGED_COMMIT_CLAIM = re.compile(
+    r"\bcommits?\s+(?:that\s+|which\s+)?(?:has|have|carries|carry)\s+no\s+"
+    r"(?:release\s+)?tags?\b")
 TAG_SITE = f"README or {CHANGELOG_NAME} opening-paragraph sentence on this repository's tags"
 # The two sentences the check was written for, as they were wrapped.
 RETRACTED_LATEST = (
@@ -1203,11 +1234,11 @@ RETRACTED_FIRST_TAG = (
     "the fixtures that commit changed.")
 
 
-def version_tags(root):
-    """The tags of the repository at `root` that name a version (`v1.2.3`,
-    `v1.2.3-rc.1`), sorted, or None when they cannot be read: git cannot run,
-    `root` is not a repository's top level, or the clone is shallow (cut at
-    one commit, a clone's tags are not a reading of the repository's)."""
+def repository_tags(root):
+    """Every tag of the repository at `root`, sorted, or None when they cannot
+    be read: git cannot run, `root` is not a repository's top level, or the
+    clone is shallow (cut at one commit, a clone's tags are not a reading of
+    the repository's)."""
     git = _history_git(root)
     try:
         shallow = git("rev-parse", "--is-shallow-repository")
@@ -1218,8 +1249,35 @@ def version_tags(root):
             return None
     except OSError:
         return None
-    names = (ref[len("refs/tags/"):] for ref in listed.stdout.split())
-    return sorted(name for name in names if VERSION_TAG.fullmatch(name))
+    return sorted(ref[len("refs/tags/"):] for ref in listed.stdout.split())
+
+
+def version_names(tags):
+    """The names in `tags` that name a version (`v1.2.3`, `v1.2.3-rc.1`), in
+    the order `tags` lists them."""
+    return [tag for tag in tags if VERSION_TAG.fullmatch(tag)]
+
+
+def version_tags(root):
+    """The tags of the repository at `root` that name a version, sorted, or
+    None when repository_tags() cannot read the repository's tags."""
+    tags = repository_tags(root)
+    return None if tags is None else version_names(tags)
+
+
+def carried_tags(tags):
+    """How a failure and the closing line name `tags` (repository_tags()):
+    each tag, and which of them name a version."""
+    if not tags:
+        return "no tag"
+    version = version_names(tags)
+    plural = "s" if len(tags) > 1 else ""
+    if len(version) == len(tags):
+        return f"the version tag{plural} {', '.join(tags)}"
+    if not version:
+        return f"the tag{plural} {', '.join(tags)} and no version tag"
+    return (f"the tags {', '.join(tags)}, of which {', '.join(version)} "
+            f"name{'s' if len(version) == 1 else ''} a version")
 
 
 def changelog_opening(changelog):
@@ -1232,32 +1290,47 @@ def changelog_opening(changelog):
 
 def release_tag_failures(readme, changelog, tags):
     """Each sentence of the README and of CHANGELOG.md's opening paragraph
-    (changelog_opening()) held to `tags` (version_tags()): one naming a tag as
-    this repository's must name one of `tags`; while `tags` is empty, one
-    saying what `@latest` resolves to must name the pseudo-version; while it
-    is not, none may say the repository has no tag. With `tags` None nothing
-    is checked."""
+    (changelog_opening()) held to `tags`, every tag the repository carries
+    (repository_tags()): one naming a tag as this repository's must name one
+    of `tags` that names a version; while none of `tags` names a version, one
+    saying what `@latest` resolves to must name the pseudo-version. While
+    `tags` holds a tag, one matching UNTAGGED_CLAIM fails, unless each claim
+    it matches also matches NO_VERSION_TAG_CLAIM and none of `tags` names a
+    version; and while it holds one that names no version, one that names a
+    pseudo-version and matches UNTAGGED_COMMIT_CLAIM fails. With `tags` None
+    nothing is checked."""
     if tags is None:
         return []
-    carried = f"the version tags {', '.join(tags)}" if tags else "no version tag"
+    version = version_names(tags)
+    unversioned = [tag for tag in tags if tag not in version]
+    carried = carried_tags(tags)
+    say_go_version = "" if version else "; say it has no Go version tag"
     failures = []
     sentences = [*statements(readme), *statements(changelog_opening(changelog))]
     for sentence in dict.fromkeys(sentences):
         for tag in TAG_CLAIM.findall(sentence):
-            if tag not in tags:
+            if tag not in version:
                 failures.append(
                     f"{TAG_SITE} names `{tag}` as a tag of this repository, but "
                     f"the repository carries {carried}: {sentence!r}")
-        if not tags and LATEST_RESOLVES.search(sentence) and PSEUDO_VERSION not in sentence:
+        if not version and LATEST_RESOLVES.search(sentence) and PSEUDO_VERSION not in sentence:
             failures.append(
                 f"{TAG_SITE} says what `@latest` resolves to and names no "
                 f"{PSEUDO_VERSION}, but the repository carries no version tag, so "
                 f"`@latest` resolves to a {PSEUDO_VERSION} of a commit on the "
                 f"default branch: {sentence!r}")
-        if tags and UNTAGGED_CLAIM.search(sentence):
+        if tags and any(version or not NO_VERSION_TAG_CLAIM.fullmatch(claim.group(0))
+                        for claim in UNTAGGED_CLAIM.finditer(sentence)):
             failures.append(
                 f"{TAG_SITE} says the repository has no tag, but it carries "
-                f"{carried}: {sentence!r}")
+                f"{carried}{say_go_version}: {sentence!r}")
+        if (unversioned and PSEUDO_VERSION in sentence
+                and UNTAGGED_COMMIT_CLAIM.search(sentence)):
+            failures.append(
+                f"{TAG_SITE} gives a {PSEUDO_VERSION} to a commit with no tag, but "
+                f"the repository carries {carried}, and `go list -m` resolves a "
+                f"commit whose only tag names no version to a {PSEUDO_VERSION} "
+                f"too; say the commit has no Go version tag: {sentence!r}")
     return failures
 
 
@@ -4474,6 +4547,25 @@ def _opening_with(changelog, text):
 
 
 TAGGED = ["v0.1.0"]
+# The tag the repository carried while docs/running-the-verifiers.md and
+# CHANGELOG.md's opening still said it has no tag. It names no version.
+KIT_TAGGED = ["kit-2026-11-14"]
+# The clauses that said so, each cut to the sentence a case needs: the first
+# three stood in docs/running-the-verifiers.md, the last in CHANGELOG.md's
+# opening.
+RETRACTED_NO_RELEASE_TAG = (
+    "This repository has no release tag, so `@latest` resolves to a\n"
+    "pseudo-version of a commit on `main`, the one the Go module proxy reports\n"
+    "as latest.")
+RETRACTED_UNTAGGED_COMMIT = (
+    "`go run` resolves the commit to its release tag, or to a pseudo-version when\n"
+    "the commit has no tag.")
+RETRACTED_NO_TAGS = (
+    "Run through the module proxy, it names the version `go run` resolved, a\n"
+    "pseudo-version naming the commit while the repository has no tags.")
+RETRACTED_NO_TAG_YET = (
+    "This repository carries no tag yet: the section `v0.1.0` lists the changes\n"
+    "its first tag, `v0.1.0`, is to carry.")
 
 
 def _release_tag_cases(tree):
@@ -4487,9 +4579,19 @@ def _release_tag_cases(tree):
     adds a failure, as does one saying it has no Go version tag, one saying a
     commit has no tag none. With the tags unread
     both retracted sentences add none, and the retracted CHANGELOG.md
-    sentence in the top section, below the opening, adds none. Each case
+    sentence in the top section, below the opening, adds none.
+
+    Held to the tag `kit-2026-11-14`, which names no version, each of the four
+    retracted clauses adds a failure, as do a sentence giving a pseudo-version
+    to a commit that carries no tag and the retracted README sentence, while
+    the same sentences saying no Go version tag add none, and one sentence
+    saying the repository has no Go version tag and has no release tag adds
+    one. Held to `v0.1.0` and that tag, the commit clause adds a failure;
+    with no tag, the no-release-tag clause adds none. Each case
     counts only the failures its text adds over the published text held to
-    the same tags. Then version_tags() is read off temporary repositories."""
+    the same tags. carried_tags() names no tag, one tag that names no
+    version, one version tag, and a mix. Then version_tags() and
+    repository_tags() are read off temporary repositories."""
     readme, changelog = tree.readme, tree.changelog or ""
     cases = []
 
@@ -4543,6 +4645,59 @@ def _release_tag_cases(tree):
     case(f"the retracted `v0.1.0` sentence in the {CHANGELOG_NAME} top section, "
          f"below its opening, with no version tag", None,
          log=_top_section_with(changelog, RETRACTED_FIRST_TAG))
+    untagged = "says the repository has no tag"
+    untagged_commit = f"gives a {PSEUDO_VERSION} to a commit with no tag"
+    for label, clause in (("no-release-tag", RETRACTED_NO_RELEASE_TAG),
+                          ("no-tags", RETRACTED_NO_TAGS)):
+        case(f"README restating the {label} clause held to the tag `kit-2026-11-14`",
+             untagged, text=readme + "\n\n" + clause + "\n", tags=KIT_TAGGED)
+    case(f"{CHANGELOG_NAME} opening restating the no-tag-yet clause held to the tag "
+         f"`kit-2026-11-14`", untagged,
+         log=_opening_with(changelog, RETRACTED_NO_TAG_YET), tags=KIT_TAGGED)
+    case("README restating the clause giving a pseudo-version to a commit with no "
+         "tag, held to the tag `kit-2026-11-14`", untagged_commit,
+         text=readme + "\n\n" + RETRACTED_UNTAGGED_COMMIT + "\n", tags=KIT_TAGGED)
+    case("README giving a pseudo-version to a commit that carries no tag, held to "
+         "the tag `kit-2026-11-14`", untagged_commit,
+         text=readme + "\n\nA pseudo-version is the version Go gives a commit that "
+                       "carries no tag.\n", tags=KIT_TAGGED)
+    case("README restating the clause giving a pseudo-version to a commit with no "
+         "tag, held to `v0.1.0` and `kit-2026-11-14`", untagged_commit,
+         text=readme + "\n\n" + RETRACTED_UNTAGGED_COMMIT + "\n",
+         tags=TAGGED + KIT_TAGGED)
+    case("README restating the retracted `@latest` sentence held to the tag "
+         "`kit-2026-11-14`, which names no version", f"names no {PSEUDO_VERSION}",
+         text=with_latest, tags=KIT_TAGGED)
+    for clause in (
+            "This repository has no Go version tag, so `@latest` resolves to a "
+            "pseudo-version of a commit on `main`.",
+            "A pseudo-version naming the commit while the repository has no Go "
+            "version tag.",
+            "`go run` resolves the commit to its Go version tag, or to a "
+            "pseudo-version when the commit has no Go version tag.",
+            "A pseudo-version is the version Go gives a commit that carries no Go "
+            "version tag."):
+        case(f"README clause {clause!r} held to the tag `kit-2026-11-14`", None,
+             text=readme + "\n\n" + clause + "\n", tags=KIT_TAGGED)
+    case(f"{CHANGELOG_NAME} opening saying the repository carries no Go version tag "
+         f"yet, held to the tag `kit-2026-11-14`", None,
+         log=_opening_with(changelog, "This repository carries no Go version tag yet."),
+         tags=KIT_TAGGED)
+    case("README sentence saying the repository has no Go version tag and has no "
+         "release tag, held to the tag `kit-2026-11-14`", untagged,
+         text=readme + "\n\nThis repository has no Go version tag, and the "
+                       "repository has no release tag.\n", tags=KIT_TAGGED)
+    case("README restating the no-release-tag clause with no tag", None,
+         text=readme + "\n\n" + RETRACTED_NO_RELEASE_TAG + "\n")
+    for tags, want in (
+            ([], "no tag"),
+            (KIT_TAGGED, "the tag kit-2026-11-14 and no version tag"),
+            (TAGGED, "the version tag v0.1.0"),
+            (["kit-2026-11-14", "v0.1.0", "v0.2.0"],
+             "the tags kit-2026-11-14, v0.1.0, v0.2.0, of which v0.1.0, v0.2.0 "
+             "name a version")):
+        cases.append((carried_tags(tags) == want, f"carried_tags({tags})",
+                      f"expected {want!r}, got {carried_tags(tags)!r}"))
     cases.extend(_version_tags_cases())
     return cases
 
@@ -4551,7 +4706,9 @@ def _version_tags_cases():
     """version_tags() over a repository with one commit: [] untagged; once the
     commit carries `v0.1.0`, `v0.2.0-rc.1` and `not-a-version`, the two
     version tags; None for a shallow clone of it and a directory that is no
-    repository. A git command that fails is a red case."""
+    repository. repository_tags() over the same three: [] untagged, then all
+    three tags, and None for each of the other two. A git command that fails
+    is a red case."""
     label = "version_tags() over a temporary repository"
     env = {name: value for name, value in os.environ.items()
            if not name.startswith("GIT_")}
@@ -4572,6 +4729,7 @@ def _version_tags_cases():
             git(repo, "add", "--", "README.md")
             git(repo, "commit", "-q", "-m", "one commit")
             untagged = version_tags(repo)
+            untagged_all = repository_tags(repo)
             git(repo, "tag", "v0.1.0")
             git(repo, "tag", "-a", "-m", "rc", "v0.2.0-rc.1")
             git(repo, "tag", "not-a-version")
@@ -4592,6 +4750,20 @@ def _version_tags_cases():
              f"expected None, got {version_tags(shallow)}"),
             (version_tags(plain) is None, f"{label}: a directory that is no repository",
              f"expected None, got {version_tags(plain)}"),
+            (untagged_all == [], "repository_tags() over the same repository: a "
+                                 "commit with no tag",
+             f"expected [], got {untagged_all}"),
+            (repository_tags(repo) == ["not-a-version", "v0.1.0", "v0.2.0-rc.1"],
+             "repository_tags() over the same repository: `v0.1.0`, `v0.2.0-rc.1` "
+             "(annotated) and `not-a-version`, which names no version",
+             f"expected ['not-a-version', 'v0.1.0', 'v0.2.0-rc.1'], got "
+             f"{repository_tags(repo)}"),
+            (repository_tags(shallow) is None,
+             "repository_tags() over a shallow clone of it",
+             f"expected None, got {repository_tags(shallow)}"),
+            (repository_tags(plain) is None,
+             "repository_tags() over a directory that is no repository",
+             f"expected None, got {repository_tags(plain)}"),
         ]
 
 
@@ -6985,7 +7157,7 @@ def main():
         module_start=first_module_commit(ROOT, go_mod),
         nested_modules=nested_module_dirs(ROOT),
         changelog=CHANGELOG.read_text(encoding="utf-8") if CHANGELOG.exists() else None,
-        release_tags=version_tags(ROOT),
+        release_tags=repository_tags(ROOT),
         verify_go_test=(VERIFY_GO_TEST.read_text(encoding="utf-8")
                         if VERIFY_GO_TEST.exists() else None),
         spec_text=SPEC_TEXT.read_text(encoding="utf-8") if SPEC_TEXT.exists() else None,
@@ -7046,10 +7218,8 @@ def main():
              if first is not None else
              f"the {CHANGELOG_NAME} top section, `{heading}`, names no `go run` "
              f"command as README.md's first command; ")
-          + ((f"each README and {CHANGELOG_NAME} opening-paragraph sentence on this "
-              f"repository's tags matches "
-              + (f"its version tags, {', '.join(tree.release_tags)}; "
-                 if tree.release_tags else "its carrying no version tag; "))
+          + (f"each README and {CHANGELOG_NAME} opening-paragraph sentence on this "
+             f"repository's tags matches its carrying {carried_tags(tree.release_tags)}; "
              if tree.release_tags is not None else
              f"sentences on this repository's tags not held to them: none could be "
              f"read in this checkout; ")
