@@ -97,11 +97,11 @@ The kit needs Go 1.22 or later; on macOS 26, Go 1.23 or later. Install it at
 one commit. This line needs the network once; the installed kit does not.
 
 ```bash
-go install github.com/opena2a-standards/atx-conformance/cmd/atx-verify@4f70281a00163ec898e9671ba9ab023907e402b2
+go install github.com/opena2a-standards/atx-conformance/cmd/atx-verify@a38e00017076c4e524d9c99ca296abf441ce0c6b
 ```
 
-This commit carries 41 of the 57 fixtures on main; the Hackathon kit release
-carries 47. Without Go, download the kit from the
+This commit carries 47 of the 57 fixtures on main; it is the Hackathon kit
+release's commit. Without Go, download the kit from the
 [Hackathon kit release](https://github.com/opena2a-standards/atx-conformance/releases).
 
 Then point it at a verifier you run as a command, or at one you run as a
