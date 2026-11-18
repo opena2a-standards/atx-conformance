@@ -368,6 +368,14 @@ class AlsoRefused(unittest.TestCase):
         self.repo.admit(wall_row(verifier="Example Verifier\n"))
         self.assertEqual(self.repo.refusals(), [(0, "format")])
 
+    def test_a_verifier_that_is_an_array_is_named_by_its_kind(self):
+        # A refusal line shows an array or an object by its kind, never its
+        # contents, so it stays one short line however deep the value nests.
+        self.repo.admit(wall_row(verifier=[["Example Verifier"]]))
+        self.assertEqual(self.repo.refusals(), [(0, "format")])
+        self.assertIn("(verifier (an array)): format: verifier (an array) is not",
+                      self.repo.lines()[0])
+
     def test_a_tag_that_names_no_commit_is_refused(self):
         tree = git(self.repo.root, "rev-parse", "HEAD^{tree}")
         git(self.repo.root, "tag", "-f", TAG, tree)

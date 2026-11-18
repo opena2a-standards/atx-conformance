@@ -121,8 +121,14 @@ Checked = collections.namedtuple("Checked", "rows refusals")
 
 
 def show(value):
-    """value as JSON, with every control character and every character past
-    ASCII escaped, cut to 80 characters, so a refusal stays one line."""
+    """A string, number, boolean or null as JSON, with every control
+    character and every character past ASCII escaped, cut to 80 characters,
+    and an array or an object by its kind alone, so a refusal stays one short
+    line however deep the value is nested."""
+    if isinstance(value, dict):
+        return "(an object)"
+    if isinstance(value, list):
+        return "(an array)"
     text = json.dumps(value, ensure_ascii=True)
     return text if len(text) <= 80 else text[:77] + "..."
 
