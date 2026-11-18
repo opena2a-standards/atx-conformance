@@ -1,4 +1,4 @@
-This release is atx-conformance at commit `<sha>`, with its Go verifier built for macOS, Linux and Windows, so the fixtures can be run without Go and without a network connection. It is not a version of the suite: `go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@latest` still runs the newest commit on `main`. `atx-verify --version` prints the version this kit was built from, `<version>`.
+This release is atx-conformance at commit `<sha>`, with its Go verifier built for macOS, Linux and Windows, so the fixtures can be run without Go and without a network connection. `go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@latest` runs the version the Go module proxy reports as latest, which need not be the commit of this kit. `atx-verify --version` prints the version this kit was built from, `<version>`.
 
 Built by `<workflow file>` on GitHub-hosted runners, from the tag `<tag>` at commit `<sha>`. The kit is `interop-day-kit.tar.gz`; `SHA256SUMS` lists every file in it, and each of the two carries a build provenance attestation, as does each binary in `bin/`.
 

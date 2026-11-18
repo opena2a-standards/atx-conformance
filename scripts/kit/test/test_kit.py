@@ -923,6 +923,21 @@ def cells_version_under_tags() -> None:
     cell(f"t{i} check-claims refuses notes naming v0.6.1 when the binary prints v0.6.1-0.<time>-<sha12>: a claim "
          "is the whole version, never a part of it", r.returncode == 1 and "do not print" in r.stderr,
          f"exit {r.returncode}: " + (r.stdout + r.stderr).strip().split("\n")[-1][:160])
+    # Two sentences that hold only while the repository carries no Go version
+    # tag: with vX.Y.Z on the commit the kit is built from a version of the
+    # suite, and once a release tag exists @latest resolves to the highest
+    # release version, not to the newest commit on main. The notes rendered
+    # for the two views with a tag say neither.
+    i += 1
+    no_tag_only = ("not a version of the suite", "runs the newest commit on `main`")
+    found = {}
+    for key in ("tagged", "after"):
+        rendered = parent / f"notes-{key}" / "dist" / "release-notes.md"
+        found[key] = [s for s in no_tag_only if s in rendered.read_text()] if rendered.exists() else ["no notes"]
+    cell(f"t{i} release notes rendered with v0.6.0 on HEAD and with v0.6.0 on HEAD^ only say neither that the kit "
+         "is not a version of the suite nor that @latest runs the newest commit on main",
+         not any(found.values()),
+         "; ".join(f"{key}: {', '.join(said) or 'neither'}" for key, said in found.items()))
 
     # kit() from the repository, on a stage holding the line stage wrote.
     def kit_run(stage_line: str, printed: str, version_file: str, name: str):
