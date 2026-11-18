@@ -47,6 +47,10 @@
     {
       "item": "Transparency-log monitor behavior (ATX core.md section 6.4)",
       "reason": "no fixture models a monitor and the conformance verifiers do not consult a log"
+    },
+    {
+      "item": "Resource attestation statements: the statement form, its signing projection, validity, revocation and acceptance rules, and the subject result (ATX core.md section 1.6)",
+      "reason": "no fixture is a resource attestation statement, and the fixture format has no member that carries one"
     }
   ],
   "requirements": [

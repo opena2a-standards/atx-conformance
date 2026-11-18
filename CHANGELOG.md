@@ -13,6 +13,10 @@ they should not.
 
 ### Added
 
+- `conformance.json` lists the resource attestation statements of ATX
+  `core.md` §1.6 under `notCovered`, generated from the new entry in
+  `scripts/conformance_profile.py`: no fixture is a resource attestation
+  statement, and the fixture format has no member that carries one.
 - `atx-verify --verifier "<command>"` and `atx-verify --verifier-url <url>`
   send each embedded fixture to an outside verifier and compare its
   verdicts with the answer key in `conformance.json`; `--report <dir>` writes
