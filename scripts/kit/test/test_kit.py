@@ -941,23 +941,26 @@ def cells_version_under_tags() -> None:
         detail = f"kit exit {r.returncode}: " + (r.stdout + r.stderr).strip().split("\n")[-1][:160]
         return archived.returncode == 0, r, out, detail
 
-    i += 1
-    archived, r, out, detail = kit_run(line(tagged), line(tagged), line(tagged), "tagged")
-    left = (out / "interop-day-kit" / "bin" / "version-line.txt").exists()
-    cell(f"t{i} kit() from the repository, v0.6.0 on HEAD: takes the capture holding the line stage wrote (it "
-         "reaches its captures line) and leaves bin/version-line.txt out of the kit",
-         archived and f"assemble: captures: 1 platforms ran all {n} fixtures" in r.stdout and not left,
-         f"bin/version-line.txt {'left in' if left else 'not in'} the kit; {detail}")
+    for what, key, version in three:
+        i += 1
+        archived, r, out, detail = kit_run(line(version), line(version), line(version), f"take-{key}")
+        left = (out / "interop-day-kit" / "bin" / "version-line.txt").exists()
+        cell(f"t{i} kit() from the repository, {what}: takes the capture holding the line stage wrote (it "
+             "reaches its captures line) and leaves bin/version-line.txt out of the kit",
+             archived and f"assemble: captures: 1 platforms ran all {n} fixtures" in r.stdout and not left,
+             f"bin/version-line.txt {'left in' if left else 'not in'} the kit; {detail}")
     i += 1
     archived, r, out, detail = kit_run(line(tagged), line(tagged), line(untagged), "mismatch")
     cell(f"t{i} kit() from the repository, v0.6.0 on HEAD: refuses a capture whose version file holds the line "
          "with no Go version tag", archived and r.returncode == 1 and "the version line is not" in r.stderr, detail)
-    i += 1
-    later = line(f"v0.0.0-{time.strftime('%Y%m%d%H%M%S', time.gmtime(commit_time + 1))}-{sha[:12]}")
-    archived, r, out, detail = kit_run(later, later, later, "time")
-    cell(f"t{i} kit() from the repository refuses a line stage wrote whose 14-digit time is not the commit's "
-         "committer time, read from the checkout", archived and r.returncode == 1 and "committer time" in r.stderr,
-         detail)
+    later_stamp = time.strftime("%Y%m%d%H%M%S", time.gmtime(commit_time + 1))
+    for what, key, version in (("with no Go version tag", "untagged", f"v0.0.0-{later_stamp}-{sha[:12]}"),
+                               ("after a tag", "after", f"v0.6.1-0.{later_stamp}-{sha[:12]}")):
+        i += 1
+        archived, r, out, detail = kit_run(line(version), line(version), line(version), f"time-{key}")
+        cell(f"t{i} kit() from the repository refuses a line stage wrote {what} whose 14-digit time is not the "
+             "commit's committer time, read from the checkout",
+             archived and r.returncode == 1 and "committer time" in r.stderr, detail)
 
     i += 1
     cell(f"t{i} this repository's tags are the same after the t cells as before: tags were made only in the "
