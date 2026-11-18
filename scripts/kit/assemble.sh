@@ -122,9 +122,12 @@ version_line() { # <module>
 }
 version_file=bin/version-line.txt
 version_form() { # <line> <module>
-  # Whether <line> is the --version line of a clean build of KIT_COMMIT with
-  # go$KIT_GO_VERSION in one of the three forms version_line writes. Bash
-  # only: check-capture runs it with no git and no Python.
+  # Whether <line> is a --version line of <module> built with
+  # go$KIT_GO_VERSION whose version is in one of the three forms
+  # version_line writes. The two pseudo-version forms must end in the first
+  # 12 hex of KIT_COMMIT. The form vX.Y.Z names no commit, so this check
+  # does not tie it to KIT_COMMIT. Bash only: check-capture runs it with no
+  # git and no Python.
   local v sha12=${KIT_COMMIT:0:12} n='(0|[123456789][0123456789]*)' t='[0123456789]{14}' untagged tagged after
   v=${1#"atx-verify: $2 "}
   v=${v%", built with go$KIT_GO_VERSION"}
@@ -136,8 +139,9 @@ version_form() { # <line> <module>
 }
 stage_line() { # <kit-dir> <module>
   # The line stage wrote into the kit, which every binary's --version must
-  # print, once it is checked to be a line of KIT_COMMIT and
-  # go$KIT_GO_VERSION in a form version_line writes.
+  # print, once version_form has checked it: go$KIT_GO_VERSION, a version
+  # in a form version_line writes and, in the two pseudo-version forms, the
+  # first 12 hex of KIT_COMMIT.
   local line
   [ -f "$1/$version_file" ] || die "the kit holds no $version_file: stage writes there the line every binary's --version prints"
   line=$(cat "$1/$version_file")
@@ -224,8 +228,11 @@ check_capture() {
   # check-capture runs in the unpacked kit, which is not a repository, and runs
   # no Python, so it reads no tag and no commit time: the binary's --version
   # line must be the whole line stage derived where the checkout and its tags
-  # were and wrote into the kit, once that line is checked to name KIT_COMMIT
-  # and go$KIT_GO_VERSION.
+  # were and wrote into the kit, once stage_line has checked that line. That
+  # check holds the line to go$KIT_GO_VERSION and, in the two pseudo-version
+  # forms, to the first 12 hex of KIT_COMMIT. The form vX.Y.Z names no
+  # commit: stage tied the binaries to the commit with go version -m, and
+  # kit() ties each capture to its binary's sha256.
   want=$(stage_line "$kit" "$module")
   version=$("$bin" --version | tr -d '\r')
   [ "$version" = "$want" ] || die "$target: --version prints '$version', not '$want'"
