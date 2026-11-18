@@ -711,8 +711,8 @@ def cells_capture_in_the_unpacked_kit() -> None:
 
 
 def cells_version_under_tags() -> None:
-    """The version line under each tag view CA-1 D3 (a) names, as Go stamps
-    it into a clean build: no Go version tag on the commit or an ancestor,
+    """The version line under each of the three tag views, as Go stamps it
+    into a clean build: no Go version tag on the commit or an ancestor,
     v0.0.0-<time>-<sha12>; a tag vX.Y.Z on the commit, vX.Y.Z; vX.Y.Z on an
     ancestor only, the derived pseudo-version vX.Y.(Z+1)-0.<time>-<sha12>.
     Tags are made only in a scratch clone of HEAD (git clone --no-tags), and
