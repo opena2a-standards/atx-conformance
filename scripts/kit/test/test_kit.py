@@ -9,9 +9,10 @@ check fail.
       workflow's shape, the one-line refusal of a workflow path the checks
       cannot read, SHA256SUMS and the file-list check, the label census,
       the data protection kit check, the first-run screen's form, the
-      release notes' --version claim, and check-capture as the release
+      release notes' --version claim, check-capture as the release
       workflow's test job runs it: the kit's own copy, unpacked outside any
-      repository, with no Python to call.
+      repository, with no Python to call, and the version line under each
+      Go version tag view, with tags made only in a scratch clone.
   test_kit.py --sandboxed
       Cells that run the scripts naming gh (candidate_equal.sh,
       verify_release.sh, write_stick.sh) with test doubles for gh, git and
@@ -92,9 +93,13 @@ def head_facts() -> dict:
     n = len(list((REPO / "fixtures").glob("*.json")))
     targets = ["darwin/arm64", "darwin/amd64", "linux/amd64", "linux/arm64", "windows/amd64", "windows/arm64"]
     expected = f"summary: {n} pass, 0 fail ({n} fixtures)"
+    commit_time = int(git("show", "-s", "--format=%ct", "HEAD"))
+    # The version Go stamps for HEAD with no Go version tag; the cells that
+    # take another tag view set their own.
+    version = f"v0.0.0-{time.strftime('%Y%m%d%H%M%S', time.gmtime(commit_time))}-{sha[:12]}"
     return {"sha": sha, "tag": "kit-2026-11-05", "repo": "opena2a-standards/atx-conformance",
             "workflow": ".github/workflows/kit-release.yml", "n": n, "expected": expected,
-            "pythonExpected": expected, "commitTime": int(git("show", "-s", "--format=%ct", "HEAD")),
+            "pythonExpected": expected, "commitTime": commit_time, "version": version,
             "f5": False, "targets": targets, "tested": targets, "notTested": []}
 
 
@@ -556,7 +561,8 @@ def cells_claims() -> None:
 
     # The notes as render.py writes them for HEAD, against the line a binary
     # built at HEAD prints: check-capture must take that line (it compares the
-    # whole --version line with the one version-line.txt.in gives for HEAD),
+    # whole --version line with the line stage writes into the kit,
+    # bin/version-line.txt, here the one for HEAD with no Go version tag),
     # check-claims must pass on the version file check-capture writes, and it
     # must refuse a (devel) line.
     d = scratch("i3")
@@ -569,6 +575,7 @@ def cells_claims() -> None:
     stand_in.parent.mkdir(parents=True)
     stand_in.write_text(f"#!/bin/sh\nprintf '%s\\n' 'atx-verify: {module} {pseudo}, built with go1.27.3'\n")
     stand_in.chmod(0o755)
+    (kit / "bin" / "version-line.txt").write_text(f"atx-verify: {module} {pseudo}, built with go1.27.3\n")
     (d / "capture.txt").write_text(facts["expected"] + "\n")
     (d / "capture.rc").write_text("0\n")
     taken = run(["bash", KIT / "assemble.sh", "check-capture", kit, d / "capture.txt", d / "capture.rc",
@@ -611,7 +618,8 @@ def cells_capture_in_the_unpacked_kit() -> None:
     """check-capture as the release workflow's test job runs it: the kit's own
     copy of assemble.sh (git archive HEAD, unpacked in a scratch folder outside
     any repository), never the repository's, with KIT_PYTHON naming a file that
-    does not exist, so any Python call fails the cell."""
+    does not exist, so any Python call fails the cell. The copy holds the line
+    stage writes for HEAD with no Go version tag, bin/version-line.txt."""
     parent = scratch("j")
     copy = parent / "interop-day-kit"
     tree_into(copy)
@@ -631,6 +639,8 @@ def cells_capture_in_the_unpacked_kit() -> None:
 
     def line(t: str = stamp, sha12: str = sha[:12], go: str = go_version) -> str:
         return f"atx-verify: {module} v0.0.0-{t}-{sha12}, built with go{go}"
+
+    (copy / "bin" / "version-line.txt").write_text(line() + "\n")
 
     def check_capture(printed: str, out: str):
         # The precondition witness first: git finds no repository from the
@@ -677,20 +687,281 @@ def cells_capture_in_the_unpacked_kit() -> None:
         cell(name, held and r.returncode == 1 and f"linux-amd64: --version prints '{printed}', not '" in r.stderr
              and not (parent / f"out-{i}").exists(), detail)
 
-    # A 14-digit time that is not the commit's: check-capture takes the form,
-    # and kit(), run from the repository, compares the whole line and refuses.
-    held, taken, _ = check_capture(line(t=time.strftime("%Y%m%d%H%M%S", time.gmtime(commit_time + 1))), "out-later")
+    # A 14-digit time that is not the commit's: check-capture compares the
+    # whole line with the line stage wrote and refuses it, and kit(), run from
+    # the repository, refuses a capture whose version file holds it.
+    later = line(t=time.strftime("%Y%m%d%H%M%S", time.gmtime(commit_time + 1)))
+    held, taken, _ = check_capture(later, "out-later")
+    captures = parent / "captures-later"
+    captures.mkdir()
+    (captures / "linux-amd64.txt").write_text((parent / "capture.txt").read_text())
+    (captures / "linux-amd64.version").write_text(later + "\n")
+    (captures / "linux-amd64.sha256").write_text(hashlib.sha256(stand_in.read_bytes()).hexdigest() + "\n")
     stage_tar = parent / "kit-stage.tar"
     archived = run([PY, "-I", KIT / "kit_files.py", "archive", copy, stage_tar, "--mtime", "0", "--plain"])
-    r = run(["bash", KIT / "assemble.sh", "kit", stage_tar, parent / "out-later", scratch("j-kit")],
+    r = run(["bash", KIT / "assemble.sh", "kit", stage_tar, captures, scratch("j-kit")],
             env=dict(os.environ, KIT_TAG="kit-2026-11-05", KIT_REPO="opena2a-standards/atx-conformance",
                      KIT_COMMIT=sha, KIT_GO_VERSION=go_version, KIT_PYTHON=PY))
-    cell(f"j{len(refusals) + 2} a capture whose 14-digit time is not HEAD's: the kit's check-capture takes "
-         "its form, kit() from the repository refuses it",
-         held and taken.returncode == 0 and archived.returncode == 0 and r.returncode == 1
-         and "the version line is not" in r.stderr,
+    cell(f"j{len(refusals) + 2} a 14-digit time that is not HEAD's: the kit's check-capture refuses it, and "
+         "kit() from the repository refuses a capture whose version file holds it",
+         held and taken.returncode == 1 and not (parent / "out-later").exists()
+         and archived.returncode == 0 and r.returncode == 1 and "the version line is not" in r.stderr,
          f"check-capture exit {taken.returncode}; kit exit {r.returncode}: "
          + (r.stdout + r.stderr).strip().split("\n")[-1][:160])
+
+
+def cells_version_under_tags() -> None:
+    """The version line under each tag view CA-1 D3 (a) names, as Go stamps
+    it into a clean build: no Go version tag on the commit or an ancestor,
+    v0.0.0-<time>-<sha12>; a tag vX.Y.Z on the commit, vX.Y.Z; vX.Y.Z on an
+    ancestor only, the derived pseudo-version vX.Y.(Z+1)-0.<time>-<sha12>.
+    Tags are made only in a scratch clone of HEAD (git clone --no-tags), and
+    the last cell holds that this repository's tags are the same after the
+    cells as before. Each view is checked where the release workflow checks
+    it: the line stage derives from the clone's tags (assemble.sh
+    version-line, the clone's own copy); the kit's own check-capture,
+    unpacked outside any repository with no Python, on a stand-in binary;
+    kit() from the repository; and the release notes' --version claim."""
+    repo_tags = git("tag", "-l")
+    parent = scratch("t")
+    sha = git("rev-parse", "HEAD")
+    commit_time = int(git("show", "-s", "--format=%ct", "HEAD"))
+    stamp = time.strftime("%Y%m%d%H%M%S", time.gmtime(commit_time))
+    go_version = "1.27.3"
+    clone = parent / "clone"
+
+    def in_clone(*args) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(clone), "-c", "user.name=kit-test", "-c", "user.email=kit-test",
+                               *args], capture_output=True, text=True)
+
+    made = subprocess.run(["git", "clone", "-q", "--no-hardlinks", "--no-tags", str(REPO), str(clone)],
+                          capture_output=True, text=True)
+    if made.returncode == 0:
+        made = in_clone("checkout", "-q", "--detach", sha)
+    head = in_clone("rev-parse", "HEAD").stdout.strip() if made.returncode == 0 else ""
+    ancestors = bool(head) and in_clone("rev-parse", "--verify", "-q", "HEAD~2").returncode == 0
+    cell("t0 a scratch clone of HEAD holding no tag, with HEAD^ and HEAD~2",
+         head == sha and ancestors and in_clone("tag", "-l").stdout == "",
+         f"clone exit {made.returncode}; HEAD {head[:12] or 'none'}; HEAD~2 {'present' if ancestors else 'absent'}")
+    if head != sha or not ancestors:
+        return
+    later_commit = in_clone("commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "a scratch commit after HEAD").stdout.strip()
+    parent_sha = in_clone("rev-parse", "HEAD^").stdout.strip()
+
+    def set_tags(*tags: tuple) -> str:
+        """Leaves the clone with exactly these tags, each (name, revision) or
+        (name, revision, "annotated"), and returns their names as git lists them."""
+        for old in in_clone("tag", "-l").stdout.split():
+            in_clone("tag", "-d", old)
+        for name, rev, *annotated in tags:
+            in_clone("tag", *(["-a", "-m", name] if annotated else []), name, rev)
+        return " ".join(in_clone("tag", "-l").stdout.split())
+
+    module = re.search(r"^module (\S+)$", (clone / "go.mod").read_text(), re.M).group(1)
+
+    def line(version: str, go: str = go_version) -> str:
+        return f"atx-verify: {module} {version}, built with go{go}"
+
+    untagged = f"v0.0.0-{stamp}-{sha[:12]}"
+    tagged = "v0.6.0"
+    after = f"v0.6.1-0.{stamp}-{sha[:12]}"
+    derive_env = dict(os.environ, KIT_COMMIT=sha, KIT_GO_VERSION=go_version, KIT_PYTHON=PY)
+
+    def derive(*tags: tuple):
+        listed = set_tags(*tags)
+        return listed, run(["bash", clone / "scripts" / "kit" / "assemble.sh", "version-line"], env=derive_env)
+
+    # The line stage derives from the clone's tags. Each tag view with the
+    # version go build stamps for it in a scratch clone holding those tags.
+    views = [
+        ("no Go version tag (a kit tag on HEAD, which Go does not read)",
+         [("kit-2026-11-14", "HEAD")], untagged, "v0.0.0-<time>-<sha12>"),
+        ("v0.6.0 on HEAD", [("v0.6.0", "HEAD")], tagged, "v0.6.0"),
+        ("v0.6.0 on HEAD, an annotated tag", [("v0.6.0", "HEAD", "annotated")], tagged, "v0.6.0"),
+        ("v1.0.0 on HEAD (Go reads major version 1 for a module path with no /vN)",
+         [("v1.0.0", "HEAD")], "v1.0.0", "v1.0.0"),
+        ("v0.6.0 on HEAD^ only", [("v0.6.0", "HEAD^")], after, "v0.6.1-0.<time>-<sha12>"),
+        ("v0.6.0 on HEAD~2 and v0.5.0 on HEAD^ (the highest tag among the ancestors, not the nearest)",
+         [("v0.6.0", "HEAD~2"), ("v0.5.0", "HEAD^")], after, "v0.6.1-0.<time>-<sha12>"),
+        ("v0.5.0-rc.1 on HEAD~2 and v0.6.0 on HEAD^ (a pre-release below the highest release)",
+         [("v0.5.0-rc.1", "HEAD~2"), ("v0.6.0", "HEAD^")], after, "v0.6.1-0.<time>-<sha12>"),
+        ("v0.7.0 on a commit after HEAD only, which is not an ancestor",
+         [("v0.7.0", later_commit)], untagged, "v0.0.0-<time>-<sha12>"),
+        ("v1.2 and v2.0.0 on HEAD and a pseudo-version-shaped tag on HEAD^, none of which Go reads",
+         [("v1.2", "HEAD"), ("v2.0.0", "HEAD"), (f"v0.0.0-20260101000000-{parent_sha[:12]}", "HEAD^")],
+         untagged, "v0.0.0-<time>-<sha12>"),
+    ]
+    i = 0
+    for what, tags, version, form in views:
+        i += 1
+        listed, r = derive(*tags)
+        cell(f"t{i} stage's version line with {what}: {form}",
+             r.returncode == 0 and r.stdout == line(version) + "\n",
+             f"tags [{listed}]; exit {r.returncode}: " + (r.stdout + r.stderr).strip().split("\n")[-1][:160])
+    outside = [
+        ("v0.6.0-rc.1 on HEAD, where Go stamps the pre-release v0.6.0-rc.1", [("v0.6.0-rc.1", "HEAD")], "v0.6.0-rc.1"),
+        ("v0.6.0-rc.1 on HEAD~2 above v0.5.0 on HEAD^, where Go stamps v0.6.0-rc.1.0.<time>-<sha12>",
+         [("v0.6.0-rc.1", "HEAD~2"), ("v0.5.0", "HEAD^")], "v0.6.0-rc.1"),
+        ("v0.6.0+meta on HEAD^, a tag with build metadata", [("v0.6.0+meta", "HEAD^")], "v0.6.0+meta"),
+    ]
+    for what, tags, named in outside:
+        i += 1
+        listed, r = derive(*tags)
+        cell(f"t{i} stage refuses a tag view outside the three, {what}, and names the tag",
+             r.returncode == 1 and r.stdout == "" and named in r.stderr,
+             f"tags [{listed}]; exit {r.returncode}: " + (r.stdout + r.stderr).strip().split("\n")[-1][:160])
+    set_tags()
+
+    # The kit's own check-capture, as in cells_capture_in_the_unpacked_kit, with
+    # the line stage wrote for each tag view in bin/version-line.txt.
+    kit_parent = parent / "kit"
+    copy = kit_parent / "interop-day-kit"
+    tree_into(copy)
+    n = len(list((copy / "fixtures").glob("*.json")))
+    (kit_parent / "capture.txt").write_text(f"summary: {n} pass, 0 fail ({n} fixtures)\n")
+    (kit_parent / "capture.rc").write_text("0\n")
+    no_python = kit_parent / "no-python" / "python3"
+    capture_env = {"KIT_COMMIT": sha, "KIT_GO_VERSION": go_version, "PATH": os.environ.get("PATH", ""),
+                   "HOME": os.environ.get("HOME", ""), "KIT_PYTHON": str(no_python)}
+    stand_in = copy / "bin" / "linux-amd64" / "atx-verify"
+    stand_in.parent.mkdir(parents=True)
+    stage_file = copy / "bin" / "version-line.txt"
+
+    def stage_and_print(stage_line: str | None, printed: str) -> None:
+        if stage_line is None:
+            stage_file.unlink(missing_ok=True)
+        else:
+            stage_file.write_text(stage_line + "\n")
+        stand_in.write_text(f"#!/bin/sh\nprintf '%s\\n' {shlex.quote(printed)}\n")
+        stand_in.chmod(0o755)
+
+    def check_capture(stage_line: str | None, printed: str, out: str):
+        stage_and_print(stage_line, printed)
+        witness = run(["git", "-C", copy / "scripts" / "kit", "rev-parse", "--git-dir"], env=capture_env)
+        r = run(["bash", "interop-day-kit/scripts/kit/assemble.sh", "check-capture", "interop-day-kit",
+                 "capture.txt", "capture.rc", "linux-amd64", out], cwd=kit_parent, env=capture_env)
+        detail = (f"git rev-parse --git-dir exit {witness.returncode}; check-capture exit {r.returncode}: "
+                  + (r.stdout + r.stderr).strip().split("\n")[-1][:160])
+        return witness.returncode != 0 and not no_python.exists(), r, detail
+
+    three = [("no Go version tag", "untagged", untagged), ("v0.6.0 on HEAD", "tagged", tagged),
+             ("v0.6.0 on HEAD^ only", "after", after)]
+    for what, key, version in three:
+        i += 1
+        held, r, detail = check_capture(line(version), line(version), f"out-{key}")
+        wrote = kit_parent / f"out-{key}" / "linux-amd64.version"
+        cell(f"t{i} the kit's own check-capture, {what}: the line stage wrote passes and linux-amd64.version "
+             "holds it", held and r.returncode == 0 and wrote.exists() and wrote.read_text() == line(version) + "\n",
+             detail)
+    devel = line(f"(devel), commit {sha}")
+    controls = [
+        ("no Go version tag", untagged, "the line of a tag on the commit (v0.6.0)", line(tagged)),
+        ("no Go version tag", untagged, "the line of a tag on an ancestor (v0.6.1-0.)", line(after)),
+        ("v0.6.0 on HEAD", tagged, "the line with no Go version tag, the form the check took before",
+         line(untagged)),
+        ("v0.6.0 on HEAD", tagged, "another tag's line (v0.6.1)", line("v0.6.1")),
+        ("v0.6.0 on HEAD", tagged, "the pseudo-version after the tag (v0.6.1-0.)", line(after)),
+        ("v0.6.0 on HEAD", tagged, "a +dirty build", line(tagged + "+dirty")),
+        ("v0.6.0 on HEAD", tagged, "a (devel), commit <sha> line", devel),
+        ("v0.6.0 on HEAD^ only", after, "the tag's own line (v0.6.0)", line(tagged)),
+        ("v0.6.0 on HEAD^ only", after, "the line with no Go version tag", line(untagged)),
+        ("v0.6.0 on HEAD^ only", after, "a pseudo-version whose base is not raised (v0.6.0-0.)",
+         line(f"v0.6.0-0.{stamp}-{sha[:12]}")),
+        ("v0.6.0 on HEAD^ only", after, "a pseudo-version after another tag (v0.5.1-0.)",
+         line(f"v0.5.1-0.{stamp}-{sha[:12]}")),
+        ("v0.6.0 on HEAD^ only", after, "a +dirty build", line(after + "+dirty")),
+        ("v0.6.0 on HEAD^ only", after, "a (devel), commit <sha> line", devel),
+    ]
+    for k, (view, version, what, printed) in enumerate(controls):
+        i += 1
+        out = f"out-control-{k}"
+        held, r, detail = check_capture(line(version), printed, out)
+        cell(f"t{i} the kit's own check-capture, {view}: refuses {what}",
+             held and r.returncode == 1 and f"linux-amd64: --version prints '{printed}', not '" in r.stderr
+             and not (kit_parent / out).exists(), detail)
+    stage_controls = [
+        ("names HEAD^'s 12 hex", line(f"v0.0.0-{stamp}-{parent_sha[:12]}")),
+        ("names go1.27.2", line(untagged, go="1.27.2")),
+        ("names a pre-release (v0.6.0-rc.1), a form stage does not derive", line("v0.6.0-rc.1")),
+        ("is missing", None),
+    ]
+    for k, (what, stage_line) in enumerate(stage_controls):
+        i += 1
+        out = f"out-stage-{k}"
+        held, r, detail = check_capture(stage_line, stage_line or line(untagged), out)
+        cell(f"t{i} the kit's own check-capture refuses when the line stage wrote {what}, whatever the binary "
+             "prints", held and r.returncode == 1 and "bin/version-line.txt" in r.stderr
+             and not (kit_parent / out).exists(), detail)
+
+    # The release notes' --version claim, held to the line check-capture took.
+    others = {"untagged": ("v0.6.0 on HEAD", line(tagged)), "tagged": ("v0.6.0 on HEAD^ only", line(after)),
+              "after": ("v0.6.0 on HEAD", line(tagged))}
+    for what, key, version in three:
+        i += 1
+        d = parent / f"notes-{key}"
+        d.mkdir()
+        scratch_kit(d, dict(head_facts(), version=version))
+        notes = d / "dist" / "release-notes.md"
+        taken = kit_parent / f"out-{key}" / "linux-amd64.version"
+        other_view, other_line = others[key]
+        other = d / "other.version"
+        other.write_text(other_line + "\n")
+        passed = run([PY, "-I", KIT / "render.py", "check-claims", notes, taken]) if taken.exists() else None
+        refused = run([PY, "-I", KIT / "render.py", "check-claims", notes, other])
+        cell(f"t{i} release notes rendered with {what}: they name the version stage derived; check-claims passes "
+             f"on the line check-capture took and refuses the line of {other_view}",
+             f"`{version}`" in notes.read_text() and passed is not None and passed.returncode == 0
+             and refused.returncode == 1 and "do not print" in refused.stderr,
+             f"version named {'yes' if f'`{version}`' in notes.read_text() else 'no'}; check-claims exit "
+             f"{passed.returncode if passed else 'not run'}; on the other line exit {refused.returncode}")
+    i += 1
+    d = parent / "notes-prefix"
+    d.mkdir()
+    (d / "release-notes.md").write_text("`atx-verify --version` prints `v0.6.1`.\n")
+    (d / "linux-amd64.version").write_text(line(after) + "\n")
+    r = run([PY, "-I", KIT / "render.py", "check-claims", d / "release-notes.md", d / "linux-amd64.version"])
+    cell(f"t{i} check-claims refuses notes naming v0.6.1 when the binary prints v0.6.1-0.<time>-<sha12>: a claim "
+         "is the whole version, never a part of it", r.returncode == 1 and "do not print" in r.stderr,
+         f"exit {r.returncode}: " + (r.stdout + r.stderr).strip().split("\n")[-1][:160])
+
+    # kit() from the repository, on a stage holding the line stage wrote.
+    def kit_run(stage_line: str, printed: str, version_file: str, name: str):
+        stage_and_print(stage_line, printed)
+        captures = parent / f"captures-{name}"
+        captures.mkdir()
+        (captures / "linux-amd64.txt").write_text((kit_parent / "capture.txt").read_text())
+        (captures / "linux-amd64.version").write_text(version_file + "\n")
+        (captures / "linux-amd64.sha256").write_text(hashlib.sha256(stand_in.read_bytes()).hexdigest() + "\n")
+        stage_tar = parent / f"stage-{name}.tar"
+        archived = run([PY, "-I", KIT / "kit_files.py", "archive", copy, stage_tar, "--mtime", "0", "--plain"])
+        out = parent / f"kit-{name}"
+        r = run(["bash", KIT / "assemble.sh", "kit", stage_tar, captures, out],
+                env=dict(os.environ, KIT_TAG="kit-2026-11-05", KIT_REPO="opena2a-standards/atx-conformance",
+                         KIT_COMMIT=sha, KIT_GO_VERSION=go_version, KIT_PYTHON=PY))
+        detail = f"kit exit {r.returncode}: " + (r.stdout + r.stderr).strip().split("\n")[-1][:160]
+        return archived.returncode == 0, r, out, detail
+
+    i += 1
+    archived, r, out, detail = kit_run(line(tagged), line(tagged), line(tagged), "tagged")
+    left = (out / "interop-day-kit" / "bin" / "version-line.txt").exists()
+    cell(f"t{i} kit() from the repository, v0.6.0 on HEAD: takes the capture holding the line stage wrote (it "
+         "reaches its captures line) and leaves bin/version-line.txt out of the kit",
+         archived and f"assemble: captures: 1 platforms ran all {n} fixtures" in r.stdout and not left,
+         f"bin/version-line.txt {'left in' if left else 'not in'} the kit; {detail}")
+    i += 1
+    archived, r, out, detail = kit_run(line(tagged), line(tagged), line(untagged), "mismatch")
+    cell(f"t{i} kit() from the repository, v0.6.0 on HEAD: refuses a capture whose version file holds the line "
+         "with no Go version tag", archived and r.returncode == 1 and "the version line is not" in r.stderr, detail)
+    i += 1
+    later = line(f"v0.0.0-{time.strftime('%Y%m%d%H%M%S', time.gmtime(commit_time + 1))}-{sha[:12]}")
+    archived, r, out, detail = kit_run(later, later, later, "time")
+    cell(f"t{i} kit() from the repository refuses a line stage wrote whose 14-digit time is not the commit's "
+         "committer time, read from the checkout", archived and r.returncode == 1 and "committer time" in r.stderr,
+         detail)
+
+    i += 1
+    cell(f"t{i} this repository's tags are the same after the t cells as before: tags were made only in the "
+         "scratch clone", git("tag", "-l") == repo_tags, f"{len(repo_tags.split())} tag(s) before and after")
 
 
 # ---------------------------------------------------------- --sandboxed cells
@@ -968,6 +1239,7 @@ def main(argv: list[str]) -> int:
             cells_readme()
             cells_claims()
             cells_capture_in_the_unpacked_kit()
+            cells_version_under_tags()
         if "--sandboxed" in modes:
             reason = sandbox_setup()
             if reason:
