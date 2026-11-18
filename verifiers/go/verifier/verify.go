@@ -912,6 +912,14 @@ type result struct {
 	MLDSA65Valid bool
 	SigsExpected int
 	SigsValid    int
+	// IssuerDID and AgentDID are the credential's issuerDid and agentDid
+	// members as verify read them. verify sets both on each result it
+	// returns once the strict parse (step 0) has passed, and neither on a
+	// result returned before. VerifyCredential returns them, so its caller
+	// acts on the members this verifier read, never on a second decode of
+	// the credential (core.md section 1.3 step 8).
+	IssuerDID string
+	AgentDID  string
 }
 
 func (r result) String() string {
@@ -1199,7 +1207,7 @@ func noATXReason(schema json.RawMessage) string {
 // verify runs the ATX v1.0 and v1.1 verification algorithm with hybrid
 // signing enforcement per AIP §3. Step 7 counts distinct signer authorities;
 // see the comment at that step.
-func verify(f fixture) result {
+func verify(f fixture) (res result) {
 	// A fixture with no atx member, such as one of another conformance
 	// suite, has no credential to parse. json.Unmarshal of no bytes reports
 	// "unexpected end of JSON input", which names no cause.
@@ -1233,6 +1241,12 @@ func verify(f fixture) result {
 	if err := readTrustScore(f.ATX, &a); err != nil {
 		return result{RejectCategory: "PARSE_ERROR", Reason: err.Error()}
 	}
+	// The strict parse has passed: a holds the members this verifier read.
+	// Each result returned from here on carries the issuerDid and agentDid
+	// among them, whatever its verdict.
+	defer func(issuerDID, agentDID string) {
+		res.IssuerDID, res.AgentDID = issuerDID, agentDID
+	}(a.IssuerDID, a.AgentDID)
 
 	now, err := parseRFC3339(f.VerifierState.ClockRFC3339)
 	if err != nil {
