@@ -351,6 +351,18 @@ they should not.
 
 ### Fixed
 
+- The Go verifier's unit tests pass under go1.27 as under go1.22 and go1.26:
+  two tests expected `strconv.ParseFloat`, and the JCS library that reads
+  numbers with it, to read 1 followed by 1000 zeros and e-650, whose value is
+  10^350, as 1e+149 with no error, which go1.26 does and go1.27, refusing it
+  as outside the float64 range, does not. They now accept either reading and
+  check the verdict, the same under both: a v1.1 `declaredPurpose` number
+  outside the float64 range rejects as SIGNATURE_INVALID, with a reason that
+  quotes it as written. `docs/captures/go-verifier.txt` is unchanged byte for
+  byte; its sidecar, `docs/captures/go-verifier.json`, records the tree ids
+  `verifiers/go/verifier` and `conformance.json` have now, both changed since
+  it was taken, so `scripts/capture_go_verifier.py --check` passes, where it
+  failed before. No fixture, expected verdict or workflow file changes.
 - `scripts/check_readme_counts.py` reads in either letter case the words by
   which two of its rules find a sentence that gives a pseudo-version to a
   commit with no tag (#389): the rule on the whole-line comments of the four
