@@ -89,6 +89,27 @@ inside it:
 - Windows: not measured with the network denied. The runs above were made
   on one Mac, the Linux ones in containers on it.
 
+On macOS, `python3 scripts/kit/test/test_kit.py --offline` makes such a
+measurement on the commit you have checked out. It first checks that a
+listener on 127.0.0.1 is reachable outside `sandbox-exec` and refused
+inside it. From a copy of the commit, it then builds `atx-verify` and the
+Go verifier with `go build`, and installs the Python verifier from the
+wheels `requirements.lock` pins, with the options of the kit's `PYTHON.md`
+install command. These builds run with the network allowed: `go build`
+fetches the modules the module cache lacks, and `pip download` fetches
+the wheels for the Python running the check. It runs `atx-verify` over
+its embedded fixtures and over `fixtures/`, the kit's `./verify`
+launcher, the Go verifier and the Python verifier inside `sandbox-exec`
+with `(deny network*)` and outside it, with the same arguments, folder
+and environment. A run passes when, with the network denied, it exits 0 and
+its last line is `summary: N pass, 0 fail (N fixtures)`, N being the
+number of fixtures, and its standard output is the same as with the
+network allowed. The same checks must refuse three stand-in verifiers:
+one that exits 1 when it cannot connect to 127.0.0.1, one that prints one
+more line when it can, and one that prints a summary with a failure. It
+prints one line for the control, one for the builds and one for each run,
+then how many of them passed, and exits 1 when any of them fails.
+
 In `atx-verify`, `--verifier-url <url>` is the option that uses the
 network: the interop kit sends each fixture to the URL you give. With
 `--verifier "<command>"` it runs your command, which may use the network

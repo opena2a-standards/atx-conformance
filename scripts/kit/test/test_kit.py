@@ -25,6 +25,22 @@ check fail.
       each double resolves first in bash, and a listener on 127.0.0.1 is
       reachable outside the sandbox and refused inside it; a guard that does
       not hold stops the run.
+  test_kit.py --offline
+      The reference verifiers with the network denied, as docs/network.md
+      says (macOS only). After the guards --sandboxed names, go build
+      builds atx-verify and the Go verifier (verifiers/go) from a copy of
+      HEAD, and pip installs the Python verifier from the wheels
+      requirements.lock pins, with the options of the kit's PYTHON.md
+      install command (network: the Go modules the module cache lacks, and
+      those wheels). Then atx-verify over its embedded fixtures and over
+      fixtures/, the kit's ./verify launcher, the Go verifier and the
+      Python verifier each run inside sandbox-exec with the network denied
+      and outside it, with the same arguments, folder and environment: each
+      must exit 0 inside, print the summary line of every fixture passing
+      as its last line, and print the same standard output both ways.
+      Three stand-in verifiers must be refused: one that exits 1 when it
+      cannot connect to 127.0.0.1, one that prints one more line when it
+      can, and one that prints a summary with a failure.
   test_kit.py --slow
       Two full assemblies of HEAD, from two clones with their own Go and pip
       caches, must write byte-equal SHA256SUMS (network: Go modules and the
@@ -1371,6 +1387,159 @@ def cells_stick() -> None:
          r.returncode != 0 and not any(vol.iterdir()), r.stderr.strip().split("\n")[-1][:110])
 
 
+# ------------------------------------------------------------ --offline cells
+
+# docs/network.md says running a reference verifier makes no network request.
+# These cells measure that on a copy of HEAD. The builds run outside the
+# sandbox, where go build may fetch modules and pip downloads the locked
+# wheels. Each verifier then runs inside sandbox-exec with the network denied,
+# after the s0 control of the same run, and outside it with the same
+# arguments, folder and environment, so the sandbox is the only difference.
+
+# A stand-in verifier for the refusal cells: it connects to 127.0.0.1:<port>,
+# then "needs" exits 1 when that fails, "extra" prints one more line when it
+# succeeds, and "plain" ignores the result. Unless it exits, it prints
+# <summary> last.
+STANDIN = r'''import socket, sys
+port, mode, summary = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+try:
+    socket.create_connection(("127.0.0.1", port), 3).close()
+    reached = True
+except OSError as exc:
+    reached = False
+    if mode == "needs":
+        sys.stderr.write(f"stand-in: no connection to 127.0.0.1:{port}: {exc}\n")
+        sys.exit(1)
+if reached and mode == "extra":
+    print("stand-in: connected to 127.0.0.1")
+print(summary)
+'''
+
+
+def offline_problems(cmd: list, cwd: Path, expected: str) -> tuple[list[str], str]:
+    """Runs cmd outside the sandbox, then inside it with the network denied.
+    Returns what keeps the run from passing (inside: exit 0 and `expected`
+    as the last line of standard output; the same standard output both
+    ways) and a line recording the run inside."""
+    allowed = run(cmd, cwd=cwd, env=SANDBOX_ENV)
+    denied = run(cmd, cwd=cwd, sandboxed=True)
+    last = denied.stdout.rstrip("\n").rsplit("\n", 1)[-1]
+    problems = []
+    if denied.returncode != 0:
+        why = (denied.stderr or denied.stdout).strip().rsplit("\n", 1)[-1]
+        problems.append(f"exit {denied.returncode} with the network denied: {why[:100]}")
+    if last != expected:
+        problems.append(f"last line with the network denied is {last[:70]!r}")
+    if denied.stdout != allowed.stdout:
+        problems.append("standard output differs from the same run with the network allowed")
+    record = (f"exit {denied.returncode} denied and {allowed.returncode} allowed, "
+              f"{len(denied.stdout.splitlines())} lines, sha256 "
+              f"{hashlib.sha256(denied.stdout.encode()).hexdigest()[:16]}, {last}")
+    return problems, record
+
+
+def offline_build(root: Path) -> tuple[dict[str, Path], str]:
+    """Builds the reference verifiers from the copy of HEAD at root, outside
+    the sandbox, and puts the kit's launcher at root/verify and the binary
+    it runs at root/bin/<os>-<arch>/atx-verify, where the kit has them.
+    Returns the paths keyed atx, gover and python, and what was built; or
+    no paths and the step that failed."""
+    if shutil.which("go") is None:
+        return {}, "go is not on PATH"
+    plat = run(["go", "env", "GOOS", "GOARCH", "GOVERSION"], cwd=root)
+    values = plat.stdout.splitlines()
+    if plat.returncode != 0 or len(values) != 3:
+        return {}, f"go env GOOS GOARCH GOVERSION: {(plat.stderr or plat.stdout).strip()[-120:]}"
+    goos, goarch, goversion = values
+    atx = root / "bin" / f"{goos}-{goarch}" / "atx-verify"
+    gover = scratch("o-bin") / "go-verifier"
+    benv = dict(os.environ, CGO_ENABLED="0")
+    for out, pkg in ((atx, "./cmd/atx-verify"), (gover, "./verifiers/go")):
+        r = run(["go", "build", "-trimpath", "-o", out, pkg], cwd=root, env=benv)
+        if r.returncode != 0:
+            return {}, f"go build {pkg}: {r.stderr.strip()[-120:]}"
+    shutil.copy(root / "scripts" / "kit" / "launchers" / "verify", root / "verify")
+    venv = SCRATCH / "o-venv"
+    wheels = scratch("o-wheels")
+    vpy = venv / "bin" / "python"
+    lock = "verifiers/python/requirements.lock"
+    quiet = ["--disable-pip-version-check", "--quiet"]
+    # The download fetches this interpreter's wheels of each pin; the install
+    # is PYTHON.md's, with the folder the download wrote.
+    for step in ([PY, "-I", "-m", "venv", venv],
+                 [vpy, "-I", "-m", "pip", "download", *quiet, "--only-binary=:all:", "--require-hashes",
+                  "-r", lock, "--dest", wheels],
+                 [vpy, "-m", "pip", "install", *quiet, "--no-index", "--find-links", wheels,
+                  "--only-binary=:all:", "--require-hashes", "-r", lock]):
+        r = run(step, cwd=root)
+        if r.returncode != 0:
+            return {}, f"{' '.join(str(s) for s in step[:5])}: {r.stderr.strip()[-120:]}"
+    wheel_names = sorted(p.name.split("-")[0] for p in wheels.glob("*.whl"))
+    pyver = run([vpy, "-I", "-c", "import sys; print(sys.version.split()[0])"]).stdout.strip()
+    return ({"atx": atx, "gover": gover, "python": vpy},
+            f"{goversion} {goos}/{goarch}, CPython {pyver}, wheels {' '.join(wheel_names)}")
+
+
+def cells_offline() -> None:
+    root = scratch("o-head")
+    tree_into(root)
+    n = len(list((root / "fixtures").glob("*.json")))
+    expected = f"summary: {n} pass, 0 fail ({n} fixtures)"
+    built, detail = offline_build(root)
+    cell("o1 built from HEAD outside the sandbox: atx-verify and the Go verifier with go build, "
+         "the Python verifier from the locked wheels", bool(built), detail)
+    runs = [
+        ("atx-verify over its embedded fixtures", built.get("atx"), []),
+        ("atx-verify over fixtures/", built.get("atx"), ["fixtures"]),
+        ("the kit's ./verify launcher", root / "verify", []),
+        ("the Go verifier (verifiers/go) over fixtures/", built.get("gover"), ["fixtures"]),
+        ("the Python verifier over fixtures/, installed from the locked wheels", built.get("python"),
+         ["verifiers/python/verify.py", "fixtures"]),
+    ]
+    for i, (name, program, args) in enumerate(runs, start=2):
+        what = (f"o{i} {name}: with the network denied, exit 0, the summary of every fixture passing last, "
+                "and the same output as with the network allowed")
+        if not built:
+            cell(what, False, "not run: a build failed")
+            continue
+        problems, record = offline_problems([program, *args], root, expected)
+        cell(what, not problems, "; ".join(problems) or record)
+    standin = scratch("o-standin") / "standin.py"
+    standin.write_text(STANDIN)
+    failing = f"summary: {n - 1} pass, 1 fail ({n} fixtures)"
+    cases = [
+        ("needs", expected, "a stand-in verifier that exits 1 when it cannot connect to 127.0.0.1",
+         lambda ps: any(p.startswith("exit 1 with the network denied") for p in ps)),
+        ("extra", expected, "a stand-in verifier that prints one more line when it can connect, "
+         "and exits 0 with the summary last both ways", lambda ps: len(ps) == 1 and "differs" in ps[0]),
+        ("plain", failing, "a stand-in verifier that needs no connection and prints a summary with a failure",
+         lambda ps: len(ps) == 1 and ps[0].startswith("last line")),
+    ]
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    stop = threading.Event()
+
+    def serve():
+        listener.settimeout(0.5)
+        while not stop.is_set():
+            try:
+                conn, _ = listener.accept()
+                conn.close()
+            except OSError:
+                pass
+
+    try:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(8)
+        port = listener.getsockname()[1]
+        threading.Thread(target=serve, daemon=True).start()
+        for i, (mode, summary, what, refused) in enumerate(cases, start=2 + len(runs)):
+            problems, _ = offline_problems([PY, "-I", standin, str(port), mode, summary], root, expected)
+            cell(f"o{i} refused: {what}", refused(problems), "; ".join(problems)[:150] or "no problem found")
+    finally:
+        stop.set()
+        listener.close()
+
+
 # --------------------------------------------------------------- --slow cell
 
 def cell_reproducible() -> None:
@@ -1400,7 +1569,7 @@ def cell_reproducible() -> None:
 
 def main(argv: list[str]) -> int:
     modes = set(argv)
-    if not modes or not modes <= {"--ci", "--sandboxed", "--slow"}:
+    if not modes or not modes <= {"--ci", "--sandboxed", "--offline", "--slow"}:
         print(__doc__, file=sys.stderr)
         return 2
     try:
@@ -1416,15 +1585,18 @@ def main(argv: list[str]) -> int:
             cells_claims()
             cells_capture_in_the_unpacked_kit()
             cells_version_under_tags()
-        if "--sandboxed" in modes:
+        if modes & {"--sandboxed", "--offline"}:
             reason = sandbox_setup()
             if reason:
                 cell("s0 guards", False, reason)
                 print("test_kit: a guard did not hold; no sandboxed cell ran", file=sys.stderr)
             else:
-                cells_verify_release()
-                cells_candidate()
-                cells_stick()
+                if "--sandboxed" in modes:
+                    cells_verify_release()
+                    cells_candidate()
+                    cells_stick()
+                if "--offline" in modes:
+                    cells_offline()
         if "--slow" in modes:
             cell_reproducible()
     finally:
