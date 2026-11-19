@@ -351,6 +351,18 @@ they should not.
 
 ### Fixed
 
+- Three sentences of this file's top section, in the entries for #302 and
+  #308, gave the go1.22 and go1.26 reading of `strconv.ParseFloat`, and of
+  the Go verifier's JCS library that reads numbers with it, without naming
+  a Go release (#399). Each now names the release whose reading it gives,
+  and gives the go1.27 reading beside it.
+  `GoReleaseOfEachParseFloatReading`, the test added for #397 in
+  `verifiers/python/test_verify.py`, now also reads the top section of this
+  file, and fails on a sentence there that names `strconv.ParseFloat`, or
+  its go1.22 and go1.26 reading 1e+149, and no Go release; on this file as
+  it was, it finds those three sentences and the one in the #397 entry that
+  describes that test, which now names the two releases too. No verifier
+  code, fixture or expected verdict changes.
 - Five comments of the Python reference verifier, in
   `verifiers/python/verify.py` and `verifiers/python/test_verify.py`, gave
   the go1.22 and go1.26 reading of `strconv.ParseFloat`, and of the Go
@@ -362,8 +374,8 @@ they should not.
   1e+149, and reads 875 followed by 900 zeros and e-901 as 87.5, where they
   read it as 8.75e-102. A new test in `test_verify.py` fails on a comment or
   docstring sentence of either file that names `strconv.ParseFloat`, or its
-  1e+149 reading, and no Go release. No verifier code, fixture or expected
-  verdict changes.
+  go1.22 and go1.26 reading 1e+149, and no Go release. No verifier code,
+  fixture or expected verdict changes.
 - The Go verifier's unit tests pass under go1.27 as under go1.22 and go1.26:
   two tests expected `strconv.ParseFloat`, and the JCS library that reads
   numbers with it, to read 1 followed by 1000 zeros and e-650, whose value is
@@ -458,9 +470,10 @@ they should not.
   quotes `1.5`. In the Go verifier the scan now runs before the JCS library
   reads the payload, which it ran after: the library refuses `1e400` and an
   integer of 401 digits, and writes `1` followed by 1000 zeros and `e-650`
-  as `1e+149`. An unpaired surrogate escape in `declaredPurpose` is still
-  refused first, as `VERIFIER_CONFIG_ERROR`. Neither verifier decides the
-  float64 range now, so `numberOutsideFloat64Range`,
+  as `1e+149` built with go1.22 or go1.26 (built with go1.27, it refuses
+  that number too). An unpaired surrogate escape in `declaredPurpose` is
+  still refused first, as `VERIFIER_CONFIG_ERROR`. Neither verifier decides
+  the float64 range now, so `numberOutsideFloat64Range`,
   `float64OverflowDigits`, `hasNumberOutsideFloat64RangeV11` and
   `_holds_number_outside_float64` are removed, and the Python scan now
   refuses an integer with more digits than `int()` converts, which the
@@ -548,19 +561,21 @@ they should not.
 - The Go reference verifier builds the v1.0 and v1.1 signed payloads from
   the `trustScore` value the credential writes, decided on every digit
   written, as the Python reference verifier's `float()` reads it (#308).
-  It read `trustScore` with `strconv.ParseFloat`, which keeps at most 800
-  digits of a literal and places the decimal point by the digits it kept:
-  it read `875` followed by 900 zeros and `e-901`, whose value is 87.5, as
-  8.75e-102, and refused the v1.0 and v1.1 baselines carrying it as
-  `SIGNATURE_INVALID`, where the Python verifier accepts them. It read `1`
-  followed by 1000 zeros and `e-650`, whose value is 10^350, as 1e+149,
-  where the Python verifier refuses it as `PARSE_ERROR`; the Go verifier now
-  refuses it as `PARSE_ERROR` too, with the reason it gives for `1e400`. It
-  decides that range with `numberOutsideFloat64Range` and
-  `float64OverflowDigits`, which the #302 entry above removes with the
-  `declaredPurpose` check they served; they stay for `trustScore`, and
-  `TestNumberOutsideFloat64Range` pins them at 2^1024 - 2^970 again. No
-  fixture changes.
+  It read `trustScore` with `strconv.ParseFloat`, which in go1.22 and
+  go1.26 keeps at most 800 digits of a literal and places the decimal point
+  by the digits it kept: built with either, it read `875` followed by 900
+  zeros and `e-901`, whose value is 87.5, as 8.75e-102 (go1.27 reads 87.5),
+  and refused the v1.0 and v1.1 baselines carrying it as
+  `SIGNATURE_INVALID`, where the Python verifier accepts them. Built with
+  go1.22 or go1.26, it read `1` followed by 1000 zeros and `e-650`, whose
+  value is 10^350, as 1e+149 (go1.27 refuses it as outside the float64
+  range), where the Python verifier refuses it as `PARSE_ERROR`; the Go
+  verifier now refuses it as `PARSE_ERROR` too, with the reason it gives
+  for `1e400`, built with go1.22, go1.26 or go1.27. It decides that range
+  with `numberOutsideFloat64Range` and `float64OverflowDigits`, which
+  the #302 entry above removes with the `declaredPurpose` check they
+  served; they stay for `trustScore`, and `TestNumberOutsideFloat64Range`
+  pins them at 2^1024 - 2^970 again. No fixture changes.
 - `docs/demo/record-atx-verify.sh` gives the render container a
   `--pids-limit` of 512 plus 32 for each CPU `docker info` counts on the
   docker host, 768 with 8 CPUs and 1024 with 16, where it gave 256 whatever
