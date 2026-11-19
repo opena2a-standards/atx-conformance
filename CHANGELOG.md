@@ -351,6 +351,19 @@ they should not.
 
 ### Fixed
 
+- Five comments of the Python reference verifier, in
+  `verifiers/python/verify.py` and `verifiers/python/test_verify.py`, gave
+  the go1.22 and go1.26 reading of `strconv.ParseFloat`, and of the Go
+  verifier's JCS library that reads numbers with it, for numbers written
+  with more than 800 digits without naming a Go release. Each now names the
+  release whose reading it gives, and gives the go1.27 reading beside it:
+  built with go1.27, `strconv.ParseFloat` refuses 1 followed by 1000 zeros
+  and e-650 as outside the float64 range, where go1.22 and go1.26 read it as
+  1e+149, and reads 875 followed by 900 zeros and e-901 as 87.5, where they
+  read it as 8.75e-102. A new test in `test_verify.py` fails on a comment or
+  docstring sentence of either file that names `strconv.ParseFloat`, or its
+  1e+149 reading, and no Go release. No verifier code, fixture or expected
+  verdict changes.
 - The Go verifier's unit tests pass under go1.27 as under go1.22 and go1.26:
   two tests expected `strconv.ParseFloat`, and the JCS library that reads
   numbers with it, to read 1 followed by 1000 zeros and e-650, whose value is
