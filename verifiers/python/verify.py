@@ -120,7 +120,8 @@ lesson and scoped to the whole body because ATX signs it all):
     followed by 1000 zeros and e-650, are written with an exponent part, and
     an integer of 401 digits is outside the exact range. The Go verifier
     refuses each before its JCS library reads it, which refuses the first and
-    the third and parses the second, with strconv.ParseFloat, as 1e+149. The
+    the third, and the second too when built with go1.27; built with go1.22
+    or go1.26, it parses the second, with strconv.ParseFloat, as 1e+149. The
     first number in it outside the integer form or the exact range decides.
   - NaN, Infinity and -Infinity are not JSON, so a file carrying one fails to
     load with the reason the Go reference verifier gives a file that is not
@@ -1561,10 +1562,11 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
             # and this serializer writes no such number (rfc8785.py), which
             # json.loads reads as a float; it reaches the TBS only through
             # declaredPurpose, which enters it verbatim. The library refuses
-            # 1e400 and an integer of 401 digits and parses 1 followed by 1000
-            # zeros and e-650 as 1e+149. The Go verifier refuses each before
-            # its library reads it, which is after the check above, and the
-            # reasons are its.
+            # 1e400 and an integer of 401 digits, and 1 followed by 1000 zeros
+            # and e-650 it parses as 1e+149 when built with go1.22 or go1.26
+            # and refuses when built with go1.27. The Go verifier refuses each
+            # before its library reads it, which is after the check above, and
+            # the reasons are its.
             where, literal, fraction_or_exponent = outside
             if fraction_or_exponent:
                 reason = (

@@ -98,6 +98,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tokenize
 import types
 import unittest
 from datetime import date
@@ -419,10 +420,12 @@ FLOAT64_EDGE = 2**1024 - 2**970
 # first number the credential writes that is outside the integer form or the
 # exact range decides. The first table holds numbers written with a fraction
 # or an exponent part. Its rows written with more than 800 digits and an
-# exponent part, which strconv.ParseFloat reads as finite, are those
-# atx-conformance#293 lists, then 10^309 and 2^1024 - 2^970 written with 1000
-# trailing zeros, and, in the range, 10^308, 10^300, 10^307 and
-# 2^1024 - 2^970 - 1 written so.
+# exponent part are those atx-conformance#293 lists, then 10^309 and
+# 2^1024 - 2^970 written with 1000 trailing zeros, and, in the range, 10^308,
+# 10^300, 10^307 and 2^1024 - 2^970 - 1 written so. strconv.ParseFloat reads
+# each number in them as finite in go1.22 and go1.26; go1.27 reads as finite
+# those in the range, the one with 200000 zeros and 2^1024 - 2^970, and
+# refuses the others as outside the float64 range.
 GO_PURPOSE_FORM_BESIDE_FLOAT64_EDGE = (
     ("1e400", "1e400"),
     ("-1e400", "-1e400"),
@@ -526,12 +529,14 @@ class InjectedNumberPurpose(unittest.TestCase):
 
     def test_number_outside_float64_range_written_with_more_than_800_digits(self):
         # 1 followed by 1000 zeros and e-650, whose value is 10^350, is
-        # outside the float64 range: float() returns inf. strconv.ParseFloat
-        # reads it as 1e+149, so the Go reference verifier's JCS library
-        # writes it as it writes 1e149, and a signature over those bytes
-        # verifies over them. Neither reference verifier reads that signature:
-        # the number is written with an exponent part. atx-conformance#294,
-        # atx-conformance#302.
+        # outside the float64 range: float() returns inf. Built with go1.22
+        # or go1.26, strconv.ParseFloat reads it as 1e+149, so the Go
+        # reference verifier's JCS library writes it as it writes 1e149, and
+        # a signature over those bytes verifies over them; built with go1.27,
+        # it refuses it as outside the float64 range, and the library refuses
+        # it as it refuses 1e400. Neither reference verifier reads that
+        # signature: the number is written with an exponent part.
+        # atx-conformance#294, atx-conformance#302.
         literal = "1" + "0" * 1000 + "e-650"
         self.assertEqual(float(literal), float("inf"))
         reason = _fraction_or_exponent_reason(literal)
@@ -1925,9 +1930,10 @@ class GoNegativeZero(unittest.TestCase):
 # 87.500000 (TestTrustScoreReadAsWritten in the Go verifier). Each verifier
 # reads the value written, decided on every digit: float() here, and
 # nearestFloat64 in the Go verifier. Until atx-conformance#308 the Go
-# verifier read trustScore with strconv.ParseFloat, which reads the first two
-# as values other than 87.5 and the last two, whose value is 10^350, as
-# 1e+149.
+# verifier read trustScore with strconv.ParseFloat, which in go1.22 and
+# go1.26 reads the first two as values other than 87.5 and the last two,
+# whose value is 10^350, as 1e+149; go1.27 reads the first two as 87.5 and
+# refuses the last two as outside the float64 range.
 GO_LONG_TRUST_SCORE_VERDICTS = (
     ("875" + "0" * 900 + "e-901", "ACCEPT"),
     ("8750" + "0" * 1000 + "e-1002", "ACCEPT"),
@@ -5218,6 +5224,100 @@ class ArgumentsSectionQuotesTheCredentialMembers(unittest.TestCase):
         code, out = _run_main_stdout_bytes(str(WRONG_ISSUER))
         self.assertEqual(code, 0, out)
         self.assertIn(reason.encode(), out)
+
+
+GO_RELEASE = re.compile(r"\b[Gg]o ?1\.[0-9]+")
+SENTENCE_END = re.compile(r"(?<=\.)\s+")
+
+
+def _prose_blocks(text):
+    # The comments of a Python source, a run of comments on consecutive lines
+    # read as one block, and its module, class and function docstrings, each
+    # with the line it starts on.
+    blocks = []
+    run = []
+    for token in tokenize.generate_tokens(io.StringIO(text).readline):
+        if token.type != tokenize.COMMENT:
+            continue
+        line = token.start[0]
+        if run and line != run[-1][0] + 1:
+            blocks.append((run[0][0], " ".join(words for _, words in run)))
+            run = []
+        run.append((line, token.string.lstrip("#").strip()))
+    if run:
+        blocks.append((run[0][0], " ".join(words for _, words in run)))
+    for node in ast.walk(ast.parse(text)):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            doc = ast.get_docstring(node)
+            if doc:
+                blocks.append((node.body[0].lineno, doc))
+    return blocks
+
+
+def _parse_float_readings_without_release(text):
+    # Each sentence of the source's comments and docstrings that names
+    # strconv.ParseFloat, or the 1e+149 that go1.22 and go1.26 read 1
+    # followed by 1000 zeros and e-650 as, and names no Go release, with the
+    # line its block starts on.
+    found = []
+    for line, block in _prose_blocks(text):
+        for sentence in SENTENCE_END.split(" ".join(block.split())):
+            if ("ParseFloat" in sentence or "1e+149" in sentence) and not GO_RELEASE.search(sentence):
+                found.append((line, sentence))
+    return found
+
+
+class GoReleaseOfEachParseFloatReading(unittest.TestCase):
+    """strconv.ParseFloat reads some JSON number literals of more than 800
+    digits one way in go1.22 and go1.26 and another way in go1.27, so a
+    comment or docstring sentence of verify.py or test_verify.py that gives
+    its reading of a number, or its 1e+149 reading of 1 followed by 1000
+    zeros and e-650, names the Go release whose reading it is, as the Go
+    verifier's comments on that reading do (atx-conformance#397)."""
+
+    def test_each_reading_names_a_go_release(self):
+        for name in ("verify.py", "test_verify.py"):
+            with self.subTest(file=name):
+                text = (HERE / name).read_text(encoding="utf-8")
+                self.assertEqual(_parse_float_readings_without_release(text), [])
+
+    def test_a_reading_without_a_release_is_found(self):
+        comment = (
+            "x = 1\n"
+            "# The library refuses 1e400 and parses 1 followed by 1000 zeros\n"
+            "# and e-650 as 1e+149. The Go verifier refuses each first.\n"
+        )
+        docstring = (
+            '"""Numbers.\n\n'
+            "The JCS library refuses the first and parses the second, with\n"
+            "strconv.ParseFloat, as 1e+149.\n"
+            '"""\n'
+        )
+        neighbour = (
+            "# Built with go1.27 it refuses it. strconv.ParseFloat reads the\n"
+            "# rows as finite.\n"
+        )
+        self.assertEqual(
+            _parse_float_readings_without_release(comment),
+            [(2, "The library refuses 1e400 and parses 1 followed by 1000 zeros and e-650 as 1e+149.")],
+        )
+        self.assertEqual(
+            _parse_float_readings_without_release(docstring),
+            [(1, "The JCS library refuses the first and parses the second, with strconv.ParseFloat, as 1e+149.")],
+        )
+        self.assertEqual(
+            _parse_float_readings_without_release(neighbour),
+            [(1, "strconv.ParseFloat reads the rows as finite.")],
+        )
+
+    def test_a_reading_with_a_release_is_not_found(self):
+        for text in (
+            "# Built with go1.22 or go1.26, the library parses it as 1e+149.\n",
+            '"""strconv.ParseFloat in Go 1.27 refuses it."""\n',
+            "# strconv.ParseFloat reads them as finite in go1.26.\n",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(_parse_float_readings_without_release(text), [])
 
 
 if __name__ == "__main__":
