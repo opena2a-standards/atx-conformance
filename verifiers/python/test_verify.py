@@ -5254,17 +5254,65 @@ def _prose_blocks(text):
     return blocks
 
 
-def _parse_float_readings_without_release(text):
-    # Each sentence of the source's comments and docstrings that names
-    # strconv.ParseFloat, or the 1e+149 that go1.22 and go1.26 read 1
-    # followed by 1000 zeros and e-650 as, and names no Go release, with the
-    # line its block starts on.
+def _readings_without_release(blocks):
+    # Each sentence of the blocks, each the line it starts on and its text,
+    # that names strconv.ParseFloat, or the 1e+149 that go1.22 and go1.26
+    # read 1 followed by 1000 zeros and e-650 as, and names no Go release,
+    # with the line its block starts on.
     found = []
-    for line, block in _prose_blocks(text):
+    for line, block in blocks:
         for sentence in SENTENCE_END.split(" ".join(block.split())):
             if ("ParseFloat" in sentence or "1e+149" in sentence) and not GO_RELEASE.search(sentence):
                 found.append((line, sentence))
     return found
+
+
+def _parse_float_readings_without_release(text):
+    # Each such sentence of a Python source's comments and docstrings.
+    return _readings_without_release(_prose_blocks(text))
+
+
+CHANGELOG_HEADING = re.compile(r"(#{1,6})(?:[ \t]|$)")
+CHANGELOG_LIST_ITEM = re.compile(r"[-*+][ \t]")
+
+
+def _changelog_top_section_blocks(text):
+    # Each list item and paragraph of the top section of a CHANGELOG.md text,
+    # its first `## ` section whatever its heading says, up to the next
+    # heading of level 1 or 2, with its lines joined and the line it starts
+    # on; None when the text has no `## ` heading. A heading of level 3 or
+    # more is no block, and a line that opens with `#` followed by a
+    # character other than a blank, such as an issue number a list item
+    # wraps to, is no heading. The sections below the top one record past
+    # commits and are not read, as scripts/check_readme_counts.py does not
+    # hold them to its checks of the top section.
+    lines = text.split("\n")
+    top = next((i for i, line in enumerate(lines) if line.startswith("## ")), None)
+    if top is None:
+        return None
+    blocks = []
+    run = []
+    for number, line in enumerate(lines[top + 1:], top + 2):
+        heading = CHANGELOG_HEADING.match(line)
+        if heading and len(heading.group(1)) <= 2:
+            break
+        item = CHANGELOG_LIST_ITEM.match(line)
+        if heading or item or not line.strip():
+            if run:
+                blocks.append((run[0][0], " ".join(words for _, words in run)))
+            run = []
+        if line.strip() and not heading:
+            run.append((number, (line[item.end():] if item else line).strip()))
+    if run:
+        blocks.append((run[0][0], " ".join(words for _, words in run)))
+    return blocks
+
+
+def _changelog_readings_without_release(text):
+    # Each such sentence of the top section of a CHANGELOG.md text; None
+    # when the text has no `## ` heading.
+    blocks = _changelog_top_section_blocks(text)
+    return None if blocks is None else _readings_without_release(blocks)
 
 
 class GoReleaseOfEachParseFloatReading(unittest.TestCase):
@@ -5273,13 +5321,52 @@ class GoReleaseOfEachParseFloatReading(unittest.TestCase):
     comment or docstring sentence of verify.py or test_verify.py that gives
     its reading of a number, or its 1e+149 reading of 1 followed by 1000
     zeros and e-650, names the Go release whose reading it is, as the Go
-    verifier's comments on that reading do (atx-conformance#397)."""
+    verifier's comments on that reading do (atx-conformance#397). A
+    sentence of the top section of CHANGELOG.md is held to the same rule
+    (atx-conformance#399)."""
 
     def test_each_reading_names_a_go_release(self):
         for name in ("verify.py", "test_verify.py"):
             with self.subTest(file=name):
                 text = (HERE / name).read_text(encoding="utf-8")
                 self.assertEqual(_parse_float_readings_without_release(text), [])
+
+    def test_each_changelog_reading_names_a_go_release(self):
+        text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        self.assertEqual(_changelog_readings_without_release(text), [])
+
+    def test_a_changelog_reading_without_a_release_is_found(self):
+        changelog = (
+            "# Changelog\n"
+            "\n"
+            "Opening paragraph.\n"
+            "\n"
+            "## [Unreleased]\n"
+            "\n"
+            "### Fixed\n"
+            "\n"
+            "- The library refuses `1e400`, and writes `1` followed by 1000\n"
+            "  zeros and `e-650` as `1e+149`. Built with go1.27 it refuses it.\n"
+            "- It read the value with `strconv.ParseFloat`, which built with\n"
+            "  go1.26 keeps at most 800 digits.\n"
+            "- The entries for #302 and\n"
+            "#308 read it as `1e+149`.\n"
+            "\n"
+            "A paragraph: strconv.ParseFloat reads the rows as finite.\n"
+            "\n"
+            "## v0.1.0\n"
+            "\n"
+            "- It reads that number as `1e+149` with no error.\n"
+        )
+        self.assertEqual(
+            _changelog_readings_without_release(changelog),
+            [
+                (9, "The library refuses `1e400`, and writes `1` followed by 1000 zeros and `e-650` as `1e+149`."),
+                (13, "The entries for #302 and #308 read it as `1e+149`."),
+                (16, "A paragraph: strconv.ParseFloat reads the rows as finite."),
+            ],
+        )
+        self.assertIsNone(_changelog_readings_without_release("# Changelog\n\n- It reads it as 1e+149.\n"))
 
     def test_a_reading_without_a_release_is_found(self):
         comment = (
