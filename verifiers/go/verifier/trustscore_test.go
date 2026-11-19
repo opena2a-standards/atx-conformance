@@ -14,11 +14,11 @@ import (
 // payload from the trustScore value the credential writes, decided on every
 // digit written, as the Python reference verifier's float() reads it.
 // strconv.ParseFloat, which encoding/json reads a float64 with, keeps at most
-// 800 digits of a literal and places the decimal point by the digits it kept,
-// so it read 875 followed by 900 zeros and e-901, whose value is 87.5, as
-// 8.75e-102, and the v1.0 and v1.1 baselines, signed over 87.500000, were
-// refused for a signature that covers the value the credential writes.
-// atx-conformance#308.
+// 800 digits of a literal in go1.26 and places the decimal point by the
+// digits it kept, so it read 875 followed by 900 zeros and e-901, whose value
+// is 87.5, as 8.75e-102 (go1.27 reads 87.5), and the v1.0 and v1.1
+// baselines, signed over 87.500000, were refused for a signature that covers
+// the value the credential writes. atx-conformance#308.
 func TestTrustScoreReadAsWritten(t *testing.T) {
 	zeros := func(n int) string { return strings.Repeat("0", n) }
 	v10, err := loadFixture(repoRoot + "/fixtures/baseline-valid.json")
@@ -64,7 +64,8 @@ func TestTrustScoreReadAsWritten(t *testing.T) {
 
 	// A trustScore whose value is outside the float64 range is not a
 	// float64, however strconv.ParseFloat reads it: 1 followed by 1000 zeros
-	// and e-650 is 10^350, which ParseFloat reads as 1e+149.
+	// and e-650 is 10^350, which ParseFloat reads as 1e+149 in go1.26 and
+	// refuses in go1.27.
 	for _, literal := range []string{
 		`1e400`,
 		`-1e400`,

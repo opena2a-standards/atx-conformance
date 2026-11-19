@@ -1210,44 +1210,42 @@ func TestSuitePinsMemberNamesOutsidePrintableASCII(t *testing.T) {
 // TestDecoderWithoutUseNumberOnOutOfRangeNumbers pins what the comment on
 // UseNumber in rawDuplicateMember says. Without UseNumber, Token() returns an
 // error on a number strconv.ParseFloat refuses as outside the float64 range,
-// 1e400, -1e400 and an integer of 401 digits here, and none on 1 followed by
-// 1000 zeros and e-650, whose value is 10^350 and which strconv.ParseFloat
-// reads as 1e+149. rawDuplicateMember reports the duplicate after each. A
-// v1.1 credential whose declaredPurpose is that last number rejects as
+// and on no other. Every Go release refuses 1e400, -1e400 and an integer of
+// 401 digits here. 1 followed by 1000 zeros and e-650, whose value is
+// 10^350, go1.27 refuses too, where go1.26 reads it as 1e+149 with no error,
+// so Token() refuses it under the one release and not the other. The
+// verifier reads each the same under both: numberOutsideFloat64Range places
+// it outside the range, rawDuplicateMember reports the duplicate after it,
+// and a v1.1 credential whose declaredPurpose is that last number rejects as
 // SIGNATURE_INVALID, with a reason that quotes it as written
 // (integerOutsideExactRangeV11), whatever strconv.ParseFloat reads it as.
 // atx-conformance#294, atx-conformance#302.
 func TestDecoderWithoutUseNumberOnOutOfRangeNumbers(t *testing.T) {
-	misread := "1" + strings.Repeat("0", 1000) + "e-650"
-	for _, tc := range []struct {
-		literal string
-		refused bool
-	}{
-		{`1e400`, true},
-		{`-1e400`, true},
-		{"1" + strings.Repeat("0", 400), true},
-		{misread, false},
-	} {
-		f, err := strconv.ParseFloat(tc.literal, 64)
-		if tc.refused && !errors.Is(err, strconv.ErrRange) || !tc.refused && err != nil {
-			t.Errorf("strconv.ParseFloat(%.40s, %d bytes) = %g, %.80v; want ErrRange: %v", tc.literal, len(tc.literal), f, err, tc.refused)
+	long := "1" + strings.Repeat("0", 1000) + "e-650"
+	for _, literal := range []string{`1e400`, `-1e400`, "1" + strings.Repeat("0", 400), long} {
+		f, err := strconv.ParseFloat(literal, 64)
+		refused := errors.Is(err, strconv.ErrRange)
+		// go1.22 and go1.26 read long as 1e+149 with no error; any other
+		// reading here is ErrRange.
+		if !refused && (literal != long || err != nil || f != 1e149) {
+			t.Errorf("strconv.ParseFloat(%.40s, %d bytes) = %g, %.80v; want ErrRange, or 1e+149 and no error for 1 followed by 1000 zeros and e-650", literal, len(literal), f, err)
 		}
-		dec := json.NewDecoder(strings.NewReader("[" + tc.literal + "]"))
+		dec := json.NewDecoder(strings.NewReader("[" + literal + "]"))
 		var tokenErr error
 		for tokenErr == nil {
 			_, tokenErr = dec.Token()
 		}
-		if failed := !errors.Is(tokenErr, io.EOF); failed != tc.refused {
-			t.Errorf("Token() without UseNumber on [%.40s] (%d bytes): %.80v; want an error: %v", tc.literal, len(tc.literal), tokenErr, tc.refused)
+		if failed := !errors.Is(tokenErr, io.EOF); failed != refused {
+			t.Errorf("Token() without UseNumber on [%.40s] (%d bytes): %.80v; want an error: %v, as strconv.ParseFloat gives %g, %.80v", literal, len(literal), tokenErr, refused, f, err)
 		}
-		if _, dup := rawDuplicateMember([]byte(`{"zzz":` + tc.literal + `,"trustLevel":1,"trustLevel":4}`)); !dup {
-			t.Errorf("rawDuplicateMember: no duplicate reported after %.40s (%d bytes)", tc.literal, len(tc.literal))
+		if !numberOutsideFloat64Range(literal) {
+			t.Errorf("numberOutsideFloat64Range(%.40s, %d bytes) = false, want true", literal, len(literal))
+		}
+		if _, dup := rawDuplicateMember([]byte(`{"zzz":` + literal + `,"trustLevel":1,"trustLevel":4}`)); !dup {
+			t.Errorf("rawDuplicateMember: no duplicate reported after %.40s (%d bytes)", literal, len(literal))
 		}
 	}
-	if f, err := strconv.ParseFloat(misread, 64); f != 1e149 || err != nil {
-		t.Errorf("strconv.ParseFloat(1 followed by 1000 zeros and e-650) = %g, %.80v; want 1e+149, <nil>", f, err)
-	}
-	if got, want := verify(withMembers(t, v11Baseline(t), map[string]string{"declaredPurpose": misread})), fractionOrExponentReason(misread); got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != want {
+	if got, want := verify(withMembers(t, v11Baseline(t), map[string]string{"declaredPurpose": long})), fractionOrExponentReason(long); got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != want {
 		t.Errorf("declaredPurpose 1 followed by 1000 zeros and e-650: %.300s, want REJECT[SIGNATURE_INVALID: %.300s]", got, want)
 	}
 }
@@ -3361,13 +3359,15 @@ func TestDeclaredPurposeNumberOutsideFloat64Range(t *testing.T) {
 	edge := edgeValue.String()
 	above := new(big.Int).Add(edgeValue, big.NewInt(1)).String()
 	below := new(big.Int).Sub(edgeValue, big.NewInt(1)).String()
-	// 10^350, which strconv.ParseFloat reads as 1e+149.
+	// 10^350, which strconv.ParseFloat reads as 1e+149 in go1.26 and
+	// refuses in go1.27.
 	long := "1" + zeros(1000) + "e-650"
 
 	// Written with a fraction or an exponent part, outside the range. The
 	// last ten are written with more than 800 digits and an exponent part,
-	// which strconv.ParseFloat reads as finite: those atx-conformance#293
-	// lists, then 10^309 and 2^1024 - 2^970 written with 1000 trailing zeros.
+	// which strconv.ParseFloat reads as finite in go1.26, and in go1.27 the
+	// one with 200000 zeros and the last: those atx-conformance#293 lists,
+	// then 10^309 and 2^1024 - 2^970 written with 1000 trailing zeros.
 	for _, number := range []string{
 		`1e400`, `-1e400`, `1E400`, `1e+400`, `1e309`, `0.1e310`, `10e308`,
 		`1e99999999999999999999`, `1.7976931348623159e308`,
@@ -3442,11 +3442,22 @@ func TestDeclaredPurposeNumberOutsideFloat64Range(t *testing.T) {
 	}
 
 	// A signature that verifies over the bytes the JCS library writes does
-	// not save such a number: strconv.ParseFloat reads long as 1e+149, so the
-	// library writes for it what it writes for the 1e149 signed here.
+	// not save such a number. The library reads a number with
+	// strconv.ParseFloat: in go1.26, which reads long as 1e+149, it writes
+	// for long what it writes for the 1e149 signed here, so that signature
+	// verifies over JCS(TBS); in go1.27, which refuses long, it refuses long
+	// as it refuses 1e400. The verdict is the same in both.
 	carried := withMembers(t, signedByPrimary(t, withMembers(t, base, map[string]string{"declaredPurpose": `1e149`})), map[string]string{"declaredPurpose": long})
-	if !signaturesVerifyOverTBS(t, carried) {
-		t.Error("declaredPurpose 1 followed by 1000 zeros and e-650, signed as 1e149: the signature does not verify over JCS(TBS)")
+	var presented atx
+	if err := json.Unmarshal(carried.ATX, &presented); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := canonicalPayloadV11(&presented); err == nil {
+		if !signaturesVerifyOverTBS(t, carried) {
+			t.Error("declaredPurpose 1 followed by 1000 zeros and e-650, signed as 1e149: the JCS library writes bytes for it, and the signature does not verify over them")
+		}
+	} else if !errors.Is(err, strconv.ErrRange) {
+		t.Errorf("canonicalPayloadV11 with declaredPurpose 1 followed by 1000 zeros and e-650: %.120v; want the bytes it writes for 1e149, or strconv.ErrRange", err)
 	}
 	if got, want := verify(carried), fractionOrExponentReason(long); got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != want {
 		t.Errorf("declaredPurpose 1 followed by 1000 zeros and e-650, signed as 1e149: %.300s, want REJECT[SIGNATURE_INVALID: %.300s]", got, want)

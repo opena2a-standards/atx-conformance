@@ -730,11 +730,13 @@ var float64OverflowDigits = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 102
 // 2^1024 - 2^970 or more, which rounds to infinity as a float64
 // (float64OverflowDigits): Python's float() returns inf for such a literal.
 // It decides on the digits as written, whatever their count and whatever
-// the exponent. strconv.ParseFloat keeps at most 800 digits of a literal,
-// places the decimal point by the digits it kept and caps the exponent it
-// reads, so it reads 1 followed by 1000 zeros and e-650, whose value is
-// 10^350, as 1e+149 with no error, and 0. followed by 200000 zeros, 1 and
-// e200400, whose value is 10^399, as 0. A literal with no nonzero digit is
+// the exponent, so its answer does not depend on the Go release, where
+// strconv.ParseFloat's does. In go1.26 ParseFloat keeps at most 800 digits
+// of a literal and places the decimal point by the digits it kept, so it
+// reads 1 followed by 1000 zeros and e-650, whose value is 10^350, as
+// 1e+149 with no error, where go1.27 refuses it. Both cap the exponent they
+// read, so both read 0. followed by 200000 zeros, 1 and e200400, whose value
+// is 10^399, as 0. A literal with no nonzero digit is
 // zero. Any other is 0.d1d2d3... × 10^point, with d1 its first nonzero digit
 // and point the count of digits before the decimal point from d1 on, plus
 // the exponent: it is outside the range when point is above 309, and when
@@ -809,11 +811,12 @@ func decimalForm(s string) (negative bool, digits string, point int) {
 // nearestFloat64 returns the float64 nearest the value of the JSON number
 // literal s, ties to even, decided on every digit written: the value
 // Python's float() reads s as. The caller has refused a literal outside the
-// float64 range (numberOutsideFloat64Range). strconv.ParseFloat keeps at most
-// 800 digits of a literal and places the decimal point by the digits it
-// kept, so it reads 875 followed by 900 zeros and e-901, whose value is 87.5,
-// as 8.75e-102. A magnitude below 10^-400 is zero, keeping the sign, as it
-// is in float(). Past 800 significant digits, the digits after the 800th are
+// float64 range (numberOutsideFloat64Range). In go1.26 strconv.ParseFloat
+// keeps at most 800 digits of a literal and places the decimal point by the
+// digits it kept, so it reads 875 followed by 900 zeros and e-901, whose
+// value is 87.5, as 8.75e-102, where go1.27 reads 87.5. A magnitude below
+// 10^-400 is zero, keeping the sign, as it is in float(). Past 800
+// significant digits, the digits after the 800th are
 // read as one nonzero digit: a point halfway between two float64s is written
 // with at most 767 significant digits, so the digits past the 800th decide
 // no rounding but whether the value lies above the first 800.
@@ -842,11 +845,13 @@ func nearestFloat64(s string) float64 {
 // digit written (nearestFloat64), so the v1.0 and v1.1 signed payloads hold
 // the %.6f form of the value the credential carries, as the Python
 // reference verifier's float() reads it. json.Unmarshal reads the float64
-// with strconv.ParseFloat, which reads a literal of more than 800 digits by
-// the digits it keeps. A literal whose value is outside the float64 range
+// with strconv.ParseFloat, whose reading of a literal of more than 800
+// digits is not the same in every Go release, nor always the value written.
+// A literal whose value is outside the float64 range
 // (numberOutsideFloat64Range) is refused with the error json.Unmarshal
-// returns for 1e400, although ParseFloat reads 1 followed by 1000 zeros and
-// e-650, whose value is 10^350, as 1e+149. The member is read by a second
+// returns for 1e400, whether ParseFloat refuses it, as go1.27 refuses 1
+// followed by 1000 zeros and e-650, whose value is 10^350, or reads it as
+// finite, as go1.26 reads that one as 1e+149. The member is read by a second
 // decode of raw, which matches member names as the first does, so it reads
 // the member the first decoded. A trustScore that is null or absent keeps
 // the zero value. (Same reading in verifiers/python; atx-conformance#308.)
@@ -964,9 +969,12 @@ func rawDuplicateMember(raw []byte) (string, bool) {
 	// aborts the scan, although the number is valid JSON that json.Unmarshal
 	// accepts in a member the atx struct holds as raw JSON (declaredPurpose)
 	// or does not declare: a duplicate member after it was then not reported
-	// (atx-conformance#187). strconv.ParseFloat reads 1 followed by 1000
-	// zeros and e-650, whose value is 10^350, as 1e+149, so without UseNumber
-	// Token() returns no error on that number
+	// (atx-conformance#187). Which numbers ParseFloat refuses is not the
+	// same in every Go release: 1 followed by 1000 zeros and e-650, whose
+	// value is 10^350, go1.27 refuses and go1.26 reads as 1e+149 with no
+	// error, so without UseNumber Token() aborts on it in go1.27 and not in
+	// go1.26. With UseNumber it converts no number, so the scan reports a
+	// duplicate after any number in either
 	// (TestDecoderWithoutUseNumberOnOutOfRangeNumbers).
 	dec.UseNumber()
 	name, dup, _ := scanValueForDuplicates(dec, 0)
@@ -1391,9 +1399,11 @@ func verifySignatures(a *atx, state verifierState) result {
 		// number of the TBS is refused here, in declaredPurpose the first
 		// the credential writes (integerOutsideExactRangeV11). That is before
 		// the JCS library reads any of them, because it refuses 1e400 and an
-		// integer of 401 digits and writes 1 followed by 1000 zeros and
-		// e-650, whose value is 10^350, as 1e+149. The Python reference
-		// verifier refuses it at this point too, with these reasons.
+		// integer of 401 digits, and 1 followed by 1000 zeros and e-650,
+		// whose value is 10^350, it refuses in go1.27 and writes as 1e+149 in
+		// go1.26: the verdict decided here on the number as written is the
+		// same in both. The Python reference verifier refuses it at this
+		// point too, with these reasons.
 		if where, literal, fractionOrExponent := integerOutsideExactRangeV11(a); where != "" {
 			reason := fmt.Sprintf("no signature covers %s: the integer %s is outside the I-JSON exact range, -(2^53-1) to 2^53-1", where, literal)
 			if fractionOrExponent {
