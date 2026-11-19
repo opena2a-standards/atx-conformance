@@ -2,8 +2,8 @@
 ================================================================================
 This kit carries commit <sha>
 of atx-conformance: <N> fixtures, and both reference verifiers pass all <N>.
-Running a verifier needs no network. Building one needs it once, to fetch
-dependencies, so this kit carries prebuilt Go binaries for <platforms>.
+Running a verifier needs no network. Building one fetches what docs/network.md
+names, so this kit carries prebuilt Go binaries for <platforms>.
 
 Check before you run. This folder is a copy of the release at
 <release URL>

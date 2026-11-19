@@ -13,6 +13,20 @@ they should not.
 
 ### Added
 
+- `docs/network.md` names what building the Go verifier and installing the
+  Python verifier's packages fetch: the modules `go.mod` requires
+  (`github.com/cloudflare/circl v1.6.2`, `github.com/gowebpki/jcs v1.0.1`
+  and `golang.org/x/sys v0.28.0`), the atx-conformance module itself and the
+  checksum database lookups when `go run` or `go install` names a version,
+  and the Python packages `cryptography`, `dilithium-py`, `cffi` and
+  `pycparser`, with the releases `requirements.lock` pins for the kit. It
+  says running a reference verifier makes no network request, and lists the
+  runs on macOS and Linux that measured it with the network denied; Windows
+  is listed as not measured. The kit's first-run screen names the page in
+  its network sentence, and `scripts/kit/test/test_kit.py --ci` holds the
+  page to `go.mod` and the lock, and the reference verifiers' sources to
+  importing no network package. No fixture, verifier or module dependency
+  changed.
 - `conformance.json` lists the resource attestation statements of ATX
   `core.md` §1.6 under `notCovered`, generated from the new entry in
   `scripts/conformance_profile.py`: no fixture is a resource attestation

@@ -9,10 +9,14 @@ check fail.
       workflow's shape, the one-line refusal of a workflow path the checks
       cannot read, SHA256SUMS and the file-list check, the label census,
       the data protection kit check, the first-run screen's form, the
-      release notes' --version claim, check-capture as the release
-      workflow's test job runs it: the kit's own copy, unpacked outside any
-      repository, with no Python to call, and the version line under each
-      Go version tag view, with tags made only in a scratch clone.
+      network note the screen names (docs/network.md: each module go.mod
+      requires and each package requirements.lock pins, at its version,
+      and no network package imported by the verifiers it says open no
+      connection), the release notes' --version claim, check-capture as
+      the release workflow's test job runs it: the kit's own copy, unpacked
+      outside any repository, with no Python to call, and the version line
+      under each Go version tag view, with tags made only in a scratch
+      clone.
   test_kit.py --sandboxed
       Cells that run the scripts naming gh (candidate_equal.sh,
       verify_release.sh, write_stick.sh) with test doubles for gh, git and
@@ -31,6 +35,7 @@ Prints one line per cell and exits 1 if any cell fails.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -542,6 +547,158 @@ def cells_readme() -> None:
          "; ".join(f"{label}: Mac step line(s) {mac}, gh attestation line {check}, Run the fixtures {run_at}"
                    for label, (_, mac, check, run_at) in zip(("without", "with"), places))
          + f"; the notes carry the step's command and its name: {in_notes}")
+
+
+# docs/network.md, which the first-run screen names, says what building and
+# installing fetch and that running a reference verifier makes no network
+# request. It must name each module go.mod requires and each package
+# requirements.lock pins, at the version pinned, so a pin bumped without the
+# page refuses; and the verifiers it says open no connection must import no
+# network package. The cells read the tree the kit carries (HEAD), as the
+# cells above do.
+NETWORK_NOTE = "docs/network.md"
+NETWORK_RUN_TIME = "makes no network request"
+GO_NET_IMPORT = re.compile(r'"(net|net/[^"]+|crypto/tls)"')
+PY_NET_MODULES = frozenset({
+    "aiohttp", "asyncio", "ftplib", "http", "httpx", "imaplib", "nntplib", "poplib", "requests",
+    "smtplib", "socket", "socketserver", "ssl", "telnetlib", "urllib", "urllib3", "websocket",
+    "websockets", "xmlrpc"})
+
+
+def go_requires(gomod: str) -> list[tuple[str, str]]:
+    """The module path and version of each require directive in go.mod, on a
+    require line or in a require block, with comments dropped."""
+    found: list[tuple[str, str]] = []
+    in_block = False
+    for raw in gomod.split("\n"):
+        line = raw.split("//", 1)[0].strip()
+        if in_block:
+            if line == ")":
+                in_block = False
+                continue
+        elif line in ("require (", "require("):
+            in_block = True
+            continue
+        elif line.startswith("require "):
+            line = line[len("require "):].strip()
+        else:
+            continue
+        parts = line.split()
+        if len(parts) == 2:
+            found.append((parts[0], parts[1]))
+    return found
+
+
+def lock_pins(lock: str) -> list[tuple[str, str]]:
+    """The name and version of each name==version line of requirements.lock."""
+    return re.findall(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s\\]+)", lock, re.M)
+
+
+def network_note_problems(readme: str, note: str | None, gomod: str, lock: str) -> list[str]:
+    """What keeps the first-run screen and docs/network.md from holding."""
+    problems = []
+    if NETWORK_NOTE not in readme:
+        problems.append(f"the first-run screen does not name {NETWORK_NOTE}")
+    if note is None:
+        return problems + [f"the kit carries no {NETWORK_NOTE}"]
+    flat = " ".join(note.split())
+    requires, pins = go_requires(gomod), lock_pins(lock)
+    if not requires:
+        problems.append("no require directive read from go.mod")
+    if not pins:
+        problems.append("no name==version line read from requirements.lock")
+    problems += [f"{NETWORK_NOTE} does not name `{p} {v}`, which go.mod requires"
+                 for p, v in requires if f"`{p} {v}`" not in flat]
+    problems += [f"{NETWORK_NOTE} does not name `{n} {v}`, which requirements.lock pins"
+                 for n, v in pins if f"`{n} {v}`" not in flat]
+    if NETWORK_RUN_TIME not in flat:
+        problems.append(f"{NETWORK_NOTE} does not say that running a reference verifier {NETWORK_RUN_TIME}")
+    return problems
+
+
+def network_imports(go_files: list[Path], py_files: list[Path]) -> list[str]:
+    """Each network package a Go or Python source file imports."""
+    found = []
+    for f in go_files:
+        for decl in re.findall(r"(?ms)^import\s*(\(.*?^\)|[^\n]*)", f.read_text(encoding="utf-8")):
+            found += [f"{f.name} imports {p}" for p in GO_NET_IMPORT.findall(decl)]
+    for f in py_files:
+        for node in ast.walk(ast.parse(f.read_text(encoding="utf-8"), filename=str(f))):
+            if isinstance(node, ast.Import):
+                names = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                names = [node.module]
+            else:
+                continue
+            found += [f"{f.name} imports {n}" for n in names if n.split(".")[0] in PY_NET_MODULES]
+    return found
+
+
+def verifier_sources(kit: Path) -> tuple[list[Path], list[Path]]:
+    """The reference verifiers' Go and Python source files, tests left out."""
+    go = sorted(p for d in (kit / "verifiers" / "go", kit / "verifiers" / "go" / "verifier")
+                for p in d.glob("*.go") if not p.name.endswith("_test.go"))
+    py = sorted(p for p in (kit / "verifiers" / "python").glob("*.py") if not p.name.startswith("test_"))
+    return go, py
+
+
+def cells_network_note() -> None:
+    d = scratch("n")
+    kit = scratch_kit(d)
+    readme = (kit / "README-START-HERE.md").read_text()
+    note_file = kit / NETWORK_NOTE
+    note = note_file.read_text(encoding="utf-8") if note_file.is_file() else None
+    gomod = (kit / "go.mod").read_text(encoding="utf-8")
+    lock = (kit / "verifiers" / "python" / "requirements.lock").read_text(encoding="utf-8")
+    requires, pins = go_requires(gomod), lock_pins(lock)
+    problems = network_note_problems(readme, note, gomod, lock)
+    cell(f"n1 network note: the first-run screen names {NETWORK_NOTE}, the kit carries it, and it names each "
+         "module go.mod requires and each package requirements.lock pins, at its version, and says running a "
+         f"reference verifier {NETWORK_RUN_TIME}",
+         not problems, "; ".join(problems) or f"modules {requires}; packages {pins}")
+    # The first module go.mod requires is in its require block, the last on a
+    # require line of its own; each mutant changes one input and must be named.
+    (blk, blk_v), (one, one_v) = (requires or [("", "")])[0], (requires or [("", "")])[-1]
+    pkg, pkg_v = (pins or [("", "")])[0]
+    flat = " ".join((note or "").split())
+    mutants = [
+        (f"the note without `{one} {one_v}`", readme, (note or "").replace(f"`{one} {one_v}`", f"`{one}`"),
+         gomod, lock, f"does not name `{one} {one_v}`"),
+        (f"go.mod requiring {blk} {blk_v}9", readme, note, gomod.replace(f"{blk} {blk_v}", f"{blk} {blk_v}9", 1),
+         lock, f"does not name `{blk} {blk_v}9`, which go.mod requires"),
+        (f"requirements.lock pinning {pkg}=={pkg_v}9", readme, note, gomod,
+         re.sub(rf"(?m)^{re.escape(pkg)}=={re.escape(pkg_v)}", f"{pkg}=={pkg_v}9", lock, count=1),
+         f"does not name `{pkg} {pkg_v}9`, which requirements.lock pins"),
+        ("the first-run screen not naming the note", readme.replace(NETWORK_NOTE, "docs/elsewhere.md"), note,
+         gomod, lock, f"the first-run screen does not name {NETWORK_NOTE}"),
+        ("the note not saying what running does", readme, flat.replace(NETWORK_RUN_TIME, "may make a request"),
+         gomod, lock, "does not say that running a reference verifier"),
+        ("the kit without the note", readme, None, gomod, lock, f"the kit carries no {NETWORK_NOTE}"),
+    ]
+    for i, (what, r, n, g, lk, expect) in enumerate(mutants, 2):
+        got = network_note_problems(r, n, g, lk)
+        cell(f"n{i} network note mutant refused: {what}", note is not None and any(expect in p for p in got),
+             "; ".join(got)[:200] if note is not None else f"no {NETWORK_NOTE} in the kit to alter")
+
+    go_files, py_files = verifier_sources(kit)
+    found = network_imports(go_files, py_files)
+    names = [p.name for p in go_files + py_files]
+    i = len(mutants) + 2
+    cell(f"n{i} the reference verifiers import no network package: the Go and Python files the note names, "
+         "tests left out", "verify.go" in names and "verify.py" in names and not found,
+         "; ".join(found) or ", ".join(names))
+    extra_go = d / "extra.go"
+    extra_go.write_text('package verifier\n\nimport (\n\t"fmt"\n\tnethttp "net/http"\n)\n\n'
+                        "var _ = fmt.Sprint\nvar _ = nethttp.Get\n")
+    extra_py = d / "extra.py"
+    extra_py.write_text("import json\nfrom urllib.request import urlopen\n")
+    for i, (what, gf, pf, expect) in enumerate((
+            ("a Go file importing net/http under another name", go_files + [extra_go], py_files,
+             "extra.go imports net/http"),
+            ("a Python file importing urllib.request", go_files, py_files + [extra_py],
+             "extra.py imports urllib.request")), i + 1):
+        got = network_imports(gf, pf)
+        cell(f"n{i} network import mutant refused: {what}", expect in got, "; ".join(got))
 
 
 def cells_claims() -> None:
@@ -1255,6 +1412,7 @@ def main(argv: list[str]) -> int:
             cells_census()
             cells_kit_check()
             cells_readme()
+            cells_network_note()
             cells_claims()
             cells_capture_in_the_unpacked_kit()
             cells_version_under_tags()
