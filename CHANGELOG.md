@@ -13,6 +13,18 @@ they should not.
 
 ### Added
 
+- `atx-verify` with no argument, run at a terminal, ends with a `Next:` line
+  below the summary line when every fixture passes. The line links to the
+  README section "Try your verifier in two minutes", which installs the
+  interop kit and points it at a verifier of the reader's own. It is written
+  to standard error, and only when standard error is a terminal: the report
+  on standard output is unchanged, and a run whose standard error is a pipe
+  or a file writes nothing it did not write before.
+  `cmd/atx-verify/main_test.go` holds the line, its link to that README
+  heading, and the output of a piped run. `docs/captures/go-verifier.json`
+  is taken again for the new `cmd/atx-verify` tree, and
+  `docs/captures/go-verifier.txt` is unchanged. No fixture, verifier result
+  or module dependency changed.
 - `docs/network.md` names what building the Go verifier and installing the
   Python verifier's packages fetch: the modules `go.mod` requires
   (`github.com/cloudflare/circl v1.6.2`, `github.com/gowebpki/jcs v1.0.1`
