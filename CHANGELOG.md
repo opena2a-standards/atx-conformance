@@ -419,6 +419,23 @@ they should not.
 
 ### Fixed
 
+- README.md gives `docs/captures/go-verifier.txt` as the full output of
+  `atx-verify` with no argument, and neither it nor
+  `docs/running-the-verifiers.md` said that at a terminal a run in which
+  every fixture passes writes one more line, the `Next:` line, to standard
+  error, below the summary line where the capture ends (#403). Both now
+  quote that line where they describe the run with no argument, say a run
+  at a terminal writes it to standard error, and say the capture is the
+  run's standard output; `docs/running-the-verifiers.md` adds that a run
+  with an argument, `--` alone included, or one whose standard error is a
+  pipe or a regular file writes no such line. `TestDocsQuoteTheNextStep` in
+  `cmd/atx-verify/main_test.go` fails when either page has no paragraph
+  outside a fenced block that quotes the line, or when that paragraph does
+  not name the terminal, standard error, the summary line, standard output
+  and the capture; on both pages as they were, it fails for the missing
+  quote. `docs/captures/go-verifier.json` is taken again for the new
+  `cmd/atx-verify` tree, and `docs/captures/go-verifier.txt` is unchanged.
+  No verifier code, fixture or expected verdict changes.
 - Three sentences of this file's top section, in the entries for #302 and
   #308, gave the go1.22 and go1.26 reading of `strconv.ParseFloat`, and of
   the Go verifier's JCS library that reads numbers with it, without naming

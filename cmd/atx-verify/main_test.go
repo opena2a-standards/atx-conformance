@@ -5,10 +5,12 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode"
@@ -223,5 +225,112 @@ func TestNextStepLinksToTheReadmeSection(t *testing.T) {
 	}
 	if !slices.Contains(headings, readmeSection) {
 		t.Errorf("README.md holds no heading %q outside a fenced block; its headings are %q", readmeSection, headings)
+	}
+}
+
+// paragraphs returns the paragraphs of the Markdown text md that stand
+// outside a fenced block, each a run of lines between blank lines, with each
+// run of whitespace in it read as one space, as Markdown renders a line
+// break inside a paragraph.
+func paragraphs(md string) []string {
+	var out, lines []string
+	end := func() {
+		if len(lines) > 0 {
+			out = append(out, strings.Join(strings.Fields(strings.Join(lines, " ")), " "))
+			lines = nil
+		}
+	}
+	fenced := false
+	for _, line := range strings.Split(md, "\n") {
+		switch {
+		case strings.HasPrefix(line, "```"):
+			end()
+			fenced = !fenced
+		case fenced:
+		case strings.TrimSpace(line) == "":
+			end()
+		default:
+			lines = append(lines, line)
+		}
+	}
+	end()
+	return out
+}
+
+// nextStepTerms are what a paragraph that quotes nextStep must name besides
+// the capture: where a run writes the line, the line it follows, and the
+// stream the capture holds.
+var nextStepTerms = []string{"terminal", "standard error", "summary line", "standard output"}
+
+// nextStepFailures returns the failures of the Markdown text md of the page
+// name, which links docs/captures/go-verifier.txt as capture, a link target
+// in parentheses: one when no paragraph outside a fenced block quotes
+// nextStep in a code span, and one for each of nextStepTerms and capture
+// that such a paragraph does not hold.
+func nextStepFailures(name, md, capture string) []string {
+	quote := "`" + strings.TrimSuffix(nextStep, "\n") + "`"
+	var failures []string
+	quoted := false
+	for _, p := range paragraphs(md) {
+		if !strings.Contains(p, quote) {
+			continue
+		}
+		quoted = true
+		for _, want := range append(slices.Clone(nextStepTerms), capture) {
+			if !strings.Contains(p, want) {
+				failures = append(failures, fmt.Sprintf("%s: the paragraph that quotes nextStep does not hold %q: %q", name, want, p))
+			}
+		}
+	}
+	if !quoted {
+		failures = append(failures, fmt.Sprintf("%s has no paragraph outside a fenced block that quotes nextStep as %s", name, quote))
+	}
+	return failures
+}
+
+// TestDocsQuoteTheNextStep holds README.md and docs/running-the-verifiers.md,
+// where they describe the run with no argument, to quoting nextStep in a
+// paragraph that says a run at a terminal writes it to standard error, below
+// the summary line, and that docs/captures/go-verifier.txt holds the run's
+// standard output. README.md gives that capture as the full output of its
+// first command, and the capture ends at the summary line, so a reader at a
+// terminal sees one line more than the capture holds. A page altered to drop
+// the quote, or one of the words the paragraph must hold, fails the check.
+func TestDocsQuoteTheNextStep(t *testing.T) {
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := os.ReadFile("../../docs/running-the-verifiers.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range nextStepFailures("README.md", string(readme), "(docs/captures/go-verifier.txt)") {
+		t.Error(f)
+	}
+	for _, f := range nextStepFailures("docs/running-the-verifiers.md", string(page), "(captures/go-verifier.txt)") {
+		t.Error(f)
+	}
+
+	const capture = "(docs/captures/go-verifier.txt)"
+	quote := "`" + strings.TrimSuffix(nextStep, "\n") + "`"
+	held := "At a terminal the run writes " + quote + " to standard error, below the\n" +
+		"summary line; [the capture]" + capture + " holds its standard output.\n"
+	if f := nextStepFailures("held", held, capture); len(f) != 0 {
+		t.Errorf("a paragraph that holds the quote and each term fails: %q", f)
+	}
+	for _, c := range []struct{ label, md string }{
+		{"no quote", strings.Replace(held, quote, "the next step", 1)},
+		{"the quote in a fenced block alone", "```text\n" + quote + "\n```\n\n" + strings.Replace(held, quote, "it", 1)},
+	} {
+		if f := nextStepFailures(c.label, c.md, capture); len(f) != 1 {
+			t.Errorf("%s: %d failures, want 1: %q", c.label, len(f), f)
+		}
+	}
+	for _, term := range append(slices.Clone(nextStepTerms), capture) {
+		md := strings.Replace(strings.Join(strings.Fields(held), " "), term, "", 1)
+		if f := nextStepFailures("without "+term, md, capture); len(f) != 1 || !strings.Contains(f[0], strconv.Quote(term)) {
+			t.Errorf("a paragraph without %q gives %q, want one failure naming it", term, f)
+		}
 	}
 }
