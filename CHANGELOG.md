@@ -51,7 +51,8 @@ they should not.
   and allowed, and with the network denied `./verify` must print the
   kit's capture for that machine when the kit holds one. Run so on the kit
   of the release `kit-2026-11-14`, it passed 14 of 14 cells on macOS on
-  arm64 and in containers on Linux on arm64 and on amd64, each of the four
+  arm64, in containers on Linux on arm64 and on amd64, and in a virtual
+  machine on Linux on arm64 that had no network adapter, each of the four
   runs passing every fixture of the kit with the network denied.
   `docs/network.md` names the check. No fixture, verifier or module
   dependency changed.

@@ -189,6 +189,25 @@ capture for that machine, and the sha256 of each `atx-verify` that ran is
 the one `SHA256SUMS` lists. After the runs, every file of the kit still
 matched `SHA256SUMS`, and the kit held no new file.
 
+On 2026-11-20 (UTC), the same command measured the same kit in a virtual
+machine with no network adapter: VirtualBox 7.2.6 on a Mac with macOS
+26.6.2 on arm64, the machine booted from a new copy of the Fedora Cloud
+Base Generic 45-1.4 image for aarch64, whose SHA-256 is the one Fedora's
+`CHECKSUM` file lists. In the machine, which ran Linux 7.2.11 on arm64 with
+Python 3.15.0 and util-linux 2.42.4, `lo` was the only network interface
+and `ip route` listed no route, for IPv4 or for IPv6. At its first boot,
+the machine unpacked the kit and `test_kit.py` from a disk that held only
+them and the release's `SHA256SUMS`, ran the check from a systemd service
+as a user without root, and wrote the `--log` folder to another disk. The
+control's line records that in the machine no UDP socket could be
+connected to 192.0.2.1 or to 2001:db8::1 outside the denial either. In
+each of two boots, each from a new copy of the image, the check passed 14
+of 14 cells, and each of the four runs passed all 47 fixtures with the
+network denied and exited 0. Their standard output was the same bytes as
+the kit's captures for macOS and for Linux, the sha256 of the `atx-verify`
+that ran is the one `SHA256SUMS` lists, and after the runs every file of
+the kit still matched `SHA256SUMS`, and the kit held no new file.
+
 In `atx-verify`, `--verifier-url <url>` is the option that uses the
 network: the interop kit sends each fixture to the URL you give. With
 `--verifier "<command>"` it runs your command, which may use the network
