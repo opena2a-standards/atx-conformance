@@ -24,7 +24,9 @@ check fail.
       --offline, with --commit, or naming an empty folder or a folder with
       each file the --kit cells read but a wheel, the run exits 2 and names
       the reason, and a folder holding each of those files gets past those
-      checks.
+      checks. With git not on PATH, --offline and --offline --commit with
+      HEAD's sha exit 2 and name the reason, and --kit with that folder
+      gets past those checks. None of these runs leaves a scratch folder.
   test_kit.py --sandboxed
       Cells that run the scripts naming gh (candidate_equal.sh,
       verify_release.sh, write_stick.sh) with test doubles for gh, git and
@@ -52,7 +54,9 @@ check fail.
       same standard output both ways.
       Three stand-in verifiers must be refused: one that exits 1 when it
       cannot connect to 127.0.0.1, one that prints one more line when it
-      can, and one that prints a summary with a failure.
+      can, and one that prints a summary with a failure. The copy is made
+      with git: with git not on PATH, it exits 2 before any cell runs and
+      names the reason (--offline --kit KIT needs neither git nor Go).
   test_kit.py --offline --log DIR
       As --offline, and keeps the record of the run in DIR, a folder that
       must be new or empty. DIR/offline.log names the commit the copy was
@@ -104,6 +108,7 @@ Prints one line per cell and exits 1 if any cell fails.
 from __future__ import annotations
 
 import ast
+import atexit
 import hashlib
 import json
 import os
@@ -126,6 +131,9 @@ CONFORMANCE = REPO / ".github" / "workflows" / "conformance.yml"
 PY = sys.executable
 RESULTS: list[tuple[str, bool, str]] = []
 SCRATCH = Path(tempfile.mkdtemp(prefix="kit-test-"))
+# main() removes the scratch folder once the cells have run; a run that exits
+# before them, refused or raising, has it removed here.
+atexit.register(shutil.rmtree, SCRATCH, ignore_errors=True)
 SANDBOX_ENV: dict[str, str] | None = None
 # The words that run a command in the sandbox (sandbox_setup() sets them),
 # and what the s0 cell names as the sandbox.
@@ -1244,12 +1252,13 @@ def cells_version_under_tags() -> None:
 
 
 def cells_options() -> None:
-    """--commit and --kit as main() reads them, each case in a fresh run of
-    this file: a misuse exits 2 before any cell runs, with the reason as the
-    first line of standard error. HEAD's sha, and a folder holding each file
-    the --kit cells read, get past the --commit and --kit checks to the --log
-    check, which a folder holding a file stops, so no cell runs there
-    either."""
+    """--commit and --kit as main() reads them, and --offline with git not
+    on PATH, each case in a fresh run of this file: a misuse exits 2 before
+    any cell runs, with the reason as the first line of standard error, and
+    leaves no scratch folder in its TMPDIR. HEAD's sha, and a folder holding
+    each file the --kit cells read (with git on PATH and without it), get
+    past the --commit and --kit checks to the --log check, which a folder
+    holding a file stops, so no cell runs there either."""
     # A run this cell starts that got past main()'s checks with --ci would
     # reach this cell again; TEST_KIT_OPTIONS_RUN stops it there.
     if os.environ.get("TEST_KIT_OPTIONS_RUN") == "1":
@@ -1276,6 +1285,11 @@ def cells_options() -> None:
     (wheelless / "verifiers/python/wheels/a-1-py3-none-any.whl").unlink()
     unplaced = (f"--kit: the kit's ./verify runs on macOS and Linux, on arm64 and amd64, not on "
                 f"{platform.system()} {platform.machine()}")
+    # A PATH with no git on it: a folder holding only a python3.
+    nogit = d / "nogit"
+    nogit.mkdir()
+    (nogit / "python3").symlink_to(PY)
+    needs_git = "--offline without --kit needs git, which is not on PATH; --offline --kit KIT needs neither git nor Go"
     cases = [
         ("refused: --commit with no commit after it", ["--offline", "--commit"],
          "--commit needs a commit after it"),
@@ -1300,16 +1314,28 @@ def cells_options() -> None:
         ("taken: --kit naming a folder holding each file the --kit cells read, then stopped by --log naming "
          "a folder that holds a file", ["--offline", "--kit", str(shaped), "--log", str(held)],
          f"--log {held}: not a new or empty folder" if plat else unplaced),
+        ("refused: --offline with git not on PATH", ["--offline"], needs_git, nogit),
+        ("refused: --offline --commit naming HEAD by its sha, with git not on PATH",
+         ["--offline", "--commit", head], needs_git, nogit),
+        ("taken: --kit naming a folder holding each file the --kit cells read, with git not on PATH, then "
+         "stopped by --log naming a folder that holds a file", ["--offline", "--kit", str(shaped), "--log", str(held)],
+         f"--log {held}: not a new or empty folder" if plat else unplaced, nogit),
     ]
-    # Each run makes its scratch folder at import; TMPDIR puts it in this
-    # cell's folder, which is removed with the rest.
-    env = dict(os.environ, TMPDIR=str(d), TEST_KIT_OPTIONS_RUN="1")
-    for i, (what, args, expect) in enumerate(cases, 1):
+    # Each run makes its scratch folder at import, in a TMPDIR of its own in
+    # this cell's folder; that TMPDIR must be empty once the run has exited.
+    for i, (what, args, expect, *path) in enumerate(cases, 1):
+        tmp = d / f"tmp-u{i}"
+        tmp.mkdir()
+        env = dict(os.environ, TMPDIR=str(tmp), TEST_KIT_OPTIONS_RUN="1")
+        if path:
+            env["PATH"] = str(path[0])
         r = run([PY, "-I", Path(__file__).resolve(), *args], env=env)
         first = r.stderr.split("\n", 1)[0]
-        cell(f"u{i} {what}: exit 2 before any cell runs, the reason first",
-             r.returncode == 2 and first == f"test_kit: {expect}" and not r.stdout,
-             f"exit {r.returncode}: {first[:160]}" + (f"; standard output {r.stdout[:80]!r}" if r.stdout else ""))
+        left = sorted(p.name for p in tmp.iterdir())
+        cell(f"u{i} {what}: exit 2 before any cell runs, the reason first, no scratch folder left",
+             r.returncode == 2 and first == f"test_kit: {expect}" and not r.stdout and not left,
+             f"exit {r.returncode}: {first[:160]}" + (f"; standard output {r.stdout[:80]!r}" if r.stdout else "")
+             + (f"; left in its TMPDIR: {' '.join(left)}" if left else ""))
 
 
 # ---------------------------------------------------------- --sandboxed cells
@@ -2042,9 +2068,14 @@ def main(argv: list[str]) -> int:
             OFFLINE_SHA = kit_commit(OFFLINE_KIT)
             OFFLINE_REV = OFFLINE_SHA[:12]
     if not why and "--offline" in modes and OFFLINE_KIT is None:
-        OFFLINE_SHA = commit_of(OFFLINE_REV)
-        if not OFFLINE_SHA:
-            why = f"{'--commit ' if commit else ''}{OFFLINE_REV}: names no commit in this repository"
+        # Without --kit, git names the commit and makes the copy of it.
+        if shutil.which("git") is None:
+            why = ("--offline without --kit needs git, which is not on PATH; "
+                   "--offline --kit KIT needs neither git nor Go")
+        else:
+            OFFLINE_SHA = commit_of(OFFLINE_REV)
+            if not OFFLINE_SHA:
+                why = f"{'--commit ' if commit else ''}{OFFLINE_REV}: names no commit in this repository"
     if not why and log is not None:
         folder = Path(log).absolute()
         why = ("--log needs a folder after it" if not log else
