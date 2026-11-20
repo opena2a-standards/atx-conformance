@@ -126,6 +126,22 @@ one that prints a summary with a failure. It prints one line for the
 control, one for the builds and one for each run, then how many of them
 passed, and exits 1 when any of them fails.
 
+With `--log <folder>`, a folder that is new or empty, the check keeps the
+record of the run there. `offline.log` names the commit it copied, the time
+the run started and the system it ran on, and holds the line of each cell,
+the command of each run and how many cells passed; the control's line says
+how the connection to 127.0.0.1 was refused inside the denial. For each
+run, the folder keeps the standard output and the standard error with the
+network denied and with it allowed: `o2.denied.stdout`,
+`o2.denied.stderr`, `o2.allowed.stdout`, `o2.allowed.stderr`, and so on.
+In the folder, `shasum -a 256 o2.denied.stdout` (Linux:
+`sha256sum o2.denied.stdout`) prints the sha256 whose first 16 digits the
+o2 line records, and `cmp o2.denied.stdout o2.allowed.stdout` compares the
+two runs. The check then reads the folder back, and must refuse four
+altered copies of it: one without the control's line, one with a run's
+output one line longer, one without a run's output with the network
+allowed, and one naming another commit.
+
 In `atx-verify`, `--verifier-url <url>` is the option that uses the
 network: the interop kit sends each fixture to the URL you give. With
 `--verifier "<command>"` it runs your command, which may use the network

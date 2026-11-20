@@ -29,8 +29,15 @@ they should not.
   denied, end with the summary line of every fixture passing, and print the
   same standard output both ways; the same checks refuse three stand-in
   verifiers, one of them a verifier that exits 1 when it cannot connect to
-  127.0.0.1. `docs/network.md` names the check. No fixture, verifier or
-  module dependency changed.
+  127.0.0.1. With `--log <folder>`, a new or empty folder, it keeps the
+  record of the run there: `offline.log` names the commit it copied, the
+  time and the system, and holds the line of each cell and the command of
+  each run, and beside it each run's standard output and standard error,
+  with the network denied and with it allowed. It then reads the folder
+  back, and refuses altered copies of it. The control's line says how the
+  connection to 127.0.0.1 was refused inside the denial.
+  `docs/network.md` names the check. No fixture, verifier or module
+  dependency changed.
 - `atx-verify` with no argument, run at a terminal, ends with a `Next:` line
   below the summary line when every fixture passes. The line links to the
   README section "Try your verifier in two minutes", which installs the

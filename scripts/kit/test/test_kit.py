@@ -45,6 +45,23 @@ check fail.
       Three stand-in verifiers must be refused: one that exits 1 when it
       cannot connect to 127.0.0.1, one that prints one more line when it
       can, and one that prints a summary with a failure.
+  test_kit.py --offline --log DIR
+      As --offline, and keeps the record of the run in DIR, a folder that
+      must be new or empty. DIR/offline.log names the commit the copy was
+      made from, the time the run started and the system it ran on, and
+      holds the line of each cell, the command of each run and how many
+      cells passed. For each run, the standard output and standard error
+      with the network denied and with it allowed are kept as
+      <cell>.denied.stdout, <cell>.denied.stderr, <cell>.allowed.stdout and
+      <cell>.allowed.stderr (o2.denied.stdout, and so on). Then a cell reads
+      DIR back: it must name the commit, hold the passing s0 line before
+      the first run, and hold each run's four files, the standard output
+      with the network denied having the line count and sha256 its cell
+      line records, and the same bytes as with the network allowed when its
+      cell passed. Four more cells must refuse altered copies of DIR: one
+      without the s0 line, one with a run's output one line longer, one
+      without a run's output with the network allowed, and one naming
+      another commit.
   test_kit.py --slow
       Two full assemblies of HEAD, from two clones with their own Go and pip
       caches, must write byte-equal SHA256SUMS (network: Go modules and the
@@ -59,6 +76,7 @@ import ast
 import hashlib
 import json
 import os
+import platform
 import re
 import shlex
 import shutil
@@ -82,11 +100,24 @@ SANDBOX_ENV: dict[str, str] | None = None
 # and what the s0 cell names as the sandbox.
 SANDBOX_PREFIX: list[str] = []
 SANDBOX_NAME = ""
+# --log DIR: the folder that keeps the record of the run (main() sets it),
+# and the name of the record in it.
+LOG_DIR: Path | None = None
+LOG_NAME = "offline.log"
 
 
 def cell(name: str, ok: bool, detail: str = "") -> None:
     RESULTS.append((name, ok, detail))
-    print(f"{'PASS' if ok else 'FAIL'}  {name}" + (f"  ({detail})" if detail else ""), flush=True)
+    line = f"{'PASS' if ok else 'FAIL'}  {name}" + (f"  ({detail})" if detail else "")
+    print(line, flush=True)
+    log_line(line)
+
+
+def log_line(line: str) -> None:
+    """Adds a line to the record in the --log folder, when there is one."""
+    if LOG_DIR is not None:
+        with open(LOG_DIR / LOG_NAME, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
 
 
 def run(cmd, cwd=None, env=None, sandboxed=False):
@@ -1292,6 +1323,7 @@ def sandbox_setup(offline_only: bool = False) -> str | None:
         return "control: the loopback listener is not reachable outside the sandbox"
     if inside.returncode == 0:
         return "control: the loopback listener is reachable inside the sandbox, so its network is not denied"
+    refusal = (inside.stderr.strip() or inside.stdout.strip()).rsplit("\n", 1)[-1][:100]
     udp = run([PY, "-I", "-c", UDP_PROBE], sandboxed=True)
     if udp.returncode != 0:
         return f"control: inside the sandbox, {(udp.stdout.strip() or udp.stderr.strip())[-160:]}"
@@ -1300,7 +1332,7 @@ def sandbox_setup(offline_only: bool = False) -> str | None:
     udp_outside = run([PY, "-I", "-c", UDP_PROBE]).stdout.strip() or "no UDP socket connects either"
     cell("s0 guards: tripwire set, doubles resolve first in bash, 127.0.0.1 reachable outside and refused inside, "
          "and no UDP socket connects to 192.0.2.1 or 2001:db8::1 inside", True,
-         f"port {port}, {SANDBOX_NAME}; outside, {udp_outside}")
+         f"port {port}, {SANDBOX_NAME}; inside, exit {inside.returncode}: {refusal}; outside, {udp_outside}")
     return None
 
 
@@ -1469,13 +1501,35 @@ print(summary)
 '''
 
 
-def offline_problems(cmd: list, cwd: Path, expected: str) -> tuple[list[str], str]:
+def shown(cmd: list, root: Path) -> str:
+    """cmd as the --log record shows it: a path in the copy of the commit
+    (root) relative to it, a path in the scratch folder under <scratch>."""
+    words = []
+    for c in cmd:
+        s = str(c)
+        for base, mark in ((root, "."), (SCRATCH, "<scratch>")):
+            if s.startswith(f"{base}{os.sep}"):
+                s = mark + "/" + s[len(str(base)) + 1:]
+                break
+        words.append(shlex.quote(s) if re.search(r"[\s'\"\\$`]", s) or not s else s)
+    return " ".join(words)
+
+
+def offline_problems(cmd: list, cwd: Path, expected: str, tag: str = "") -> tuple[list[str], str]:
     """Runs cmd outside the sandbox, then inside it with the network denied.
     Returns what keeps the run from passing (inside: exit 0 and `expected`
     as the last line of standard output; the same standard output both
-    ways) and a line recording the run inside."""
+    ways) and a line recording the run inside. With --log, the record gets
+    the command, and the folder each run's standard output and standard
+    error, as <tag>.<denied|allowed>.<stdout|stderr>."""
     allowed = run(cmd, cwd=cwd, env=SANDBOX_ENV)
     denied = run(cmd, cwd=cwd, sandboxed=True)
+    if LOG_DIR is not None and tag:
+        log_line(f"{tag} command: {shown(cmd, cwd)}")
+        for side, done in (("denied", denied), ("allowed", allowed)):
+            for stream in ("stdout", "stderr"):
+                with open(LOG_DIR / f"{tag}.{side}.{stream}", "w", encoding="utf-8", newline="") as f:
+                    f.write(getattr(done, stream))
     last = denied.stdout.rstrip("\n").rsplit("\n", 1)[-1]
     problems = []
     if denied.returncode != 0:
@@ -1555,7 +1609,7 @@ def cells_offline() -> None:
         if not built:
             cell(what, False, "not run: a build failed")
             continue
-        problems, record = offline_problems([program, *args], root, expected)
+        problems, record = offline_problems([program, *args], root, expected, f"o{i}")
         cell(what, not problems, "; ".join(problems) or record)
     standin = scratch("o-standin") / "standin.py"
     standin.write_text(STANDIN)
@@ -1586,11 +1640,110 @@ def cells_offline() -> None:
         port = listener.getsockname()[1]
         threading.Thread(target=serve, daemon=True).start()
         for i, (mode, summary, what, refused) in enumerate(cases, start=2 + len(runs)):
-            problems, _ = offline_problems([PY, "-I", standin, str(port), mode, summary], root, expected)
+            problems, _ = offline_problems([PY, "-I", standin, str(port), mode, summary], root, expected,
+                                           f"o{i}")
             cell(f"o{i} refused: {what}", refused(problems), "; ".join(problems)[:150] or "no problem found")
     finally:
         stop.set()
         listener.close()
+    if LOG_DIR is not None:
+        cells_offline_log(2 + len(runs) + len(cases))
+
+
+# A cell line of the record that names a run's output with the network
+# denied: its verdict, its cell, and the line count and sha256 it records.
+RECORDED = re.compile(r"(PASS|FAIL)  (o\d+) .*\(exit -?\d+ denied and -?\d+ allowed, (\d+) lines, "
+                      r"sha256 ([0-9a-f]{16}), ")
+COMMANDED = re.compile(r"(o\d+) command: ")
+
+
+def offline_log_problems(log: Path, sha: str) -> list[str]:
+    """What keeps the --log folder from being the record of a run of the
+    commit sha: the record names that commit and holds a passing s0 control
+    line before the first run; each run it gives a command for has its four
+    files; and each run's standard output with the network denied has the
+    line count and sha256 its cell line records, and the same bytes as with
+    the network allowed when the cell passed."""
+    record = log / LOG_NAME
+    if not record.is_file():
+        return [f"no {LOG_NAME} in the folder"]
+    lines = record.read_text(encoding="utf-8").splitlines()
+    problems = []
+    named = [line.split()[1] for line in lines if line.startswith("commit ") and len(line.split()) > 1]
+    if named != [sha]:
+        problems.append(f"the record names commit {', '.join(named) or 'none'}, not {sha}")
+    first = next((i for i, line in enumerate(lines) if COMMANDED.match(line)), len(lines))
+    if not any(line.startswith("PASS  s0 guards") for line in lines[:first]):
+        problems.append("no passing s0 control line before the first run")
+    runs = [m[1] for m in map(COMMANDED.match, lines) if m]
+    for tag in runs:
+        problems += [f"{tag}: no {name}" for name in (f"{tag}.{side}.{stream}" for side in ("denied", "allowed")
+                                                      for stream in ("stdout", "stderr"))
+                     if not (log / name).is_file()]
+    for m in map(RECORDED.match, lines):
+        if not m:
+            continue
+        verdict, tag, count, digest = m.groups()
+        denied, allowed = log / f"{tag}.denied.stdout", log / f"{tag}.allowed.stdout"
+        if tag not in runs:
+            problems.append(f"{tag}: its line records an output, and the record gives no {tag} command")
+        if not denied.is_file():
+            continue
+        data = denied.read_bytes()
+        got = (len(data.decode("utf-8", errors="replace").splitlines()), hashlib.sha256(data).hexdigest()[:16])
+        if got != (int(count), digest):
+            problems.append(f"{denied.name} has {got[0]} lines, sha256 {got[1]}; its line records {count} lines, "
+                            f"sha256 {digest}")
+        if verdict == "PASS" and allowed.is_file() and allowed.read_bytes() != data:
+            problems.append(f"{tag} passed, and {denied.name} and {allowed.name} differ")
+    return problems
+
+
+def cells_offline_log(first: int) -> None:
+    """Reads the --log folder back, then four altered copies of it; each
+    copy must be refused for what was altered."""
+    sha = git("rev-parse", "HEAD")
+    problems = offline_log_problems(LOG_DIR, sha)
+    text = (LOG_DIR / LOG_NAME).read_text(encoding="utf-8") if (LOG_DIR / LOG_NAME).is_file() else ""
+    lines = text.splitlines()
+    hashed = [m[2] for m in map(RECORDED.match, lines) if m]
+    commanded = [m[1] for m in map(COMMANDED.match, lines) if m]
+    cell(f"o{first} the --log folder names commit HEAD, holds the passing s0 control line before the first run, "
+         "and each run's four output files, each standard output with the network denied matching the line "
+         "count and sha256 its cell line records", not problems,
+         "; ".join(problems)[:200] or f"{len(commanded)} runs with their four files, {len(hashed)} outputs "
+         f"matching their lines, commit {sha[:12]}")
+
+    def without_s0(d: Path) -> None:
+        kept = [line for line in lines if not line.startswith("PASS  s0 guards")]
+        (d / LOG_NAME).write_text("".join(f"{line}\n" for line in kept), encoding="utf-8")
+
+    def longer(d: Path) -> None:
+        with open(d / f"{hashed[0]}.denied.stdout", "a", encoding="utf-8") as f:
+            f.write("one more line\n")
+
+    def other_commit(d: Path) -> None:
+        other = ("e" if sha[0] == "f" else "f") + sha[1:]
+        (d / LOG_NAME).write_text(text.replace(f"commit {sha}", f"commit {other}"), encoding="utf-8")
+
+    mutants = [
+        ("without the s0 line", without_s0, "no passing s0 control line before the first run"),
+        (f"with {hashed[0]}.denied.stdout one line longer" if hashed else "with a run's output one line longer",
+         longer if hashed else None, f"{hashed[0]}.denied.stdout has" if hashed else ""),
+        (f"without {commanded[0]}.allowed.stdout" if commanded else "without a run's output",
+         (lambda d: (d / f"{commanded[0]}.allowed.stdout").unlink()) if commanded else None,
+         f"{commanded[0]}: no {commanded[0]}.allowed.stdout" if commanded else ""),
+        ("naming another commit", other_commit, f"not {sha}"),
+    ]
+    for i, (what, edit, expect) in enumerate(mutants, first + 1):
+        if edit is None or not text:
+            cell(f"o{i} refused: the --log folder {what}", False, "the record holds nothing to alter")
+            continue
+        copy = SCRATCH / f"o-log-{i}"
+        shutil.copytree(LOG_DIR, copy)
+        edit(copy)
+        got = offline_log_problems(copy, sha)
+        cell(f"o{i} refused: the --log folder {what}", any(expect in p for p in got), "; ".join(got)[:200])
 
 
 # --------------------------------------------------------------- --slow cell
@@ -1621,10 +1774,34 @@ def cell_reproducible() -> None:
 
 
 def main(argv: list[str]) -> int:
+    global LOG_DIR
+    argv = list(argv)
+    log = None
+    if "--log" in argv:
+        at = argv.index("--log")
+        log = argv[at + 1] if at + 1 < len(argv) and not argv[at + 1].startswith("-") else ""
+        del argv[at:at + 1 + bool(log)]
     modes = set(argv)
     if not modes or not modes <= {"--ci", "--sandboxed", "--offline", "--slow"}:
         print(__doc__, file=sys.stderr)
         return 2
+    if log is not None:
+        folder = Path(log).absolute()
+        why = ("--log needs a folder after it" if not log else
+               "--log goes with --offline" if "--offline" not in modes else
+               f"--log {log}: not a new or empty folder"
+               if folder.exists() and (not folder.is_dir() or any(folder.iterdir())) else "")
+        if why:
+            print(f"test_kit: {why}", file=sys.stderr)
+            print(__doc__, file=sys.stderr)
+            return 2
+        folder.mkdir(parents=True, exist_ok=True)
+        LOG_DIR = folder
+        started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        log_line(f"test_kit.py {' '.join(sorted(modes))}, started {started}")
+        log_line(f"commit {git('rev-parse', 'HEAD')} (the copy is made with git archive: changes not committed "
+                 "are not in it)")
+        log_line(f"system {platform.platform()}, Python {platform.python_version()}")
     try:
         if "--ci" in modes:
             cells_pins()
@@ -1643,6 +1820,7 @@ def main(argv: list[str]) -> int:
             if reason:
                 cell("s0 guards", False, reason)
                 print("test_kit: a guard did not hold; no sandboxed cell ran", file=sys.stderr)
+                log_line("test_kit: a guard did not hold; no sandboxed cell ran")
             else:
                 if "--sandboxed" in modes:
                     cells_verify_release()
@@ -1655,7 +1833,9 @@ def main(argv: list[str]) -> int:
     finally:
         shutil.rmtree(SCRATCH, ignore_errors=True)
     failed = [n for n, ok, _ in RESULTS if not ok]
-    print(f"test_kit: {len(RESULTS) - len(failed)} of {len(RESULTS)} cells passed")
+    summary = f"test_kit: {len(RESULTS) - len(failed)} of {len(RESULTS)} cells passed"
+    print(summary)
+    log_line(summary)
     return 1 if failed else 0
 
 
