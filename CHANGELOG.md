@@ -13,6 +13,48 @@ they should not.
 
 ### Added
 
+- `python3 scripts/kit/test/test_kit.py --offline` measures on macOS and on
+  Linux, on the commit checked out, whether the reference verifiers run
+  with the network denied, as `docs/network.md` says they do. It denies the
+  network with `sandbox-exec` on macOS, and on Linux with
+  `unshare --user --net`, which runs each command in a new user and network
+  namespace. It checks that a listener on 127.0.0.1 is reachable outside the
+  denial and refused inside it, and that inside it a UDP socket cannot be
+  connected to 192.0.2.1 or to 2001:db8::1; builds `atx-verify` and the Go
+  verifier from a copy of the commit with `go build`, and installs the
+  Python verifier from the wheels `requirements.lock` pins; then runs
+  `atx-verify` over its embedded fixtures and over `fixtures/`, the kit's
+  `./verify` launcher, the Go verifier and the Python verifier with the
+  network denied and with it allowed. Each run must exit 0 with the network
+  denied, end with the summary line of every fixture passing, and print the
+  same standard output both ways; the same checks refuse three stand-in
+  verifiers, one of them a verifier that exits 1 when it cannot connect to
+  127.0.0.1. With `--log <folder>`, a new or empty folder, it keeps the
+  record of the run there: `offline.log` names the commit it copied, the
+  time and the system, and holds the line of each cell and the command of
+  each run, and beside it each run's standard output and standard error,
+  with the network denied and with it allowed. It then reads the folder
+  back, and refuses altered copies of it. The control's line says how the
+  connection to 127.0.0.1 was refused inside the denial. With
+  `--commit <commit>`, a tag, a branch or a sha of this repository, it
+  measures that commit's verifiers over that commit's fixtures with the
+  checks of the commit checked out, and `offline.log` names both commits;
+  `--commit` without `--offline`, with no commit after it, or naming no
+  commit of this repository exits 2 before any check runs. Run so on the
+  commit the kit release `kit-2026-11-14` carries, a38e000, each of its
+  five verifier runs passed every fixture of that commit with the network
+  denied, on macOS and on Linux. With `--kit <folder>`, an unpacked
+  interop day kit, it measures the kit's own files instead, with neither
+  git nor Go: it installs the Python verifier from the kit's wheels with
+  the network denied, then runs the kit's `atx-verify` for the machine,
+  its `./verify` launcher and the Python verifier with the network denied
+  and allowed, and with the network denied `./verify` must print the
+  kit's capture for that machine when the kit holds one. Run so on the kit
+  of the release `kit-2026-11-14`, it passed 14 of 14 cells on macOS on
+  arm64 and in containers on Linux on arm64 and on amd64, each of the four
+  runs passing every fixture of the kit with the network denied.
+  `docs/network.md` names the check. No fixture, verifier or module
+  dependency changed.
 - `atx-verify` with no argument, run at a terminal, ends with a `Next:` line
   below the summary line when every fixture passes. The line links to the
   README section "Try your verifier in two minutes", which installs the

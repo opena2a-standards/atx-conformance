@@ -14,17 +14,85 @@ check fail.
       and no network package imported by the verifiers it says open no
       connection), the release notes' --version claim, check-capture as
       the release workflow's test job runs it: the kit's own copy, unpacked
-      outside any repository, with no Python to call, and the version line
+      outside any repository, with no Python to call, the version line
       under each Go version tag view, with tags made only in a scratch
-      clone.
+      clone, and --commit as this file reads it, in a fresh run of it for
+      each case: with no REV, without --offline, or with a REV that names
+      no commit here (a name this repository lacks, HEAD's tree), the run
+      exits 2 and names the reason before any cell runs, and HEAD's sha
+      gets past those checks. --kit the same way: with no KIT, without
+      --offline, with --commit, or naming an empty folder or a folder with
+      each file the --kit cells read but a wheel, the run exits 2 and names
+      the reason, and a folder holding each of those files gets past those
+      checks.
   test_kit.py --sandboxed
       Cells that run the scripts naming gh (candidate_equal.sh,
       verify_release.sh, write_stick.sh) with test doubles for gh, git and
       diskutil, inside sandbox-exec with the network denied (macOS only).
       Before any cell: HARNESS_NO_LIVE_TRANSPORT=1 is set for every command,
-      each double resolves first in bash, and a listener on 127.0.0.1 is
-      reachable outside the sandbox and refused inside it; a guard that does
-      not hold stops the run.
+      a command starts inside the sandbox, each double resolves first in
+      bash, a listener on 127.0.0.1 is reachable outside the sandbox and
+      refused inside it, and inside it a UDP socket cannot be connected to
+      192.0.2.1 or to 2001:db8::1; a guard that does not hold stops the run.
+  test_kit.py --offline
+      The reference verifiers with the network denied, as docs/network.md
+      says. The sandbox is sandbox-exec on macOS; on Linux it is a new user
+      and network namespace for each command (unshare --user --net, from
+      util-linux), and --offline runs there without --sandboxed. After the
+      guards --sandboxed names, go build builds atx-verify and the Go
+      verifier (verifiers/go) from a copy of HEAD, and pip installs the
+      Python verifier from the wheels requirements.lock pins, with the
+      options of the kit's PYTHON.md install command (network: the Go
+      modules the module cache lacks, and those wheels). Then atx-verify
+      over its embedded fixtures and over fixtures/, the kit's ./verify
+      launcher, the Go verifier and the Python verifier each run inside the
+      sandbox with the network denied and outside it, with the same
+      arguments, folder and environment: each must exit 0 inside, print the
+      summary line of every fixture passing as its last line, and print the
+      same standard output both ways.
+      Three stand-in verifiers must be refused: one that exits 1 when it
+      cannot connect to 127.0.0.1, one that prints one more line when it
+      can, and one that prints a summary with a failure.
+  test_kit.py --offline --log DIR
+      As --offline, and keeps the record of the run in DIR, a folder that
+      must be new or empty. DIR/offline.log names the commit the copy was
+      made from, the commit this file is from, the time the run started and
+      the system it ran on, and holds the line of each cell, the command of
+      each run and how many cells passed. For each run, the standard output
+      and standard error with the network denied and with it allowed are
+      kept as <cell>.denied.stdout, <cell>.denied.stderr,
+      <cell>.allowed.stdout and <cell>.allowed.stderr (o2.denied.stdout,
+      and so on). Then a cell reads
+      DIR back: it must name the commit, hold the passing s0 line before
+      the first run, and hold each run's four files, the standard output
+      with the network denied having the line count and sha256 its cell
+      line records, and the same bytes as with the network allowed when its
+      cell passed. Four more cells must refuse altered copies of DIR: one
+      without the s0 line, one with a run's output one line longer, one
+      without a run's output with the network allowed, and one naming
+      another commit.
+  test_kit.py --offline --commit REV
+      As --offline, with the --offline cells on the commit REV names in this
+      repository (a tag, a branch or a sha) instead of HEAD: the copy, the
+      builds, the fixture count and the runs are that commit's, and the
+      checks are this file's. With --log DIR, DIR/offline.log names that
+      commit. Without --offline, with no REV, or with a REV that names no
+      commit here, it exits 2 before any cell runs and names the reason.
+  test_kit.py --offline --kit KIT
+      As --offline, with the --offline cells on the files of the unpacked
+      interop day kit in the folder KIT instead of a copy of a commit:
+      nothing is built, and neither git nor Go is needed. Inside the
+      sandbox, pip installs the Python verifier from the kit's wheels into
+      a scratch venv, with the options of the kit's PYTHON.md. Then the
+      kit's atx-verify for this machine over its embedded fixtures and over
+      fixtures/, the kit's ./verify launcher and the Python verifier each
+      run inside the sandbox and outside it, as above; with the network
+      denied, ./verify must also print the kit's captures/<os>-<arch>.txt
+      for this machine, when the kit holds one. The kit is read, not
+      changed. With --log DIR, DIR/offline.log names the commit the kit's
+      CONTACT.txt names. Without --offline, with no KIT, with --commit, or
+      naming a folder that lacks a file these cells read, it exits 2 before
+      any cell runs and names the reason.
   test_kit.py --slow
       Two full assemblies of HEAD, from two clones with their own Go and pip
       caches, must write byte-equal SHA256SUMS (network: Go modules and the
@@ -39,6 +107,7 @@ import ast
 import hashlib
 import json
 import os
+import platform
 import re
 import shlex
 import shutil
@@ -58,17 +127,43 @@ PY = sys.executable
 RESULTS: list[tuple[str, bool, str]] = []
 SCRATCH = Path(tempfile.mkdtemp(prefix="kit-test-"))
 SANDBOX_ENV: dict[str, str] | None = None
-SANDBOX_PROFILE = ""
+# The words that run a command in the sandbox (sandbox_setup() sets them),
+# and what the s0 cell names as the sandbox.
+SANDBOX_PREFIX: list[str] = []
+SANDBOX_NAME = ""
+# --log DIR: the folder that keeps the record of the run (main() sets it),
+# and the name of the record in it.
+LOG_DIR: Path | None = None
+LOG_NAME = "offline.log"
+# The commit the --offline cells copy, build and run: as it was named (HEAD,
+# or the REV of --commit REV) and the full sha main() resolved it to before
+# any cell ran. With --kit KIT, the commit the kit's CONTACT.txt names.
+OFFLINE_REV = "HEAD"
+OFFLINE_SHA = ""
+# --kit KIT: the unpacked kit whose files the --offline cells run, in place
+# of a copy of a commit (main() sets it).
+OFFLINE_KIT: Path | None = None
 
 
 def cell(name: str, ok: bool, detail: str = "") -> None:
     RESULTS.append((name, ok, detail))
-    print(f"{'PASS' if ok else 'FAIL'}  {name}" + (f"  ({detail})" if detail else ""), flush=True)
+    line = f"{'PASS' if ok else 'FAIL'}  {name}" + (f"  ({detail})" if detail else "")
+    print(line, flush=True)
+    log_line(line)
+
+
+def log_line(line: str) -> None:
+    """Adds a line to the record in the --log folder, when there is one."""
+    if LOG_DIR is not None:
+        with open(LOG_DIR / LOG_NAME, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
 
 
 def run(cmd, cwd=None, env=None, sandboxed=False):
     if sandboxed:
-        cmd = ["/usr/bin/sandbox-exec", "-p", SANDBOX_PROFILE] + list(cmd)
+        if not SANDBOX_PREFIX:
+            raise RuntimeError("a sandboxed run before sandbox_setup() chose the sandbox")
+        cmd = SANDBOX_PREFIX + list(cmd)
         env = dict(env or SANDBOX_ENV)
     full_env = dict(env if env is not None else os.environ)
     full_env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -86,11 +181,20 @@ def git(*args) -> str:
     return subprocess.run(["git", "-C", str(REPO), *args], capture_output=True, text=True, check=True).stdout.strip()
 
 
-def tree_into(dest: Path, *paths: str) -> None:
+def tree_into(dest: Path, *paths: str, rev: str = "HEAD") -> None:
     dest.mkdir(parents=True, exist_ok=True)
-    archive = subprocess.run(["git", "-C", str(REPO), "archive", "--format=tar", "HEAD", *paths],
+    archive = subprocess.run(["git", "-C", str(REPO), "archive", "--format=tar", rev, *paths],
                              capture_output=True, check=True).stdout
     subprocess.run(["tar", "-x", "-C", str(dest)], input=archive, check=True)
+
+
+def commit_of(rev: str) -> str:
+    """The full sha of the commit rev names in this repository, or "" when it
+    names none: no such name or object here, or an object that is not a
+    commit (a tree, a blob)."""
+    r = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--verify", "--quiet", "--end-of-options",
+                        f"{rev}^{{commit}}"], capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else ""
 
 
 def head_facts() -> dict:
@@ -1139,6 +1243,75 @@ def cells_version_under_tags() -> None:
          "scratch clone", git("tag", "-l") == repo_tags, f"{len(repo_tags.split())} tag(s) before and after")
 
 
+def cells_options() -> None:
+    """--commit and --kit as main() reads them, each case in a fresh run of
+    this file: a misuse exits 2 before any cell runs, with the reason as the
+    first line of standard error. HEAD's sha, and a folder holding each file
+    the --kit cells read, get past the --commit and --kit checks to the --log
+    check, which a folder holding a file stops, so no cell runs there
+    either."""
+    # A run this cell starts that got past main()'s checks with --ci would
+    # reach this cell again; TEST_KIT_OPTIONS_RUN stops it there.
+    if os.environ.get("TEST_KIT_OPTIONS_RUN") == "1":
+        cell("u0 a run of this file that the u cells started reached the u cells", False,
+             "TEST_KIT_OPTIONS_RUN=1; no run started")
+        return
+    d = scratch("u")
+    held = d / "held"
+    held.mkdir()
+    (held / "a-file").write_text("")
+    head, tree = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
+    empty = d / "empty"
+    empty.mkdir()
+    # A folder holding each file the --kit cells read, none of them working.
+    plat = kit_platform()
+    shaped = d / "shaped"
+    for name in ("verify", f"bin/{plat}/atx-verify", "fixtures/a.json", "verifiers/python/verify.py",
+                 "verifiers/python/requirements.lock", "verifiers/python/wheels/a-1-py3-none-any.whl"):
+        (shaped / name).parent.mkdir(parents=True, exist_ok=True)
+        (shaped / name).write_text("")
+    (shaped / "CONTACT.txt").write_text(f"built from atx-conformance commit {head}.\n")
+    wheelless = d / "wheelless"
+    shutil.copytree(shaped, wheelless)
+    (wheelless / "verifiers/python/wheels/a-1-py3-none-any.whl").unlink()
+    unplaced = (f"--kit: the kit's ./verify runs on macOS and Linux, on arm64 and amd64, not on "
+                f"{platform.system()} {platform.machine()}")
+    cases = [
+        ("refused: --commit with no commit after it", ["--offline", "--commit"],
+         "--commit needs a commit after it"),
+        ("refused: --commit without --offline", ["--ci", "--commit", "HEAD"], "--commit goes with --offline"),
+        ("refused: --commit naming a name this repository lacks", ["--offline", "--commit", "no-such-commit"],
+         "--commit no-such-commit: names no commit in this repository"),
+        ("refused: --commit naming HEAD's tree, an object that is not a commit", ["--offline", "--commit", tree],
+         f"--commit {tree}: names no commit in this repository"),
+        ("taken: --commit naming HEAD by its sha, then stopped by --log naming a folder that holds a file",
+         ["--offline", "--commit", head, "--log", str(held)], f"--log {held}: not a new or empty folder"),
+        ("refused: --kit with no folder after it", ["--offline", "--kit"], "--kit needs a folder after it"),
+        ("refused: --kit without --offline", ["--ci", "--kit", str(shaped)], "--kit goes with --offline"),
+        ("refused: --kit with --commit", ["--offline", "--commit", head, "--kit", str(shaped)],
+         "--kit and --commit each name what --offline measures: give one"),
+        ("refused: --kit naming an empty folder", ["--offline", "--kit", str(empty)],
+         f"--kit {empty}: not an unpacked kit for {plat}: no CONTACT.txt naming a commit, no verify, "
+         f"no bin/{plat}/atx-verify, no fixtures/*.json, no verifiers/python/verify.py, "
+         "no verifiers/python/requirements.lock, no verifiers/python/wheels/*.whl" if plat else unplaced),
+        ("refused: --kit naming a folder with each file but a wheel", ["--offline", "--kit", str(wheelless)],
+         f"--kit {wheelless}: not an unpacked kit for {plat}: no verifiers/python/wheels/*.whl"
+         if plat else unplaced),
+        ("taken: --kit naming a folder holding each file the --kit cells read, then stopped by --log naming "
+         "a folder that holds a file", ["--offline", "--kit", str(shaped), "--log", str(held)],
+         f"--log {held}: not a new or empty folder" if plat else unplaced),
+    ]
+    # Each run makes its scratch folder at import; TMPDIR puts it in this
+    # cell's folder, which is removed with the rest.
+    env = dict(os.environ, TMPDIR=str(d), TEST_KIT_OPTIONS_RUN="1")
+    for i, (what, args, expect) in enumerate(cases, 1):
+        r = run([PY, "-I", Path(__file__).resolve(), *args], env=env)
+        first = r.stderr.split("\n", 1)[0]
+        cell(f"u{i} {what}: exit 2 before any cell runs, the reason first",
+             r.returncode == 2 and first == f"test_kit: {expect}" and not r.stdout,
+             f"exit {r.returncode}: {first[:160]}" + (f"; standard output {r.stdout[:80]!r}" if r.stdout else ""))
+
+
 # ---------------------------------------------------------- --sandboxed cells
 
 def write_stub(directory: Path, name: str, body: str) -> None:
@@ -1177,17 +1350,49 @@ printf '%s\trefs/tags/%s\n' "$STUB_COMMIT" "$STUB_TAG"
 '''
 
 
-def sandbox_setup() -> str | None:
-    """Builds the doubles and the sandbox; returns a reason when a guard fails."""
-    global SANDBOX_ENV, SANDBOX_PROFILE
-    if sys.platform != "darwin" or not Path("/usr/bin/sandbox-exec").exists():
+# Run by the s0 guard inside the sandbox, and outside it for the record.
+# Connecting a UDP socket sends no datagram. Inside, the connect fails:
+# sandbox-exec refuses it, and in a new network namespace the kernel finds no
+# route or no source address for it. It exits 1 when a socket connects to the
+# IPv4 or the IPv6 documentation address (RFC 5737, RFC 3849).
+UDP_PROBE = r'''import socket
+for family, host in ((socket.AF_INET, "192.0.2.1"), (socket.AF_INET6, "2001:db8::1")):
+    try:
+        with socket.socket(family, socket.SOCK_DGRAM) as s:
+            s.connect((host, 9))
+    except OSError:
+        continue
+    print(f"a UDP socket connected to {host}")
+    raise SystemExit(1)
+'''
+
+
+def sandbox_setup(offline_only: bool = False) -> str | None:
+    """Builds the doubles and the sandbox; returns a reason when a guard fails.
+    On macOS the sandbox is sandbox-exec with the profile below. On Linux,
+    for the --offline cells alone (offline_only; the --sandboxed cells run
+    macOS scripts), unshare runs each command in a new user and network
+    namespace of its own."""
+    global SANDBOX_ENV, SANDBOX_PREFIX, SANDBOX_NAME
+    if sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").exists():
+        real_home = os.environ.get("HOME", "")
+        if len(real_home) < 2:
+            return "HOME is not set"
+        SANDBOX_PREFIX = ["/usr/bin/sandbox-exec", "-p",
+                          "(version 1)(allow default)(deny network*)"
+                          f'(deny file-read* (subpath "{real_home}/.secretless-ai"))'
+                          '(deny process-exec (literal "/usr/bin/security"))']
+        SANDBOX_NAME = "sandbox-exec, (deny network*)"
+    elif sys.platform == "linux" and not offline_only:
+        return "--sandboxed needs sandbox-exec (macOS); on Linux, --offline runs without --sandboxed"
+    elif sys.platform == "linux":
+        unshare = shutil.which("unshare", path="/usr/bin:/bin")
+        if unshare is None:
+            return "unshare (util-linux) is not in /usr/bin or /bin"
+        SANDBOX_PREFIX = [unshare, "--user", "--net", "--"]
+        SANDBOX_NAME = "unshare --user --net"
+    else:
         return "sandbox-exec is not available on this machine"
-    real_home = os.environ.get("HOME", "")
-    if len(real_home) < 2:
-        return "HOME is not set"
-    SANDBOX_PROFILE = ("(version 1)(allow default)(deny network*)"
-                       f'(deny file-read* (subpath "{real_home}/.secretless-ai"))'
-                       '(deny process-exec (literal "/usr/bin/security"))')
     stubs = scratch("doubles")
     for name, body in (("gh", STUB_GH), ("diskutil", STUB_DISKUTIL), ("git", STUB_GIT)):
         write_stub(stubs, name, body)
@@ -1199,6 +1404,10 @@ def sandbox_setup() -> str | None:
         "HOME": str(home), "GH_CONFIG_DIR": str(home / "gh"), "LC_ALL": "C", "TMPDIR": str(scratch("tmp")),
         "KIT_PYTHON": "python3", "HARNESS_NO_LIVE_TRANSPORT": "1", "KIT_ATTEST_TRIES": "1",
     }
+    entry = run(["true"], sandboxed=True)
+    if entry.returncode != 0:
+        why = (entry.stderr or entry.stdout).strip().rsplit("\n", 1)[-1]
+        return f"the sandbox ({SANDBOX_NAME}) did not start a command: exit {entry.returncode}: {why[:160]}"
     guard = run(["bash", "-c",
                  '[ "${HARNESS_NO_LIVE_TRANSPORT:-}" = 1 ] || exit 3; '
                  'for t in gh git diskutil; do p=$(command -v "$t") || exit 4; '
@@ -1231,8 +1440,16 @@ def sandbox_setup() -> str | None:
         return "control: the loopback listener is not reachable outside the sandbox"
     if inside.returncode == 0:
         return "control: the loopback listener is reachable inside the sandbox, so its network is not denied"
-    cell("s0 guards: tripwire set, doubles resolve first in bash, 127.0.0.1 reachable outside and refused inside",
-         True, f"port {port}")
+    refusal = (inside.stderr.strip() or inside.stdout.strip()).rsplit("\n", 1)[-1][:100]
+    udp = run([PY, "-I", "-c", UDP_PROBE], sandboxed=True)
+    if udp.returncode != 0:
+        return f"control: inside the sandbox, {(udp.stdout.strip() or udp.stderr.strip())[-160:]}"
+    # Outside, the probe connects only where the machine has a route; its
+    # result is recorded, not required, so a machine off the network passes.
+    udp_outside = run([PY, "-I", "-c", UDP_PROBE]).stdout.strip() or "no UDP socket connects either"
+    cell("s0 guards: tripwire set, doubles resolve first in bash, 127.0.0.1 reachable outside and refused inside, "
+         "and no UDP socket connects to 192.0.2.1 or 2001:db8::1 inside", True,
+         f"port {port}, {SANDBOX_NAME}; inside, exit {inside.returncode}: {refusal}; outside, {udp_outside}")
     return None
 
 
@@ -1371,6 +1588,379 @@ def cells_stick() -> None:
          r.returncode != 0 and not any(vol.iterdir()), r.stderr.strip().split("\n")[-1][:110])
 
 
+# ------------------------------------------------------------ --offline cells
+
+# docs/network.md says running a reference verifier makes no network request.
+# These cells measure that on a copy of HEAD, or of the commit --commit names
+# (OFFLINE_SHA). The builds run outside the sandbox, where go build may fetch
+# modules and pip downloads the locked wheels. Each verifier then runs inside
+# the sandbox with the network denied (sandbox-exec on macOS, a new network
+# namespace on Linux), after the s0 control of the same run, and outside it
+# with the same arguments, folder and environment, so the sandbox is the only
+# difference.
+
+# A stand-in verifier for the refusal cells: it connects to 127.0.0.1:<port>,
+# then "needs" exits 1 when that fails, "extra" prints one more line when it
+# succeeds, and "plain" ignores the result. Unless it exits, it prints
+# <summary> last.
+STANDIN = r'''import socket, sys
+port, mode, summary = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+try:
+    socket.create_connection(("127.0.0.1", port), 3).close()
+    reached = True
+except OSError as exc:
+    reached = False
+    if mode == "needs":
+        sys.stderr.write(f"stand-in: no connection to 127.0.0.1:{port}: {exc}\n")
+        sys.exit(1)
+if reached and mode == "extra":
+    print("stand-in: connected to 127.0.0.1")
+print(summary)
+'''
+
+
+def shown(cmd: list, root: Path) -> str:
+    """cmd as the --log record shows it: a path in the copy of the commit
+    (root) relative to it, a path in the scratch folder under <scratch>."""
+    words = []
+    for c in cmd:
+        s = str(c)
+        for base, mark in ((root, "."), (SCRATCH, "<scratch>")):
+            if s.startswith(f"{base}{os.sep}"):
+                s = mark + "/" + s[len(str(base)) + 1:]
+                break
+        words.append(shlex.quote(s) if re.search(r"[\s'\"\\$`]", s) or not s else s)
+    return " ".join(words)
+
+
+def offline_problems(cmd: list, cwd: Path, expected: str, tag: str = "",
+                     same_as: Path | None = None) -> tuple[list[str], str]:
+    """Runs cmd outside the sandbox, then inside it with the network denied.
+    Returns what keeps the run from passing (inside: exit 0 and `expected`
+    as the last line of standard output; the same standard output both
+    ways, and as the file same_as when one is given) and a line recording
+    the run inside. With --log, the record gets the command, and the folder
+    each run's standard output and standard error, as
+    <tag>.<denied|allowed>.<stdout|stderr>."""
+    allowed = run(cmd, cwd=cwd, env=SANDBOX_ENV)
+    denied = run(cmd, cwd=cwd, sandboxed=True)
+    if LOG_DIR is not None and tag:
+        log_line(f"{tag} command: {shown(cmd, cwd)}")
+        for side, done in (("denied", denied), ("allowed", allowed)):
+            for stream in ("stdout", "stderr"):
+                with open(LOG_DIR / f"{tag}.{side}.{stream}", "w", encoding="utf-8", newline="") as f:
+                    f.write(getattr(done, stream))
+    last = denied.stdout.rstrip("\n").rsplit("\n", 1)[-1]
+    problems = []
+    if denied.returncode != 0:
+        why = (denied.stderr or denied.stdout).strip().rsplit("\n", 1)[-1]
+        problems.append(f"exit {denied.returncode} with the network denied: {why[:100]}")
+    if last != expected:
+        problems.append(f"last line with the network denied is {last[:70]!r}")
+    if denied.stdout != allowed.stdout:
+        problems.append("standard output differs from the same run with the network allowed")
+    record = (f"exit {denied.returncode} denied and {allowed.returncode} allowed, "
+              f"{len(denied.stdout.splitlines())} lines, sha256 "
+              f"{hashlib.sha256(denied.stdout.encode()).hexdigest()[:16]}, {last}")
+    if same_as is not None and denied.stdout.encode() != same_as.read_bytes():
+        problems.append(f"standard output with the network denied differs from {same_as.name}")
+    elif same_as is not None:
+        record += f"; with the network denied, the same as {same_as.name}"
+    return problems, record
+
+
+def offline_build(root: Path) -> tuple[dict[str, Path], str]:
+    """Builds the reference verifiers from the copy of the commit at root,
+    outside the sandbox, and puts the kit's launcher at root/verify and the
+    binary it runs at root/bin/<os>-<arch>/atx-verify, where the kit has them.
+    Returns the paths keyed atx, gover and python, and what was built; or
+    no paths and the step that failed."""
+    if shutil.which("go") is None:
+        return {}, "go is not on PATH"
+    plat = run(["go", "env", "GOOS", "GOARCH", "GOVERSION"], cwd=root)
+    values = plat.stdout.splitlines()
+    if plat.returncode != 0 or len(values) != 3:
+        return {}, f"go env GOOS GOARCH GOVERSION: {(plat.stderr or plat.stdout).strip()[-120:]}"
+    goos, goarch, goversion = values
+    atx = root / "bin" / f"{goos}-{goarch}" / "atx-verify"
+    gover = scratch("o-bin") / "go-verifier"
+    benv = dict(os.environ, CGO_ENABLED="0")
+    for out, pkg in ((atx, "./cmd/atx-verify"), (gover, "./verifiers/go")):
+        r = run(["go", "build", "-trimpath", "-o", out, pkg], cwd=root, env=benv)
+        if r.returncode != 0:
+            return {}, f"go build {pkg}: {r.stderr.strip()[-120:]}"
+    shutil.copy(root / "scripts" / "kit" / "launchers" / "verify", root / "verify")
+    venv = SCRATCH / "o-venv"
+    wheels = scratch("o-wheels")
+    vpy = venv / "bin" / "python"
+    lock = "verifiers/python/requirements.lock"
+    quiet = ["--disable-pip-version-check", "--quiet"]
+    # The download fetches this interpreter's wheels of each pin; the install
+    # is PYTHON.md's, with the folder the download wrote.
+    for step in ([PY, "-I", "-m", "venv", venv],
+                 [vpy, "-I", "-m", "pip", "download", *quiet, "--only-binary=:all:", "--require-hashes",
+                  "-r", lock, "--dest", wheels],
+                 [vpy, "-m", "pip", "install", *quiet, "--no-index", "--find-links", wheels,
+                  "--only-binary=:all:", "--require-hashes", "-r", lock]):
+        r = run(step, cwd=root)
+        if r.returncode != 0:
+            return {}, f"{' '.join(str(s) for s in step[:5])}: {r.stderr.strip()[-120:]}"
+    wheel_names = sorted(p.name.split("-")[0] for p in wheels.glob("*.whl"))
+    pyver = run([vpy, "-I", "-c", "import sys; print(sys.version.split()[0])"]).stdout.strip()
+    return ({"atx": atx, "gover": gover, "python": vpy},
+            f"{goversion} {goos}/{goarch}, CPython {pyver}, wheels {' '.join(wheel_names)}")
+
+
+# --kit KIT runs the files of an unpacked kit instead: its prebuilt
+# atx-verify for this machine, its launcher, and the Python verifier from
+# its wheels, so the measurement needs neither git nor Go.
+
+def kit_platform() -> str | None:
+    """This machine as the kit's ./verify launcher names it from uname,
+    <os>-<arch>, or None on a system or machine the launcher refuses."""
+    system = {"Darwin": "darwin", "Linux": "linux"}.get(platform.system())
+    arch = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "amd64", "amd64": "amd64"}.get(platform.machine())
+    return f"{system}-{arch}" if system and arch else None
+
+
+def kit_commit(kit: Path) -> str:
+    """The commit the kit's CONTACT.txt names ("built from atx-conformance
+    commit <sha>."), or "" when it names none, or more than one."""
+    contact = kit / "CONTACT.txt"
+    text = contact.read_text(encoding="utf-8", errors="replace") if contact.is_file() else ""
+    named = set(re.findall(r"\bcommit\s+([0-9a-f]{40})\b", text))
+    return named.pop() if len(named) == 1 else ""
+
+
+def kit_lacks(kit: Path, plat: str) -> list[str]:
+    """What the folder lacks of the files the --kit cells read on plat."""
+    lacks = [] if kit_commit(kit) else ["CONTACT.txt naming a commit"]
+    lacks += [name for name in ("verify", f"bin/{plat}/atx-verify") if not (kit / name).is_file()]
+    if not any((kit / "fixtures").glob("*.json")):
+        lacks.append("fixtures/*.json")
+    lacks += [name for name in ("verifiers/python/verify.py", "verifiers/python/requirements.lock")
+              if not (kit / name).is_file()]
+    if not any((kit / "verifiers" / "python" / "wheels").glob("*.whl")):
+        lacks.append("verifiers/python/wheels/*.whl")
+    return lacks
+
+
+def kit_refusal(kit: str, modes: set[str], commit: str | None) -> str:
+    """Why main() refuses --kit KIT, or "" when it takes it."""
+    if not kit:
+        return "--kit needs a folder after it"
+    if "--offline" not in modes:
+        return "--kit goes with --offline"
+    if commit is not None:
+        return "--kit and --commit each name what --offline measures: give one"
+    plat = kit_platform()
+    if plat is None:
+        return (f"--kit: the kit's ./verify runs on macOS and Linux, on arm64 and amd64, not on "
+                f"{platform.system()} {platform.machine()}")
+    lacks = kit_lacks(Path(kit).absolute(), plat)
+    return f"--kit {kit}: not an unpacked kit for {plat}: no {', no '.join(lacks)}" if lacks else ""
+
+
+def kit_install(kit: Path, plat: str) -> tuple[dict[str, Path], str]:
+    """Installs the Python verifier from the kit's wheels into a scratch
+    venv, inside the sandbox, with the options of the kit's PYTHON.md.
+    Returns the venv's python keyed python, and what was installed with the
+    sha256 of the kit's atx-verify for plat; or no path and the step that
+    failed."""
+    venv = SCRATCH / "o-venv"
+    vpy = venv / "bin" / "python"
+    for step in ([PY, "-I", "-m", "venv", venv],
+                 [vpy, "-m", "pip", "install", "--disable-pip-version-check", "--quiet", "--no-index",
+                  "--find-links", "verifiers/python/wheels", "--only-binary=:all:", "--require-hashes",
+                  "-r", "verifiers/python/requirements.lock"]):
+        r = run(step, cwd=kit, sandboxed=True)
+        if r.returncode != 0:
+            return {}, f"{shown(step[:6], kit)}: exit {r.returncode}: {(r.stderr or r.stdout).strip()[-120:]}"
+    pyver = run([vpy, "-I", "-c", "import sys; print(sys.version.split()[0])"], sandboxed=True).stdout.strip()
+    installed = run([vpy, "-m", "pip", "freeze", "--disable-pip-version-check"], cwd=kit, sandboxed=True)
+    binary = kit / "bin" / plat / "atx-verify"
+    return ({"python": vpy}, f"CPython {pyver}, {' '.join(installed.stdout.split())}; bin/{plat}/atx-verify sha256 "
+            f"{hashlib.sha256(binary.read_bytes()).hexdigest()}")
+
+
+def cells_offline() -> None:
+    if OFFLINE_KIT is not None:
+        root, plat = OFFLINE_KIT, kit_platform()
+        built, detail = kit_install(root, plat)
+        cell(f"o1 installed inside the sandbox, for {plat}: the Python verifier from the kit's wheels, with the "
+             "options of the kit's PYTHON.md", bool(built), detail)
+        capture = root / "captures" / f"{plat}.txt"
+        runs = [
+            (f"the kit's atx-verify for {plat} over its embedded fixtures", root / "bin" / plat / "atx-verify", [],
+             None),
+            (f"the kit's atx-verify for {plat} over fixtures/", root / "bin" / plat / "atx-verify", ["fixtures"],
+             None),
+            ("the kit's ./verify launcher", root / "verify", [], capture if capture.is_file() else None),
+            ("the Python verifier over fixtures/, installed from the kit's wheels", built.get("python"),
+             ["verifiers/python/verify.py", "fixtures"], None),
+        ]
+        not_run = "not run: the install failed"
+    else:
+        root = scratch("o-head")
+        tree_into(root, rev=OFFLINE_SHA)
+        built, detail = offline_build(root)
+        cell(f"o1 built from {OFFLINE_REV} outside the sandbox: atx-verify and the Go verifier with go build, "
+             "the Python verifier from the locked wheels", bool(built), detail)
+        runs = [
+            ("atx-verify over its embedded fixtures", built.get("atx"), [], None),
+            ("atx-verify over fixtures/", built.get("atx"), ["fixtures"], None),
+            ("the kit's ./verify launcher", root / "verify" if built else None, [], None),
+            ("the Go verifier (verifiers/go) over fixtures/", built.get("gover"), ["fixtures"], None),
+            ("the Python verifier over fixtures/, installed from the locked wheels", built.get("python"),
+             ["verifiers/python/verify.py", "fixtures"], None),
+        ]
+        not_run = "not run: a build failed"
+    n = len(list((root / "fixtures").glob("*.json")))
+    expected = f"summary: {n} pass, 0 fail ({n} fixtures)"
+    for i, (name, program, args, same_as) in enumerate(runs, start=2):
+        what = (f"o{i} {name}: with the network denied, exit 0, the summary of every fixture passing last, "
+                "and the same output as with the network allowed"
+                + (f" and as the kit's {same_as.relative_to(root).as_posix()}" if same_as else ""))
+        if program is None:
+            cell(what, False, not_run)
+            continue
+        problems, record = offline_problems([program, *args], root, expected, f"o{i}", same_as)
+        cell(what, not problems, "; ".join(problems) or record)
+    standin = scratch("o-standin") / "standin.py"
+    standin.write_text(STANDIN)
+    failing = f"summary: {n - 1} pass, 1 fail ({n} fixtures)"
+    cases = [
+        ("needs", expected, "a stand-in verifier that exits 1 when it cannot connect to 127.0.0.1",
+         lambda ps: any(p.startswith("exit 1 with the network denied") for p in ps)),
+        ("extra", expected, "a stand-in verifier that prints one more line when it can connect, "
+         "and exits 0 with the summary last both ways", lambda ps: len(ps) == 1 and "differs" in ps[0]),
+        ("plain", failing, "a stand-in verifier that needs no connection and prints a summary with a failure",
+         lambda ps: len(ps) == 1 and ps[0].startswith("last line")),
+    ]
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    stop = threading.Event()
+
+    def serve():
+        listener.settimeout(0.5)
+        while not stop.is_set():
+            try:
+                conn, _ = listener.accept()
+                conn.close()
+            except OSError:
+                pass
+
+    try:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(8)
+        port = listener.getsockname()[1]
+        threading.Thread(target=serve, daemon=True).start()
+        for i, (mode, summary, what, refused) in enumerate(cases, start=2 + len(runs)):
+            problems, _ = offline_problems([PY, "-I", standin, str(port), mode, summary], root, expected,
+                                           f"o{i}")
+            cell(f"o{i} refused: {what}", refused(problems), "; ".join(problems)[:150] or "no problem found")
+    finally:
+        stop.set()
+        listener.close()
+    if LOG_DIR is not None:
+        cells_offline_log(2 + len(runs) + len(cases))
+
+
+# A cell line of the record that names a run's output with the network
+# denied: its verdict, its cell, and the line count and sha256 it records.
+RECORDED = re.compile(r"(PASS|FAIL)  (o\d+) .*\(exit -?\d+ denied and -?\d+ allowed, (\d+) lines, "
+                      r"sha256 ([0-9a-f]{16}), ")
+COMMANDED = re.compile(r"(o\d+) command: ")
+
+
+def offline_log_problems(log: Path, sha: str) -> list[str]:
+    """What keeps the --log folder from being the record of a run of the
+    commit sha: the record names that commit and holds a passing s0 control
+    line before the first run; each run it gives a command for has its four
+    files; and each run's standard output with the network denied has the
+    line count and sha256 its cell line records, and the same bytes as with
+    the network allowed when the cell passed."""
+    record = log / LOG_NAME
+    if not record.is_file():
+        return [f"no {LOG_NAME} in the folder"]
+    lines = record.read_text(encoding="utf-8").splitlines()
+    problems = []
+    named = [line.split()[1] for line in lines if line.startswith("commit ") and len(line.split()) > 1]
+    if named != [sha]:
+        problems.append(f"the record names commit {', '.join(named) or 'none'}, not {sha}")
+    first = next((i for i, line in enumerate(lines) if COMMANDED.match(line)), len(lines))
+    if not any(line.startswith("PASS  s0 guards") for line in lines[:first]):
+        problems.append("no passing s0 control line before the first run")
+    runs = [m[1] for m in map(COMMANDED.match, lines) if m]
+    for tag in runs:
+        problems += [f"{tag}: no {name}" for name in (f"{tag}.{side}.{stream}" for side in ("denied", "allowed")
+                                                      for stream in ("stdout", "stderr"))
+                     if not (log / name).is_file()]
+    for m in map(RECORDED.match, lines):
+        if not m:
+            continue
+        verdict, tag, count, digest = m.groups()
+        denied, allowed = log / f"{tag}.denied.stdout", log / f"{tag}.allowed.stdout"
+        if tag not in runs:
+            problems.append(f"{tag}: its line records an output, and the record gives no {tag} command")
+        if not denied.is_file():
+            continue
+        data = denied.read_bytes()
+        got = (len(data.decode("utf-8", errors="replace").splitlines()), hashlib.sha256(data).hexdigest()[:16])
+        if got != (int(count), digest):
+            problems.append(f"{denied.name} has {got[0]} lines, sha256 {got[1]}; its line records {count} lines, "
+                            f"sha256 {digest}")
+        if verdict == "PASS" and allowed.is_file() and allowed.read_bytes() != data:
+            problems.append(f"{tag} passed, and {denied.name} and {allowed.name} differ")
+    return problems
+
+
+def cells_offline_log(first: int) -> None:
+    """Reads the --log folder back, then four altered copies of it; each
+    copy must be refused for what was altered."""
+    sha = OFFLINE_SHA
+    problems = offline_log_problems(LOG_DIR, sha)
+    text = (LOG_DIR / LOG_NAME).read_text(encoding="utf-8") if (LOG_DIR / LOG_NAME).is_file() else ""
+    lines = text.splitlines()
+    hashed = [m[2] for m in map(RECORDED.match, lines) if m]
+    commanded = [m[1] for m in map(COMMANDED.match, lines) if m]
+    cell(f"o{first} the --log folder names commit {OFFLINE_REV}, holds the passing s0 control line before the "
+         "first run, and each run's four output files, each standard output with the network denied matching "
+         "the line count and sha256 its cell line records", not problems,
+         "; ".join(problems)[:200] or f"{len(commanded)} runs with their four files, {len(hashed)} outputs "
+         f"matching their lines, commit {sha[:12]}")
+
+    def without_s0(d: Path) -> None:
+        kept = [line for line in lines if not line.startswith("PASS  s0 guards")]
+        (d / LOG_NAME).write_text("".join(f"{line}\n" for line in kept), encoding="utf-8")
+
+    def longer(d: Path) -> None:
+        with open(d / f"{hashed[0]}.denied.stdout", "a", encoding="utf-8") as f:
+            f.write("one more line\n")
+
+    def other_commit(d: Path) -> None:
+        other = ("e" if sha[0] == "f" else "f") + sha[1:]
+        (d / LOG_NAME).write_text(text.replace(f"commit {sha}", f"commit {other}"), encoding="utf-8")
+
+    mutants = [
+        ("without the s0 line", without_s0, "no passing s0 control line before the first run"),
+        (f"with {hashed[0]}.denied.stdout one line longer" if hashed else "with a run's output one line longer",
+         longer if hashed else None, f"{hashed[0]}.denied.stdout has" if hashed else ""),
+        (f"without {commanded[0]}.allowed.stdout" if commanded else "without a run's output",
+         (lambda d: (d / f"{commanded[0]}.allowed.stdout").unlink()) if commanded else None,
+         f"{commanded[0]}: no {commanded[0]}.allowed.stdout" if commanded else ""),
+        ("naming another commit", other_commit, f"not {sha}"),
+    ]
+    for i, (what, edit, expect) in enumerate(mutants, first + 1):
+        if edit is None or not text:
+            cell(f"o{i} refused: the --log folder {what}", False, "the record holds nothing to alter")
+            continue
+        copy = SCRATCH / f"o-log-{i}"
+        shutil.copytree(LOG_DIR, copy)
+        edit(copy)
+        got = offline_log_problems(copy, sha)
+        cell(f"o{i} refused: the --log folder {what}", any(expect in p for p in got), "; ".join(got)[:200])
+
+
 # --------------------------------------------------------------- --slow cell
 
 def cell_reproducible() -> None:
@@ -1398,11 +1988,86 @@ def cell_reproducible() -> None:
          f"{hashlib.sha256(a).hexdigest() if a else 'none'}")
 
 
+def option_value(argv: list[str], name: str) -> str | None:
+    """Takes name and the word after it out of argv, and returns that word:
+    "" when no word follows name or the next word starts with -, and None
+    when argv does not hold name."""
+    if name not in argv:
+        return None
+    at = argv.index(name)
+    value = argv[at + 1] if at + 1 < len(argv) and not argv[at + 1].startswith("-") else ""
+    del argv[at:at + 1 + bool(value)]
+    return value
+
+
+def checks_line() -> str:
+    """The record's line naming where this file's checks come from: the
+    commit of the repository it is in, or its sha256 when git names no
+    commit for it here (an unpacked kit, or no git)."""
+    me = Path(__file__).resolve()
+    rel = me.relative_to(REPO).as_posix()
+    try:
+        top, head = git("rev-parse", "--show-toplevel"), git("rev-parse", "HEAD")
+    except (OSError, subprocess.CalledProcessError):
+        top = head = ""
+    if not top or Path(top).resolve() != REPO:
+        digest = hashlib.sha256(me.read_bytes()).hexdigest()
+        return f"checks from {rel}, sha256 {digest} (git names no commit of it here)"
+    # The checks are this file's, which a --commit run takes from another
+    # commit than the one it copies.
+    diff = subprocess.run(["git", "-C", str(REPO), "diff", "--quiet", "HEAD", "--", rel]).returncode
+    return (f"checks from {rel} at commit {head}"
+            + {0: "", 1: " (with changes not committed)"}.get(diff, f" (git diff exit {diff})"))
+
+
 def main(argv: list[str]) -> int:
+    global LOG_DIR, OFFLINE_REV, OFFLINE_SHA, OFFLINE_KIT
+    argv = list(argv)
+    log = option_value(argv, "--log")
+    commit = option_value(argv, "--commit")
+    kit = option_value(argv, "--kit")
     modes = set(argv)
-    if not modes or not modes <= {"--ci", "--sandboxed", "--slow"}:
+    if not modes or not modes <= {"--ci", "--sandboxed", "--offline", "--slow"}:
         print(__doc__, file=sys.stderr)
         return 2
+    why = ""
+    if commit is not None:
+        OFFLINE_REV = commit
+        why = ("--commit needs a commit after it" if not commit else
+               "--commit goes with --offline" if "--offline" not in modes else "")
+    if not why and kit is not None:
+        why = kit_refusal(kit, modes, commit)
+        if not why:
+            OFFLINE_KIT = Path(kit).absolute()
+            OFFLINE_SHA = kit_commit(OFFLINE_KIT)
+            OFFLINE_REV = OFFLINE_SHA[:12]
+    if not why and "--offline" in modes and OFFLINE_KIT is None:
+        OFFLINE_SHA = commit_of(OFFLINE_REV)
+        if not OFFLINE_SHA:
+            why = f"{'--commit ' if commit else ''}{OFFLINE_REV}: names no commit in this repository"
+    if not why and log is not None:
+        folder = Path(log).absolute()
+        why = ("--log needs a folder after it" if not log else
+               "--log goes with --offline" if "--offline" not in modes else
+               f"--log {log}: not a new or empty folder"
+               if folder.exists() and (not folder.is_dir() or any(folder.iterdir())) else "")
+    if why:
+        print(f"test_kit: {why}", file=sys.stderr)
+        print(__doc__, file=sys.stderr)
+        return 2
+    if log is not None:
+        folder.mkdir(parents=True, exist_ok=True)
+        LOG_DIR = folder
+        started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        log_line(f"test_kit.py {' '.join(sorted(modes))}, started {started}")
+        if OFFLINE_KIT is not None:
+            log_line(f"commit {OFFLINE_SHA} (named by the CONTACT.txt of the kit in {OFFLINE_KIT}; the runs are of "
+                     "the kit's own files)")
+        else:
+            log_line(f"commit {OFFLINE_SHA} ({OFFLINE_REV}; the copy is made with git archive: changes not "
+                     "committed are not in it)")
+        log_line(checks_line())
+        log_line(f"system {platform.platform()}, Python {platform.python_version()}")
     try:
         if "--ci" in modes:
             cells_pins()
@@ -1416,21 +2081,28 @@ def main(argv: list[str]) -> int:
             cells_claims()
             cells_capture_in_the_unpacked_kit()
             cells_version_under_tags()
-        if "--sandboxed" in modes:
-            reason = sandbox_setup()
+            cells_options()
+        if modes & {"--sandboxed", "--offline"}:
+            reason = sandbox_setup(offline_only="--sandboxed" not in modes)
             if reason:
                 cell("s0 guards", False, reason)
                 print("test_kit: a guard did not hold; no sandboxed cell ran", file=sys.stderr)
+                log_line("test_kit: a guard did not hold; no sandboxed cell ran")
             else:
-                cells_verify_release()
-                cells_candidate()
-                cells_stick()
+                if "--sandboxed" in modes:
+                    cells_verify_release()
+                    cells_candidate()
+                    cells_stick()
+                if "--offline" in modes:
+                    cells_offline()
         if "--slow" in modes:
             cell_reproducible()
     finally:
         shutil.rmtree(SCRATCH, ignore_errors=True)
     failed = [n for n, ok, _ in RESULTS if not ok]
-    print(f"test_kit: {len(RESULTS) - len(failed)} of {len(RESULTS)} cells passed")
+    summary = f"test_kit: {len(RESULTS) - len(failed)} of {len(RESULTS)} cells passed"
+    print(summary)
+    log_line(summary)
     return 1 if failed else 0
 
 
