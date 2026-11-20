@@ -20,7 +20,11 @@ check fail.
       each case: with no REV, without --offline, or with a REV that names
       no commit here (a name this repository lacks, HEAD's tree), the run
       exits 2 and names the reason before any cell runs, and HEAD's sha
-      gets past those checks.
+      gets past those checks. --kit the same way: with no KIT, without
+      --offline, with --commit, or naming an empty folder or a folder with
+      each file the --kit cells read but a wheel, the run exits 2 and names
+      the reason, and a folder holding each of those files gets past those
+      checks.
   test_kit.py --sandboxed
       Cells that run the scripts naming gh (candidate_equal.sh,
       verify_release.sh, write_stick.sh) with test doubles for gh, git and
@@ -74,6 +78,21 @@ check fail.
       checks are this file's. With --log DIR, DIR/offline.log names that
       commit. Without --offline, with no REV, or with a REV that names no
       commit here, it exits 2 before any cell runs and names the reason.
+  test_kit.py --offline --kit KIT
+      As --offline, with the --offline cells on the files of the unpacked
+      interop day kit in the folder KIT instead of a copy of a commit:
+      nothing is built, and neither git nor Go is needed. Inside the
+      sandbox, pip installs the Python verifier from the kit's wheels into
+      a scratch venv, with the options of the kit's PYTHON.md. Then the
+      kit's atx-verify for this machine over its embedded fixtures and over
+      fixtures/, the kit's ./verify launcher and the Python verifier each
+      run inside the sandbox and outside it, as above; with the network
+      denied, ./verify must also print the kit's captures/<os>-<arch>.txt
+      for this machine, when the kit holds one. The kit is read, not
+      changed. With --log DIR, DIR/offline.log names the commit the kit's
+      CONTACT.txt names. Without --offline, with no KIT, with --commit, or
+      naming a folder that lacks a file these cells read, it exits 2 before
+      any cell runs and names the reason.
   test_kit.py --slow
       Two full assemblies of HEAD, from two clones with their own Go and pip
       caches, must write byte-equal SHA256SUMS (network: Go modules and the
@@ -118,9 +137,12 @@ LOG_DIR: Path | None = None
 LOG_NAME = "offline.log"
 # The commit the --offline cells copy, build and run: as it was named (HEAD,
 # or the REV of --commit REV) and the full sha main() resolved it to before
-# any cell ran.
+# any cell ran. With --kit KIT, the commit the kit's CONTACT.txt names.
 OFFLINE_REV = "HEAD"
 OFFLINE_SHA = ""
+# --kit KIT: the unpacked kit whose files the --offline cells run, in place
+# of a copy of a commit (main() sets it).
+OFFLINE_KIT: Path | None = None
 
 
 def cell(name: str, ok: bool, detail: str = "") -> None:
@@ -1222,9 +1244,10 @@ def cells_version_under_tags() -> None:
 
 
 def cells_options() -> None:
-    """--commit as main() reads it, each case in a fresh run of this file: a
-    misuse exits 2 before any cell runs, with the reason as the first line of
-    standard error. HEAD's sha gets past the --commit checks to the --log
+    """--commit and --kit as main() reads them, each case in a fresh run of
+    this file: a misuse exits 2 before any cell runs, with the reason as the
+    first line of standard error. HEAD's sha, and a folder holding each file
+    the --kit cells read, get past the --commit and --kit checks to the --log
     check, which a folder holding a file stops, so no cell runs there
     either."""
     # A run this cell starts that got past main()'s checks with --ci would
@@ -1238,6 +1261,21 @@ def cells_options() -> None:
     held.mkdir()
     (held / "a-file").write_text("")
     head, tree = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
+    empty = d / "empty"
+    empty.mkdir()
+    # A folder holding each file the --kit cells read, none of them working.
+    plat = kit_platform()
+    shaped = d / "shaped"
+    for name in ("verify", f"bin/{plat}/atx-verify", "fixtures/a.json", "verifiers/python/verify.py",
+                 "verifiers/python/requirements.lock", "verifiers/python/wheels/a-1-py3-none-any.whl"):
+        (shaped / name).parent.mkdir(parents=True, exist_ok=True)
+        (shaped / name).write_text("")
+    (shaped / "CONTACT.txt").write_text(f"built from atx-conformance commit {head}.\n")
+    wheelless = d / "wheelless"
+    shutil.copytree(shaped, wheelless)
+    (wheelless / "verifiers/python/wheels/a-1-py3-none-any.whl").unlink()
+    unplaced = (f"--kit: the kit's ./verify runs on macOS and Linux, on arm64 and amd64, not on "
+                f"{platform.system()} {platform.machine()}")
     cases = [
         ("refused: --commit with no commit after it", ["--offline", "--commit"],
          "--commit needs a commit after it"),
@@ -1248,6 +1286,20 @@ def cells_options() -> None:
          f"--commit {tree}: names no commit in this repository"),
         ("taken: --commit naming HEAD by its sha, then stopped by --log naming a folder that holds a file",
          ["--offline", "--commit", head, "--log", str(held)], f"--log {held}: not a new or empty folder"),
+        ("refused: --kit with no folder after it", ["--offline", "--kit"], "--kit needs a folder after it"),
+        ("refused: --kit without --offline", ["--ci", "--kit", str(shaped)], "--kit goes with --offline"),
+        ("refused: --kit with --commit", ["--offline", "--commit", head, "--kit", str(shaped)],
+         "--kit and --commit each name what --offline measures: give one"),
+        ("refused: --kit naming an empty folder", ["--offline", "--kit", str(empty)],
+         f"--kit {empty}: not an unpacked kit for {plat}: no CONTACT.txt naming a commit, no verify, "
+         f"no bin/{plat}/atx-verify, no fixtures/*.json, no verifiers/python/verify.py, "
+         "no verifiers/python/requirements.lock, no verifiers/python/wheels/*.whl" if plat else unplaced),
+        ("refused: --kit naming a folder with each file but a wheel", ["--offline", "--kit", str(wheelless)],
+         f"--kit {wheelless}: not an unpacked kit for {plat}: no verifiers/python/wheels/*.whl"
+         if plat else unplaced),
+        ("taken: --kit naming a folder holding each file the --kit cells read, then stopped by --log naming "
+         "a folder that holds a file", ["--offline", "--kit", str(shaped), "--log", str(held)],
+         f"--log {held}: not a new or empty folder" if plat else unplaced),
     ]
     # Each run makes its scratch folder at import; TMPDIR puts it in this
     # cell's folder, which is removed with the rest.
@@ -1581,13 +1633,15 @@ def shown(cmd: list, root: Path) -> str:
     return " ".join(words)
 
 
-def offline_problems(cmd: list, cwd: Path, expected: str, tag: str = "") -> tuple[list[str], str]:
+def offline_problems(cmd: list, cwd: Path, expected: str, tag: str = "",
+                     same_as: Path | None = None) -> tuple[list[str], str]:
     """Runs cmd outside the sandbox, then inside it with the network denied.
     Returns what keeps the run from passing (inside: exit 0 and `expected`
     as the last line of standard output; the same standard output both
-    ways) and a line recording the run inside. With --log, the record gets
-    the command, and the folder each run's standard output and standard
-    error, as <tag>.<denied|allowed>.<stdout|stderr>."""
+    ways, and as the file same_as when one is given) and a line recording
+    the run inside. With --log, the record gets the command, and the folder
+    each run's standard output and standard error, as
+    <tag>.<denied|allowed>.<stdout|stderr>."""
     allowed = run(cmd, cwd=cwd, env=SANDBOX_ENV)
     denied = run(cmd, cwd=cwd, sandboxed=True)
     if LOG_DIR is not None and tag:
@@ -1608,6 +1662,10 @@ def offline_problems(cmd: list, cwd: Path, expected: str, tag: str = "") -> tupl
     record = (f"exit {denied.returncode} denied and {allowed.returncode} allowed, "
               f"{len(denied.stdout.splitlines())} lines, sha256 "
               f"{hashlib.sha256(denied.stdout.encode()).hexdigest()[:16]}, {last}")
+    if same_as is not None and denied.stdout.encode() != same_as.read_bytes():
+        problems.append(f"standard output with the network denied differs from {same_as.name}")
+    elif same_as is not None:
+        record += f"; with the network denied, the same as {same_as.name}"
     return problems, record
 
 
@@ -1653,29 +1711,120 @@ def offline_build(root: Path) -> tuple[dict[str, Path], str]:
             f"{goversion} {goos}/{goarch}, CPython {pyver}, wheels {' '.join(wheel_names)}")
 
 
+# --kit KIT runs the files of an unpacked kit instead: its prebuilt
+# atx-verify for this machine, its launcher, and the Python verifier from
+# its wheels, so the measurement needs neither git nor Go.
+
+def kit_platform() -> str | None:
+    """This machine as the kit's ./verify launcher names it from uname,
+    <os>-<arch>, or None on a system or machine the launcher refuses."""
+    system = {"Darwin": "darwin", "Linux": "linux"}.get(platform.system())
+    arch = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "amd64", "amd64": "amd64"}.get(platform.machine())
+    return f"{system}-{arch}" if system and arch else None
+
+
+def kit_commit(kit: Path) -> str:
+    """The commit the kit's CONTACT.txt names ("built from atx-conformance
+    commit <sha>."), or "" when it names none, or more than one."""
+    contact = kit / "CONTACT.txt"
+    text = contact.read_text(encoding="utf-8", errors="replace") if contact.is_file() else ""
+    named = set(re.findall(r"\bcommit\s+([0-9a-f]{40})\b", text))
+    return named.pop() if len(named) == 1 else ""
+
+
+def kit_lacks(kit: Path, plat: str) -> list[str]:
+    """What the folder lacks of the files the --kit cells read on plat."""
+    lacks = [] if kit_commit(kit) else ["CONTACT.txt naming a commit"]
+    lacks += [name for name in ("verify", f"bin/{plat}/atx-verify") if not (kit / name).is_file()]
+    if not any((kit / "fixtures").glob("*.json")):
+        lacks.append("fixtures/*.json")
+    lacks += [name for name in ("verifiers/python/verify.py", "verifiers/python/requirements.lock")
+              if not (kit / name).is_file()]
+    if not any((kit / "verifiers" / "python" / "wheels").glob("*.whl")):
+        lacks.append("verifiers/python/wheels/*.whl")
+    return lacks
+
+
+def kit_refusal(kit: str, modes: set[str], commit: str | None) -> str:
+    """Why main() refuses --kit KIT, or "" when it takes it."""
+    if not kit:
+        return "--kit needs a folder after it"
+    if "--offline" not in modes:
+        return "--kit goes with --offline"
+    if commit is not None:
+        return "--kit and --commit each name what --offline measures: give one"
+    plat = kit_platform()
+    if plat is None:
+        return (f"--kit: the kit's ./verify runs on macOS and Linux, on arm64 and amd64, not on "
+                f"{platform.system()} {platform.machine()}")
+    lacks = kit_lacks(Path(kit).absolute(), plat)
+    return f"--kit {kit}: not an unpacked kit for {plat}: no {', no '.join(lacks)}" if lacks else ""
+
+
+def kit_install(kit: Path, plat: str) -> tuple[dict[str, Path], str]:
+    """Installs the Python verifier from the kit's wheels into a scratch
+    venv, inside the sandbox, with the options of the kit's PYTHON.md.
+    Returns the venv's python keyed python, and what was installed with the
+    sha256 of the kit's atx-verify for plat; or no path and the step that
+    failed."""
+    venv = SCRATCH / "o-venv"
+    vpy = venv / "bin" / "python"
+    for step in ([PY, "-I", "-m", "venv", venv],
+                 [vpy, "-m", "pip", "install", "--disable-pip-version-check", "--quiet", "--no-index",
+                  "--find-links", "verifiers/python/wheels", "--only-binary=:all:", "--require-hashes",
+                  "-r", "verifiers/python/requirements.lock"]):
+        r = run(step, cwd=kit, sandboxed=True)
+        if r.returncode != 0:
+            return {}, f"{shown(step[:6], kit)}: exit {r.returncode}: {(r.stderr or r.stdout).strip()[-120:]}"
+    pyver = run([vpy, "-I", "-c", "import sys; print(sys.version.split()[0])"], sandboxed=True).stdout.strip()
+    installed = run([vpy, "-m", "pip", "freeze", "--disable-pip-version-check"], cwd=kit, sandboxed=True)
+    binary = kit / "bin" / plat / "atx-verify"
+    return ({"python": vpy}, f"CPython {pyver}, {' '.join(installed.stdout.split())}; bin/{plat}/atx-verify sha256 "
+            f"{hashlib.sha256(binary.read_bytes()).hexdigest()}")
+
+
 def cells_offline() -> None:
-    root = scratch("o-head")
-    tree_into(root, rev=OFFLINE_SHA)
+    if OFFLINE_KIT is not None:
+        root, plat = OFFLINE_KIT, kit_platform()
+        built, detail = kit_install(root, plat)
+        cell(f"o1 installed inside the sandbox, for {plat}: the Python verifier from the kit's wheels, with the "
+             "options of the kit's PYTHON.md", bool(built), detail)
+        capture = root / "captures" / f"{plat}.txt"
+        runs = [
+            (f"the kit's atx-verify for {plat} over its embedded fixtures", root / "bin" / plat / "atx-verify", [],
+             None),
+            (f"the kit's atx-verify for {plat} over fixtures/", root / "bin" / plat / "atx-verify", ["fixtures"],
+             None),
+            ("the kit's ./verify launcher", root / "verify", [], capture if capture.is_file() else None),
+            ("the Python verifier over fixtures/, installed from the kit's wheels", built.get("python"),
+             ["verifiers/python/verify.py", "fixtures"], None),
+        ]
+        not_run = "not run: the install failed"
+    else:
+        root = scratch("o-head")
+        tree_into(root, rev=OFFLINE_SHA)
+        built, detail = offline_build(root)
+        cell(f"o1 built from {OFFLINE_REV} outside the sandbox: atx-verify and the Go verifier with go build, "
+             "the Python verifier from the locked wheels", bool(built), detail)
+        runs = [
+            ("atx-verify over its embedded fixtures", built.get("atx"), [], None),
+            ("atx-verify over fixtures/", built.get("atx"), ["fixtures"], None),
+            ("the kit's ./verify launcher", root / "verify" if built else None, [], None),
+            ("the Go verifier (verifiers/go) over fixtures/", built.get("gover"), ["fixtures"], None),
+            ("the Python verifier over fixtures/, installed from the locked wheels", built.get("python"),
+             ["verifiers/python/verify.py", "fixtures"], None),
+        ]
+        not_run = "not run: a build failed"
     n = len(list((root / "fixtures").glob("*.json")))
     expected = f"summary: {n} pass, 0 fail ({n} fixtures)"
-    built, detail = offline_build(root)
-    cell(f"o1 built from {OFFLINE_REV} outside the sandbox: atx-verify and the Go verifier with go build, "
-         "the Python verifier from the locked wheels", bool(built), detail)
-    runs = [
-        ("atx-verify over its embedded fixtures", built.get("atx"), []),
-        ("atx-verify over fixtures/", built.get("atx"), ["fixtures"]),
-        ("the kit's ./verify launcher", root / "verify", []),
-        ("the Go verifier (verifiers/go) over fixtures/", built.get("gover"), ["fixtures"]),
-        ("the Python verifier over fixtures/, installed from the locked wheels", built.get("python"),
-         ["verifiers/python/verify.py", "fixtures"]),
-    ]
-    for i, (name, program, args) in enumerate(runs, start=2):
+    for i, (name, program, args, same_as) in enumerate(runs, start=2):
         what = (f"o{i} {name}: with the network denied, exit 0, the summary of every fixture passing last, "
-                "and the same output as with the network allowed")
-        if not built:
-            cell(what, False, "not run: a build failed")
+                "and the same output as with the network allowed"
+                + (f" and as the kit's {same_as.relative_to(root).as_posix()}" if same_as else ""))
+        if program is None:
+            cell(what, False, not_run)
             continue
-        problems, record = offline_problems([program, *args], root, expected, f"o{i}")
+        problems, record = offline_problems([program, *args], root, expected, f"o{i}", same_as)
         cell(what, not problems, "; ".join(problems) or record)
     standin = scratch("o-standin") / "standin.py"
     standin.write_text(STANDIN)
@@ -1851,11 +2000,32 @@ def option_value(argv: list[str], name: str) -> str | None:
     return value
 
 
+def checks_line() -> str:
+    """The record's line naming where this file's checks come from: the
+    commit of the repository it is in, or its sha256 when git names no
+    commit for it here (an unpacked kit, or no git)."""
+    me = Path(__file__).resolve()
+    rel = me.relative_to(REPO).as_posix()
+    try:
+        top, head = git("rev-parse", "--show-toplevel"), git("rev-parse", "HEAD")
+    except (OSError, subprocess.CalledProcessError):
+        top = head = ""
+    if not top or Path(top).resolve() != REPO:
+        digest = hashlib.sha256(me.read_bytes()).hexdigest()
+        return f"checks from {rel}, sha256 {digest} (git names no commit of it here)"
+    # The checks are this file's, which a --commit run takes from another
+    # commit than the one it copies.
+    diff = subprocess.run(["git", "-C", str(REPO), "diff", "--quiet", "HEAD", "--", rel]).returncode
+    return (f"checks from {rel} at commit {head}"
+            + {0: "", 1: " (with changes not committed)"}.get(diff, f" (git diff exit {diff})"))
+
+
 def main(argv: list[str]) -> int:
-    global LOG_DIR, OFFLINE_REV, OFFLINE_SHA
+    global LOG_DIR, OFFLINE_REV, OFFLINE_SHA, OFFLINE_KIT
     argv = list(argv)
     log = option_value(argv, "--log")
     commit = option_value(argv, "--commit")
+    kit = option_value(argv, "--kit")
     modes = set(argv)
     if not modes or not modes <= {"--ci", "--sandboxed", "--offline", "--slow"}:
         print(__doc__, file=sys.stderr)
@@ -1865,7 +2035,13 @@ def main(argv: list[str]) -> int:
         OFFLINE_REV = commit
         why = ("--commit needs a commit after it" if not commit else
                "--commit goes with --offline" if "--offline" not in modes else "")
-    if not why and "--offline" in modes:
+    if not why and kit is not None:
+        why = kit_refusal(kit, modes, commit)
+        if not why:
+            OFFLINE_KIT = Path(kit).absolute()
+            OFFLINE_SHA = kit_commit(OFFLINE_KIT)
+            OFFLINE_REV = OFFLINE_SHA[:12]
+    if not why and "--offline" in modes and OFFLINE_KIT is None:
         OFFLINE_SHA = commit_of(OFFLINE_REV)
         if not OFFLINE_SHA:
             why = f"{'--commit ' if commit else ''}{OFFLINE_REV}: names no commit in this repository"
@@ -1884,14 +2060,13 @@ def main(argv: list[str]) -> int:
         LOG_DIR = folder
         started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         log_line(f"test_kit.py {' '.join(sorted(modes))}, started {started}")
-        log_line(f"commit {OFFLINE_SHA} ({OFFLINE_REV}; the copy is made with git archive: changes not committed "
-                 "are not in it)")
-        # The checks are this file's, which a --commit run takes from another
-        # commit than the one it copies.
-        me = Path(__file__).resolve().relative_to(REPO).as_posix()
-        diff = subprocess.run(["git", "-C", str(REPO), "diff", "--quiet", "HEAD", "--", me]).returncode
-        log_line(f"checks from {me} at commit {git('rev-parse', 'HEAD')}"
-                 + {0: "", 1: " (with changes not committed)"}.get(diff, f" (git diff exit {diff})"))
+        if OFFLINE_KIT is not None:
+            log_line(f"commit {OFFLINE_SHA} (named by the CONTACT.txt of the kit in {OFFLINE_KIT}; the runs are of "
+                     "the kit's own files)")
+        else:
+            log_line(f"commit {OFFLINE_SHA} ({OFFLINE_REV}; the copy is made with git archive: changes not "
+                     "committed are not in it)")
+        log_line(checks_line())
         log_line(f"system {platform.platform()}, Python {platform.python_version()}")
     try:
         if "--ci" in modes:

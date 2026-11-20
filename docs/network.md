@@ -156,6 +156,39 @@ On each, it passed 15 of 15 cells, and each of the five runs passed all 47
 fixtures with the network denied and exited 0; their standard output was
 the same on both systems.
 
+With `--kit <folder>`, the folder of an unpacked interop day kit, the check
+measures the kit's own files instead of a copy of a commit, and needs
+neither git nor Go. Inside the denial, it installs the Python verifier from
+the kit's wheels into a new environment outside the kit, with the options
+of the kit's `PYTHON.md` install command. It then runs the kit's
+`atx-verify` for the machine it runs on, over its embedded fixtures and
+over `fixtures/`, the kit's `./verify` launcher and the Python verifier,
+with the network denied and with it allowed, and checks each run as above.
+With the network denied, `./verify` must also print the kit's
+`captures/<os>-<arch>.txt` for that machine when the kit holds one: the
+release workflow writes that file from what `./verify` prints on a runner
+of that platform. The install's line, o1, gives the sha256 of the kit's
+`atx-verify` that ran, to compare with the release's `SHA256SUMS`, and
+`offline.log` names the commit the kit's `CONTACT.txt` names. Where git
+names no commit for `test_kit.py`, `offline.log` names it by its sha256.
+`--kit` without `--offline`, with no folder after it, with `--commit`, or
+naming a folder that lacks a file these runs read exits 2 before any check
+runs.
+
+On 2026-11-20 (UTC), `test_kit.py --offline --kit <folder> --log <folder>`
+measured the kit of the release `kit-2026-11-14`, downloaded from the
+release, every file of it matching the release's `SHA256SUMS`: on macOS
+26.6.2 on arm64, with Python 3.14.3; and with Python 3.12.16 in
+`python:3.12-slim` containers, which hold neither git nor Go, with the kit
+mounted read-only, on Linux on arm64 and on Linux on amd64. The containers
+ran on the same Mac, the amd64 one by translation, not on an amd64
+processor. On each, it passed 14 of 14 cells, and each of the four runs
+passed all 47 fixtures with the network denied and exited 0. Their
+standard output was the same on the three, `./verify` printed the kit's
+capture for that machine, and the sha256 of each `atx-verify` that ran is
+the one `SHA256SUMS` lists. After the runs, every file of the kit still
+matched `SHA256SUMS`, and the kit held no new file.
+
 In `atx-verify`, `--verifier-url <url>` is the option that uses the
 network: the interop kit sends each fixture to the URL you give. With
 `--verifier "<command>"` it runs your command, which may use the network
