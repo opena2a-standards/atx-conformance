@@ -109,6 +109,7 @@ from __future__ import annotations
 
 import ast
 import atexit
+import errno
 import hashlib
 import json
 import os
@@ -1258,7 +1259,8 @@ def cells_options() -> None:
     leaves no scratch folder in its TMPDIR. HEAD's sha, and a folder holding
     each file the --kit cells read (with git on PATH and without it), get
     past the --commit and --kit checks to the --log check, which a folder
-    holding a file stops, so no cell runs there either."""
+    holding a file stops, so no cell runs there either; a --log path under a
+    regular file, where no folder can be made, is refused the same way."""
     # A run this cell starts that got past main()'s checks with --ci would
     # reach this cell again; TEST_KIT_OPTIONS_RUN stops it there.
     if os.environ.get("TEST_KIT_OPTIONS_RUN") == "1":
@@ -1320,6 +1322,9 @@ def cells_options() -> None:
         ("taken: --kit naming a folder holding each file the --kit cells read, with git not on PATH, then "
          "stopped by --log naming a folder that holds a file", ["--offline", "--kit", str(shaped), "--log", str(held)],
          f"--log {held}: not a new or empty folder" if plat else unplaced, nogit),
+        ("refused: --log naming a path under a regular file, where no folder can be made",
+         ["--offline", "--log", str(held / "a-file" / "x")],
+         f"--log {held / 'a-file' / 'x'}: no folder can be made there ({os.strerror(errno.ENOTDIR)})"),
     ]
     # Each run makes its scratch folder at import, in a TMPDIR of its own in
     # this cell's folder; that TMPDIR must be empty once the run has exited.
@@ -2082,12 +2087,18 @@ def main(argv: list[str]) -> int:
                "--log goes with --offline" if "--offline" not in modes else
                f"--log {log}: not a new or empty folder"
                if folder.exists() and (not folder.is_dir() or any(folder.iterdir())) else "")
+        if not why:
+            # A path under a regular file does not exist, and no folder can
+            # be made there; that is a misuse too, refused before any cell.
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                why = f"--log {log}: no folder can be made there ({e.strerror})"
     if why:
         print(f"test_kit: {why}", file=sys.stderr)
         print(__doc__, file=sys.stderr)
         return 2
     if log is not None:
-        folder.mkdir(parents=True, exist_ok=True)
         LOG_DIR = folder
         started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         log_line(f"test_kit.py {' '.join(sorted(modes))}, started {started}")
