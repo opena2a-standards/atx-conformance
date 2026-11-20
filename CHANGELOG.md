@@ -420,6 +420,25 @@ they should not.
 
 ### Fixed
 
+- `python3 scripts/kit/test/test_kit.py --offline`, with git not on PATH,
+  ended in a Python traceback, `FileNotFoundError: [Errno 2] No such file
+  or directory: 'git'`, exited 1 and left its `kit-test-*` scratch folder
+  in `TMPDIR` (#405). Without `--kit`, it now exits 2 before any check
+  runs, the first line of its standard error saying that `--offline`
+  without `--kit` needs git, which is not on PATH, and that
+  `--offline --kit KIT` needs neither git nor Go. The scratch folder that
+  `test_kit.py` makes when it starts is now also removed when a run exits
+  before its checks. Measured on this tree, none is left by each run the
+  `--ci` cells make it refuse, by a run with an option it does not know,
+  or by a run that ends in a traceback before its checks
+  (`--offline --log /dev/null/x`); on the commit before, each of the
+  refused runs left one. The `--ci` cells that run `test_kit.py` with options it
+  refuses now also check that each run leaves no scratch folder in its
+  `TMPDIR`, and add three runs with git not on PATH: `--offline`,
+  `--offline --commit` with HEAD's sha, and `--offline --kit` naming a
+  folder that holds each file the `--kit` checks read, which gets past the
+  `--kit` check to the `--log` one. No fixture, verifier or expected
+  verdict changes.
 - README.md gives `docs/captures/go-verifier.txt` as the full output of
   `atx-verify` with no argument, and neither it nor
   `docs/running-the-verifiers.md` said that at a terminal a run in which

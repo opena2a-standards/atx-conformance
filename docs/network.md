@@ -124,7 +124,9 @@ checks must refuse three stand-in verifiers: one that exits 1 when it
 cannot connect to 127.0.0.1, one that prints one more line when it can, and
 one that prints a summary with a failure. It prints one line for the
 control, one for the builds and one for each run, then how many of them
-passed, and exits 1 when any of them fails.
+passed, and exits 1 when any of them fails. The copy is made with git:
+with git not on PATH, it exits 2 before any check runs and names the
+reason, and `--kit <folder>`, below, needs neither git nor Go.
 
 With `--log <folder>`, a folder that is new or empty, the check keeps the
 record of the run there. `offline.log` names the commit it copied, the time
