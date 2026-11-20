@@ -13,21 +13,24 @@ they should not.
 
 ### Added
 
-- `python3 scripts/kit/test/test_kit.py --offline` measures on macOS, on
-  the commit checked out, whether the reference verifiers run with the
-  network denied, as `docs/network.md` says they do. It checks that a
-  listener on 127.0.0.1 is reachable outside `sandbox-exec` and refused
-  inside it; builds `atx-verify` and the Go verifier from a copy of the
-  commit with `go build`, and installs the Python verifier from the wheels
-  `requirements.lock` pins; then runs `atx-verify` over its embedded
-  fixtures and over `fixtures/`, the kit's `./verify` launcher, the Go
-  verifier and the Python verifier with the network denied and with it
-  allowed. Each run must exit 0 with the network denied, end with the
-  summary line of every fixture passing, and print the same standard
-  output both ways; the same checks refuse three stand-in verifiers, one of
-  them a verifier that exits 1 when it cannot connect to 127.0.0.1.
-  `docs/network.md` names the check. No fixture, verifier or module
-  dependency changed.
+- `python3 scripts/kit/test/test_kit.py --offline` measures on macOS and on
+  Linux, on the commit checked out, whether the reference verifiers run
+  with the network denied, as `docs/network.md` says they do. It denies the
+  network with `sandbox-exec` on macOS, and on Linux with
+  `unshare --user --net`, which runs each command in a new user and network
+  namespace. It checks that a listener on 127.0.0.1 is reachable outside the
+  denial and refused inside it, and that inside it a UDP socket cannot be
+  connected to 192.0.2.1 or to 2001:db8::1; builds `atx-verify` and the Go
+  verifier from a copy of the commit with `go build`, and installs the
+  Python verifier from the wheels `requirements.lock` pins; then runs
+  `atx-verify` over its embedded fixtures and over `fixtures/`, the kit's
+  `./verify` launcher, the Go verifier and the Python verifier with the
+  network denied and with it allowed. Each run must exit 0 with the network
+  denied, end with the summary line of every fixture passing, and print the
+  same standard output both ways; the same checks refuse three stand-in
+  verifiers, one of them a verifier that exits 1 when it cannot connect to
+  127.0.0.1. `docs/network.md` names the check. No fixture, verifier or
+  module dependency changed.
 - `atx-verify` with no argument, run at a terminal, ends with a `Next:` line
   below the summary line when every fixture passes. The line links to the
   README section "Try your verifier in two minutes", which installs the

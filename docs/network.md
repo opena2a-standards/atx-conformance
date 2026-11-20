@@ -86,29 +86,45 @@ inside it:
   `fixtures/`; and the Python verifier, installed from the locked wheels
   under Python 3.12, then run over `fixtures/`. Each run passed every
   fixture and exited 0.
+- Linux on arm64, by `test_kit.py --offline` (below), which runs each
+  such command in a new network namespace made by `unshare --user --net`:
+  in a Debian 13 container with util-linux 2.41.5, Go 1.26.11 and
+  Python 3.12.15, run as a user without root and started with
+  `--security-opt seccomp=unconfined`. `atx-verify` built for linux/arm64,
+  over its embedded fixtures and over `fixtures/`; the kit's `./verify`
+  launcher; `verifiers/go` built with `go build`; and the Python verifier,
+  installed from the locked wheels, then run over `fixtures/`. Each run
+  passed every fixture and exited 0.
 - Windows: not measured with the network denied. The runs above were made
   on one Mac, the Linux ones in containers on it.
 
-On macOS, `python3 scripts/kit/test/test_kit.py --offline` makes such a
-measurement on the commit you have checked out. It first checks that a
-listener on 127.0.0.1 is reachable outside `sandbox-exec` and refused
-inside it. From a copy of the commit, it then builds `atx-verify` and the
-Go verifier with `go build`, and installs the Python verifier from the
-wheels `requirements.lock` pins, with the options of the kit's `PYTHON.md`
-install command. These builds run with the network allowed: `go build`
-fetches the modules the module cache lacks, and `pip download` fetches
-the wheels for the Python running the check. It runs `atx-verify` over
-its embedded fixtures and over `fixtures/`, the kit's `./verify`
-launcher, the Go verifier and the Python verifier inside `sandbox-exec`
-with `(deny network*)` and outside it, with the same arguments, folder
-and environment. A run passes when, with the network denied, it exits 0 and
-its last line is `summary: N pass, 0 fail (N fixtures)`, N being the
-number of fixtures, and its standard output is the same as with the
-network allowed. The same checks must refuse three stand-in verifiers:
-one that exits 1 when it cannot connect to 127.0.0.1, one that prints one
-more line when it can, and one that prints a summary with a failure. It
-prints one line for the control, one for the builds and one for each run,
-then how many of them passed, and exits 1 when any of them fails.
+On macOS and on Linux, `python3 scripts/kit/test/test_kit.py --offline`
+makes such a measurement on the commit you have checked out. On macOS it
+denies the network with `sandbox-exec` and `(deny network*)`. On Linux it
+runs each command it denies the network to in a new user and network
+namespace, with `unshare --user --net` from util-linux. In a container
+started with Docker's default seccomp profile, `unshare` is refused: the
+first cell fails, naming the refusal, and no other cell runs. Before any
+run, the check makes sure a listener on 127.0.0.1 is reachable outside the
+denial and refused inside it, and that inside it a UDP socket cannot be
+connected to 192.0.2.1 or to 2001:db8::1. Connecting a UDP socket sends no
+datagram. From a copy of the commit, it then builds `atx-verify` and the Go
+verifier with `go build`, and installs the Python verifier from the wheels
+`requirements.lock` pins, with the options of the kit's `PYTHON.md` install
+command. These builds run with the network allowed: `go build` fetches the
+modules the module cache lacks, and `pip download` fetches the wheels for
+the Python running the check. It runs `atx-verify` over its embedded
+fixtures and over `fixtures/`, the kit's `./verify` launcher, the Go
+verifier and the Python verifier with the network denied and outside the
+denial, with the same arguments, folder and environment. A run passes when,
+with the network denied, it exits 0 and its last line is
+`summary: N pass, 0 fail (N fixtures)`, N being the number of fixtures, and
+its standard output is the same as with the network allowed. The same
+checks must refuse three stand-in verifiers: one that exits 1 when it
+cannot connect to 127.0.0.1, one that prints one more line when it can, and
+one that prints a summary with a failure. It prints one line for the
+control, one for the builds and one for each run, then how many of them
+passed, and exits 1 when any of them fails.
 
 In `atx-verify`, `--verifier-url <url>` is the option that uses the
 network: the interop kit sends each fixture to the URL you give. With

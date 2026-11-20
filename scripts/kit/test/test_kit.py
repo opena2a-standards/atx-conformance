@@ -22,22 +22,26 @@ check fail.
       verify_release.sh, write_stick.sh) with test doubles for gh, git and
       diskutil, inside sandbox-exec with the network denied (macOS only).
       Before any cell: HARNESS_NO_LIVE_TRANSPORT=1 is set for every command,
-      each double resolves first in bash, and a listener on 127.0.0.1 is
-      reachable outside the sandbox and refused inside it; a guard that does
-      not hold stops the run.
+      a command starts inside the sandbox, each double resolves first in
+      bash, a listener on 127.0.0.1 is reachable outside the sandbox and
+      refused inside it, and inside it a UDP socket cannot be connected to
+      192.0.2.1 or to 2001:db8::1; a guard that does not hold stops the run.
   test_kit.py --offline
       The reference verifiers with the network denied, as docs/network.md
-      says (macOS only). After the guards --sandboxed names, go build
-      builds atx-verify and the Go verifier (verifiers/go) from a copy of
-      HEAD, and pip installs the Python verifier from the wheels
-      requirements.lock pins, with the options of the kit's PYTHON.md
-      install command (network: the Go modules the module cache lacks, and
-      those wheels). Then atx-verify over its embedded fixtures and over
-      fixtures/, the kit's ./verify launcher, the Go verifier and the
-      Python verifier each run inside sandbox-exec with the network denied
-      and outside it, with the same arguments, folder and environment: each
-      must exit 0 inside, print the summary line of every fixture passing
-      as its last line, and print the same standard output both ways.
+      says. The sandbox is sandbox-exec on macOS; on Linux it is a new user
+      and network namespace for each command (unshare --user --net, from
+      util-linux), and --offline runs there without --sandboxed. After the
+      guards --sandboxed names, go build builds atx-verify and the Go
+      verifier (verifiers/go) from a copy of HEAD, and pip installs the
+      Python verifier from the wheels requirements.lock pins, with the
+      options of the kit's PYTHON.md install command (network: the Go
+      modules the module cache lacks, and those wheels). Then atx-verify
+      over its embedded fixtures and over fixtures/, the kit's ./verify
+      launcher, the Go verifier and the Python verifier each run inside the
+      sandbox with the network denied and outside it, with the same
+      arguments, folder and environment: each must exit 0 inside, print the
+      summary line of every fixture passing as its last line, and print the
+      same standard output both ways.
       Three stand-in verifiers must be refused: one that exits 1 when it
       cannot connect to 127.0.0.1, one that prints one more line when it
       can, and one that prints a summary with a failure.
@@ -74,7 +78,10 @@ PY = sys.executable
 RESULTS: list[tuple[str, bool, str]] = []
 SCRATCH = Path(tempfile.mkdtemp(prefix="kit-test-"))
 SANDBOX_ENV: dict[str, str] | None = None
-SANDBOX_PROFILE = ""
+# The words that run a command in the sandbox (sandbox_setup() sets them),
+# and what the s0 cell names as the sandbox.
+SANDBOX_PREFIX: list[str] = []
+SANDBOX_NAME = ""
 
 
 def cell(name: str, ok: bool, detail: str = "") -> None:
@@ -84,7 +91,9 @@ def cell(name: str, ok: bool, detail: str = "") -> None:
 
 def run(cmd, cwd=None, env=None, sandboxed=False):
     if sandboxed:
-        cmd = ["/usr/bin/sandbox-exec", "-p", SANDBOX_PROFILE] + list(cmd)
+        if not SANDBOX_PREFIX:
+            raise RuntimeError("a sandboxed run before sandbox_setup() chose the sandbox")
+        cmd = SANDBOX_PREFIX + list(cmd)
         env = dict(env or SANDBOX_ENV)
     full_env = dict(env if env is not None else os.environ)
     full_env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -1193,17 +1202,49 @@ printf '%s\trefs/tags/%s\n' "$STUB_COMMIT" "$STUB_TAG"
 '''
 
 
-def sandbox_setup() -> str | None:
-    """Builds the doubles and the sandbox; returns a reason when a guard fails."""
-    global SANDBOX_ENV, SANDBOX_PROFILE
-    if sys.platform != "darwin" or not Path("/usr/bin/sandbox-exec").exists():
+# Run by the s0 guard inside the sandbox, and outside it for the record.
+# Connecting a UDP socket sends no datagram. Inside, the connect fails:
+# sandbox-exec refuses it, and in a new network namespace the kernel finds no
+# route or no source address for it. It exits 1 when a socket connects to the
+# IPv4 or the IPv6 documentation address (RFC 5737, RFC 3849).
+UDP_PROBE = r'''import socket
+for family, host in ((socket.AF_INET, "192.0.2.1"), (socket.AF_INET6, "2001:db8::1")):
+    try:
+        with socket.socket(family, socket.SOCK_DGRAM) as s:
+            s.connect((host, 9))
+    except OSError:
+        continue
+    print(f"a UDP socket connected to {host}")
+    raise SystemExit(1)
+'''
+
+
+def sandbox_setup(offline_only: bool = False) -> str | None:
+    """Builds the doubles and the sandbox; returns a reason when a guard fails.
+    On macOS the sandbox is sandbox-exec with the profile below. On Linux,
+    for the --offline cells alone (offline_only; the --sandboxed cells run
+    macOS scripts), unshare runs each command in a new user and network
+    namespace of its own."""
+    global SANDBOX_ENV, SANDBOX_PREFIX, SANDBOX_NAME
+    if sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").exists():
+        real_home = os.environ.get("HOME", "")
+        if len(real_home) < 2:
+            return "HOME is not set"
+        SANDBOX_PREFIX = ["/usr/bin/sandbox-exec", "-p",
+                          "(version 1)(allow default)(deny network*)"
+                          f'(deny file-read* (subpath "{real_home}/.secretless-ai"))'
+                          '(deny process-exec (literal "/usr/bin/security"))']
+        SANDBOX_NAME = "sandbox-exec, (deny network*)"
+    elif sys.platform == "linux" and not offline_only:
+        return "--sandboxed needs sandbox-exec (macOS); on Linux, --offline runs without --sandboxed"
+    elif sys.platform == "linux":
+        unshare = shutil.which("unshare", path="/usr/bin:/bin")
+        if unshare is None:
+            return "unshare (util-linux) is not in /usr/bin or /bin"
+        SANDBOX_PREFIX = [unshare, "--user", "--net", "--"]
+        SANDBOX_NAME = "unshare --user --net"
+    else:
         return "sandbox-exec is not available on this machine"
-    real_home = os.environ.get("HOME", "")
-    if len(real_home) < 2:
-        return "HOME is not set"
-    SANDBOX_PROFILE = ("(version 1)(allow default)(deny network*)"
-                       f'(deny file-read* (subpath "{real_home}/.secretless-ai"))'
-                       '(deny process-exec (literal "/usr/bin/security"))')
     stubs = scratch("doubles")
     for name, body in (("gh", STUB_GH), ("diskutil", STUB_DISKUTIL), ("git", STUB_GIT)):
         write_stub(stubs, name, body)
@@ -1215,6 +1256,10 @@ def sandbox_setup() -> str | None:
         "HOME": str(home), "GH_CONFIG_DIR": str(home / "gh"), "LC_ALL": "C", "TMPDIR": str(scratch("tmp")),
         "KIT_PYTHON": "python3", "HARNESS_NO_LIVE_TRANSPORT": "1", "KIT_ATTEST_TRIES": "1",
     }
+    entry = run(["true"], sandboxed=True)
+    if entry.returncode != 0:
+        why = (entry.stderr or entry.stdout).strip().rsplit("\n", 1)[-1]
+        return f"the sandbox ({SANDBOX_NAME}) did not start a command: exit {entry.returncode}: {why[:160]}"
     guard = run(["bash", "-c",
                  '[ "${HARNESS_NO_LIVE_TRANSPORT:-}" = 1 ] || exit 3; '
                  'for t in gh git diskutil; do p=$(command -v "$t") || exit 4; '
@@ -1247,8 +1292,15 @@ def sandbox_setup() -> str | None:
         return "control: the loopback listener is not reachable outside the sandbox"
     if inside.returncode == 0:
         return "control: the loopback listener is reachable inside the sandbox, so its network is not denied"
-    cell("s0 guards: tripwire set, doubles resolve first in bash, 127.0.0.1 reachable outside and refused inside",
-         True, f"port {port}")
+    udp = run([PY, "-I", "-c", UDP_PROBE], sandboxed=True)
+    if udp.returncode != 0:
+        return f"control: inside the sandbox, {(udp.stdout.strip() or udp.stderr.strip())[-160:]}"
+    # Outside, the probe connects only where the machine has a route; its
+    # result is recorded, not required, so a machine off the network passes.
+    udp_outside = run([PY, "-I", "-c", UDP_PROBE]).stdout.strip() or "no UDP socket connects either"
+    cell("s0 guards: tripwire set, doubles resolve first in bash, 127.0.0.1 reachable outside and refused inside, "
+         "and no UDP socket connects to 192.0.2.1 or 2001:db8::1 inside", True,
+         f"port {port}, {SANDBOX_NAME}; outside, {udp_outside}")
     return None
 
 
@@ -1392,9 +1444,10 @@ def cells_stick() -> None:
 # docs/network.md says running a reference verifier makes no network request.
 # These cells measure that on a copy of HEAD. The builds run outside the
 # sandbox, where go build may fetch modules and pip downloads the locked
-# wheels. Each verifier then runs inside sandbox-exec with the network denied,
-# after the s0 control of the same run, and outside it with the same
-# arguments, folder and environment, so the sandbox is the only difference.
+# wheels. Each verifier then runs inside the sandbox with the network denied
+# (sandbox-exec on macOS, a new network namespace on Linux), after the s0
+# control of the same run, and outside it with the same arguments, folder and
+# environment, so the sandbox is the only difference.
 
 # A stand-in verifier for the refusal cells: it connects to 127.0.0.1:<port>,
 # then "needs" exits 1 when that fails, "extra" prints one more line when it
@@ -1586,7 +1639,7 @@ def main(argv: list[str]) -> int:
             cells_capture_in_the_unpacked_kit()
             cells_version_under_tags()
         if modes & {"--sandboxed", "--offline"}:
-            reason = sandbox_setup()
+            reason = sandbox_setup(offline_only="--sandboxed" not in modes)
             if reason:
                 cell("s0 guards", False, reason)
                 print("test_kit: a guard did not hold; no sandboxed cell ran", file=sys.stderr)
