@@ -34,6 +34,13 @@ PASS  fixtures/wrong-issuer.json
 summary: 57 pass, 0 fail (57 fixtures)
 ```
 
+At a terminal, when every fixture passes, the command then writes one more
+line, to standard error, below the summary line:
+`Next: to test your own verifier against the fixtures, see https://github.com/opena2a-standards/atx-conformance#try-your-verifier-in-two-minutes`.
+The full output linked above,
+[`docs/captures/go-verifier.txt`](docs/captures/go-verifier.txt), is the
+command's standard output, so it ends at the summary line.
+
 With no argument the verifier walks the fixture set built into the module
 version `go run` fetched, `fixtures/*.json` of that commit, with nothing
 cloned. The command exits 1 when any fixture's result differs from its
