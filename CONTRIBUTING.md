@@ -43,10 +43,11 @@ interop/                         the interop kit: sends each fixture to an outsi
 examples/                        wrappers that put a verifier behind the interop
                                  kit's contract
 tour/                            the guided tour's steps, pre-flight and runner
-docs/                            scope, fixtures, gates, dependencies, version
-                                 pinning and stability (the pages the README
-                                 links), and the full output of its Go run with
-                                 a JSON sidecar saying how it was taken
+docs/                            scope, fixtures, gates, dependencies, network
+                                 use, version pinning and stability (the pages
+                                 the README links), and the full output of its
+                                 Go run with a JSON sidecar saying how it was
+                                 taken
 fixtures/                        the 57 conformance fixtures (byte-stable JSON)
 jcs-vectors/                     JCS(TBS) byte-agreement vectors and the Go, Python
                                  and TypeScript canonicalizers that must agree on them

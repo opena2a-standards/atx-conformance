@@ -278,6 +278,9 @@ The cosignature itself is recorded by pull request, as
   the module version `go run` fetches, toolchain minimums, pinned modules and
   packages, results that depend on the toolchain release, and the benchmark
   of each verifier.
+- [What needs the network](docs/network.md): what building the Go verifier
+  and installing the Python verifier's packages fetch, and the runs that
+  measured both verifiers with the network denied.
 - [Continuous verification](docs/continuous-verification.md): the gates CI
   runs on every pull request.
 - [Reproducing the fixtures](docs/reproducing-the-fixtures.md): what the
