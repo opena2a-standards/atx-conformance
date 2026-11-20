@@ -142,6 +142,20 @@ altered copies of it: one without the control's line, one with a run's
 output one line longer, one without a run's output with the network
 allowed, and one naming another commit.
 
+With `--commit <commit>`, a tag, a branch or a sha of this repository, the
+check measures that commit with the checks of the commit you have checked
+out: it copies that commit, builds its verifiers and runs them over its own
+fixtures. `offline.log` names the commit it copied, and the commit
+`test_kit.py` came from. `--commit` without `--offline`, with no commit
+after it, or naming no commit of this repository exits 2 before any check
+runs. On 2026-11-20 (UTC),
+`test_kit.py --offline --commit kit-2026-11-14 --log <folder>` measured
+a38e000, the commit the kit release `kit-2026-11-14` carries, on macOS
+26.6.2 on arm64 and on Linux on arm64 in the Debian 13 container above.
+On each, it passed 15 of 15 cells, and each of the five runs passed all 47
+fixtures with the network denied and exited 0; their standard output was
+the same on both systems.
+
 In `atx-verify`, `--verifier-url <url>` is the option that uses the
 network: the interop kit sends each fixture to the URL you give. With
 `--verifier "<command>"` it runs your command, which may use the network

@@ -14,9 +14,13 @@ check fail.
       and no network package imported by the verifiers it says open no
       connection), the release notes' --version claim, check-capture as
       the release workflow's test job runs it: the kit's own copy, unpacked
-      outside any repository, with no Python to call, and the version line
+      outside any repository, with no Python to call, the version line
       under each Go version tag view, with tags made only in a scratch
-      clone.
+      clone, and --commit as this file reads it, in a fresh run of it for
+      each case: with no REV, without --offline, or with a REV that names
+      no commit here (a name this repository lacks, HEAD's tree), the run
+      exits 2 and names the reason before any cell runs, and HEAD's sha
+      gets past those checks.
   test_kit.py --sandboxed
       Cells that run the scripts naming gh (candidate_equal.sh,
       verify_release.sh, write_stick.sh) with test doubles for gh, git and
@@ -48,12 +52,13 @@ check fail.
   test_kit.py --offline --log DIR
       As --offline, and keeps the record of the run in DIR, a folder that
       must be new or empty. DIR/offline.log names the commit the copy was
-      made from, the time the run started and the system it ran on, and
-      holds the line of each cell, the command of each run and how many
-      cells passed. For each run, the standard output and standard error
-      with the network denied and with it allowed are kept as
-      <cell>.denied.stdout, <cell>.denied.stderr, <cell>.allowed.stdout and
-      <cell>.allowed.stderr (o2.denied.stdout, and so on). Then a cell reads
+      made from, the commit this file is from, the time the run started and
+      the system it ran on, and holds the line of each cell, the command of
+      each run and how many cells passed. For each run, the standard output
+      and standard error with the network denied and with it allowed are
+      kept as <cell>.denied.stdout, <cell>.denied.stderr,
+      <cell>.allowed.stdout and <cell>.allowed.stderr (o2.denied.stdout,
+      and so on). Then a cell reads
       DIR back: it must name the commit, hold the passing s0 line before
       the first run, and hold each run's four files, the standard output
       with the network denied having the line count and sha256 its cell
@@ -62,6 +67,13 @@ check fail.
       without the s0 line, one with a run's output one line longer, one
       without a run's output with the network allowed, and one naming
       another commit.
+  test_kit.py --offline --commit REV
+      As --offline, with the --offline cells on the commit REV names in this
+      repository (a tag, a branch or a sha) instead of HEAD: the copy, the
+      builds, the fixture count and the runs are that commit's, and the
+      checks are this file's. With --log DIR, DIR/offline.log names that
+      commit. Without --offline, with no REV, or with a REV that names no
+      commit here, it exits 2 before any cell runs and names the reason.
   test_kit.py --slow
       Two full assemblies of HEAD, from two clones with their own Go and pip
       caches, must write byte-equal SHA256SUMS (network: Go modules and the
@@ -104,6 +116,11 @@ SANDBOX_NAME = ""
 # and the name of the record in it.
 LOG_DIR: Path | None = None
 LOG_NAME = "offline.log"
+# The commit the --offline cells copy, build and run: as it was named (HEAD,
+# or the REV of --commit REV) and the full sha main() resolved it to before
+# any cell ran.
+OFFLINE_REV = "HEAD"
+OFFLINE_SHA = ""
 
 
 def cell(name: str, ok: bool, detail: str = "") -> None:
@@ -142,11 +159,20 @@ def git(*args) -> str:
     return subprocess.run(["git", "-C", str(REPO), *args], capture_output=True, text=True, check=True).stdout.strip()
 
 
-def tree_into(dest: Path, *paths: str) -> None:
+def tree_into(dest: Path, *paths: str, rev: str = "HEAD") -> None:
     dest.mkdir(parents=True, exist_ok=True)
-    archive = subprocess.run(["git", "-C", str(REPO), "archive", "--format=tar", "HEAD", *paths],
+    archive = subprocess.run(["git", "-C", str(REPO), "archive", "--format=tar", rev, *paths],
                              capture_output=True, check=True).stdout
     subprocess.run(["tar", "-x", "-C", str(dest)], input=archive, check=True)
+
+
+def commit_of(rev: str) -> str:
+    """The full sha of the commit rev names in this repository, or "" when it
+    names none: no such name or object here, or an object that is not a
+    commit (a tree, a blob)."""
+    r = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--verify", "--quiet", "--end-of-options",
+                        f"{rev}^{{commit}}"], capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else ""
 
 
 def head_facts() -> dict:
@@ -1195,6 +1221,45 @@ def cells_version_under_tags() -> None:
          "scratch clone", git("tag", "-l") == repo_tags, f"{len(repo_tags.split())} tag(s) before and after")
 
 
+def cells_options() -> None:
+    """--commit as main() reads it, each case in a fresh run of this file: a
+    misuse exits 2 before any cell runs, with the reason as the first line of
+    standard error. HEAD's sha gets past the --commit checks to the --log
+    check, which a folder holding a file stops, so no cell runs there
+    either."""
+    # A run this cell starts that got past main()'s checks with --ci would
+    # reach this cell again; TEST_KIT_OPTIONS_RUN stops it there.
+    if os.environ.get("TEST_KIT_OPTIONS_RUN") == "1":
+        cell("u0 a run of this file that the u cells started reached the u cells", False,
+             "TEST_KIT_OPTIONS_RUN=1; no run started")
+        return
+    d = scratch("u")
+    held = d / "held"
+    held.mkdir()
+    (held / "a-file").write_text("")
+    head, tree = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
+    cases = [
+        ("refused: --commit with no commit after it", ["--offline", "--commit"],
+         "--commit needs a commit after it"),
+        ("refused: --commit without --offline", ["--ci", "--commit", "HEAD"], "--commit goes with --offline"),
+        ("refused: --commit naming a name this repository lacks", ["--offline", "--commit", "no-such-commit"],
+         "--commit no-such-commit: names no commit in this repository"),
+        ("refused: --commit naming HEAD's tree, an object that is not a commit", ["--offline", "--commit", tree],
+         f"--commit {tree}: names no commit in this repository"),
+        ("taken: --commit naming HEAD by its sha, then stopped by --log naming a folder that holds a file",
+         ["--offline", "--commit", head, "--log", str(held)], f"--log {held}: not a new or empty folder"),
+    ]
+    # Each run makes its scratch folder at import; TMPDIR puts it in this
+    # cell's folder, which is removed with the rest.
+    env = dict(os.environ, TMPDIR=str(d), TEST_KIT_OPTIONS_RUN="1")
+    for i, (what, args, expect) in enumerate(cases, 1):
+        r = run([PY, "-I", Path(__file__).resolve(), *args], env=env)
+        first = r.stderr.split("\n", 1)[0]
+        cell(f"u{i} {what}: exit 2 before any cell runs, the reason first",
+             r.returncode == 2 and first == f"test_kit: {expect}" and not r.stdout,
+             f"exit {r.returncode}: {first[:160]}" + (f"; standard output {r.stdout[:80]!r}" if r.stdout else ""))
+
+
 # ---------------------------------------------------------- --sandboxed cells
 
 def write_stub(directory: Path, name: str, body: str) -> None:
@@ -1474,12 +1539,13 @@ def cells_stick() -> None:
 # ------------------------------------------------------------ --offline cells
 
 # docs/network.md says running a reference verifier makes no network request.
-# These cells measure that on a copy of HEAD. The builds run outside the
-# sandbox, where go build may fetch modules and pip downloads the locked
-# wheels. Each verifier then runs inside the sandbox with the network denied
-# (sandbox-exec on macOS, a new network namespace on Linux), after the s0
-# control of the same run, and outside it with the same arguments, folder and
-# environment, so the sandbox is the only difference.
+# These cells measure that on a copy of HEAD, or of the commit --commit names
+# (OFFLINE_SHA). The builds run outside the sandbox, where go build may fetch
+# modules and pip downloads the locked wheels. Each verifier then runs inside
+# the sandbox with the network denied (sandbox-exec on macOS, a new network
+# namespace on Linux), after the s0 control of the same run, and outside it
+# with the same arguments, folder and environment, so the sandbox is the only
+# difference.
 
 # A stand-in verifier for the refusal cells: it connects to 127.0.0.1:<port>,
 # then "needs" exits 1 when that fails, "extra" prints one more line when it
@@ -1546,9 +1612,9 @@ def offline_problems(cmd: list, cwd: Path, expected: str, tag: str = "") -> tupl
 
 
 def offline_build(root: Path) -> tuple[dict[str, Path], str]:
-    """Builds the reference verifiers from the copy of HEAD at root, outside
-    the sandbox, and puts the kit's launcher at root/verify and the binary
-    it runs at root/bin/<os>-<arch>/atx-verify, where the kit has them.
+    """Builds the reference verifiers from the copy of the commit at root,
+    outside the sandbox, and puts the kit's launcher at root/verify and the
+    binary it runs at root/bin/<os>-<arch>/atx-verify, where the kit has them.
     Returns the paths keyed atx, gover and python, and what was built; or
     no paths and the step that failed."""
     if shutil.which("go") is None:
@@ -1589,11 +1655,11 @@ def offline_build(root: Path) -> tuple[dict[str, Path], str]:
 
 def cells_offline() -> None:
     root = scratch("o-head")
-    tree_into(root)
+    tree_into(root, rev=OFFLINE_SHA)
     n = len(list((root / "fixtures").glob("*.json")))
     expected = f"summary: {n} pass, 0 fail ({n} fixtures)"
     built, detail = offline_build(root)
-    cell("o1 built from HEAD outside the sandbox: atx-verify and the Go verifier with go build, "
+    cell(f"o1 built from {OFFLINE_REV} outside the sandbox: atx-verify and the Go verifier with go build, "
          "the Python verifier from the locked wheels", bool(built), detail)
     runs = [
         ("atx-verify over its embedded fixtures", built.get("atx"), []),
@@ -1702,15 +1768,15 @@ def offline_log_problems(log: Path, sha: str) -> list[str]:
 def cells_offline_log(first: int) -> None:
     """Reads the --log folder back, then four altered copies of it; each
     copy must be refused for what was altered."""
-    sha = git("rev-parse", "HEAD")
+    sha = OFFLINE_SHA
     problems = offline_log_problems(LOG_DIR, sha)
     text = (LOG_DIR / LOG_NAME).read_text(encoding="utf-8") if (LOG_DIR / LOG_NAME).is_file() else ""
     lines = text.splitlines()
     hashed = [m[2] for m in map(RECORDED.match, lines) if m]
     commanded = [m[1] for m in map(COMMANDED.match, lines) if m]
-    cell(f"o{first} the --log folder names commit HEAD, holds the passing s0 control line before the first run, "
-         "and each run's four output files, each standard output with the network denied matching the line "
-         "count and sha256 its cell line records", not problems,
+    cell(f"o{first} the --log folder names commit {OFFLINE_REV}, holds the passing s0 control line before the "
+         "first run, and each run's four output files, each standard output with the network denied matching "
+         "the line count and sha256 its cell line records", not problems,
          "; ".join(problems)[:200] or f"{len(commanded)} runs with their four files, {len(hashed)} outputs "
          f"matching their lines, commit {sha[:12]}")
 
@@ -1773,34 +1839,59 @@ def cell_reproducible() -> None:
          f"{hashlib.sha256(a).hexdigest() if a else 'none'}")
 
 
+def option_value(argv: list[str], name: str) -> str | None:
+    """Takes name and the word after it out of argv, and returns that word:
+    "" when no word follows name or the next word starts with -, and None
+    when argv does not hold name."""
+    if name not in argv:
+        return None
+    at = argv.index(name)
+    value = argv[at + 1] if at + 1 < len(argv) and not argv[at + 1].startswith("-") else ""
+    del argv[at:at + 1 + bool(value)]
+    return value
+
+
 def main(argv: list[str]) -> int:
-    global LOG_DIR
+    global LOG_DIR, OFFLINE_REV, OFFLINE_SHA
     argv = list(argv)
-    log = None
-    if "--log" in argv:
-        at = argv.index("--log")
-        log = argv[at + 1] if at + 1 < len(argv) and not argv[at + 1].startswith("-") else ""
-        del argv[at:at + 1 + bool(log)]
+    log = option_value(argv, "--log")
+    commit = option_value(argv, "--commit")
     modes = set(argv)
     if not modes or not modes <= {"--ci", "--sandboxed", "--offline", "--slow"}:
         print(__doc__, file=sys.stderr)
         return 2
-    if log is not None:
+    why = ""
+    if commit is not None:
+        OFFLINE_REV = commit
+        why = ("--commit needs a commit after it" if not commit else
+               "--commit goes with --offline" if "--offline" not in modes else "")
+    if not why and "--offline" in modes:
+        OFFLINE_SHA = commit_of(OFFLINE_REV)
+        if not OFFLINE_SHA:
+            why = f"{'--commit ' if commit else ''}{OFFLINE_REV}: names no commit in this repository"
+    if not why and log is not None:
         folder = Path(log).absolute()
         why = ("--log needs a folder after it" if not log else
                "--log goes with --offline" if "--offline" not in modes else
                f"--log {log}: not a new or empty folder"
                if folder.exists() and (not folder.is_dir() or any(folder.iterdir())) else "")
-        if why:
-            print(f"test_kit: {why}", file=sys.stderr)
-            print(__doc__, file=sys.stderr)
-            return 2
+    if why:
+        print(f"test_kit: {why}", file=sys.stderr)
+        print(__doc__, file=sys.stderr)
+        return 2
+    if log is not None:
         folder.mkdir(parents=True, exist_ok=True)
         LOG_DIR = folder
         started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         log_line(f"test_kit.py {' '.join(sorted(modes))}, started {started}")
-        log_line(f"commit {git('rev-parse', 'HEAD')} (the copy is made with git archive: changes not committed "
+        log_line(f"commit {OFFLINE_SHA} ({OFFLINE_REV}; the copy is made with git archive: changes not committed "
                  "are not in it)")
+        # The checks are this file's, which a --commit run takes from another
+        # commit than the one it copies.
+        me = Path(__file__).resolve().relative_to(REPO).as_posix()
+        diff = subprocess.run(["git", "-C", str(REPO), "diff", "--quiet", "HEAD", "--", me]).returncode
+        log_line(f"checks from {me} at commit {git('rev-parse', 'HEAD')}"
+                 + {0: "", 1: " (with changes not committed)"}.get(diff, f" (git diff exit {diff})"))
         log_line(f"system {platform.platform()}, Python {platform.python_version()}")
     try:
         if "--ci" in modes:
@@ -1815,6 +1906,7 @@ def main(argv: list[str]) -> int:
             cells_claims()
             cells_capture_in_the_unpacked_kit()
             cells_version_under_tags()
+            cells_options()
         if modes & {"--sandboxed", "--offline"}:
             reason = sandbox_setup(offline_only="--sandboxed" not in modes)
             if reason:

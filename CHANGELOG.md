@@ -35,7 +35,15 @@ they should not.
   each run, and beside it each run's standard output and standard error,
   with the network denied and with it allowed. It then reads the folder
   back, and refuses altered copies of it. The control's line says how the
-  connection to 127.0.0.1 was refused inside the denial.
+  connection to 127.0.0.1 was refused inside the denial. With
+  `--commit <commit>`, a tag, a branch or a sha of this repository, it
+  measures that commit's verifiers over that commit's fixtures with the
+  checks of the commit checked out, and `offline.log` names both commits;
+  `--commit` without `--offline`, with no commit after it, or naming no
+  commit of this repository exits 2 before any check runs. Run so on the
+  commit the kit release `kit-2026-11-14` carries, a38e000, each of its
+  five verifier runs passed every fixture of that commit with the network
+  denied, on macOS and on Linux.
   `docs/network.md` names the check. No fixture, verifier or module
   dependency changed.
 - `atx-verify` with no argument, run at a terminal, ends with a `Next:` line
