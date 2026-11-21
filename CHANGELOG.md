@@ -420,6 +420,21 @@ they should not.
 
 ### Fixed
 
+- The repository layout in `CONTRIBUTING.md` said the verifier wall lists
+  the verifiers whose maintainers ran the interop kit at a released version
+  and passed, naming no rule (#417). `wall/README.md`, the docstring and
+  usage text of `scripts/check_wall.py` and the description of
+  `schemas/wall-v1.schema.json` say that the wall's pass rule,
+  `acceptedMustFail` is 0 and `couldNotRead` is below `fixtureCount`, is
+  not the kit's exit status, which is 0 only when every fixture agrees.
+  The layout's `wall/` line now says the runs passed by the wall's own
+  rule, not the kit's exit status, and that `wall/README.md` says what
+  passed means on the wall. `TheWallsOwnRule` in
+  `scripts/test_check_wall.py` reads that line too, as
+  `scripts/check_readme_counts.py` reads the layout, and fails when it
+  lacks the phrase `passed by the wall's own rule` or
+  `not the kit's exit status`; on the layout as it was, it failed, naming
+  both. No fixture, expected verdict or workflow file changes.
 - The repository layout in `CONTRIBUTING.md` names the verifier wall, and
   `scripts/check_readme_counts.py` holds the layout to the tree (#415). The
   layout gave no line to `wall/`; its `schemas/*.schema.json` line named the
