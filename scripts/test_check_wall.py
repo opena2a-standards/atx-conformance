@@ -7,7 +7,9 @@ released version and passed by the wall's own rule, acceptedMustFail 0 and
 couldNotRead below fixtureCount. That rule is not the kit's exit status,
 which is 0 only when every fixture agrees; TheWallsOwnRule holds the texts
 that say what passed means on the wall to saying so, and to that exit
-status as interop/run.go gives it. A row has nine members: the verifier's
+status as interop/run.go gives it, and the wall/ entry of CONTRIBUTING.md's
+repository layout to saying the runs passed by the wall's own rule, not the
+kit's exit status. A row has nine members: the verifier's
 name and version, the UTC date of the run, the released kit version
 (kitVersion, vX.Y.Z), the number of fixtures the kit sent and the run's four
 outcome counts. It names no report, commit or link: the report stays with
@@ -51,6 +53,7 @@ ROOT = SCRIPTS.parent
 # python3 -I leaves the script's own directory off sys.path.
 sys.path.insert(0, str(SCRIPTS))
 
+import check_readme_counts  # noqa: E402
 import check_wall  # noqa: E402
 
 SCHEMA = ROOT / "schemas" / "wall-v1.schema.json"
@@ -59,6 +62,7 @@ RUN_GO = ROOT / "interop" / "run.go"
 FIXTURES_GO = ROOT / "fixtures.go"
 WALL = ROOT / "wall" / "verifiers.json"
 WALL_README = ROOT / "wall" / "README.md"
+CONTRIBUTING = ROOT / "CONTRIBUTING.md"
 
 TAG = "v1.2.0"
 FIXTURES = 3
@@ -76,6 +80,10 @@ STANDARD_MODULES = {"collections", "datetime", "json", "os", "pathlib", "re", "s
 PASS_RULE = "acceptedMustFail is 0 and couldNotRead is below fixtureCount"
 NOT_THE_KITS = "not the kit's exit status"
 KIT_EXIT = "the kit exits 0 only when every fixture agrees"
+# What the wall/ entry of CONTRIBUTING.md's repository layout says of the
+# runs the wall lists, read by plain() beside NOT_THE_KITS: that they passed
+# by the wall's own rule.
+LAYOUT_PASSED = "passed by the wall's own rule"
 # The end of the kit's run in interop/run.go: exit 1 unless every fixture
 # agrees, 0 when every one does.
 KIT_EXIT_GO = "\tif rep.Summary.Agree != rep.FixtureCount {\n\t\treturn 1\n\t}\n\treturn 0\n}\n"
@@ -528,7 +536,10 @@ class TheWallsOwnRule(unittest.TestCase):
     """The wall's pass rule, acceptedMustFail 0 and couldNotRead below
     fixtureCount, is not the kit's exit status, which is 0 only when every
     fixture agrees: the wall admits a row from a run on which the kit exited
-    1 (#414). Each text that says what passed means on the wall says so."""
+    1 (#414). Each text that says what passed means on the wall says so, and
+    the wall/ entry of CONTRIBUTING.md's repository layout, which says the
+    maintainers of the verifiers the wall lists ran the kit and passed, says
+    they passed by the wall's own rule, not the kit's exit status (#417)."""
 
     def test_the_kit_exits_0_only_when_every_fixture_agrees(self):
         source = RUN_GO.read_text(encoding="utf-8")
@@ -554,6 +565,20 @@ class TheWallsOwnRule(unittest.TestCase):
                 missing = [phrase for phrase in (PASS_RULE, NOT_THE_KITS, KIT_EXIT)
                            if plain(phrase) not in words]
                 self.assertEqual(missing, [], f"{label} does not say {missing}")
+
+    def test_the_layouts_wall_entry_says_the_runs_passed_by_the_walls_rule(self):
+        # The entry said the maintainers ran the kit at a released version
+        # and passed, naming no rule (#417). It is read as
+        # check_readme_counts.py reads the layout: the rest of the line
+        # opening with wall/ and the indented lines that continue it.
+        entries = check_readme_counts.layout_entries(CONTRIBUTING.read_text(encoding="utf-8"))
+        self.assertIsNotNone(entries, "CONTRIBUTING.md has no repository layout")
+        self.assertIn("wall/", entries, "CONTRIBUTING.md's repository layout has no wall/ entry")
+        words = plain(entries["wall/"])
+        missing = [phrase for phrase in (LAYOUT_PASSED, NOT_THE_KITS)
+                   if plain(phrase) not in words]
+        self.assertEqual(missing, [],
+                         f"the wall/ entry of CONTRIBUTING.md's layout does not say {missing}")
 
     def test_a_pass_refusal_names_the_walls_rule(self):
         repo = Repo(self)

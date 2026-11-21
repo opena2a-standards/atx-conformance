@@ -62,11 +62,12 @@ verifiers/go/                    Go reference verifier (full hybrid): the packag
                                  runs it from a checkout
 verifiers/python/                Python reference verifier (full hybrid) and its
                                  benchmark (bench_verify.py)
-wall/                            the verifier wall: verifiers.json, which lists the
-                                 verifiers whose maintainers ran the interop kit at
-                                 a released version and passed (wall-v1 format),
-                                 and README.md, what a row holds and how to add
-                                 and check one
+wall/                            the verifier wall: verifiers.json (wall-v1 format),
+                                 which lists the verifiers whose maintainers ran
+                                 the interop kit at a released version and passed
+                                 by the wall's own rule, not the kit's exit status;
+                                 and README.md, what passed means on the wall,
+                                 what a row holds and how to add and check one
 scripts/generate-fixtures/       deterministic fixture generator (Go)
 scripts/parity/                  Go/Python per-fixture parity gate
 scripts/*.py                     CI gates: README counts, spec references, schema
