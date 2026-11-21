@@ -5,13 +5,14 @@ Two passes.
 
 FORMAT. Each fixture and conformance.json names its file format in a `$schema`
 member. That name MUST be the `$id` of a schema this repository ships under
-schemas/*.schema.json (fixture-v1.schema.json, conformance-profile-v1.schema.json),
-and the whole document MUST validate against it. A schema's `$id` MUST be the
-address GitHub serves the file from on this repository's main branch,
-SERVED_FROM followed by the file's path, so following a `$schema` reaches the
-file that defines the format; a schema whose `$id` names any other address
-fails. A `$schema` no tracked file defines fails, as does any document that
-breaks its format.
+schemas/*.schema.json (fixture-v1.schema.json, conformance-profile-v1.schema.json;
+the glob also matches wall-v1.schema.json, the format of wall/verifiers.json,
+a file the format pass does not read), and the whole document MUST validate
+against it. A schema's `$id` MUST be the address GitHub serves the file from
+on this repository's main branch, SERVED_FROM followed by the file's path, so
+following a `$schema` reaches the file that defines the format; a schema
+whose `$id` names any other address fails. A `$schema` no tracked file
+defines fails, as does any document that breaks its format.
 
 CREDENTIAL. The atx-spec schema is the machine-readable model published by
 atx-spec (schemas/atx-credential-v1.1.schema.json), vendored under
@@ -417,8 +418,12 @@ def _with_id(schema: dict, sid: str) -> dict:
 
 def _address_cases() -> list[tuple[bool, str, str]]:
     """(green, label, detail): each tracked format schema is identified by the
-    address its file is served from, and a copy identified by another address
-    is reported, the hosts that named the two formats before included."""
+    address its file is served from, and a copy of each identified by another
+    address is reported: for every tracked schema, a path under the served
+    prefix that no file has (its path with `.schema.json` read as `.json`),
+    and for the fixture and profile formats, the hosts that named them
+    before, and the profile format's address on a copy of the fixture
+    format."""
     tracked = {path.relative_to(ROOT).as_posix(): json.loads(path.read_text(encoding="utf-8"))
                for path in sorted(ROOT.glob(FORMAT_GLOB))}
     results = []
@@ -426,6 +431,16 @@ def _address_cases() -> list[tuple[bool, str, str]]:
         problem = schema_problem(pathlib.PurePosixPath(rel), schema)
         results.append((not problem, f"tracked {rel} is identified by the address it is served from",
                         problem))
+    # One copy of every tracked schema, so a schema added as
+    # schemas/<name>.schema.json has a case without one being written for it.
+    unserved = []
+    for rel in tracked:
+        path = rel.removesuffix(".schema.json") + ".json"
+        label = f"{rel} identified by a path under the served prefix that no file has"
+        if (ROOT / path).exists():
+            results.append((False, label, f"{path} is a file this repository has"))
+        else:
+            unserved.append((label, rel, SERVED_FROM + path))
     for label, rel, sid in (
             ("fixture format identified on atx.opena2a.org",
              FIXTURE_FORMAT, "https://atx.opena2a.org/schemas/fixture-v1.json"),
@@ -433,8 +448,7 @@ def _address_cases() -> list[tuple[bool, str, str]]:
              PROFILE_FORMAT, "https://specs.opena2a.org/schemas/conformance-profile-v1.json"),
             ("fixture format identified by the profile format's address",
              FIXTURE_FORMAT, SERVED_FROM + PROFILE_FORMAT),
-            ("fixture format identified by a path under the served prefix that no file has",
-             FIXTURE_FORMAT, SERVED_FROM + "schemas/fixture-v1.json")):
+            *unserved):
         if rel not in tracked:
             results.append((False, label, f"no tracked {rel} to alter"))
             continue

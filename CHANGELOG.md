@@ -420,6 +420,37 @@ they should not.
 
 ### Fixed
 
+- The repository layout in `CONTRIBUTING.md` names the verifier wall, and
+  `scripts/check_readme_counts.py` holds the layout to the tree (#415). The
+  layout gave no line to `wall/`; its `schemas/*.schema.json` line named the
+  fixture-v1 and conformance-profile-v1 formats but not wall-v1; it gave no
+  line to `scripts/test_check_wall.py`, while each other test module the
+  workflow runs has one; and it gave none to `scripts/check_wall.py`, which
+  no workflow step runs, while its `scripts/*.py` line labels the scripts CI
+  gates. The script exited 0 on that layout. It counted `check_wall.py` as
+  run because `scripts/test_check_wall.py`, a test module the Python unit
+  tests step discovers, imports it; it now follows imports from the scripts
+  a step names, and reports `check_wall.py` as not run. It also fails now
+  when a top-level directory holding a file git tracks, other than one
+  whose name opens with a dot, opens no line of the layout, when the
+  `schemas/*.schema.json` line does not name the format of each file that
+  glob matches, and when a test module the workflow's unittest discovery
+  imports has no line of its own. On the layout as it stood, it exits 1 and
+  lists four failures, one for each omission. The layout gains lines for
+  `wall/`, `scripts/check_wall.py` (run by hand, with the command that runs
+  it) and `scripts/test_check_wall.py`, and its `schemas/*.schema.json`
+  line names wall-v1; with them the script exits 0. Its self-test adds 14
+  cases. No fixture, expected verdict or workflow file changes.
+- The self-test of `scripts/schema_validation.py` builds, for each schema
+  `schemas/*.schema.json` matches, a copy identified by a path under the
+  served prefix that no file has, and requires the address check to report
+  it (#415). It altered copies of the fixture-v1 and conformance-profile-v1
+  schemas alone, while `docs/continuous-verification.md` says the
+  self-test proves the check fails "on copies of each schema that name
+  another address": `schemas/wall-v1.schema.json` had no such case. The
+  self-test adds two cases, a copy of the conformance-profile-v1 schema and
+  a copy of the wall-v1 schema, and the fixture-v1 schema's case is built
+  the same way. No fixture, expected verdict or workflow file changes.
 - `python3 -I scripts/check_wall.py`, on a wall row whose `agree` and
   `rejectedMustPass` were each the digit 9 written 4300 times, ended in a
   Python traceback, `ValueError: Exceeds the limit (4300 digits) for
