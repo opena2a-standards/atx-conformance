@@ -462,6 +462,32 @@ they should not.
   same way; a count of at most 80 digits is written in full, as before.
   Its self-test adds two cases. No fixture, verifier or expected verdict
   changes.
+- `scripts/check_wall.py` called its rule that `acceptedMustFail` is 0 and
+  `couldNotRead` is below `fixtureCount` the rule by which a run of the kit
+  passes, and its usage text called it the pass rule; `wall/README.md` said
+  the wall lists verifiers whose maintainers ran the kit and passed, and
+  the descriptions in `schemas/wall-v1.schema.json` said each row's
+  verifier version passed a run of the interop kit (#414). The kit exits 0
+  only when every fixture agrees with the answer key, and 1 when any does
+  not, while the check admits a row whose `agree` is below `fixtureCount`,
+  0 included. Those texts now say that the pass rule is the wall's own, not
+  the kit's exit status, and what passed means on the wall: `acceptedMustFail`
+  is 0 and `couldNotRead` is below `fixtureCount`, the verifier accepting
+  no fixture that must fail and the kit reading an ACCEPT or REJECT from it
+  on at least one fixture. The refusal for an `acceptedMustFail` above 0
+  now ends `a row is admitted only at 0`, where it ended
+  `a run passes only at 0`. A new class of `scripts/test_check_wall.py`,
+  `TheWallsOwnRule`, fails when the module docstring, the usage text, the
+  README or the schema's description lacks one of the phrases
+  `acceptedMustFail is 0 and couldNotRead is below fixtureCount`,
+  `not the kit's exit status` and
+  `the kit exits 0 only when every fixture agrees`, or when that refusal
+  says a run passes; on the texts as they were, it failed on each of the
+  four and on the refusal. It also holds the end of the kit's run in
+  `interop/run.go`, and its usage text, to that exit status, and checks
+  that the wall admits a row in which no fixture agreed. No rule or exit
+  status of the check changes, and no fixture, verifier or expected
+  verdict changes.
 - `python3 scripts/kit/test/test_kit.py --offline`, with git not on PATH,
   ended in a Python traceback, `FileNotFoundError: [Errno 2] No such file
   or directory: 'git'`, exited 1 and left its `kit-test-*` scratch folder

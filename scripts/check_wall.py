@@ -2,7 +2,8 @@
 """Hold a wall file, wall/verifiers.json by default, to the wall's contract.
 
 The wall lists the verifiers whose maintainers ran the interop kit at a
-released version and passed: one row per verifier version and kit version.
+released version and passed by the wall's own rule, which is not the kit's
+exit status (pass, below): one row per verifier version and kit version.
 schemas/wall-v1.schema.json is the row's format. A row names no report,
 commit or link: the report stays with the maintainer's run, and the pull
 request that adds the row carries the link to that run in its body. So this
@@ -32,8 +33,17 @@ holds (the rule's name is the word in parentheses):
     (fixture-count);
   - agree, acceptedMustFail, rejectedMustPass and couldNotRead sum to
     fixtureCount: the kit gives each fixture one of the four outcomes (sum);
-  - acceptedMustFail is 0 and couldNotRead is below fixtureCount, the rule
-    by which a run of the kit passes (pass);
+  - acceptedMustFail is 0 and couldNotRead is below fixtureCount: the
+    verifier accepted no fixture that must fail, and the kit read an ACCEPT
+    or REJECT from it on at least one fixture (pass). This is what passed
+    means on the wall, and it is the wall's own rule, not the kit's exit
+    status: the kit exits 0 only when every fixture agrees with the answer
+    key, agree equal to fixtureCount, and 1 when any does not
+    (interop/run.go). So the wall admits a run on which the kit exited 1,
+    one in which the verifier rejected a fixture that must pass or the kit
+    could not read an answer: its row counts those fixtures in
+    rejectedMustPass and couldNotRead, with agree below fixtureCount, down
+    to 0;
   - date is not after today's date in UTC, nor before the UTC date of the
     commit the tag names (date);
   - the rows are sorted by verifier, then version, then kitVersion, each
@@ -104,11 +114,15 @@ FETCH = "run `git fetch --tags` and check again"
 USAGE = """usage: {name} [--file <path>] [--repo <path>]
 
 Checks each row of a wall file: its members against
-schemas/wall-v1.schema.json, its counts against the pass rule (the four
-outcomes sum to fixtureCount, acceptedMustFail is 0 and couldNotRead is
-below fixtureCount), and its kitVersion against the repository's tags (the
-tag is there, fixtureCount is the number of fixtures/*.json files at it,
-and the date falls between the date of its commit and today, in UTC).
+schemas/wall-v1.schema.json, its counts against the wall's rules (the four
+outcomes sum to fixtureCount, and the pass rule: acceptedMustFail is 0 and
+couldNotRead is below fixtureCount), and its kitVersion against the
+repository's tags (the tag is there, fixtureCount is the number of
+fixtures/*.json files at it, and the date falls between the date of its
+commit and today, in UTC). The pass rule is the wall's own, not the kit's
+exit status: the kit exits 0 only when every fixture agrees, so the wall
+admits a row whose agree is below fixtureCount, from a run on which the
+kit exited 1.
 Prints one line per refusal, and exits 1 on any refusal and 0 otherwise.
 
   --file <path>  the wall file to read (default: wall/verifiers.json in
@@ -376,8 +390,8 @@ def row_refusals(row, tag_of, today):
 
     if good.get("acceptedMustFail", 0) != 0:
         out.append(("pass", f"acceptedMustFail is {show(good['acceptedMustFail'])}: the "
-                            f"verifier accepted a fixture that must fail, and a run passes "
-                            f"only at 0"))
+                            f"verifier accepted a fixture that must fail, and a row is "
+                            f"admitted only at 0"))
     if ("couldNotRead" in good and "fixtureCount" in good
             and good["couldNotRead"] >= good["fixtureCount"]):
         out.append(("pass", f"couldNotRead {show(good['couldNotRead'])} is not below "
