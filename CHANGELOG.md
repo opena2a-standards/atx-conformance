@@ -420,6 +420,17 @@ they should not.
 
 ### Fixed
 
+- `python3 -I scripts/check_wall.py`, on a wall row whose `agree` and
+  `rejectedMustPass` were each the digit 9 written 4300 times, ended in a
+  Python traceback, `ValueError: Exceeds the limit (4300 digits) for
+  integer string conversion`, and printed no refusal line (#413): the sum
+  of the two has 4301 digits, which Python 3.14.3 refuses to write. It now
+  prints one `sum` refusal line for the row, in which a count or sum of
+  more than 80 digits is written as its first 77 digits and `...`, and
+  exits 1. The `fixture-count` and `pass` refusals cut such a count the
+  same way; a count of at most 80 digits is written in full, as before.
+  Its self-test adds two cases. No fixture, verifier or expected verdict
+  changes.
 - `python3 scripts/kit/test/test_kit.py --offline`, with git not on PATH,
   ended in a Python traceback, `FileNotFoundError: [Errno 2] No such file
   or directory: 'git'`, exited 1 and left its `kit-test-*` scratch folder

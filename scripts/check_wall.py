@@ -124,13 +124,35 @@ def show(value):
     """A string, number, boolean or null as JSON, with every control
     character and every character past ASCII escaped, cut to 80 characters,
     and an array or an object by its kind alone, so a refusal stays one short
-    line however deep the value is nested."""
+    line however deep the value is nested and however many digits a count
+    has."""
     if isinstance(value, dict):
         return "(an object)"
     if isinstance(value, list):
         return "(an array)"
+    if type(value) is int:
+        return cut_integer(value)
     text = json.dumps(value, ensure_ascii=True)
     return text if len(text) <= 80 else text[:77] + "..."
+
+
+def cut_integer(value):
+    """The integer value in decimal, cut as show() cuts JSON: in full when
+    that is at most 80 characters, else its first 77 and "...". It never
+    writes a longer integer in full, which Python refuses to do past
+    sys.get_int_max_str_digits() digits, 4300 unless set otherwise: JSON
+    reads a count of 4300 digits, and the sum of two such counts can have
+    4301."""
+    if -10 ** 79 < value < 10 ** 80:
+        return str(value)
+    sign, size = ("-", -value) if value < 0 else ("", value)
+    keep = 77 - len(sign)
+    # size has at least floor((bits - 1) * log10(2)) + 1 digits, and 0.30102
+    # is below log10(2), so least is never more than the digits size has:
+    # dividing by 10 ** (least - keep) leaves keep digits or a few more, the
+    # first keep of them those of size.
+    least = (size.bit_length() - 1) * 30102 // 100000 + 1
+    return sign + str(size // 10 ** (least - keep))[:keep] + "..."
 
 
 def one_line(text):
@@ -340,25 +362,27 @@ def row_refusals(row, tag_of, today):
         out += [("fixture-count", text) for text in problems["fixture-count"]]
         if tag["fixtures"] is not None and tag["fixtures"] != good["fixtureCount"]:
             out.append(("fixture-count",
-                        f"fixtureCount {good['fixtureCount']} is not {tag['fixtures']}, the number "
-                        f"of fixtures/*.json files at tag {good['kitVersion']}: the kit at that "
-                        f"version sends each of them once"))
+                        f"fixtureCount {show(good['fixtureCount'])} is not {tag['fixtures']}, "
+                        f"the number of fixtures/*.json files at tag {good['kitVersion']}: the "
+                        f"kit at that version sends each of them once"))
 
     if all(name in good for name in COUNTS):
         total = sum(good[name] for name in BUCKETS)
         if total != good["fixtureCount"]:
-            terms = " + ".join(f"{name} {good[name]}" for name in BUCKETS)
-            out.append(("sum", f"{terms} is {total}, not fixtureCount {good['fixtureCount']}: "
-                               f"the kit gives each fixture one of the four outcomes"))
+            terms = " + ".join(f"{name} {show(good[name])}" for name in BUCKETS)
+            out.append(("sum", f"{terms} is {show(total)}, not fixtureCount "
+                               f"{show(good['fixtureCount'])}: the kit gives each fixture one "
+                               f"of the four outcomes"))
 
     if good.get("acceptedMustFail", 0) != 0:
-        out.append(("pass", f"acceptedMustFail is {good['acceptedMustFail']}: the verifier "
-                            f"accepted a fixture that must fail, and a run passes only at 0"))
+        out.append(("pass", f"acceptedMustFail is {show(good['acceptedMustFail'])}: the "
+                            f"verifier accepted a fixture that must fail, and a run passes "
+                            f"only at 0"))
     if ("couldNotRead" in good and "fixtureCount" in good
             and good["couldNotRead"] >= good["fixtureCount"]):
-        out.append(("pass", f"couldNotRead {good['couldNotRead']} is not below fixtureCount "
-                            f"{good['fixtureCount']}: the kit read none of the verifier's "
-                            f"answers, so the run measured nothing"))
+        out.append(("pass", f"couldNotRead {show(good['couldNotRead'])} is not below "
+                            f"fixtureCount {show(good['fixtureCount'])}: the kit read none of "
+                            f"the verifier's answers, so the run measured nothing"))
 
     if "date" in good:
         day = datetime.date.fromisoformat(good["date"])

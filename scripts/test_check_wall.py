@@ -364,6 +364,33 @@ class AlsoRefused(unittest.TestCase):
         self.repo.admit(wall_row(agree=float(FIXTURES)))
         self.assertEqual(self.repo.refusals(), [(0, "format")])
 
+    def test_counts_summing_to_4301_digits_are_refused_in_one_line(self):
+        # JSON reads a count of up to 4300 digits, and Python refuses to write
+        # an integer of more, so the sum of these two is never written in full.
+        nines = int("9" * 4300)
+        self.repo.admit(wall_row(agree=nines, rejectedMustPass=nines))
+        self.assertEqual(self.repo.refusals(), [(0, "sum")])
+        done = self.repo.run()
+        self.assertEqual((done.returncode, done.stderr), (1, ""), done.stdout)
+        cut = "9" * 77 + "..."
+        self.assertEqual(done.stdout.splitlines(), [
+            f'refused: wall/verifiers.json[0] (verifier "Example Verifier"): sum: agree {cut} '
+            f"+ acceptedMustFail 0 + rejectedMustPass {cut} + couldNotRead 0 is "
+            f"1{'9' * 76}..., not fixtureCount 3: the kit gives each fixture one of the four "
+            f"outcomes",
+            "wall/verifiers.json: 1 refusal",
+        ])
+
+    def test_a_count_of_4300_digits_is_cut_in_each_refusal_that_names_it(self):
+        nines = int("9" * 4300)
+        self.repo.admit(wall_row(fixtureCount=nines, agree=0, acceptedMustFail=nines,
+                                 couldNotRead=nines))
+        self.assertEqual(self.repo.refusals(),
+                         [(0, "fixture-count"), (0, "sum"), (0, "pass"), (0, "pass")])
+        for line in self.repo.lines():
+            self.assertIsNone(re.search("[0-9]{78}", line), line[:200])
+            self.assertIn("9" * 77 + "...", line)
+
     def test_a_verifier_ending_in_a_line_break_is_refused(self):
         self.repo.admit(wall_row(verifier="Example Verifier\n"))
         self.assertEqual(self.repo.refusals(), [(0, "format")])
