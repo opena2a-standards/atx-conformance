@@ -428,6 +428,19 @@ they should not.
   cells: one fails unless a line of each render names the three by URL and
   says they are not in the kit, and one drops that line and must be
   refused. No fixture or verifier changes.
+- README.md's kit section, `Try your verifier in two minutes`, installs the
+  kit at commit `a38e000`, the commit the kit release `kit-2026-11-14`
+  carries, where it installed the kit at `4f70281`, and the count of
+  fixtures it gives for the commit it installs goes from 41 to 47. Its two
+  sentences on what the kit reports for `true`, which answers ACCEPT to
+  everything, said 9 agree and 32 accepted what must fail, the counts of
+  the kit at `4f70281`. They now say 10 agree and 37 accepted what must
+  fail: the fixtures at `a38e000` hold 10 that must pass and 37 that must
+  fail. Built from `a38e000` and run with `--verifier true`, and with
+  `--verifier-url` against `examples/serve_verifier.py` serving `true`, the
+  kit answers 47 of 47 credentials, agrees with the answer key on 10 and
+  accepts 37 that must fail. `scripts/check_readme_counts.py` does not hold
+  these two counts. No fixture or verifier changes.
 
 ### Fixed
 

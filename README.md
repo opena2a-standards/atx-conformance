@@ -118,7 +118,7 @@ service (yours goes in the angle brackets):
 ```
 
 To see a result before you connect yours, use `true`, which answers ACCEPT to
-everything: 9 agree, and 32 accepted what must fail.
+everything: 10 agree, and 37 accepted what must fail.
 
 ```bash
 "$(go env GOPATH)/bin/atx-verify" --verifier true --label "always ACCEPT" --report atx-report
@@ -133,7 +133,7 @@ python3 examples/serve_verifier.py 8080 true &
 ```
 
 When it prints its `listening on` line, run the kit against port 8080 on
-this machine; it shows the same 9 agree and 32 accepted what must fail, and
+this machine; it shows the same 10 agree and 37 accepted what must fail, and
 `kill %1` stops the service:
 
 ```bash
