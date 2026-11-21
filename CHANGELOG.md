@@ -431,23 +431,44 @@ they should not.
   before its checks. Measured on this tree, none is left by each run the
   `--ci` cells make it refuse, by a run with an option it does not know,
   or by a run that ends in a traceback before its checks
-  (`--offline --log /dev/null/x`); on the commit before, each of the
-  refused runs left one. The `--ci` cells that run `test_kit.py` with options it
-  refuses now also check that each run leaves no scratch folder in its
+  (`--offline --log /dev/null/x` was one until #408, below, made it
+  exit 2); on the commit before, each of the refused runs left one. The
+  `--ci` cells that run `test_kit.py` with options it refuses now also
+  check that each run leaves no scratch folder in its
   `TMPDIR`, and add three runs with git not on PATH: `--offline`,
   `--offline --commit` with HEAD's sha, and `--offline --kit` naming a
   folder that holds each file the `--kit` checks read, which gets past the
   `--kit` check to the `--log` one. No fixture, verifier or expected
   verdict changes.
 - `python3 scripts/kit/test/test_kit.py --offline --log /dev/null/x`, a
-  `--log` path under a regular file, where no folder can be made, ended in
-  a Python traceback, `NotADirectoryError: [Errno 20] Not a directory`,
+  `--log` path under a file that is not a folder (`/dev/null` is a
+  character device), where no folder can be made, ended in a Python
+  traceback, `NotADirectoryError: [Errno 20] Not a directory`,
   and exited 1 (#408). It now exits 2 before any check runs, the first line
   of its standard error reading
   `test_kit: --log /dev/null/x: no folder can be made there (Not a directory)`,
   as measured on macOS. The `--ci` cells that run `test_kit.py` with
   options it refuses add one such run, `--offline --log` naming a path
   under a regular file. No fixture, verifier or expected verdict changes.
+- `python3 scripts/kit/test/test_kit.py --offline --log <path>` ended in a
+  Python traceback and exited 1 before any check ran (#411): with Python
+  3.9.6, 3.12.12 and 3.13.12, for a `--log` path in a folder with mode
+  000, a path under a file in such a folder, or a path whose last name is
+  300 bytes long, where `Path.exists()` raised `PermissionError` or
+  `OSError` (File name too long); and with those and 3.14.3, for an
+  existing empty folder with mode 000, which it could not list, or with
+  mode 500, where it could not write `offline.log`. Each of these runs now
+  exits 2 before any check runs, the first line of its standard error
+  naming the reason: `no folder can be made there (Permission denied)`,
+  `no folder can be made there (File name too long)`,
+  `the folder cannot be listed (Permission denied)` or
+  `offline.log cannot be written there (Permission denied)`, as measured
+  on macOS with Python 3.9.6, 3.12.12, 3.13.12 and 3.14.3. The `--ci`
+  cells that run `test_kit.py` with options it refuses add these five
+  runs. Each first checks that the mode, or the name's length, denies the
+  step to the user running the cells; when it does not, the cell fails
+  and the run is not started. No fixture, verifier or expected verdict
+  changes.
 - README.md gives `docs/captures/go-verifier.txt` as the full output of
   `atx-verify` with no argument, and neither it nor
   `docs/running-the-verifiers.md` said that at a terminal a run in which

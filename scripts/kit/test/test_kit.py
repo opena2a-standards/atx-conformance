@@ -26,7 +26,11 @@ check fail.
       the reason, and a folder holding each of those files gets past those
       checks. With git not on PATH, --offline and --offline --commit with
       HEAD's sha exit 2 and name the reason, and --kit with that folder
-      gets past those checks. None of these runs leaves a scratch folder.
+      gets past those checks. --log naming a path where no folder can be
+      made (under a regular file, in a folder with mode 000, or with a name
+      300 bytes long), or an empty folder this run cannot list (mode 000)
+      or write in (mode 500), exits 2 and names the reason. None of these
+      runs leaves a scratch folder.
   test_kit.py --sandboxed
       Cells that run the scripts naming gh (candidate_equal.sh,
       verify_release.sh, write_stick.sh) with test doubles for gh, git and
@@ -59,10 +63,13 @@ check fail.
       names the reason (--offline --kit KIT needs neither git nor Go).
   test_kit.py --offline --log DIR
       As --offline, and keeps the record of the run in DIR, a folder that
-      must be new or empty. DIR/offline.log names the commit the copy was
-      made from, the commit this file is from, the time the run started and
-      the system it ran on, and holds the line of each cell, the command of
-      each run and how many cells passed. For each run, the standard output
+      must be new or empty. A DIR that is neither, where no folder can be
+      made, or that this run cannot list or write DIR/offline.log in makes
+      it exit 2 before any cell runs and name the reason. DIR/offline.log
+      names the commit the copy was made from, the commit this file is
+      from, the time the run started and the system it ran on, and holds
+      the line of each cell, the command of each run and how many cells
+      passed. For each run, the standard output
       and standard error with the network denied and with it allowed are
       kept as <cell>.denied.stdout, <cell>.denied.stderr,
       <cell>.allowed.stdout and <cell>.allowed.stderr (o2.denied.stdout,
@@ -1260,7 +1267,14 @@ def cells_options() -> None:
     each file the --kit cells read (with git on PATH and without it), get
     past the --commit and --kit checks to the --log check, which a folder
     holding a file stops, so no cell runs there either; a --log path under a
-    regular file, where no folder can be made, is refused the same way."""
+    regular file, where no folder can be made, is refused the same way. So
+    are a --log path in a folder with mode 000, a path under a file in such
+    a folder and a path whose last name is 300 bytes long, where no folder
+    can be made, an empty folder with mode 000, which cannot be listed, and
+    an empty folder with mode 500, where offline.log cannot be written. A
+    witness first shows that the mode, or the name's length, denies this
+    user the step; a witness that does not hold fails the cell, and no run
+    starts (a user the modes do not deny would get past the --log check)."""
     # A run this cell starts that got past main()'s checks with --ci would
     # reach this cell again; TEST_KIT_OPTIONS_RUN stops it there.
     if os.environ.get("TEST_KIT_OPTIONS_RUN") == "1":
@@ -1328,19 +1342,68 @@ def cells_options() -> None:
     ]
     # Each run makes its scratch folder at import, in a TMPDIR of its own in
     # this cell's folder; that TMPDIR must be empty once the run has exited.
-    for i, (what, args, expect, *path) in enumerate(cases, 1):
+    def refused(i: int, what: str, args: list, expect: str, path: Path | None = None, witness: str = "") -> None:
+        name = f"u{i} {what}: exit 2 before any cell runs, the reason first, no scratch folder left"
+        if witness:
+            cell(name, False, f"{witness}; no run started")
+            return
         tmp = d / f"tmp-u{i}"
         tmp.mkdir()
         env = dict(os.environ, TMPDIR=str(tmp), TEST_KIT_OPTIONS_RUN="1")
         if path:
-            env["PATH"] = str(path[0])
+            env["PATH"] = str(path)
         r = run([PY, "-I", Path(__file__).resolve(), *args], env=env)
         first = r.stderr.split("\n", 1)[0]
         left = sorted(p.name for p in tmp.iterdir())
-        cell(f"u{i} {what}: exit 2 before any cell runs, the reason first, no scratch folder left",
-             r.returncode == 2 and first == f"test_kit: {expect}" and not r.stdout and not left,
+        cell(name, r.returncode == 2 and first == f"test_kit: {expect}" and not r.stdout and not left,
              f"exit {r.returncode}: {first[:160]}" + (f"; standard output {r.stdout[:80]!r}" if r.stdout else "")
              + (f"; left in its TMPDIR: {' '.join(left)}" if left else ""))
+
+    for i, (what, args, expect, *path) in enumerate(cases, 1):
+        refused(i, what, args, expect, *path)
+
+    # --log paths that Path.exists() raised on with Python 3.9, 3.12 and 3.13
+    # (a folder above with mode 000, a name too long), and folders this run
+    # cannot list or write offline.log in. Each mode is set for its own run.
+    shut, shut_file, unlisted, unwritten = d / "shut", d / "shut-file", d / "unlisted", d / "unwritten"
+    for f in (shut, shut_file, unlisted, unwritten):
+        f.mkdir()
+    (shut_file / "a-file").write_text("")
+    long_name = d / ("x" * 300)
+    eacces = os.strerror(errno.EACCES)
+    log_cases = [
+        ("refused: --log naming a path in a folder with mode 000, where no folder can be made",
+         shut / "x", shut, 0o000, lambda: os.stat(shut / "x"), errno.EACCES,
+         f"no folder can be made there ({eacces})"),
+        ("refused: --log naming a path under a file in a folder with mode 000, where no folder can be made",
+         shut_file / "a-file" / "x", shut_file, 0o000, lambda: os.stat(shut_file / "a-file" / "x"), errno.EACCES,
+         f"no folder can be made there ({eacces})"),
+        ("refused: --log naming a path whose last name is 300 bytes long, where no folder can be made",
+         long_name, None, None, lambda: os.stat(long_name), errno.ENAMETOOLONG,
+         f"no folder can be made there ({os.strerror(errno.ENAMETOOLONG)})"),
+        ("refused: --log naming an empty folder with mode 000, which cannot be listed",
+         unlisted, unlisted, 0o000, lambda: os.listdir(unlisted), errno.EACCES,
+         f"the folder cannot be listed ({eacces})"),
+        ("refused: --log naming an empty folder with mode 500, where offline.log cannot be written",
+         unwritten, unwritten, 0o500,
+         lambda: os.close(os.open(unwritten / LOG_NAME, os.O_WRONLY | os.O_CREAT | os.O_EXCL)), errno.EACCES,
+         f"{LOG_NAME} cannot be written there ({eacces})"),
+    ]
+    for i, (what, log, folder, mode, step, want, reason) in enumerate(log_cases, len(cases) + 1):
+        if folder is not None:
+            folder.chmod(mode)
+        try:
+            try:
+                step()
+                witness = "witness: the step the run is refused at works for this user"
+            except OSError as e:
+                witness = ("" if e.errno == want else
+                           f"witness: the step fails with {e.strerror}, not with {os.strerror(want)}")
+            refused(i, what, ["--offline", "--log", str(log)], f"--log {log}: {reason}", witness=witness)
+        finally:
+            # Set back, so the scratch folder can be removed.
+            if folder is not None:
+                folder.chmod(0o700)
 
 
 # ---------------------------------------------------------- --sandboxed cells
@@ -1792,6 +1855,41 @@ def kit_refusal(kit: str, modes: set[str], commit: str | None) -> str:
     return f"--kit {kit}: not an unpacked kit for {plat}: no {', no '.join(lacks)}" if lacks else ""
 
 
+def log_refusal(log: str, modes: set[str]) -> str:
+    """Why main() refuses --log LOG, or "" when it takes it. Taking it makes
+    the folder when it is new, and starts the record in it, so a folder this
+    run cannot list, or cannot write the record in, is refused here too."""
+    if not log:
+        return "--log needs a folder after it"
+    if "--offline" not in modes:
+        return "--log goes with --offline"
+    folder = Path(log).absolute()
+    # os.path.isdir and os.path.exists answer False on any OSError, where
+    # Path's is_dir and exists raise each error but ENOENT, ENOTDIR, EBADF
+    # and ELOOP on Python 3.9, 3.12 and 3.13 (EACCES from a folder above
+    # LOG, ENAMETOOLONG): with these, mkdir below names that error instead.
+    if os.path.isdir(folder):
+        try:
+            if any(folder.iterdir()):
+                return f"--log {log}: not a new or empty folder"
+        except OSError as e:
+            return f"--log {log}: the folder cannot be listed ({e.strerror})"
+    elif os.path.exists(folder):
+        return f"--log {log}: not a new or empty folder"
+    try:
+        # A path under a file that is not a folder does not exist, and no
+        # folder can be made there.
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return f"--log {log}: no folder can be made there ({e.strerror})"
+    try:
+        with open(folder / LOG_NAME, "a", encoding="utf-8"):
+            pass
+    except OSError as e:
+        return f"--log {log}: {LOG_NAME} cannot be written there ({e.strerror})"
+    return ""
+
+
 def kit_install(kit: Path, plat: str) -> tuple[dict[str, Path], str]:
     """Installs the Python verifier from the kit's wheels into a scratch
     venv, inside the sandbox, with the options of the kit's PYTHON.md.
@@ -2082,24 +2180,13 @@ def main(argv: list[str]) -> int:
             if not OFFLINE_SHA:
                 why = f"{'--commit ' if commit else ''}{OFFLINE_REV}: names no commit in this repository"
     if not why and log is not None:
-        folder = Path(log).absolute()
-        why = ("--log needs a folder after it" if not log else
-               "--log goes with --offline" if "--offline" not in modes else
-               f"--log {log}: not a new or empty folder"
-               if folder.exists() and (not folder.is_dir() or any(folder.iterdir())) else "")
-        if not why:
-            # A path under a regular file does not exist, and no folder can
-            # be made there; that is a misuse too, refused before any cell.
-            try:
-                folder.mkdir(parents=True, exist_ok=True)
-            except OSError as e:
-                why = f"--log {log}: no folder can be made there ({e.strerror})"
+        why = log_refusal(log, modes)
     if why:
         print(f"test_kit: {why}", file=sys.stderr)
         print(__doc__, file=sys.stderr)
         return 2
     if log is not None:
-        LOG_DIR = folder
+        LOG_DIR = Path(log).absolute()
         started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         log_line(f"test_kit.py {' '.join(sorted(modes))}, started {started}")
         if OFFLINE_KIT is not None:
