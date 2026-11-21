@@ -2,7 +2,8 @@
 """Hold a wall file, wall/verifiers.json by default, to the wall's contract.
 
 The wall lists the verifiers whose maintainers ran the interop kit at a
-released version and passed: one row per verifier version and kit version.
+released version and passed by the wall's own rule, which is not the kit's
+exit status (pass, below): one row per verifier version and kit version.
 schemas/wall-v1.schema.json is the row's format. A row names no report,
 commit or link: the report stays with the maintainer's run, and the pull
 request that adds the row carries the link to that run in its body. So this
@@ -32,8 +33,17 @@ holds (the rule's name is the word in parentheses):
     (fixture-count);
   - agree, acceptedMustFail, rejectedMustPass and couldNotRead sum to
     fixtureCount: the kit gives each fixture one of the four outcomes (sum);
-  - acceptedMustFail is 0 and couldNotRead is below fixtureCount, the rule
-    by which a run of the kit passes (pass);
+  - acceptedMustFail is 0 and couldNotRead is below fixtureCount: the
+    verifier accepted no fixture that must fail, and the kit read an ACCEPT
+    or REJECT from it on at least one fixture (pass). This is what passed
+    means on the wall, and it is the wall's own rule, not the kit's exit
+    status: the kit exits 0 only when every fixture agrees with the answer
+    key, agree equal to fixtureCount, and 1 when any does not
+    (interop/run.go). So the wall admits a run on which the kit exited 1,
+    one in which the verifier rejected a fixture that must pass or the kit
+    could not read an answer: its row counts those fixtures in
+    rejectedMustPass and couldNotRead, with agree below fixtureCount, down
+    to 0;
   - date is not after today's date in UTC, nor before the UTC date of the
     commit the tag names (date);
   - the rows are sorted by verifier, then version, then kitVersion, each
@@ -104,11 +114,15 @@ FETCH = "run `git fetch --tags` and check again"
 USAGE = """usage: {name} [--file <path>] [--repo <path>]
 
 Checks each row of a wall file: its members against
-schemas/wall-v1.schema.json, its counts against the pass rule (the four
-outcomes sum to fixtureCount, acceptedMustFail is 0 and couldNotRead is
-below fixtureCount), and its kitVersion against the repository's tags (the
-tag is there, fixtureCount is the number of fixtures/*.json files at it,
-and the date falls between the date of its commit and today, in UTC).
+schemas/wall-v1.schema.json, its counts against the wall's rules (the four
+outcomes sum to fixtureCount, and the pass rule: acceptedMustFail is 0 and
+couldNotRead is below fixtureCount), and its kitVersion against the
+repository's tags (the tag is there, fixtureCount is the number of
+fixtures/*.json files at it, and the date falls between the date of its
+commit and today, in UTC). The pass rule is the wall's own, not the kit's
+exit status: the kit exits 0 only when every fixture agrees, so the wall
+admits a row whose agree is below fixtureCount, from a run on which the
+kit exited 1.
 Prints one line per refusal, and exits 1 on any refusal and 0 otherwise.
 
   --file <path>  the wall file to read (default: wall/verifiers.json in
@@ -124,13 +138,35 @@ def show(value):
     """A string, number, boolean or null as JSON, with every control
     character and every character past ASCII escaped, cut to 80 characters,
     and an array or an object by its kind alone, so a refusal stays one short
-    line however deep the value is nested."""
+    line however deep the value is nested and however many digits a count
+    has."""
     if isinstance(value, dict):
         return "(an object)"
     if isinstance(value, list):
         return "(an array)"
+    if type(value) is int:
+        return cut_integer(value)
     text = json.dumps(value, ensure_ascii=True)
     return text if len(text) <= 80 else text[:77] + "..."
+
+
+def cut_integer(value):
+    """The integer value in decimal, cut as show() cuts JSON: in full when
+    that is at most 80 characters, else its first 77 and "...". It never
+    writes a longer integer in full, which Python refuses to do past
+    sys.get_int_max_str_digits() digits, 4300 unless set otherwise: JSON
+    reads a count of 4300 digits, and the sum of two such counts can have
+    4301."""
+    if -10 ** 79 < value < 10 ** 80:
+        return str(value)
+    sign, size = ("-", -value) if value < 0 else ("", value)
+    keep = 77 - len(sign)
+    # size has at least floor((bits - 1) * log10(2)) + 1 digits, and 0.30102
+    # is below log10(2), so least is never more than the digits size has:
+    # dividing by 10 ** (least - keep) leaves keep digits or a few more, the
+    # first keep of them those of size.
+    least = (size.bit_length() - 1) * 30102 // 100000 + 1
+    return sign + str(size // 10 ** (least - keep))[:keep] + "..."
 
 
 def one_line(text):
@@ -340,25 +376,27 @@ def row_refusals(row, tag_of, today):
         out += [("fixture-count", text) for text in problems["fixture-count"]]
         if tag["fixtures"] is not None and tag["fixtures"] != good["fixtureCount"]:
             out.append(("fixture-count",
-                        f"fixtureCount {good['fixtureCount']} is not {tag['fixtures']}, the number "
-                        f"of fixtures/*.json files at tag {good['kitVersion']}: the kit at that "
-                        f"version sends each of them once"))
+                        f"fixtureCount {show(good['fixtureCount'])} is not {tag['fixtures']}, "
+                        f"the number of fixtures/*.json files at tag {good['kitVersion']}: the "
+                        f"kit at that version sends each of them once"))
 
     if all(name in good for name in COUNTS):
         total = sum(good[name] for name in BUCKETS)
         if total != good["fixtureCount"]:
-            terms = " + ".join(f"{name} {good[name]}" for name in BUCKETS)
-            out.append(("sum", f"{terms} is {total}, not fixtureCount {good['fixtureCount']}: "
-                               f"the kit gives each fixture one of the four outcomes"))
+            terms = " + ".join(f"{name} {show(good[name])}" for name in BUCKETS)
+            out.append(("sum", f"{terms} is {show(total)}, not fixtureCount "
+                               f"{show(good['fixtureCount'])}: the kit gives each fixture one "
+                               f"of the four outcomes"))
 
     if good.get("acceptedMustFail", 0) != 0:
-        out.append(("pass", f"acceptedMustFail is {good['acceptedMustFail']}: the verifier "
-                            f"accepted a fixture that must fail, and a run passes only at 0"))
+        out.append(("pass", f"acceptedMustFail is {show(good['acceptedMustFail'])}: the "
+                            f"verifier accepted a fixture that must fail, and a row is "
+                            f"admitted only at 0"))
     if ("couldNotRead" in good and "fixtureCount" in good
             and good["couldNotRead"] >= good["fixtureCount"]):
-        out.append(("pass", f"couldNotRead {good['couldNotRead']} is not below fixtureCount "
-                            f"{good['fixtureCount']}: the kit read none of the verifier's "
-                            f"answers, so the run measured nothing"))
+        out.append(("pass", f"couldNotRead {show(good['couldNotRead'])} is not below "
+                            f"fixtureCount {show(good['fixtureCount'])}: the kit read none of "
+                            f"the verifier's answers, so the run measured nothing"))
 
     if "date" in good:
         day = datetime.date.fromisoformat(good["date"])

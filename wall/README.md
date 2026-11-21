@@ -1,8 +1,18 @@
 # Verifier wall
 
 `verifiers.json` lists the verifiers whose maintainers ran the interop kit at
-a released version and passed: a JSON array of rows, `[]` while there are
-none. Its format is [`schemas/wall-v1.schema.json`](../schemas/wall-v1.schema.json).
+a released version and passed by the wall's own rule: a JSON array of rows,
+`[]` while there are none. Its format is [`schemas/wall-v1.schema.json`](../schemas/wall-v1.schema.json).
+
+A run passes on the wall when the verifier accepted no fixture that must
+fail and the kit read an ACCEPT or REJECT from it on at least one fixture:
+`acceptedMustFail` is 0 and `couldNotRead` is below `fixtureCount`. That is
+the wall's rule, not the kit's exit status. The kit exits 0 only when every
+fixture agrees with the answer key, and 1 when any does not, so the wall
+admits a run on which the kit exited 1: one in which the verifier rejected
+a fixture that must pass, or the kit could not read some of its answers.
+Its row counts those fixtures in `rejectedMustPass` and `couldNotRead`, with
+`agree` below `fixtureCount`, down to 0.
 
 ## A row
 

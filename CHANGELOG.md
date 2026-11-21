@@ -420,6 +420,74 @@ they should not.
 
 ### Fixed
 
+- The repository layout in `CONTRIBUTING.md` names the verifier wall, and
+  `scripts/check_readme_counts.py` holds the layout to the tree (#415). The
+  layout gave no line to `wall/`; its `schemas/*.schema.json` line named the
+  fixture-v1 and conformance-profile-v1 formats but not wall-v1; it gave no
+  line to `scripts/test_check_wall.py`, while each other test module the
+  workflow runs has one; and it gave none to `scripts/check_wall.py`, which
+  no workflow step runs, while its `scripts/*.py` line labels the scripts CI
+  gates. The script exited 0 on that layout. It counted `check_wall.py` as
+  run because `scripts/test_check_wall.py`, a test module the Python unit
+  tests step discovers, imports it; it now follows imports from the scripts
+  a step names, and reports `check_wall.py` as not run. It also fails now
+  when a top-level directory holding a file git tracks, other than one
+  whose name opens with a dot, opens no line of the layout, when the
+  `schemas/*.schema.json` line does not name the format of each file that
+  glob matches, and when a test module the workflow's unittest discovery
+  imports has no line of its own. On the layout as it stood, it exits 1 and
+  lists four failures, one for each omission. The layout gains lines for
+  `wall/`, `scripts/check_wall.py` (run by hand, with the command that runs
+  it) and `scripts/test_check_wall.py`, and its `schemas/*.schema.json`
+  line names wall-v1; with them the script exits 0. Its self-test adds 14
+  cases. No fixture, expected verdict or workflow file changes.
+- The self-test of `scripts/schema_validation.py` builds, for each schema
+  `schemas/*.schema.json` matches, a copy identified by a path under the
+  served prefix that no file has, and requires the address check to report
+  it (#415). It altered copies of the fixture-v1 and conformance-profile-v1
+  schemas alone, while `docs/continuous-verification.md` says the
+  self-test proves the check fails "on copies of each schema that name
+  another address": `schemas/wall-v1.schema.json` had no such case. The
+  self-test adds two cases, a copy of the conformance-profile-v1 schema and
+  a copy of the wall-v1 schema, and the fixture-v1 schema's case is built
+  the same way. No fixture, expected verdict or workflow file changes.
+- `python3 -I scripts/check_wall.py`, on a wall row whose `agree` and
+  `rejectedMustPass` were each the digit 9 written 4300 times, ended in a
+  Python traceback, `ValueError: Exceeds the limit (4300 digits) for
+  integer string conversion`, and printed no refusal line (#413): the sum
+  of the two has 4301 digits, which Python 3.14.3 refuses to write. It now
+  prints one `sum` refusal line for the row, in which a count or sum of
+  more than 80 digits is written as its first 77 digits and `...`, and
+  exits 1. The `fixture-count` and `pass` refusals cut such a count the
+  same way; a count of at most 80 digits is written in full, as before.
+  Its self-test adds two cases. No fixture, verifier or expected verdict
+  changes.
+- `scripts/check_wall.py` called its rule that `acceptedMustFail` is 0 and
+  `couldNotRead` is below `fixtureCount` the rule by which a run of the kit
+  passes, and its usage text called it the pass rule; `wall/README.md` said
+  the wall lists verifiers whose maintainers ran the kit and passed, and
+  the descriptions in `schemas/wall-v1.schema.json` said each row's
+  verifier version passed a run of the interop kit (#414). The kit exits 0
+  only when every fixture agrees with the answer key, and 1 when any does
+  not, while the check admits a row whose `agree` is below `fixtureCount`,
+  0 included. Those texts now say that the pass rule is the wall's own, not
+  the kit's exit status, and what passed means on the wall: `acceptedMustFail`
+  is 0 and `couldNotRead` is below `fixtureCount`, the verifier accepting
+  no fixture that must fail and the kit reading an ACCEPT or REJECT from it
+  on at least one fixture. The refusal for an `acceptedMustFail` above 0
+  now ends `a row is admitted only at 0`, where it ended
+  `a run passes only at 0`. A new class of `scripts/test_check_wall.py`,
+  `TheWallsOwnRule`, fails when the module docstring, the usage text, the
+  README or the schema's description lacks one of the phrases
+  `acceptedMustFail is 0 and couldNotRead is below fixtureCount`,
+  `not the kit's exit status` and
+  `the kit exits 0 only when every fixture agrees`, or when that refusal
+  says a run passes; on the texts as they were, it failed on each of the
+  four and on the refusal. It also holds the end of the kit's run in
+  `interop/run.go`, and its usage text, to that exit status, and checks
+  that the wall admits a row in which no fixture agreed. No rule or exit
+  status of the check changes, and no fixture, verifier or expected
+  verdict changes.
 - `python3 scripts/kit/test/test_kit.py --offline`, with git not on PATH,
   ended in a Python traceback, `FileNotFoundError: [Errno 2] No such file
   or directory: 'git'`, exited 1 and left its `kit-test-*` scratch folder
@@ -431,23 +499,44 @@ they should not.
   before its checks. Measured on this tree, none is left by each run the
   `--ci` cells make it refuse, by a run with an option it does not know,
   or by a run that ends in a traceback before its checks
-  (`--offline --log /dev/null/x`); on the commit before, each of the
-  refused runs left one. The `--ci` cells that run `test_kit.py` with options it
-  refuses now also check that each run leaves no scratch folder in its
+  (`--offline --log /dev/null/x` was one until #408, below, made it
+  exit 2); on the commit before, each of the refused runs left one. The
+  `--ci` cells that run `test_kit.py` with options it refuses now also
+  check that each run leaves no scratch folder in its
   `TMPDIR`, and add three runs with git not on PATH: `--offline`,
   `--offline --commit` with HEAD's sha, and `--offline --kit` naming a
   folder that holds each file the `--kit` checks read, which gets past the
   `--kit` check to the `--log` one. No fixture, verifier or expected
   verdict changes.
 - `python3 scripts/kit/test/test_kit.py --offline --log /dev/null/x`, a
-  `--log` path under a regular file, where no folder can be made, ended in
-  a Python traceback, `NotADirectoryError: [Errno 20] Not a directory`,
+  `--log` path under a file that is not a folder (`/dev/null` is a
+  character device), where no folder can be made, ended in a Python
+  traceback, `NotADirectoryError: [Errno 20] Not a directory`,
   and exited 1 (#408). It now exits 2 before any check runs, the first line
   of its standard error reading
   `test_kit: --log /dev/null/x: no folder can be made there (Not a directory)`,
   as measured on macOS. The `--ci` cells that run `test_kit.py` with
   options it refuses add one such run, `--offline --log` naming a path
   under a regular file. No fixture, verifier or expected verdict changes.
+- `python3 scripts/kit/test/test_kit.py --offline --log <path>` ended in a
+  Python traceback and exited 1 before any check ran (#411): with Python
+  3.9.6, 3.12.12 and 3.13.12, for a `--log` path in a folder with mode
+  000, a path under a file in such a folder, or a path whose last name is
+  300 bytes long, where `Path.exists()` raised `PermissionError` or
+  `OSError` (File name too long); and with those and 3.14.3, for an
+  existing empty folder with mode 000, which it could not list, or with
+  mode 500, where it could not write `offline.log`. Each of these runs now
+  exits 2 before any check runs, the first line of its standard error
+  naming the reason: `no folder can be made there (Permission denied)`,
+  `no folder can be made there (File name too long)`,
+  `the folder cannot be listed (Permission denied)` or
+  `offline.log cannot be written there (Permission denied)`, as measured
+  on macOS with Python 3.9.6, 3.12.12, 3.13.12 and 3.14.3. The `--ci`
+  cells that run `test_kit.py` with options it refuses add these five
+  runs. Each first checks that the mode, or the name's length, denies the
+  step to the user running the cells; when it does not, the cell fails
+  and the run is not started. No fixture, verifier or expected verdict
+  changes.
 - README.md gives `docs/captures/go-verifier.txt` as the full output of
   `atx-verify` with no argument, and neither it nor
   `docs/running-the-verifiers.md` said that at a terminal a run in which

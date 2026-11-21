@@ -215,6 +215,25 @@ and unittest stops with an ImportError. The check had also read a folded
 block's line breaks where YAML folds them into spaces, and a `#` right
 after `;` as part of a word.
 
+A test module's imports are not read as run. test_check_wall.py, a test
+module the Python unit tests step discovers, imports check_wall.py, which no
+step runs, so the check counted check_wall.py as run and passed a layout
+whose scripts/*.py line labels the scripts CI gates and which gave
+check_wall.py no line of its own. Imports are followed from the scripts a
+step names alone.
+
+It also holds the repository layout to the tree. The layout gave no line to
+wall/, its schemas/*.schema.json line named fixture-v1 and
+conformance-profile-v1 but not wall-v1, and it gave no line to
+scripts/test_check_wall.py while each other test module the workflow runs had
+one, and the check exited 0 (#415). Each top-level directory holding a file
+git tracks, other than one whose name opens with a dot, must open a line of
+the layout, alone or as the start of a longer path; the schemas/*.schema.json
+line must name the format of each file that glob matches, the file's name less
+`.schema.json`; and each test module the workflow's unittest discovery imports
+must open a line of its own. Where git cannot list the tracked files, the
+directories are not checked, and the closing line says so.
+
 The criterion (c) claim is matched in more wordings than the one the README
 used ("fulfils criterion (c)", "closes criterion c"), and a failure is
 reported under a header that names claims as well as counts.
@@ -438,7 +457,10 @@ pinning link names a commit, the reproduction steps match the generator, no
 coordination link points at a closed issue, every statement of the TBS
 numbers matches the vectors, the jcs-vectors README scopes signing to the
 TBS projection, the Ed25519-only ACCEPT count matches the fixtures, the
-workflow runs every script the layout calls a CI gate, README.md states no
+workflow runs every script the layout calls a CI gate, the layout opens a
+line with each top-level directory holding tracked files (where git can list
+them) and with each test module the workflow runs, and names the format of
+each schemas/*.schema.json file, README.md states no
 version or date, holds no paragraph over 69 words and at most one over 60,
 and states each toolchain minimum above its first command,
 every fenced `pip install` command passes --disable-pip-version-check, each
@@ -2240,10 +2262,12 @@ def ed25519_only_failures(readme, suites):
 # The repository layout labels the scripts/*.py glob "CI gates". A script the
 # workflow does not run, either by name in the command of a `run:` step, by a
 # `python3 -m unittest discover` run over scripts/ in such a command, or
-# through a script it runs that imports it, must have its own layout line, and
-# that line must not call it a CI gate. The layout called
+# through a script so named that imports it, must have its own layout line,
+# and that line must not call it a CI gate. The layout called
 # check_fixture_immutability.py a CI gate while no workflow step ran it, and a
-# name the workflow held only in a comment counted as run.
+# name the workflow held only in a comment counted as run. A test module's
+# imports counted as run too, so check_wall.py, which only test_check_wall.py
+# imports, passed with no layout line of its own.
 SCRIPTS = ROOT / "scripts"
 CI_GATE_GLOB = re.compile(r"^scripts/\*\.py[ \t]+CI gates\b", re.M)
 # A layout line naming one script, with the indented lines that continue it.
@@ -2754,18 +2778,30 @@ def unittest_discover_scripts(command, scripts):
     return found
 
 
+def ci_test_modules(workflow, scripts):
+    """The scripts/*.py names a `python3 -m unittest discover` run over
+    scripts/ in the command of a `run:` step imports as test modules
+    (unittest_discover_scripts()). `scripts` maps each name to its source
+    text."""
+    found = set()
+    for command in workflow_run_commands(workflow):
+        found |= unittest_discover_scripts(command, scripts)
+    return found
+
+
 def ci_run_scripts(workflow, scripts):
     """The scripts/*.py names the workflow runs: those named in the command of
-    a `run:` step, those a `python3 -m unittest discover` run over scripts/
-    in such a command imports as test modules (unittest_discover_scripts()),
-    and those a script it runs imports. `scripts` maps each name to its
-    source text."""
+    a `run:` step, those a script so named imports, directly or through
+    another, and the test modules a `python3 -m unittest discover` run over
+    scripts/ in such a command imports (ci_test_modules()). A test module's
+    own imports are not followed: test_check_wall.py imports check_wall.py
+    and runs its check on git repositories it builds in a temporary
+    directory, while no step runs check_wall.py on this tree. `scripts` maps
+    each name to its source text."""
     commands = workflow_run_commands(workflow)
     named = "\n".join(commands)
     run = {name for name in re.findall(r"\bscripts/([\w-]+\.py)\b", named)
            if name in scripts}
-    for command in commands:
-        run |= unittest_discover_scripts(command, scripts)
     todo = list(run)
     while todo:
         source = scripts.get(todo.pop()) or ""
@@ -2774,7 +2810,7 @@ def ci_run_scripts(workflow, scripts):
             if name in scripts and name not in run:
                 run.add(name)
                 todo.append(name)
-    return run
+    return run | ci_test_modules(workflow, scripts)
 
 
 def ci_gate_label_failures(readme, workflow, scripts):
@@ -2795,6 +2831,95 @@ def ci_gate_label_failures(readme, workflow, scripts):
             failures.append(
                 f"README layout calls scripts/{name} a CI gate, but "
                 f"{WORKFLOW_NAME} does not run it")
+    return failures
+
+
+# The repository layout gave no line to wall/, its schemas/*.schema.json line
+# named fixture-v1 and conformance-profile-v1 but not wall-v1, and it gave no
+# line to scripts/test_check_wall.py, while each other test module the
+# workflow runs had one (#415). The layout is the first fenced block of the
+# `## Repository layout` section. Each top-level directory holding a file git
+# tracks, other than one whose name opens with a dot, must open a line of it,
+# alone or as the start of a longer path (cmd/atx-verify/ opens one for
+# cmd/); its schemas/*.schema.json line must name the format of each schema
+# that glob matches, the file's name less `.schema.json`; and each test module
+# a `python3 -m unittest discover` run of the workflow imports must open a
+# line of its own.
+LAYOUT_HEADING = re.compile(r"^## Repository layout[ \t]*$", re.M)
+ANY_HEADING = re.compile(r"^#{1,6}[ \t]", re.M)
+# A path opening a line of the layout, with the indented lines that continue it.
+LAYOUT_ENTRY = re.compile(r"^(\S+)(.*(?:\n[ \t]+\S.*)*)", re.M)
+FORMAT_ENTRY = "schemas/*.schema.json"
+FORMAT_SUFFIX = ".schema.json"
+
+
+def tracked_top_directories(root):
+    """Each top-level directory of `root` holding a file git tracks, other
+    than one whose name opens with a dot, sorted, or None when they cannot be
+    read: git cannot run, or `root` is not a repository's top level. git runs
+    as _history_git() runs it, so for a copy of the tree outside the
+    repository they cannot be read."""
+    git = _history_git(root)
+    try:
+        listed = git("ls-files", "-z")
+    except OSError:
+        return None
+    if listed.returncode != 0:
+        return None
+    return sorted({path.split("/", 1)[0] for path in listed.stdout.split("\0")
+                   if "/" in path and not path.startswith(".")})
+
+
+def format_names(root):
+    """The format each schemas/*.schema.json file of `root` defines, named as
+    the file is less `.schema.json` (`fixture-v1`), sorted."""
+    return sorted(path.name[:-len(FORMAT_SUFFIX)]
+                  for path in (root / "schemas").glob("*" + FORMAT_SUFFIX))
+
+
+def layout_entries(readme):
+    """The repository layout, the first fenced block of the `## Repository
+    layout` section of README.md or its pages, as each path opening a line of
+    it mapped to the rest of that line and the indented lines that continue
+    it. None when the section is missing or holds no fenced block before the
+    next heading."""
+    heading = LAYOUT_HEADING.search(readme)
+    if heading is None:
+        return None
+    block = FENCED.search(readme, heading.end())
+    if block is None or ANY_HEADING.search(readme[heading.end():block.start()]):
+        return None
+    return {m.group(1): m.group(2) for m in LAYOUT_ENTRY.finditer(block.group(1))}
+
+
+def layout_failures(readme, directories, formats, test_modules):
+    """What the repository layout leaves out: a line opening with each of
+    `directories` (tracked_top_directories(); None when they could not be
+    read, which leaves them unchecked), the name of each of `formats`
+    (format_names()) on its schemas/*.schema.json line, and a line of its own
+    for each of `test_modules` (ci_test_modules())."""
+    entries = layout_entries(readme)
+    if entries is None:
+        return ["no `## Repository layout` section with a fenced block found in "
+                "README.md or its pages"]
+    failures = []
+    for name in directories or ():
+        if not any(path.startswith(name + "/") for path in entries):
+            failures.append(
+                f"README layout has no line for {name}/, a top-level directory "
+                f"holding tracked files; give it one saying what it holds")
+    held = entries.get(FORMAT_ENTRY)
+    for name in formats:
+        if held is None or not re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", held):
+            failures.append(
+                f"README layout's `{FORMAT_ENTRY}` line does not name {name}, the "
+                f"format of schemas/{name}{FORMAT_SUFFIX}"
+                + ("" if held is not None else "; the layout has no such line"))
+    for name in sorted(test_modules):
+        if f"scripts/{name}" not in entries:
+            failures.append(
+                f"README layout has no line of its own for scripts/{name}, a test "
+                f"module {WORKFLOW_NAME} runs; give it one saying what it tests")
     return failures
 
 
@@ -3969,7 +4094,8 @@ Tree = collections.namedtuple("Tree", (
     "py_dependency_texts jcs_sites tbs_sites tbs_canonical jcs_readme "
     "gate_sites gate_libraries profile outcomes suites scripts front_page "
     "readme_pages module_start nested_modules changelog release_tags "
-    "verify_go_test spec_text pinned_fixtures source_comments"))
+    "verify_go_test spec_text pinned_fixtures source_comments top_directories "
+    "format_names"))
 
 # One check tree_failures() runs: its name, the call (`run(tree)` returns
 # failures) and the alteration the self-test makes to prove the call is still
@@ -5821,6 +5947,9 @@ def _ed25519_only_cases(readme, suites):
 
 
 INVENTED_SCRIPT = "check_invented.py"
+INVENTED_DIRECTORY = "invented-directory"
+INVENTED_FORMAT = "invented-v1"
+INVENTED_TEST_MODULE = "test_invented_case.py"
 
 
 def _ci_gate_label_cases(readme, workflow, scripts):
@@ -6160,6 +6289,123 @@ def _ci_gate_label_cases(readme, workflow, scripts):
         cases.append((any(want in f for f in got) == reported, label,
                       f"expected {'a' if reported else 'no'} failure containing "
                       f"{want!r}, got {got}"))
+    return cases
+
+
+def _test_import_cases(readme, workflow, scripts):
+    """Add a step running `python3 -m unittest discover` over scripts/ with a
+    pattern that matches one invented test module, the module importing an
+    invented helper no step names: the helper must be reported as not run.
+    Then add a step naming an invented runner that imports the same helper:
+    that must add no failure naming the helper."""
+    labels = ("script only a test module imports",
+              "script a test module and a script a step names both import")
+    if not CI_GATE_GLOB.search(readme):
+        why = ("no `scripts/*.py  CI gates` layout line found in README.md or its "
+               "pages: the label is not covered by this self-test")
+        return [(False, label, why) for label in labels]
+    baseline = set(ci_gate_label_failures(readme, workflow, scripts))
+
+    def new(flow, files):
+        return [f for f in ci_gate_label_failures(readme, flow, files) if f not in baseline]
+
+    flow = ((workflow or "")
+            + "\n      - run: python3 -m unittest discover -s scripts -p 'invented_case.py'\n")
+    files = {**scripts, "invented_case.py": "import helper_invented  # noqa\n",
+             "helper_invented.py": ""}
+    want = "does not run scripts/helper_invented.py"
+    got = new(flow, files)
+    cases = [(any(want in f for f in got), labels[0],
+              f"expected a failure containing {want!r}, got {got}")]
+    flow += "\n      - run: python3 scripts/runner_invented.py\n"
+    got = new(flow, {**files, "runner_invented.py": "import helper_invented  # noqa\n"})
+    cases.append((not any(want in f for f in got), labels[1],
+                  f"the helper is not read as run: {got}"))
+    return cases
+
+
+def _layout_cases(readme, directories, formats, test_modules):
+    """Give the tree a top-level directory the layout has no line for, a
+    format schema its schemas/*.schema.json line does not name, and a test
+    module with no line of its own: each must add a failure naming it. Then
+    give the directory a line opening with a path under it, name the format
+    on that line and give the test module a line of its own: none may add a
+    failure. A line for the directory in a fenced block of a section after
+    the layout's, the format written only as the start of a longer name, and
+    the test module named only in another line's text must each add the
+    failure still. Last, rename the layout's section heading: that must add
+    a failure saying the layout was not found."""
+    labels = (
+        "top-level directory the layout has no line for",
+        "top-level directory a layout line opens with a path under it",
+        "top-level directory with a line only in a later section's block",
+        "format the schemas/*.schema.json line does not name",
+        "format the schemas/*.schema.json line names",
+        "format written on that line only as the start of a longer name",
+        "test module with no layout line of its own",
+        "test module with a layout line of its own",
+        "test module named only in another layout line's text",
+        "layout section heading renamed",
+    )
+    heading = LAYOUT_HEADING.search(readme)
+    block = FENCED.search(readme, heading.end()) if heading else None
+    entry = (re.compile(rf"^{re.escape(FORMAT_ENTRY)}[^\n]*", re.M)
+             .search(readme, block.start(1), block.end(1)) if block else None)
+    if layout_entries(readme) is None or entry is None:
+        why = (f"no `## Repository layout` block with a `{FORMAT_ENTRY}` line found "
+               f"in README.md or its pages")
+        return [(False, label, why) for label in labels]
+    directories = list(directories or ())
+    test_modules = set(test_modules)
+    baseline = set(layout_failures(readme, directories, formats, test_modules))
+
+    def new(text=readme, dirs=directories, names=formats, tests=test_modules):
+        return [f for f in layout_failures(text, dirs, names, tests) if f not in baseline]
+
+    def in_block(line):
+        return readme[:block.start(1)] + line + "\n" + readme[block.start(1):]
+
+    def on_format_line(text):
+        return readme[:entry.end()] + text + readme[entry.end():]
+
+    cases = []
+    dirs = directories + [INVENTED_DIRECTORY]
+    want = f"has no line for {INVENTED_DIRECTORY}/"
+    for label, text, reported in (
+            (labels[0], readme, True),
+            (labels[1], in_block(f"{INVENTED_DIRECTORY}/sub/     an invented path"), False),
+            (labels[2], readme + (f"\n\n## Another section\n\n```\n{INVENTED_DIRECTORY}/"
+                                  f"     an invented directory\n```\n"), True)):
+        got = new(text, dirs=dirs)
+        cases.append((any(want in f for f in got) == reported, label,
+                      f"expected {'a' if reported else 'no'} failure containing "
+                      f"{want!r}, got {got}"))
+    names = [*formats, INVENTED_FORMAT]
+    want = f"does not name {INVENTED_FORMAT},"
+    for label, text, reported in (
+            (labels[3], readme, True),
+            (labels[4], on_format_line(f" and {INVENTED_FORMAT}"), False),
+            (labels[5], on_format_line(f" and {INVENTED_FORMAT}0"), True)):
+        got = new(text, names=names)
+        cases.append((any(want in f for f in got) == reported, label,
+                      f"expected {'a' if reported else 'no'} failure containing "
+                      f"{want!r}, got {got}"))
+    tests = test_modules | {INVENTED_TEST_MODULE}
+    want = f"has no line of its own for scripts/{INVENTED_TEST_MODULE}"
+    for label, text, reported in (
+            (labels[6], readme, True),
+            (labels[7], in_block(f"scripts/{INVENTED_TEST_MODULE}   CI gate: an invented "
+                                 f"test"), False),
+            (labels[8], on_format_line(f" (see scripts/{INVENTED_TEST_MODULE})"), True)):
+        got = new(text, tests=tests)
+        cases.append((any(want in f for f in got) == reported, label,
+                      f"expected {'a' if reported else 'no'} failure containing "
+                      f"{want!r}, got {got}"))
+    renamed = readme[:heading.start()] + "## Layout" + readme[heading.end():]
+    want = "no `## Repository layout` section"
+    got = new(renamed)
+    cases.append((any(want in f for f in got), labels[9],
+                  f"expected a failure containing {want!r}, got {got}"))
     return cases
 
 
@@ -6914,6 +7160,11 @@ def _wire_ci_gate_label(tree):
             {"scripts": {**tree.scripts, INVENTED_SCRIPT: ""}})
 
 
+def _wire_layout(tree):
+    return (f"does not name {INVENTED_FORMAT},",
+            {"format_names": [*tree.format_names, INVENTED_FORMAT]})
+
+
 def _wire_front_page(tree):
     return ("README.md:1 states '9.9.9'",
             {"front_page": "Requires Go 9.9.9 or later.\n" + tree.front_page})
@@ -7024,6 +7275,10 @@ CHECKS = (
     Check("CI gate label",
           lambda t: ci_gate_label_failures(t.readme, t.workflow, t.scripts),
           _wire_ci_gate_label),
+    Check("repository layout",
+          lambda t: layout_failures(t.readme, t.top_directories, t.format_names,
+                                    ci_test_modules(t.workflow, t.scripts)),
+          _wire_layout),
     Check("README.md toolchain minimum",
           lambda t: prerequisite_failures(t.readme, t.front_page),
           _wire_prerequisite),
@@ -7266,6 +7521,9 @@ def self_test(tree, verbose):
     cases.extend(_signature_coverage_cases(readme, tree.outcomes))
     cases.extend(_ed25519_only_cases(readme, tree.suites))
     cases.extend(_ci_gate_label_cases(readme, tree.workflow, tree.scripts))
+    cases.extend(_test_import_cases(readme, tree.workflow, tree.scripts))
+    cases.extend(_layout_cases(readme, tree.top_directories, tree.format_names,
+                               ci_test_modules(tree.workflow, tree.scripts)))
     cases.extend(_trigger_cases(readme, tree.workflow))
     cases.extend(_key_source_cases(readme, tree.key_vectors, tree.used_key_ids))
     cases.extend(_version_cases(readme, tree.versions))
@@ -7520,6 +7778,8 @@ def main():
         source_comments={site: (ROOT / site).read_text(encoding="utf-8")
                          if (ROOT / site).exists() else None
                          for site in SOURCE_TAG_SITES},
+        top_directories=tracked_top_directories(ROOT),
+        format_names=format_names(ROOT),
     )
 
     failed, total, published = self_test(tree, only_self_test)
@@ -7607,6 +7867,15 @@ def main():
           f"{JCS_README_NAME} scopes v1.1 signing to the TBS projection; "
           f"the Ed25519-only ACCEPT count matches the fixtures; "
           f"{WORKFLOW_NAME} runs each scripts/*.py the layout calls a CI gate; "
+          + (f"the repository layout opens a line with each of the "
+             f"{len(tree.top_directories)} top-level directories holding tracked "
+             f"files; "
+             if tree.top_directories is not None else
+             "the repository layout not held to the top-level directories: git "
+             "could not list the tracked files in this checkout; ")
+          + f"its `{FORMAT_ENTRY}` line names each of the {len(tree.format_names)} "
+          f"formats that glob matches, and each test module {WORKFLOW_NAME} runs "
+          f"has a layout line of its own; "
           f"README.md states no version or date; "
           f"README.md holds no paragraph over {PARAGRAPH_MAX_WORDS} words and at "
           f"most {PARAGRAPHS_OVER} over {PARAGRAPH_WORDS}; "

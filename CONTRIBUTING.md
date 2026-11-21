@@ -51,7 +51,8 @@ docs/                            scope, fixtures, gates, dependencies, network
 fixtures/                        the 57 conformance fixtures (byte-stable JSON)
 jcs-vectors/                     JCS(TBS) byte-agreement vectors and the Go, Python
                                  and TypeScript canonicalizers that must agree on them
-schemas/*.schema.json            fixture-v1 and conformance-profile-v1 file formats
+schemas/*.schema.json            fixture-v1, conformance-profile-v1 and wall-v1 file
+                                 formats
 schemas/vendor/atx-spec/         vendored atx-spec credential schema and core.md
                                  (pinned ref)
 vectors/                         test keypair vectors (TEST-ONLY)
@@ -61,6 +62,11 @@ verifiers/go/                    Go reference verifier (full hybrid): the packag
                                  runs it from a checkout
 verifiers/python/                Python reference verifier (full hybrid) and its
                                  benchmark (bench_verify.py)
+wall/                            the verifier wall: verifiers.json, which lists the
+                                 verifiers whose maintainers ran the interop kit at
+                                 a released version and passed (wall-v1 format),
+                                 and README.md, what a row holds and how to add
+                                 and check one
 scripts/generate-fixtures/       deterministic fixture generator (Go)
 scripts/parity/                  Go/Python per-fixture parity gate
 scripts/*.py                     CI gates: README counts, spec references, schema
@@ -80,6 +86,11 @@ scripts/capture_go_verifier.py   runs the README's Go command from the tree and
 scripts/bench_report.py          runs the benchmark of each reference verifier and
                                  prints each figure with the commit and the CPU
                                  it ran on (run by hand)
+scripts/check_wall.py            each row of wall/verifiers.json against the wall-v1
+                                 format, the pass rule and the repository's tags
+                                 (run by hand from the repository root as
+                                 python3 -I scripts/check_wall.py; --file names
+                                 another wall file, --repo another repository)
 scripts/check_circl_pin.sh       CI gate: one cloudflare/circl version per Go module
 scripts/test_script_options.py   CI gate: every script's -h, --help and unknown-argument
                                  handling
@@ -96,4 +107,9 @@ scripts/test_check_step7_coverage.py
                                  CI gate: the file check_step7_coverage.py's
                                  docstring names as saying "the two drop it
                                  together" holds that sentence
+scripts/test_check_wall.py       CI gate: check_wall.py's cases, each on a git
+                                 repository built in a temporary directory; the
+                                 wall-v1 schema against the members and forms
+                                 the check holds; wall/verifiers.json against
+                                 that schema
 ```

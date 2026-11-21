@@ -3,14 +3,18 @@
 the wall's form and git confirms what the row says about its kit version.
 
 The wall lists the verifiers whose maintainers ran the interop kit at a
-released version and passed. A row has nine members: the verifier's name and
-version, the UTC date of the run, the released kit version (kitVersion,
-vX.Y.Z), the number of fixtures the kit sent and the run's four outcome
-counts. It names no report, commit or link: the report stays with the
-maintainer's run, and the link to that run goes in the pull request's body.
-schemas/wall-v1.schema.json is the row's format. check_wall.py holds a wall
-file to that format and, from git alone, to the rules a schema cannot state:
-the kitVersion tag is in the clone; fixtureCount is the number of
+released version and passed by the wall's own rule, acceptedMustFail 0 and
+couldNotRead below fixtureCount. That rule is not the kit's exit status,
+which is 0 only when every fixture agrees; TheWallsOwnRule holds the texts
+that say what passed means on the wall to saying so, and to that exit
+status as interop/run.go gives it. A row has nine members: the verifier's
+name and version, the UTC date of the run, the released kit version
+(kitVersion, vX.Y.Z), the number of fixtures the kit sent and the run's four
+outcome counts. It names no report, commit or link: the report stays with
+the maintainer's run, and the link to that run goes in the pull request's
+body. schemas/wall-v1.schema.json is the row's format. check_wall.py holds a
+wall file to that format and, from git alone, to the rules a schema cannot
+state: the kitVersion tag is in the clone; fixtureCount is the number of
 fixtures/*.json files at that tag, the set the kit at that version embeds;
 the outcome counts sum to fixtureCount; acceptedMustFail is 0 and
 couldNotRead is below fixtureCount; the date is not after today (UTC) and not
@@ -51,8 +55,10 @@ import check_wall  # noqa: E402
 
 SCHEMA = ROOT / "schemas" / "wall-v1.schema.json"
 REPORT_GO = ROOT / "interop" / "report.go"
+RUN_GO = ROOT / "interop" / "run.go"
 FIXTURES_GO = ROOT / "fixtures.go"
 WALL = ROOT / "wall" / "verifiers.json"
+WALL_README = ROOT / "wall" / "README.md"
 
 TAG = "v1.2.0"
 FIXTURES = 3
@@ -64,6 +70,17 @@ ONE_DAY = datetime.timedelta(days=1)
 # The modules check_wall.py may import: standard library modules, none of
 # them a network module.
 STANDARD_MODULES = {"collections", "datetime", "json", "os", "pathlib", "re", "subprocess", "sys"}
+# What each text that says what passed means on the wall holds, read by
+# plain(): the wall's pass rule, that the rule is not the kit's exit status,
+# and what that exit status is.
+PASS_RULE = "acceptedMustFail is 0 and couldNotRead is below fixtureCount"
+NOT_THE_KITS = "not the kit's exit status"
+KIT_EXIT = "the kit exits 0 only when every fixture agrees"
+# The end of the kit's run in interop/run.go: exit 1 unless every fixture
+# agrees, 0 when every one does.
+KIT_EXIT_GO = "\tif rep.Summary.Agree != rep.FixtureCount {\n\t\treturn 1\n\t}\n\treturn 0\n}\n"
+# The kit's usage text in interop/run.go on its exit status, read by plain().
+KIT_EXIT_USAGE = "Exit status: 0 when every fixture agrees with the answer key, 1 when any does not"
 
 
 def git(cwd, *args, date=None):
@@ -87,6 +104,13 @@ def git(cwd, *args, date=None):
 
 def utc_today():
     return datetime.datetime.now(datetime.timezone.utc).date()
+
+
+def plain(text):
+    """text as one line of words in lower case: each run of white space read
+    as one space, as a sentence wrapped over several lines reads, and
+    Markdown's backticks dropped."""
+    return " ".join(text.replace("`", "").split()).lower()
 
 
 def wall_row(**change):
@@ -364,6 +388,33 @@ class AlsoRefused(unittest.TestCase):
         self.repo.admit(wall_row(agree=float(FIXTURES)))
         self.assertEqual(self.repo.refusals(), [(0, "format")])
 
+    def test_counts_summing_to_4301_digits_are_refused_in_one_line(self):
+        # JSON reads a count of up to 4300 digits, and Python refuses to write
+        # an integer of more, so the sum of these two is never written in full.
+        nines = int("9" * 4300)
+        self.repo.admit(wall_row(agree=nines, rejectedMustPass=nines))
+        self.assertEqual(self.repo.refusals(), [(0, "sum")])
+        done = self.repo.run()
+        self.assertEqual((done.returncode, done.stderr), (1, ""), done.stdout)
+        cut = "9" * 77 + "..."
+        self.assertEqual(done.stdout.splitlines(), [
+            f'refused: wall/verifiers.json[0] (verifier "Example Verifier"): sum: agree {cut} '
+            f"+ acceptedMustFail 0 + rejectedMustPass {cut} + couldNotRead 0 is "
+            f"1{'9' * 76}..., not fixtureCount 3: the kit gives each fixture one of the four "
+            f"outcomes",
+            "wall/verifiers.json: 1 refusal",
+        ])
+
+    def test_a_count_of_4300_digits_is_cut_in_each_refusal_that_names_it(self):
+        nines = int("9" * 4300)
+        self.repo.admit(wall_row(fixtureCount=nines, agree=0, acceptedMustFail=nines,
+                                 couldNotRead=nines))
+        self.assertEqual(self.repo.refusals(),
+                         [(0, "fixture-count"), (0, "sum"), (0, "pass"), (0, "pass")])
+        for line in self.repo.lines():
+            self.assertIsNone(re.search("[0-9]{78}", line), line[:200])
+            self.assertIn("9" * 77 + "...", line)
+
     def test_a_verifier_ending_in_a_line_break_is_refused(self):
         self.repo.admit(wall_row(verifier="Example Verifier\n"))
         self.assertEqual(self.repo.refusals(), [(0, "format")])
@@ -471,6 +522,47 @@ class Contract(unittest.TestCase):
         doc = check_wall.read_json(WALL)
         self.assertIsInstance(doc, list)
         self.assertEqual(list(Draft202012Validator(schema).iter_errors(doc)), [])
+
+
+class TheWallsOwnRule(unittest.TestCase):
+    """The wall's pass rule, acceptedMustFail 0 and couldNotRead below
+    fixtureCount, is not the kit's exit status, which is 0 only when every
+    fixture agrees: the wall admits a row from a run on which the kit exited
+    1 (#414). Each text that says what passed means on the wall says so."""
+
+    def test_the_kit_exits_0_only_when_every_fixture_agrees(self):
+        source = RUN_GO.read_text(encoding="utf-8")
+        self.assertIn(KIT_EXIT_GO, source,
+                      f"{RUN_GO} does not end a run with the exit status the wall's texts give")
+        self.assertIn(plain(KIT_EXIT_USAGE), plain(source))
+
+    def test_a_row_on_which_no_fixture_agreed_is_admitted(self):
+        # agree 0 of 3: the kit exits 1 on such a run, and the wall admits it.
+        repo = Repo(self)
+        repo.admit(wall_row(agree=0, rejectedMustPass=FIXTURES))
+        self.assertEqual(repo.refusals(), [])
+
+    def test_each_text_says_the_pass_rule_is_the_walls_own(self):
+        schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+        for label, text in (
+                ("the docstring of check_wall.py", check_wall.__doc__),
+                ("the usage text of check_wall.py", check_wall.USAGE),
+                ("wall/README.md", WALL_README.read_text(encoding="utf-8")),
+                ("the description of schemas/wall-v1.schema.json", schema["description"])):
+            with self.subTest(label):
+                words = plain(text)
+                missing = [phrase for phrase in (PASS_RULE, NOT_THE_KITS, KIT_EXIT)
+                           if plain(phrase) not in words]
+                self.assertEqual(missing, [], f"{label} does not say {missing}")
+
+    def test_a_pass_refusal_names_the_walls_rule(self):
+        repo = Repo(self)
+        repo.admit(wall_row(agree=FIXTURES - 1, acceptedMustFail=1))
+        self.assertEqual(repo.refusals(), [(0, "pass")])
+        line = repo.lines()[0]
+        self.assertIn(": pass: acceptedMustFail is 1: ", line)
+        self.assertIn("a row is admitted only at 0", line)
+        self.assertNotIn("a run passes", line)
 
 
 if __name__ == "__main__":
