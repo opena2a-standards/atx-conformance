@@ -439,6 +439,15 @@ they should not.
   folder that holds each file the `--kit` checks read, which gets past the
   `--kit` check to the `--log` one. No fixture, verifier or expected
   verdict changes.
+- `python3 scripts/kit/test/test_kit.py --offline --log /dev/null/x`, a
+  `--log` path under a regular file, where no folder can be made, ended in
+  a Python traceback, `NotADirectoryError: [Errno 20] Not a directory`,
+  and exited 1 (#408). It now exits 2 before any check runs, the first line
+  of its standard error reading
+  `test_kit: --log /dev/null/x: no folder can be made there (Not a directory)`,
+  as measured on macOS. The `--ci` cells that run `test_kit.py` with
+  options it refuses add one such run, `--offline --log` naming a path
+  under a regular file. No fixture, verifier or expected verdict changes.
 - README.md gives `docs/captures/go-verifier.txt` as the full output of
   `atx-verify` with no argument, and neither it nor
   `docs/running-the-verifiers.md` said that at a terminal a run in which
