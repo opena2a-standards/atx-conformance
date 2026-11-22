@@ -326,8 +326,26 @@ they should not.
   1000), so the native signatures verify whichever of the two the credential
   writes; both reference verifiers reject such a credential as
   `SIGNATURE_INVALID`, and the command's message names the member and the
-  number as the Go verifier's reason does. A number the command cannot read
-  at all, `1e400` for one, makes a fixture it cannot read, and it exits 1.
+  number as the Go verifier's reason does. A number outside the IEEE 754
+  double range, `1e400` for one, makes a fixture the command cannot read,
+  and it exits 1 naming the member and the number. The range is decided on
+  the digits as written, so 1 followed by 1000 zeros and `e-650`, whose
+  value is 10^350, is outside it whatever Go release builds the command;
+  the RFC 8785 library reads that literal as 1e+149 built with Go 1.22.0 or
+  Go 1.26.3. It signs nothing, and exits 3, when the credential, of either
+  atcVersion, holds a number that RFC 8785, the form the credential is
+  written in, writes in another form: RFC 8785 writes each number as the
+  IEEE 754 double nearest it, so an ATX v1.0 `trustLevel` of
+  9007199254740993, which the native signature covers digit for digit,
+  would be written as 9007199254740992, a `trustScore` of -0 as 0, and a
+  `declaredPurpose` number `1e3` as 1000. Its message names the number, its
+  member and the form RFC 8785 writes it in. `issuedAt` and `expiresAt` are
+  read as the Go reference verifier reads a timestamp, whatever Go release
+  builds the command: one written with a JSON escape, which encoding/json
+  reads into a plain `time.Time` built with Go 1.27.0, or with a time zone
+  offset hour above 24 or minute above 60, which it reads built with Go
+  1.22.0, makes a fixture the command cannot read, and it exits 1 with that
+  verifier's reason.
   So does the `declaredPurpose` of an ATX v1.1 credential that holds an
   unpaired UTF-16 surrogate escape. RFC 8785 refuses a string that holds a
   lone surrogate, and the library that computes the native bytes reads such

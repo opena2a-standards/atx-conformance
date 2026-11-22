@@ -10,14 +10,17 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"math"
 	"math/big"
 	"os"
 	"path"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	"github.com/gowebpki/jcs"
@@ -294,6 +297,9 @@ func checkMembers(t *testing.T, name string, vc map[string]any, f *fixture) {
 		if !sameJSON(t, v, a[from]) {
 			t.Errorf("%s: credentialSubject.%s differs from the native %s", name, k, from)
 		}
+		if !sameNumbersAsWritten(v, a[from]) {
+			t.Errorf("%s: credentialSubject.%s does not hold each number as the native %s writes it", name, k, from)
+		}
 	}
 	for k, from := range allowed {
 		if _, carried := subject[k]; !carried {
@@ -301,6 +307,43 @@ func checkMembers(t *testing.T, name string, vc map[string]any, f *fixture) {
 				t.Errorf("%s: credentialSubject lacks %s", name, k)
 			}
 		}
+	}
+}
+
+// sameNumbersAsWritten reports whether a and b, two JSON values decoded with
+// numbers as written, hold at the same places numbers written alike.
+// sameJSON compares canonical forms, in which 9007199254740993 and
+// 9007199254740992 are one number, and so are 1e3 and 1000.
+func sameNumbersAsWritten(a, b any) bool {
+	switch a := a.(type) {
+	case json.Number:
+		n, ok := b.(json.Number)
+		return ok && n == a
+	case map[string]any:
+		m, ok := b.(map[string]any)
+		if !ok || len(m) != len(a) {
+			return false
+		}
+		for k, v := range a {
+			if w, ok := m[k]; !ok || !sameNumbersAsWritten(v, w) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		s, ok := b.([]any)
+		if !ok || len(s) != len(a) {
+			return false
+		}
+		for i := range a {
+			if !sameNumbersAsWritten(a[i], s[i]) {
+				return false
+			}
+		}
+		return true
+	default:
+		_, isNumber := b.(json.Number)
+		return !isNumber
 	}
 }
 
@@ -576,6 +619,45 @@ func signedAlteredFixture(t *testing.T, name string, alter func(atx map[string]a
 	})
 }
 
+// signedAsReadFixture is alteredFixture with every native signature of the
+// copy made again: over the bytes the command computes for the copy that
+// read writes, with the suite's published test key the signature names.
+// read writes a member as a build of the command that reads the member alter
+// writes reads it, so the copy alter writes is one whose native signatures
+// verify for such a build, even when the command cannot read that copy.
+// Every native signature of the fixture must be Ed25519, and the command
+// must be able to read the copy read writes.
+func signedAsReadFixture(t *testing.T, name string, read, alter func(atx map[string]any)) (file string, atxRaw, state []byte) {
+	t.Helper()
+	unsigned, _, _ := alteredFixture(t, name, read)
+	f, err := readFixture(unsigned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	native, err := nativeSignedBytes(&f.native)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make([]string, len(f.native.Signatures))
+	for i, sig := range f.native.Signatures {
+		key, err := f.ed25519Key(sig.KeyID)
+		if err != nil {
+			t.Fatalf("%s: native signature %d: %v", name, i, err)
+		}
+		values[i] = base64.StdEncoding.EncodeToString(ed25519.Sign(key, native))
+	}
+	return alteredFixture(t, name, func(atx map[string]any) {
+		alter(atx)
+		sigs, _ := atx["signatures"].([]any)
+		if len(sigs) != len(values) {
+			t.Fatalf("%s: the altered copy holds %d signatures, the fixture %d", name, len(sigs), len(values))
+		}
+		for i, value := range values {
+			sigs[i].(map[string]any)["value"] = value
+		}
+	})
+}
+
 // TestSignedAlteredFixtureCopyIsTheFixture guards the helper above: for a
 // copy that changes nothing, the signature it makes is the fixture's own, so
 // the copy holds the credential the unsigned helper writes.
@@ -585,6 +667,10 @@ func TestSignedAlteredFixtureCopyIsTheFixture(t *testing.T) {
 	_, kept, _ := alteredFixture(t, name, func(map[string]any) {})
 	if len(signed) == 0 || !bytes.Equal(signed, kept) {
 		t.Errorf("an unchanged copy of %s, signed again, differs from the copy that keeps the fixture's signature", name)
+	}
+	_, read, _ := signedAsReadFixture(t, name, func(map[string]any) {}, func(map[string]any) {})
+	if len(read) == 0 || !bytes.Equal(read, kept) {
+		t.Errorf("an unchanged copy of %s, signed again as read, differs from the copy that keeps the fixture's signature", name)
 	}
 }
 
@@ -1045,6 +1131,359 @@ func TestNumberOutsideTheDoubleRangeIsNotRead(t *testing.T) {
 			t.Errorf("1e400 in %s: exit %d, stdout %q, stderr %q; want exit %d and a message that the atx cannot be canonicalized", member, code, out, errOut, exitInput)
 		}
 	}
+}
+
+// TestNumberOutsideTheDoubleRangeWhateverTheRelease holds the command to
+// the digits a number outside the IEEE 754 double range is written with,
+// whatever Go release builds it. The copy of the v1.1 baseline whose
+// trustScore is 1 followed by 1000 zeros and e-650, whose value is 10^350,
+// is signed over the trustScore a build with go1.22.0 or go1.26.3 read it
+// as, 1e+149: such a build exported the copy with atxTrustScore 1e+149, and
+// a build with go1.27.0 exited 1. The Go reference verifier rejects the copy
+// as PARSE_ERROR. The command exits 1 for it, and for the same number in
+// declaredPurpose, where a build with go1.26.3 exited 3, naming the member
+// and the number, with and without --mldsa65-proof. In the table, each
+// number is written as the trustScore of a copy of the baseline: the
+// verifier rejects the copy as PARSE_ERROR when the number is outside the
+// range and the command exits 1 naming it, and for a number inside the
+// range the verifier does not reject the copy as PARSE_ERROR and the command
+// exits 3.
+func TestNumberOutsideTheDoubleRangeWhateverTheRelease(t *testing.T) {
+	const name = "v1_1-baseline-valid.json"
+	tenTo350 := "1" + strings.Repeat("0", 1000) + "e-650"
+	outsideRange := func(file, where, literal string) string {
+		return "atx-export: " + file + ": atx cannot be canonicalized (RFC 8785): " + where + " holds the number " + literal + ", which is outside the IEEE 754 double range\n"
+	}
+	signed, atxRaw, state := signedAsReadFixture(t, name,
+		func(atx map[string]any) { atx["trustScore"] = json.Number("1e+149") },
+		func(atx map[string]any) { atx["trustScore"] = json.Number(tenTo350) })
+	if outcome := verifier.VerifyCredential(atxRaw, state); outcome.Verdict != "REJECT" || outcome.RejectCategory != "PARSE_ERROR" {
+		t.Errorf("trustScore 10^350: the reference verifier gives %s %s, want REJECT PARSE_ERROR", outcome.Verdict, outcome.RejectCategory)
+	}
+	inPurpose, purposeRaw, purposeState := alteredFixture(t, name, func(atx map[string]any) {
+		atx["declaredPurpose"] = map[string]any{"n": json.Number(tenTo350)}
+	})
+	if outcome := verifier.VerifyCredential(purposeRaw, purposeState); outcome.Verdict != "REJECT" {
+		t.Errorf("declaredPurpose 10^350: the reference verifier gives %s", outcome.Verdict)
+	}
+	for _, c := range []struct{ file, where string }{{signed, "trustScore"}, {inPurpose, "declaredPurpose"}} {
+		for _, flags := range [][]string{{"--form", "vc"}, {"--form", "vc", "--mldsa65-proof"}} {
+			code, out, errOut := export(append(append([]string{}, flags...), c.file)...)
+			if want := outsideRange(c.file, c.where, tenTo350); code != exitInput || out != "" || errOut != want {
+				t.Errorf("10^350 in %s %v: exit %d, %d bytes written, stderr %.300q; want exit %d and stderr %.300q", c.where, flags, code, len(out), errOut, exitInput, want)
+			}
+		}
+	}
+
+	// edge is the largest float64 and half a unit in its last place,
+	// 2^1024 - 2^970, which rounds to infinity; one less rounds to the
+	// largest float64.
+	sum := new(big.Float).SetPrec(2000).SetFloat64(math.MaxFloat64)
+	sum.Add(sum, new(big.Float).SetMantExp(big.NewFloat(1), 970))
+	edge, _ := sum.Int(nil)
+	belowEdge := new(big.Int).Sub(edge, big.NewInt(1))
+	for _, row := range []struct {
+		literal string
+		outside bool
+	}{
+		{"1e400", true},
+		{"-1e400", true},
+		{tenTo350, true},
+		{"0." + strings.Repeat("0", 2000) + "1e2400", true},
+		{edge.String(), true},
+		{"1.7976931348623159e308", true},
+		{belowEdge.String(), false},
+		{"1.7976931348623157e308", false},
+		{"1" + strings.Repeat("0", 1000) + "e-700", false},
+		{"1e-400", false},
+	} {
+		file, atxRaw, state := alteredFixture(t, name, func(atx map[string]any) { atx["trustScore"] = json.Number(row.literal) })
+		if outcome := verifier.VerifyCredential(atxRaw, state); (outcome.RejectCategory == "PARSE_ERROR") != row.outside {
+			t.Errorf("trustScore %.40s (%d bytes): the reference verifier gives %s %s", row.literal, len(row.literal), outcome.Verdict, outcome.RejectCategory)
+		}
+		code, out, errOut := export("--form", "vc", file)
+		want := exitNativeSignature
+		if row.outside {
+			want = exitInput
+		}
+		if code != want || out != "" || (errOut == outsideRange(file, "trustScore", row.literal)) != row.outside {
+			t.Errorf("trustScore %.40s (%d bytes): exit %d, %d bytes written, stderr %.300q; want exit %d", row.literal, len(row.literal), code, len(out), errOut, want)
+		}
+	}
+}
+
+// TestNumbersTheCredentialCannotHold holds the credential to each number as
+// the fixture writes it. The command writes the credential as RFC 8785
+// canonical JSON, which writes each number as the IEEE 754 double nearest
+// it, so it wrote trustLevel 9007199254740993 of a "1.0" credential, which
+// the native signature covers digit for digit, as 9007199254740992. Each row
+// changes one number of a copy of the v1.0 or the v1.1 baseline, signed
+// again where the change alters the bytes the native signatures cover, and
+// the Go reference verifier accepts each copy. Where the row names a
+// member, RFC 8785 writes the number in another form than the row does: the
+// command exits 3 and writes nothing, and its message names the number, the
+// member and the form RFC 8785 writes it in, with and without
+// --mldsa65-proof. Where it names none, RFC 8785 writes each number as the
+// row does, and the command exports the copy, each number of the credential
+// as the copy writes it (checkMembers).
+func TestNumbersTheCredentialCannotHold(t *testing.T) {
+	const (
+		v10 = "baseline-valid.json"
+		v11 = "v1_1-baseline-valid.json"
+	)
+	member := func(name, value string) func(map[string]any) {
+		return func(atx map[string]any) { atx[name] = json.Number(value) }
+	}
+	inObject := func(object, name, value string) func(map[string]any) {
+		return func(atx map[string]any) { atx[object].(map[string]any)[name] = json.Number(value) }
+	}
+	written := func(name, text string) func(map[string]any) {
+		return func(atx map[string]any) { atx[name] = json.RawMessage(text) }
+	}
+	rows := []struct {
+		name, fixture string
+		alter         func(atx map[string]any)
+		resign        bool
+		// where is the member the refusal names, "" for a copy the command
+		// exports; literal is the number as the copy writes it, and
+		// canonical as RFC 8785 writes it.
+		where, literal, canonical string
+	}{
+		{"a 1.0 trustLevel of 2^53+1", v10, member("trustLevel", "9007199254740993"), true, "trustLevel", "9007199254740993", "9007199254740992"},
+		{"a 1.0 trustLevel of -0", v10, member("trustLevel", "-0"), true, "trustLevel", "-0", "0"},
+		{"a 1.0 scanSummary.criticalFindings of 2^53+1", v10, inObject("scanSummary", "criticalFindings", "9007199254740993"), false,
+			"scanSummary.criticalFindings", "9007199254740993", "9007199254740992"},
+		{"a 1.0 declaredPurpose number with an exponent part", v10, written("declaredPurpose", `{"n":1e3}`), false, "declaredPurpose", "1e3", "1000"},
+		{"a 1.0 behavioralProfile member with an exponent part", v10,
+			written("behavioralProfile", `{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":14,"weight":1E3}`), false,
+			"behavioralProfile.weight", "1E3", "1000"},
+		{"a 1.1 trustScore of 2^53+1", v11, member("trustScore", "9007199254740993"), true, "trustScore", "9007199254740993", "9007199254740992"},
+		{"a 1.1 trustScore of -0", v11, member("trustScore", "-0"), true, "trustScore", "-0", "0"},
+		{"a 1.1 trustScore with a trailing zero", v11, member("trustScore", "87.50"), false, "trustScore", "87.50", "87.5"},
+		{"a 1.1 declaredPurpose number of -0", v11, written("declaredPurpose", `{"n":-0}`), true, "declaredPurpose", "-0", "0"},
+		{"a 1.0 trustLevel of 2^53", v10, member("trustLevel", "9007199254740992"), true, "", "", ""},
+		{"a 1.0 declaredPurpose whose numbers RFC 8785 writes as written", v10,
+			written("declaredPurpose", `{"a":1000,"b":0.5,"c":5e-7,"d":-12,"e":1e+21,"f":[0,100000000000000000000]}`), false, "", "", ""},
+		{"a 1.1 trustScore written as an integer", v11, member("trustScore", "90"), true, "", "", ""},
+	}
+	for _, row := range rows {
+		file, atxRaw, state := alteredFixture(t, row.fixture, row.alter)
+		if row.resign {
+			file, atxRaw, state = signedAlteredFixture(t, row.fixture, row.alter)
+		}
+		if outcome := verifier.VerifyCredential(atxRaw, state); outcome.Verdict != "ACCEPT" {
+			t.Errorf("%s: the reference verifier gives %s %s (%s), want ACCEPT", row.name, outcome.Verdict, outcome.RejectCategory, outcome.Reason)
+			continue
+		}
+		if row.where == "" {
+			code, out, errOut := export("--form", "vc", file)
+			if code != exitOK {
+				t.Errorf("%s: exit %d, stderr %q; want exit %d and a credential", row.name, code, errOut, exitOK)
+				continue
+			}
+			secured, err := decodeObject([]byte(strings.TrimSuffix(out, "\n")))
+			if err != nil {
+				t.Fatal(err)
+			}
+			f, err := readFixture(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkMembers(t, row.name, secured, f)
+			continue
+		}
+		want := "atx-export: the credential cannot hold the number " + row.literal + " in " + row.where + " as written: RFC 8785 writes it as " + row.canonical + "; not re-signing\n"
+		for _, flags := range [][]string{{"--form", "vc"}, {"--form", "vc", "--mldsa65-proof"}} {
+			code, out, errOut := export(append(append([]string{}, flags...), file)...)
+			if code != exitNativeSignature || out != "" || errOut != want {
+				t.Errorf("%s %v: exit %d, %d bytes written, stderr %q; want exit %d and stderr %q", row.name, flags, code, len(out), errOut, exitNativeSignature, want)
+			}
+		}
+	}
+}
+
+// TestCanonicalNumber holds canonicalNumber to the RFC 8785 library's own
+// form of each literal of the table, and to 87.5 for 875 followed by 900
+// zeros and e-901, whose value is 87.5: the library writes that literal as
+// 8.75e-102 built with go1.22.0 or go1.26.3, and as 87.5 built with go1.27.0.
+func TestCanonicalNumber(t *testing.T) {
+	for literal, want := range map[string]string{
+		"9007199254740993":      "9007199254740992",
+		"9007199254740992":      "9007199254740992",
+		"-0":                    "0",
+		"1e3":                   "1000",
+		"1000.0":                "1000",
+		"87.50":                 "87.5",
+		"87.5":                  "87.5",
+		"5e-7":                  "5e-7",
+		"1e21":                  "1e+21",
+		"1e-400":                "0",
+		"100000000000000000000": "100000000000000000000",
+	} {
+		if got := canonicalNumber(literal); got != want {
+			t.Errorf("%s: %q, want %q", literal, got, want)
+		}
+		if library, err := jcs.Transform([]byte(literal)); err != nil || string(library) != want {
+			t.Errorf("%s: the RFC 8785 library writes %q (%v), want %q", literal, library, err, want)
+		}
+	}
+	if got := canonicalNumber("875" + strings.Repeat("0", 900) + "e-901"); got != "87.5" {
+		t.Errorf("875 followed by 900 zeros and e-901: %q, want 87.5", got)
+	}
+}
+
+// TestCredentialMembers checks that credentialMembers names each native
+// member credential copies into the credential and no other, so that
+// rewrittenNumber reads each number the credential carries.
+func TestCredentialMembers(t *testing.T) {
+	const marker = "value of "
+	atx := map[string]any{}
+	for _, name := range jsonNames(reflect.TypeOf(ATX{})) {
+		atx[name] = marker + name
+	}
+	cred, err := credential(atx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var copied []string
+	var walk func(v any)
+	walk = func(v any) {
+		switch v := v.(type) {
+		case string:
+			if i := strings.Index(v, marker); i >= 0 {
+				copied = append(copied, v[i+len(marker):])
+			}
+		case map[string]any:
+			for _, e := range v {
+				walk(e)
+			}
+		case []any:
+			for _, e := range v {
+				walk(e)
+			}
+		}
+	}
+	walk(cred)
+	sort.Strings(copied)
+	if !reflect.DeepEqual(copied, credentialMembers) {
+		t.Errorf("credential copies %v; credentialMembers is %v", copied, credentialMembers)
+	}
+}
+
+// TestIssuedAtAndExpiresAtAsTheVerifierReadsThem holds the command's reading
+// of issuedAt and expiresAt to the Go reference verifier's, on copies of the
+// v1.1 baseline, whatever Go release builds the command. A build with
+// go1.22.0 read a time zone offset hour above 24 or minute above 60, and
+// exported an expiresAt written so as validUntil; a build with go1.27.0 read
+// a timestamp written with a JSON escape; a build with go1.26.3 read
+// neither. A row marked refused is signed over the bytes a build that read
+// it computed, and the verifier rejects the copy as PARSE_ERROR: the command
+// exits 1, writes nothing, and names the verifier's reason, with and without
+// --mldsa65-proof. A row marked kept as well writes a timestamp no release
+// reads, refused for its offset and for its day, the text after it or its
+// minute: the copy keeps the fixture's signature, and the reason names the
+// offset under every release, as Go 1.23 and later name it (offsetFirst).
+// Every other row writes an offset each of those builds reads: signed
+// again, the verifier accepts the copy, and the command exports it with the
+// member as written.
+func TestIssuedAtAndExpiresAtAsTheVerifierReadsThem(t *testing.T) {
+	const name = "v1_1-baseline-valid.json"
+	// escaped writes the first hyphen of s as the JSON escape of U+002D.
+	escaped := func(s string) string { return strings.Replace(s, "-", backslashU+"002d", 1) }
+	rows := []struct {
+		name, member, written string
+		refused, kept         bool
+	}{
+		{"expiresAt with a time zone offset hour of 25", "expiresAt", "2099-12-31T23:59:59+25:00", true, false},
+		{"expiresAt with a time zone offset hour of -25", "expiresAt", "2099-12-31T23:59:59-25:00", true, false},
+		{"expiresAt with a time zone offset minute of 61", "expiresAt", "2099-12-31T23:59:59+23:61", true, false},
+		{"expiresAt with a time zone offset of +99:99", "expiresAt", "2099-12-31T23:59:59+99:99", true, false},
+		{"issuedAt with a time zone offset hour of 25", "issuedAt", "2026-05-23T00:00:00+25:00", true, false},
+		{"issuedAt written with a JSON escape", "issuedAt", escaped("2026-05-23T00:00:00Z"), true, false},
+		{"expiresAt written with a JSON escape", "expiresAt", escaped("2099-12-31T23:59:59Z"), true, false},
+		{"expiresAt with an offset hour of 25 on February 30", "expiresAt", "2099-02-30T23:59:59+25:00", true, true},
+		{"expiresAt with an offset hour of 25 and text after it", "expiresAt", "2099-12-31T23:59:59+25:00x", true, true},
+		{"expiresAt with an offset hour of 25 and a minute that is not two digits", "expiresAt", "2099-02-30T23:59:59+25:0a", true, true},
+		{"expiresAt with a time zone offset of +24:00", "expiresAt", "2099-12-31T23:59:59+24:00", false, false},
+		{"expiresAt with a time zone offset of +23:60", "expiresAt", "2099-12-31T23:59:59+23:60", false, false},
+	}
+	for _, row := range rows {
+		alter := func(atx map[string]any) { atx[row.member] = json.RawMessage(`"` + row.written + `"`) }
+		read := func(atx map[string]any) { atx[row.member] = readAsGo122(t, row.written).Format(time.RFC3339) }
+		var file string
+		var atxRaw, state []byte
+		if row.kept {
+			file, atxRaw, state = alteredFixture(t, name, alter)
+		} else {
+			file, atxRaw, state = signedAsReadFixture(t, name, read, alter)
+		}
+		if !bytes.Contains(atxRaw, []byte(`"`+row.written+`"`)) {
+			t.Fatalf("%s: the copy does not hold %s as the row writes it", row.name, row.member)
+		}
+		outcome := verifier.VerifyCredential(atxRaw, state)
+		if !row.refused {
+			if outcome.Verdict != "ACCEPT" {
+				t.Errorf("%s: the reference verifier gives %s %s (%s), want ACCEPT", row.name, outcome.Verdict, outcome.RejectCategory, outcome.Reason)
+				continue
+			}
+			code, out, errOut := export("--form", "vc", file)
+			if code != exitOK {
+				t.Errorf("%s: exit %d, stderr %q; want exit %d and a credential", row.name, code, errOut, exitOK)
+				continue
+			}
+			secured, err := decodeObject([]byte(strings.TrimSuffix(out, "\n")))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if secured["validUntil"] != row.written {
+				t.Errorf("%s: validUntil %v, want %s", row.name, secured["validUntil"], row.written)
+			}
+			continue
+		}
+		if outcome.Verdict != "REJECT" || outcome.RejectCategory != "PARSE_ERROR" {
+			t.Errorf("%s: the reference verifier gives %s %s (%s), want REJECT PARSE_ERROR", row.name, outcome.Verdict, outcome.RejectCategory, outcome.Reason)
+			continue
+		}
+		want := "atx-export: " + file + ": atx: " + outcome.Reason + "\n"
+		for _, flags := range [][]string{{"--form", "vc"}, {"--form", "vc", "--mldsa65-proof"}} {
+			code, out, errOut := export(append(append([]string{}, flags...), file)...)
+			if code != exitInput || out != "" || errOut != want {
+				t.Errorf("%s %v: exit %d, %d bytes written, stderr %q; want exit %d and stderr %q", row.name, flags, code, len(out), errOut, exitInput, want)
+			}
+		}
+	}
+}
+
+// readAsGo122 returns the instant a time.Time decoder built with go1.22.0,
+// handed s with its escapes resolved, reads: the date and time before the
+// time zone offset, less the offset read as two digits of hour and two of
+// minute whatever their range, so +25:00 is 25 hours and +23:61 is 23 hours
+// and 61 minutes.
+func readAsGo122(t *testing.T, s string) time.Time {
+	t.Helper()
+	s = strings.Replace(s, backslashU+"002d", "-", 1)
+	if strings.HasSuffix(s, "Z") {
+		at, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+	local, offset := s[:len(s)-len("+00:00")], s[len(s)-len("+00:00"):]
+	at, err := time.Parse("2006-01-02T15:04:05", local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hours, errHours := strconv.Atoi(offset[1:3])
+	minutes, errMinutes := strconv.Atoi(offset[4:6])
+	if errHours != nil || errMinutes != nil {
+		t.Fatalf("%s: the offset is not two digits of hour and two of minute", s)
+	}
+	shift := time.Duration(hours)*time.Hour + time.Duration(minutes)*time.Minute
+	if offset[0] == '-' {
+		shift = -shift
+	}
+	return at.Add(-shift).UTC()
 }
 
 // TestNothingExportedWhereNoSignatureCovers holds the command to the Go

@@ -7,7 +7,9 @@ package main
 // copied from scripts/generate-fixtures/main.go, the program that signed
 // every fixture. That program is a separate module's package main, so it
 // cannot be imported. The code is unchanged except that canonicalPayloadV11
-// returns its errors instead of panicking; the comments are shortened.
+// returns its errors instead of panicking, and that the IssuedAt and
+// ExpiresAt fields of ATX are of the timestamp type below rather than
+// time.Time; the comments are shortened.
 
 import (
 	"bytes"
@@ -18,6 +20,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
+	"math/big"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -79,8 +83,8 @@ type ATX struct {
 	ScanSummary          *ATCScanSummary       `json:"scanSummary"`
 	TrustScore           float64               `json:"trustScore"`
 	TrustLevel           int                   `json:"trustLevel"`
-	IssuedAt             time.Time             `json:"issuedAt"`
-	ExpiresAt            time.Time             `json:"expiresAt"`
+	IssuedAt             timestamp             `json:"issuedAt"`
+	ExpiresAt            timestamp             `json:"expiresAt"`
 	IssuerDID            string                `json:"issuerDid"`
 	IssuerChain          []string              `json:"issuerChain"`
 	Signatures           []ATCSignature        `json:"signatures"`
@@ -254,6 +258,14 @@ type fixture struct {
 // outside the IEEE 754 double range), and one with a member whose name
 // differs from an ATX member name only by letter case, because a decoder
 // that folds case would read a different credential than one that does not.
+// A number is outside the double range by its digits as written
+// (numberOutsideFloat64Range), before the RFC 8785 library reads it: that
+// library reads a number with strconv.ParseFloat, which built with go1.22.0
+// or go1.26.3 reads 1 followed by 1000 zeros and e-650, whose value is
+// 10^350, as 1e+149, and built with go1.27.0 refuses it. issuedAt and
+// expiresAt are decoded as timestamps (timestamp), so one written with a
+// JSON escape, or with a time zone offset hour above 24 or minute above 60,
+// is refused whatever the Go release.
 func readFixture(path string) (*fixture, error) {
 	// The path is the operator's own argument; Clean only normalizes it.
 	clean := filepath.Clean(path)
@@ -269,12 +281,15 @@ func readFixture(path string) (*fixture, error) {
 	if !ok {
 		return nil, fmt.Errorf("%s: not a fixture: no atx member", path)
 	}
-	if _, err := jcs.Transform(atxRaw); err != nil {
-		return nil, fmt.Errorf("%s: atx cannot be canonicalized (RFC 8785): %w", path, err)
-	}
 	members, err := decodeObject(atxRaw)
 	if err != nil {
 		return nil, fmt.Errorf("%s: atx: %w", path, err)
+	}
+	if where, literal := numberOutsideDoubleRange(members); where != "" {
+		return nil, fmt.Errorf("%s: atx cannot be canonicalized (RFC 8785): %s holds the number %s, which is outside the IEEE 754 double range", path, where, literal)
+	}
+	if _, err := jcs.Transform(atxRaw); err != nil {
+		return nil, fmt.Errorf("%s: atx cannot be canonicalized (RFC 8785): %w", path, err)
 	}
 	if err := checkMemberCase(members); err != nil {
 		return nil, fmt.Errorf("%s: atx: %w", path, err)
@@ -455,30 +470,125 @@ func timestampAsWritten(raw json.RawMessage) bool {
 
 // offsetOutOfRange reports whether s, a timestamp that time.Time's decoder
 // has read, ends in a time zone offset whose hour is above 24 or whose
-// minute is above 60. It reads the offset as checkOffset of
-// verifiers/go/verifier/verify.go does: the last six bytes, a sign, two
-// digits of hour, a colon and two digits of minute.
+// minute is above 60. It reads the offset as checkOffset does
+// (endingOffsetField): the last six bytes, a sign, two digits of hour, a
+// colon and two digits of minute.
 func offsetOutOfRange(s string) bool {
-	const form = "+00:00"
-	if len(s) < len(form) || s[len(s)-1] == 'Z' {
-		return false
+	return endingOffsetField(s) != ""
+}
+
+// timestamp is a time.Time decoded by time.Time's own UnmarshalJSON, which
+// parses the bytes between the quotes, so a timestamp written with a JSON
+// escape fails to decode, and refused as well when its time zone offset has
+// an hour above 24 or a minute above 60 (checkOffset). That is how the
+// timestamp type of verifiers/go/verifier/verify.go decodes the issuedAt and
+// expiresAt of a credential. What encoding/json reads into a plain time.Time
+// field depends on the Go release, as timestampAsWritten says: an issuedAt
+// or expiresAt decoded into one was read with an offset of +25:00 built with
+// go1.22.0 and written with an escape built with go1.27.0, and refused
+// built with go1.26.3. Decoded as this type, each is read as the reference
+// verifier reads it, and the error that refuses one is the verifier's
+// reason, whatever the Go release. The type, its UnmarshalJSON, and
+// offsetFirst, checkOffset, endingOffsetField, offsetField and
+// offsetRangeError are copied from that file; the code is unchanged.
+type timestamp struct{ time.Time }
+
+func (t *timestamp) UnmarshalJSON(b []byte) error {
+	if err := t.Time.UnmarshalJSON(b); err != nil {
+		return offsetFirst(err)
 	}
-	offset := s[len(s)-len(form):]
-	if offset[3] != ':' {
-		return false
+	if s := string(b); s != "null" {
+		return checkOffset(s[1 : len(s)-1])
 	}
-	twoDigits := func(d string) (int, bool) {
-		if d[0] < '0' || '9' < d[0] || d[1] < '0' || '9' < d[1] {
+	return nil
+}
+
+// offsetFirst returns the error Go 1.23 and later return for a timestamp in
+// place of err, the error time.Time's decoder returned for it, when err
+// names something other than the time zone offset and offsetField refuses
+// the offset. Go 1.23 and later check the offset's range as soon as they
+// have read its hour and minute, so they return the offset's error before
+// that of the day, of any text after the offset, or of the offset's sign or
+// a minute that is not two digits. Go 1.22 does not check the range, and
+// returns the day's error for 2026-02-30T00:00:00+25:00, the extra text's
+// for 2099-12-31T23:59:59+25:00x and one that cannot parse the offset for
+// 2026-02-30T00:00:00+25:0a.
+func offsetFirst(err error) error {
+	var pe *time.ParseError
+	if !errors.As(err, &pe) {
+		return err
+	}
+	field := ""
+	switch {
+	case pe.Message == ": day out of range":
+		field = endingOffsetField(pe.Value)
+	case strings.HasPrefix(pe.Message, ": extra text: ") && strings.HasSuffix(pe.Value, pe.ValueElem):
+		field = endingOffsetField(strings.TrimSuffix(pe.Value, pe.ValueElem))
+	case pe.Message == "" && pe.LayoutElem == "Z07:00":
+		field = offsetField(pe.ValueElem)
+	}
+	if offsetErr := offsetRangeError(pe.Value, field); offsetErr != nil {
+		return offsetErr
+	}
+	return err
+}
+
+// checkOffset refuses a timestamp that time.Time's decoder has read when its
+// time zone offset has an hour above 24 or a minute above 60, with the error
+// Go 1.23 and later return for it. Go 1.22 decodes such an offset (+25:00,
+// +23:61) and Go 1.23 and later refuse it. An offset of +24:00 or +23:60
+// decodes under every release.
+func checkOffset(s string) error {
+	return offsetRangeError(s, endingOffsetField(s))
+}
+
+// endingOffsetField is offsetField for the offset s ends in, or "" when s
+// ends in Z.
+func endingOffsetField(s string) string {
+	if len(s) < len("+00:00") || s[len(s)-1] == 'Z' {
+		return ""
+	}
+	return offsetField(s[len(s)-len("+00:00"):])
+}
+
+// offsetField returns "hour" or "minute", the field Go 1.23 and later name
+// when they refuse the time zone offset v starts with, or "". They read the
+// offset as six bytes, a sign, two digits of hour, a colon and two digits of
+// minute; refuse it for its hour when that is above 24 and for its minute
+// when that is above 60, the minute's error winning; read no minute when the
+// hour is not two digits; and refuse it for its range whatever its sign is.
+func offsetField(v string) string {
+	if len(v) < len("+00:00") || v[3] != ':' {
+		return ""
+	}
+	twoDigits := func(s string) (int, bool) {
+		if s[0] < '0' || '9' < s[0] || s[1] < '0' || '9' < s[1] {
 			return 0, false
 		}
-		return int(d[0]-'0')*10 + int(d[1]-'0'), true
+		return int(s[0]-'0')*10 + int(s[1]-'0'), true
 	}
-	hour, ok := twoDigits(offset[1:3])
-	minute := 0
+	hr, ok := twoDigits(v[1:3])
+	mm := 0
 	if ok {
-		minute, _ = twoDigits(offset[4:6])
+		mm, _ = twoDigits(v[4:6])
 	}
-	return hour > 24 || minute > 60
+	field := ""
+	if hr > 24 {
+		field = "hour"
+	}
+	if mm > 60 {
+		field = "minute"
+	}
+	return field
+}
+
+// offsetRangeError is the error Go 1.23 and later return for timestamp s
+// when they refuse its time zone offset for field, or nil when field is "".
+func offsetRangeError(s, field string) error {
+	if field == "" {
+		return nil
+	}
+	return &time.ParseError{Layout: time.RFC3339, Value: s, Message: ": time zone offset " + field + " out of range"}
 }
 
 // maxExactInteger is 2^53-1, the largest magnitude of an integer in the
@@ -505,8 +615,9 @@ const maxExactInteger int64 = 1<<53 - 1
 // when the TBS holds no such number, and for a "1.0" credential, whose
 // signed string writes trustLevel digit for digit and holds none of the
 // other members. readFixture has refused, before this is called, an atx
-// object holding a number outside the IEEE 754 double range or an integer
-// member outside the int range, so the rule reads neither.
+// object holding a number outside the IEEE 754 double range by its digits
+// as written (numberOutsideDoubleRange), and its typed decode one holding an
+// integer member outside the int range, so the rule reads neither.
 func uncoveredNumber(a *ATX) (where, literal string, fractionOrExponent bool) {
 	if a.ATCVersion != atcVersionV11 {
 		return "", "", false
@@ -560,6 +671,158 @@ func purposeNumbersV11(raw json.RawMessage) []json.Number {
 			numbers = append(numbers, number)
 		}
 	}
+}
+
+// numberOutsideDoubleRange names the first number of the atx object, its
+// members decoded with numbers as written (decodeObject), whose magnitude is
+// outside the IEEE 754 double range (numberOutsideFloat64Range): where is
+// the atx member that holds it, and literal the number as written. It reads
+// the members in the order of their names, as firstNumber reads each value.
+func numberOutsideDoubleRange(members map[string]any) (where, literal string) {
+	for _, name := range sortedNames(members) {
+		if literal, found := firstNumber(members[name], numberOutsideFloat64Range); found {
+			return name, literal
+		}
+	}
+	return "", ""
+}
+
+// firstNumber returns the first number of v, a value decoded with numbers as
+// written, for which match holds: v itself, or for an object the first of
+// its members' values in the order of their names, for an array the first
+// of its elements in their order.
+func firstNumber(v any, match func(literal string) bool) (string, bool) {
+	switch v := v.(type) {
+	case json.Number:
+		if match(string(v)) {
+			return string(v), true
+		}
+	case map[string]any:
+		for _, name := range sortedNames(v) {
+			if literal, found := firstNumber(v[name], match); found {
+				return literal, true
+			}
+		}
+	case []any:
+		for _, element := range v {
+			if literal, found := firstNumber(element, match); found {
+				return literal, true
+			}
+		}
+	}
+	return "", false
+}
+
+// float64OverflowDigits is 2^1024 - 2^970 in decimal digits: the largest
+// float64 plus half a unit in its last place, the least magnitude IEEE 754
+// round-to-nearest-even takes to infinity, since the tie rounds to the even
+// significand, 2^1024. It has 309 digits.
+var float64OverflowDigits = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 1024), new(big.Int).Lsh(big.NewInt(1), 970)).String()
+
+// numberOutsideFloat64Range reports whether the JSON number literal s has a
+// magnitude of 2^1024 - 2^970 or more, which rounds to infinity as a
+// float64 (float64OverflowDigits). It decides on the digits as written,
+// whatever their count and whatever the exponent, so its answer does not
+// depend on the Go release, where strconv.ParseFloat's does. A literal with
+// no nonzero digit is zero. Any other is 0.d1d2d3... × 10^point, with d1 its
+// first nonzero digit and point the count of digits before the decimal point
+// from d1 on, plus the exponent: it is outside the range when point is above
+// 309, and when point is 309 and its digits, those past the last written
+// being zero, are those of 2^1024 - 2^970 or above them. This function,
+// decimalForm and nearestFloat64 are copied from
+// verifiers/go/verifier/verify.go; the code is unchanged.
+func numberOutsideFloat64Range(s string) bool {
+	_, digits, point := decimalForm(s)
+	if digits == "" {
+		return false
+	}
+	switch {
+	case point > len(float64OverflowDigits):
+		return true
+	case point < len(float64OverflowDigits):
+		return false
+	}
+	for i := 0; i < len(float64OverflowDigits); i++ {
+		d := byte('0')
+		if i < len(digits) {
+			d = digits[i]
+		}
+		if d != float64OverflowDigits[i] {
+			return d > float64OverflowDigits[i]
+		}
+	}
+	return true
+}
+
+// decimalForm reads the JSON number literal s as negative, whether it opens
+// with a minus sign; digits, its digits from the first nonzero one on (none
+// for a literal with no nonzero digit); and point, such that the magnitude
+// of s is 0.digits × 10^point. An exponent is read up to 400 past the length
+// of s, which decides the magnitude of any literal on its own
+// (numberOutsideFloat64Range).
+func decimalForm(s string) (negative bool, digits string, point int) {
+	negative = strings.HasPrefix(s, "-")
+	s = strings.TrimPrefix(s, "-")
+	mantissa, exponent := s, ""
+	if i := strings.IndexAny(s, "eE"); i >= 0 {
+		mantissa, exponent = s[:i], s[i+1:]
+	}
+	point = strings.IndexByte(mantissa, '.')
+	if point < 0 {
+		point = len(mantissa)
+	}
+	written := strings.Replace(mantissa, ".", "", 1)
+	digits = strings.TrimLeft(written, "0")
+	if digits == "" {
+		return negative, "", 0
+	}
+	point -= len(written) - len(digits)
+	if exponent != "" {
+		negativeExponent := exponent[0] == '-'
+		if negativeExponent || exponent[0] == '+' {
+			exponent = exponent[1:]
+		}
+		e, limit := 0, len(s)+400
+		for i := 0; i < len(exponent) && e < limit; i++ {
+			e = e*10 + int(exponent[i]-'0')
+		}
+		if negativeExponent {
+			e = -e
+		}
+		point += e
+	}
+	return negative, digits, point
+}
+
+// nearestFloat64 returns the float64 nearest the value of the JSON number
+// literal s, ties to even, decided on every digit written. The caller has
+// refused a literal outside the float64 range (numberOutsideFloat64Range).
+// In go1.26 strconv.ParseFloat keeps at most 800 digits of a literal and
+// places the decimal point by the digits it kept, so it reads 875 followed
+// by 900 zeros and e-901, whose value is 87.5, as 8.75e-102, where go1.27
+// reads 87.5. A magnitude below 10^-400 is zero, keeping the sign. Past 800
+// significant digits, the digits after the 800th are read as one nonzero
+// digit: a point halfway between two float64s is written with at most 767
+// significant digits, so the digits past the 800th decide no rounding but
+// whether the value lies above the first 800.
+func nearestFloat64(s string) float64 {
+	negative, digits, point := decimalForm(s)
+	digits = strings.TrimRight(digits, "0")
+	var f float64
+	if digits != "" && point >= -400 {
+		if len(digits) > 800 {
+			digits = digits[:800] + "1"
+		}
+		r, ok := new(big.Rat).SetString(digits + "e" + strconv.Itoa(point-len(digits)))
+		if !ok {
+			panic("nearestFloat64: " + s + " is not a JSON number")
+		}
+		f, _ = r.Float64()
+	}
+	if negative {
+		f = math.Copysign(f, -1)
+	}
+	return f
 }
 
 // purposeSurrogateEscape returns the first unpaired UTF-16 surrogate escape
