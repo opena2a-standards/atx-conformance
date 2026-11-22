@@ -307,6 +307,54 @@ they should not.
   lists: freshness and a list required". The fixture, accept and reject
   counts of the kit's self-tests in `interop/run_test.go` go from 52, 11 and
   41 to 57, 12 and 45.
+- `atx-export --form vc <fixture>` writes the credential of a native fixture
+  as a W3C Verifiable Credential 2.0 with one `eddsa-jcs-2022` Data Integrity
+  proof, signed with the suite's published test keys, the same bytes on every
+  run; `--mldsa65-proof` adds a second proof with the experimental
+  `mldsa65-jcs-2024` suite, as the 2026-03-01 revision of the W3C
+  Quantum-Resistant Cryptosuites Editor's Draft defines it (later revisions
+  leave the ML-DSA-65 suites out). This is a draft form, and its description
+  is not yet published. It signs nothing, and exits 3, when a native
+  signature does not verify over the native bytes, or when an ATX v1.1
+  credential's `behavioralProfile` or `scanSummary` holds a member those
+  bytes leave out (a `scanSummary` member named `techniques` is one, even
+  when it is null or an empty array), or when an ATX v1.1 credential writes
+  a number those bytes do not hold as written: an integer of the signed
+  members whose magnitude is above 2^53-1, or a `declaredPurpose` number
+  written with a fraction or an exponent part. RFC 8785 writes such a number
+  as the double nearest it (9007199254740993 as 9007199254740992, `1e3` as
+  1000), so the native signatures verify whichever of the two the credential
+  writes; both reference verifiers reject such a credential as
+  `SIGNATURE_INVALID`, and the command's message names the member and the
+  number as the Go verifier's reason does. A number the command cannot read
+  at all, `1e400` for one, makes a fixture it cannot read, and it exits 1.
+  So does the `declaredPurpose` of an ATX v1.1 credential that holds an
+  unpaired UTF-16 surrogate escape. RFC 8785 refuses a string that holds a
+  lone surrogate, and the library that computes the native bytes reads such
+  an escape and a `\u` escape directly after it as a single U+FFFD, so a
+  native signature made over a `declaredPurpose` that holds U+FFFD verifies
+  a credential that writes the two escapes in its place, where another JSON
+  reader reads U+FFFD and the second escape's character; both reference
+  verifiers reject such a credential as `VERIFIER_CONFIG_ERROR`, and the
+  command's message names the escape as the Go verifier's reason does.
+  It signs nothing, and exits 3, as well when an ATX v1.1 credential's
+  `behavioralProfile` holds null for `checksum`, `generatedAt` or
+  `observationDays`, or lacks one of them. The native bytes hold that
+  member's zero value (an empty `checksum`, the `generatedAt`
+  `0001-01-01T00:00:00Z`, the `observationDays` 0), so a native signature
+  made over the zero value verifies a credential that does not write it;
+  both reference verifiers reject such a credential as `SIGNATURE_INVALID`,
+  and the command's message describes the profile as the Go verifier's
+  reason does. The same refusal meets a `generatedAt` that the build of the
+  command reads and the reference verifiers do not read as a timestamp: a
+  time zone offset with an hour above 24 or a minute above 60, which a
+  build with Go 1.22 reads, and a timestamp written with a JSON escape,
+  which a build with Go 1.27 reads.
+  `@digitalbazaar/vc` 7.3.0 with
+  `@digitalbazaar/eddsa-jcs-2022-cryptosuite` 1.0.0 verified the output for
+  each ACCEPT fixture; on the output with `--mldsa65-proof` it checked the
+  Ed25519 proof only. No fixture, expected verdict, verifier, schema or
+  module dependency changed.
 
 ### Changed
 
