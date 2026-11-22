@@ -21,6 +21,8 @@ import (
 
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	"github.com/gowebpki/jcs"
+
+	"github.com/opena2a-standards/atx-conformance/verifiers/go/verifier"
 )
 
 // repoDir is the repository root, two directories above this package.
@@ -417,6 +419,16 @@ func TestRefusals(t *testing.T) {
 			"atx-export: --mldsa65-proof needs a native ML-DSA-65 signature\n"},
 		{"member written after signing", []string{"--form", "vc", fixturePath("v1_1-behavioral-profile-extra-member.json")}, exitNativeSignature,
 			"atx-export: member behavioralProfile.riskLevel is not covered by the native signatures; not re-signing\n"},
+		{"count above 2^53-1", []string{"--form", "vc", fixturePath("v1_1-integer-outside-exact-range.json")}, exitNativeSignature,
+			"atx-export: no native signature covers scanSummary.criticalFindings: the integer 9007199254740993 is outside the I-JSON exact range, -(2^53-1) to 2^53-1; not re-signing\n"},
+		{"declaredPurpose integer above 2^53-1", []string{"--form", "vc", fixturePath("v1_1-declared-purpose-integer-outside-range.json")}, exitNativeSignature,
+			"atx-export: no native signature covers declaredPurpose: the integer 9007199254740993 is outside the I-JSON exact range, -(2^53-1) to 2^53-1; not re-signing\n"},
+		{"declaredPurpose number with an exponent part", []string{"--form", "vc", fixturePath("v1_1-declared-purpose-integer-respelled-exponent.json")}, exitNativeSignature,
+			"atx-export: no native signature covers declaredPurpose: the number 1e3 is written with a fraction or an exponent part, not as an integer; not re-signing\n"},
+		{"declaredPurpose number with a fraction", []string{"--form", "vc", fixturePath("v1_1-declared-purpose-integer-respelled-fraction.json")}, exitNativeSignature,
+			"atx-export: no native signature covers declaredPurpose: the number 1000.0 is written with a fraction or an exponent part, not as an integer; not re-signing\n"},
+		{"declaredPurpose number with an upper-case exponent part", []string{"--form", "vc", fixturePath("v1_1-declared-purpose-integer-respelled-upper-exponent.json")}, exitNativeSignature,
+			"atx-export: no native signature covers declaredPurpose: the number 1E3 is written with a fraction or an exponent part, not as an integer; not re-signing\n"},
 		{"case-variant member", []string{"--form", "vc", fixturePath("v1_1-case-variant-member.json")}, exitInput,
 			`differs from member "trustLevel" only by letter case`},
 		{"duplicate member", []string{"--form", "vc", fixturePath("v1_1-duplicate-purpose-member.json")}, exitInput,
@@ -435,6 +447,255 @@ func TestRefusals(t *testing.T) {
 			}
 		}
 	}
+}
+
+// noSignatureCovers opens each reason the Go reference verifier gives for a
+// credential it rejects because no signature covers something the
+// credential holds.
+const noSignatureCovers = "no signature covers "
+
+// alteredFixture writes a copy of the suite fixture name, its atx object
+// changed by alter, into a new folder laid out as the suite is: the copy
+// under fixtures/, beside a vectors/ folder holding the suite's vector
+// files. It returns the copy's path, and its atx and verifierState members
+// as the copy holds them. Each number alter does not change stays as the
+// fixture writes it.
+func alteredFixture(t *testing.T, name string, alter func(atx map[string]any)) (file string, atxRaw, state []byte) {
+	t.Helper()
+	raw, err := fs.ReadFile(repo, "fixtures/"+name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		t.Fatal(err)
+	}
+	atx, err := decodeObject(top["atx"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	alter(atx)
+	if top["atx"], err = json.Marshal(atx); err != nil {
+		t.Fatal(err)
+	}
+	text, err := json.Marshal(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	for _, sub := range []string{"fixtures", "vectors"} {
+		if err := os.Mkdir(filepath.Join(dir, sub), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	vectors, err := fs.Glob(repo, "vectors/*.json")
+	if err != nil || len(vectors) == 0 {
+		t.Fatalf("vectors/*.json: %d files, %v", len(vectors), err)
+	}
+	for _, v := range vectors {
+		data, err := fs.ReadFile(repo, v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "vectors", path.Base(v)), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file = filepath.Join(dir, "fixtures", name)
+	if err := os.WriteFile(file, text, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return file, top["atx"], top["verifierState"]
+}
+
+// TestAlteredFixtureCopyExports guards the helper above: a copy that
+// changes nothing exports the bytes the suite's own fixture exports, so a
+// refusal of an altered copy is a refusal of the change.
+func TestAlteredFixtureCopyExports(t *testing.T) {
+	const name = "v1_1-baseline-valid.json"
+	file, _, _ := alteredFixture(t, name, func(map[string]any) {})
+	code, out, errOut := export("--form", "vc", file)
+	wantCode, want, _ := export("--form", "vc", fixturePath(name))
+	if code != exitOK || wantCode != exitOK || out == "" || out != want {
+		t.Errorf("an unchanged copy of %s: exit %d, stderr %q; the fixture: exit %d; same output: %t", name, code, errOut, wantCode, out == want)
+	}
+}
+
+// TestNumbersNoNativeSignatureCovers holds the command's rule for the
+// numbers of a "1.1" credential to the Go reference verifier's, on copies
+// of the v1.1 baseline that change one or two numbers. Where the row names
+// a member, the verifier rejects the copy because no signature covers that
+// member's number, and the command exits 3 naming the same member and
+// number in the verifier's words. Where it names none, the number is in the
+// exact range, the verifier rejects the copy for the signature the change
+// breaks, and the command refuses that native signature.
+func TestNumbersNoNativeSignatureCovers(t *testing.T) {
+	number := func(s string) json.Number { return json.Number(s) }
+	inObject := func(object, member, value string) func(map[string]any) {
+		return func(atx map[string]any) {
+			atx[object].(map[string]any)[member] = number(value)
+		}
+	}
+	both := func(alter ...func(map[string]any)) func(map[string]any) {
+		return func(atx map[string]any) {
+			for _, a := range alter {
+				a(atx)
+			}
+		}
+	}
+	trustLevel := func(value string) func(map[string]any) {
+		return func(atx map[string]any) { atx["trustLevel"] = number(value) }
+	}
+	purpose := func(value any) func(map[string]any) {
+		return func(atx map[string]any) { atx["declaredPurpose"] = value }
+	}
+	cases := []struct {
+		name  string
+		alter func(atx map[string]any)
+		where string
+	}{
+		{"criticalFindings 2^53", inObject("scanSummary", "criticalFindings", "9007199254740992"), "scanSummary.criticalFindings"},
+		{"criticalFindings -(2^53)", inObject("scanSummary", "criticalFindings", "-9007199254740992"), "scanSummary.criticalFindings"},
+		{"highFindings 2^53+1", inObject("scanSummary", "highFindings", "9007199254740993"), "scanSummary.highFindings"},
+		{"observationDays 2^53", inObject("behavioralProfile", "observationDays", "9007199254740992"), "behavioralProfile.observationDays"},
+		{"trustLevel 2^53", trustLevel("9007199254740992"), "trustLevel"},
+		{"trustLevel -(2^53)", trustLevel("-9007199254740992"), "trustLevel"},
+		{"declaredPurpose: a fraction before an integer above 2^53-1",
+			purpose(map[string]any{"a": number("1"), "b": []any{number("2.5"), number("9007199254740993")}}), "declaredPurpose"},
+		{"declaredPurpose: an integer above 2^53-1 before a fraction",
+			purpose(map[string]any{"a": number("9007199254740993"), "b": number("2.5")}), "declaredPurpose"},
+		{"declaredPurpose: an integer outside the int64 range", purpose(map[string]any{"n": number("12345678901234567890")}), "declaredPurpose"},
+		{"declaredPurpose: -(2^53)", purpose(map[string]any{"n": number("-9007199254740992")}), "declaredPurpose"},
+		{"declaredPurpose: an exponent part, nested", purpose(map[string]any{"a": map[string]any{"b": []any{number("0e0")}}}), "declaredPurpose"},
+		{"declaredPurpose: a number, not an object", purpose(number("1E3")), "declaredPurpose"},
+		{"observationDays before trustLevel",
+			both(inObject("behavioralProfile", "observationDays", "9007199254740992"), trustLevel("9007199254740993")), "behavioralProfile.observationDays"},
+		{"declaredPurpose before criticalFindings",
+			both(purpose(map[string]any{"n": number("9007199254740992")}), inObject("scanSummary", "criticalFindings", "9007199254740993")), "declaredPurpose"},
+		{"criticalFindings before highFindings",
+			both(inObject("scanSummary", "criticalFindings", "9007199254740992"), inObject("scanSummary", "highFindings", "9007199254740993")), "scanSummary.criticalFindings"},
+		{"highFindings before trustLevel",
+			both(inObject("scanSummary", "highFindings", "9007199254740992"), trustLevel("9007199254740993")), "scanSummary.highFindings"},
+		{"criticalFindings 2^53-1", inObject("scanSummary", "criticalFindings", "9007199254740991"), ""},
+		{"highFindings -(2^53-1)", inObject("scanSummary", "highFindings", "-9007199254740991"), ""},
+		{"observationDays 2^53-1", inObject("behavioralProfile", "observationDays", "9007199254740991"), ""},
+		{"trustLevel 2^53-1", trustLevel("9007199254740991"), ""},
+		{"declaredPurpose: 2^53-1 and -(2^53-1)", purpose(map[string]any{"a": number("9007199254740991"), "b": number("-9007199254740991")}), ""},
+	}
+	for _, c := range cases {
+		file, atxRaw, state := alteredFixture(t, "v1_1-baseline-valid.json", c.alter)
+		outcome := verifier.VerifyCredential(atxRaw, state)
+		want := "atx-export: native signature 0 does not verify over the native bytes; not re-signing\n"
+		switch {
+		case outcome.Verdict != "REJECT" || outcome.RejectCategory != "SIGNATURE_INVALID":
+			t.Errorf("%s: the reference verifier gives %s %s (%s), want REJECT SIGNATURE_INVALID", c.name, outcome.Verdict, outcome.RejectCategory, outcome.Reason)
+			continue
+		case c.where != "" && !strings.HasPrefix(outcome.Reason, noSignatureCovers+c.where+": "):
+			t.Errorf("%s: the reference verifier's reason is %q, want one that starts %q", c.name, outcome.Reason, noSignatureCovers+c.where+": ")
+			continue
+		case c.where == "" && strings.HasPrefix(outcome.Reason, noSignatureCovers):
+			t.Errorf("%s: the reference verifier's reason is %q, want the signature the change breaks", c.name, outcome.Reason)
+			continue
+		case c.where != "":
+			want = "atx-export: no native signature covers " + strings.TrimPrefix(outcome.Reason, noSignatureCovers) + "; not re-signing\n"
+		}
+		code, out, errOut := export("--form", "vc", file)
+		if code != exitNativeSignature || out != "" || errOut != want {
+			t.Errorf("%s: exit %d, stdout %q, stderr %q; want exit %d and stderr %q", c.name, code, out, errOut, exitNativeSignature, want)
+		}
+	}
+}
+
+// TestUncoveredNumberReadsOnlyV11 checks that the rule is the "1.1" signed
+// bytes' own: a "1.0" credential's signed string writes trustLevel digit for
+// digit and holds no other number the rule reads, and a "1.1" credential
+// with no behavioralProfile, scanSummary or declaredPurpose has none of
+// their numbers.
+func TestUncoveredNumberReadsOnlyV11(t *testing.T) {
+	over := maxExactInteger + 1
+	big := int(over)
+	if int64(big) != over {
+		t.Skip("int is narrower than 64 bits here: it holds no integer above 2^53-1")
+	}
+	full := func(version string) *ATX {
+		return &ATX{
+			ATCVersion:        version,
+			TrustLevel:        big,
+			BehavioralProfile: &ATCBehavioralProfile{ObservationDays: big},
+			ScanSummary:       &ATCScanSummary{CriticalFindings: big, HighFindings: big},
+			DeclaredPurpose:   json.RawMessage(`{"n":1e3}`),
+		}
+	}
+	if where, literal, _ := uncoveredNumber(full(atcVersion)); where != "" {
+		t.Errorf("a %q credential: %s %s", atcVersion, where, literal)
+	}
+	if where, _, _ := uncoveredNumber(full(atcVersionV11)); where != "behavioralProfile.observationDays" {
+		t.Errorf("a %q credential: %q, want behavioralProfile.observationDays", atcVersionV11, where)
+	}
+	for _, purpose := range []string{"", "null", "{}", " { } ", `{"n":9007199254740991}`, `"1e3"`} {
+		bare := &ATX{ATCVersion: atcVersionV11, TrustLevel: 4, DeclaredPurpose: json.RawMessage(purpose)}
+		if where, literal, _ := uncoveredNumber(bare); where != "" {
+			t.Errorf("declaredPurpose %q and no behavioralProfile or scanSummary: %s %s", purpose, where, literal)
+		}
+	}
+}
+
+// TestNumberOutsideTheDoubleRangeIsNotRead checks that a number the RFC 8785
+// library refuses to read, 1e400, makes a fixture the command cannot read,
+// in declaredPurpose and in trustScore: exit status 1 and nothing written.
+// The Go reference verifier rejects both copies.
+func TestNumberOutsideTheDoubleRangeIsNotRead(t *testing.T) {
+	alterations := map[string]func(atx map[string]any){
+		"declaredPurpose": func(atx map[string]any) { atx["declaredPurpose"] = map[string]any{"n": json.Number("1e400")} },
+		"trustScore":      func(atx map[string]any) { atx["trustScore"] = json.Number("1e400") },
+	}
+	for member, alter := range alterations {
+		file, atxRaw, state := alteredFixture(t, "v1_1-baseline-valid.json", alter)
+		if outcome := verifier.VerifyCredential(atxRaw, state); outcome.Verdict != "REJECT" {
+			t.Errorf("1e400 in %s: the reference verifier gives %s", member, outcome.Verdict)
+		}
+		code, out, errOut := export("--form", "vc", file)
+		if code != exitInput || out != "" || !strings.Contains(errOut, "atx cannot be canonicalized (RFC 8785)") {
+			t.Errorf("1e400 in %s: exit %d, stdout %q, stderr %q; want exit %d and a message that the atx cannot be canonicalized", member, code, out, errOut, exitInput)
+		}
+	}
+}
+
+// TestNothingExportedWhereNoSignatureCovers holds the command to the Go
+// reference verifier on every fixture of the suite: where the verifier
+// rejects the fixture's credential with a reason that starts "no signature
+// covers", the command writes nothing to standard output and exits with a
+// status other than 0.
+func TestNothingExportedWhereNoSignatureCovers(t *testing.T) {
+	refused := 0
+	for _, name := range fixtureNames(t, "") {
+		raw, err := fs.ReadFile(repo, "fixtures/"+name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fx struct {
+			ATX           json.RawMessage `json:"atx"`
+			VerifierState json.RawMessage `json:"verifierState"`
+		}
+		if err := json.Unmarshal(raw, &fx); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		reason := verifier.VerifyCredential(fx.ATX, fx.VerifierState).Reason
+		if !strings.HasPrefix(reason, noSignatureCovers) {
+			continue
+		}
+		refused++
+		for _, flags := range [][]string{{"--form", "vc"}, {"--form", "vc", "--mldsa65-proof"}} {
+			code, out, _ := export(append(append([]string{}, flags...), fixturePath(name))...)
+			if code == exitOK || out != "" {
+				t.Errorf("%s %v: exit %d, %d bytes written; the reference verifier: %s", name, flags, code, len(out), reason)
+			}
+		}
+	}
+	if refused == 0 {
+		t.Fatalf("the reference verifier gives no fixture a reason that starts %q", noSignatureCovers)
+	}
+	t.Logf("%d fixtures", refused)
 }
 
 // TestUsage checks the command line.

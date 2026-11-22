@@ -29,7 +29,13 @@
 // signatures do not all verify. It also refuses an atcVersion "1.1"
 // credential whose behavioralProfile or scanSummary holds a member the
 // v1.1 to-be-signed projection leaves out, because no native signature
-// covers that member.
+// covers that member, and one that writes a number the native bytes do not
+// hold as written: an integer of that projection whose magnitude is above
+// 2^53-1, or a declaredPurpose number written with a fraction or an
+// exponent part. RFC 8785 writes such a number as the double nearest it,
+// 9007199254740993 as 9007199254740992 and 1e3 as 1000, so the native
+// signatures verify whichever of the two the credential writes, and the
+// reference verifiers reject the credential.
 //
 // Exit status:
 //
@@ -39,8 +45,9 @@
 //	2  usage error; --form jws; or the fixture has no native signature of
 //	   the algorithm a proof needs
 //	3  a native signature does not verify over the native bytes, or an
-//	   atcVersion "1.1" behavioralProfile or scanSummary holds a member
-//	   those bytes leave out; nothing was signed
+//	   atcVersion "1.1" credential holds a behavioralProfile or scanSummary
+//	   member those bytes leave out, or a number they do not hold as
+//	   written; nothing was signed
 package main
 
 import (
@@ -74,8 +81,10 @@ credential and one line feed; every run writes the same bytes.
 Exit status: 0 written; 1 the fixture or a vector file it names cannot be
 read; 2 usage error, or the fixture has no native signature of the algorithm
 a proof needs; 3 a native signature does not verify over the native bytes,
-or an ATX v1.1 behavioralProfile or scanSummary holds a member those bytes
-leave out, and nothing was signed.
+or an ATX v1.1 credential holds a behavioralProfile or scanSummary member
+those bytes leave out, or a number they do not hold as written (an integer
+above 2^53-1 in magnitude, or a declaredPurpose number with a fraction or an
+exponent part), and nothing was signed.
 `
 
 // refusal is an error that ends the command with its own exit status and

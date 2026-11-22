@@ -23,6 +23,7 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -377,6 +378,87 @@ func memberOutside(obj map[string]any, t reflect.Type) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// maxExactInteger is 2^53-1, the largest magnitude of an integer in the
+// I-JSON exact range (RFC 7493 §2.2). jcs.Transform reads each number as an
+// IEEE 754 double (RFC 8785 §3.2.2.3), which holds every integer in that
+// range and writes it as its decimal digits. Outside it a double does not
+// hold every integer: 9007199254740993 is written as 9007199254740992.
+const maxExactInteger int64 = 1<<53 - 1
+
+// uncoveredNumber names the first number of a "1.1" credential's TBS that
+// JCS(TBS) does not hold as the credential writes it, so that a native
+// signature verifies whether the credential writes that number or another:
+// an integer whose magnitude is above maxExactInteger, or a declaredPurpose
+// number written with a fraction or an exponent part, which jcs.Transform
+// writes as the double nearest it (1e3, 1000.0 and 1E3 as 1000). The rule
+// and its order are those of integerOutsideExactRangeV11 in
+// verifiers/go/verifier/verify.go, by which the reference verifier rejects
+// such a credential before it canonicalizes:
+// behavioralProfile.observationDays, the numbers of declaredPurpose in the
+// order written, scanSummary.criticalFindings, scanSummary.highFindings,
+// trustLevel. where is the member, literal the number (as written in
+// declaredPurpose, in decimal digits elsewhere), and fractionOrExponent is
+// set for a number written with a fraction or an exponent part. where is ""
+// when the TBS holds no such number, and for a "1.0" credential, whose
+// signed string writes trustLevel digit for digit and holds none of the
+// other members. readFixture has refused, before this is called, an atx
+// object holding a number outside the IEEE 754 double range or an integer
+// member outside the int range, so the rule reads neither.
+func uncoveredNumber(a *ATX) (where, literal string, fractionOrExponent bool) {
+	if a.ATCVersion != atcVersionV11 {
+		return "", "", false
+	}
+	exact := func(n int64) bool { return -maxExactInteger <= n && n <= maxExactInteger }
+	if bp := a.BehavioralProfile; bp != nil && !exact(int64(bp.ObservationDays)) {
+		return "behavioralProfile.observationDays", strconv.Itoa(bp.ObservationDays), false
+	}
+	for _, number := range purposeNumbersV11(a.DeclaredPurpose) {
+		// The form is decided from the number as written, whatever its value.
+		if strings.ContainsAny(string(number), ".eE") {
+			return "declaredPurpose", string(number), true
+		}
+		// A JSON integer that ParseInt refuses is outside the int64 range.
+		if n, err := strconv.ParseInt(string(number), 10, 64); err != nil || !exact(n) {
+			return "declaredPurpose", string(number), false
+		}
+	}
+	if ss := a.ScanSummary; ss != nil {
+		if !exact(int64(ss.CriticalFindings)) {
+			return "scanSummary.criticalFindings", strconv.Itoa(ss.CriticalFindings), false
+		}
+		if !exact(int64(ss.HighFindings)) {
+			return "scanSummary.highFindings", strconv.Itoa(ss.HighFindings), false
+		}
+	}
+	if !exact(int64(a.TrustLevel)) {
+		return "trustLevel", strconv.Itoa(a.TrustLevel), false
+	}
+	return "", "", false
+}
+
+// purposeNumbersV11 returns each number the declaredPurpose raw writes, as
+// written and in the order written, and none when the v1.1 TBS omits
+// declaredPurpose. declaredPurpose enters the TBS as written, so no typed
+// decode reads these numbers.
+func purposeNumbersV11(raw json.RawMessage) []json.Number {
+	purpose := projectDeclaredPurposeV11(raw)
+	if purpose == nil {
+		return nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(purpose))
+	dec.UseNumber()
+	var numbers []json.Number
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return numbers // io.EOF: readFixture has decoded this text whole
+		}
+		if number, ok := tok.(json.Number); ok {
+			numbers = append(numbers, number)
+		}
+	}
 }
 
 // jsonNames returns the JSON member names the struct type t declares.

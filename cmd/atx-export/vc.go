@@ -291,6 +291,18 @@ func exportVC(path string, withMLDSA65 bool) ([]byte, error) {
 		return nil, err
 	}
 
+	// A number of a "1.1" credential that the native bytes do not hold as
+	// written is refused before those bytes are computed, as the reference
+	// verifiers refuse it before they canonicalize: the native signatures
+	// verify over the bytes whichever number the credential writes.
+	if where, literal, fractionOrExponent := uncoveredNumber(&f.native); where != "" {
+		reason := fmt.Sprintf("the integer %s is outside the I-JSON exact range, -(2^53-1) to 2^53-1", literal)
+		if fractionOrExponent {
+			reason = fmt.Sprintf("the number %s is written with a fraction or an exponent part, not as an integer", literal)
+		}
+		return nil, &refusal{exitNativeSignature, fmt.Sprintf("no native signature covers %s: %s; not re-signing", where, reason)}
+	}
+
 	// Every native signature must verify over the native bytes before
 	// anything is signed.
 	native, err := nativeSignedBytes(&f.native)
