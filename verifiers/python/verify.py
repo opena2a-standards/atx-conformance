@@ -106,7 +106,9 @@ lesson and scoped to the whole body because ATX signs it all):
     followed directly by another \\u escape, cannot be canonicalized (RFC 8785
     section 3.2.2.2) and rejects as VERIFIER_CONFIG_ERROR, as it does in the
     Go reference verifier, which refuses it before its JCS library reads the
-    escape. This verifier refuses it before it canonicalizes the payload too,
+    escape. The reason names the first such escape as the file writes it,
+    the letter case of its hex digits included, as the Go verifier's reason
+    does. This verifier refuses it before it canonicalizes the payload too,
     so a number beside it written with a fraction part (1.5) does not make
     the credential a signature failure. An integer in it outside the I-JSON
     exact range rejects after that check, as SIGNATURE_INVALID (Spec
@@ -261,6 +263,13 @@ _REPLACEMENT_CHARACTER = chr(0xFFFD)
 _STRING_REST = re.compile(r'[^"\\]*(?:\\.[^"\\]*)*"([ \t\n\r]*:)?', re.DOTALL)
 _BRACKET = re.compile(r"[\[\]{}]")
 
+# JSON whitespace (RFC 8259 section 2); what a walk of an array or object
+# stops at, a quote, which opens a string literal, or a bracket; and the rest
+# of a number, true, false or null, up to what ends it.
+_JSON_WHITESPACE = re.compile(r"[ \t\n\r]*")
+_QUOTE_OR_BRACKET = re.compile(r'["\[\]{}]')
+_SCALAR_REST = re.compile(r"[^,\]} \t\n\r]*")
+
 # The deepest nesting of arrays and objects Go's encoding/json decodes, the
 # outermost value included (maxNestingDepth in its scanner).
 _GO_MAX_DEPTH = 10000
@@ -383,9 +392,12 @@ class _DupMarkedDict(dict):
     member, as written, in document order, which the dict's own order does
     not give: it keeps a repeated name at its first position. shadowed holds
     the value of each member that a later member of the same name replaced in
-    the dict, by its index in names, or is None when no member was replaced."""
+    the dict, by its index in names, or is None when no member was replaced.
+    text is set on the object load_fixture returns alone: the JSON text it
+    parsed, which keeps what json.loads does not, the letter case of an
+    escape's hex digits among it (_purpose_escape_as_written)."""
 
-    __slots__ = ("duplicate_member", "names", "shadowed")
+    __slots__ = ("duplicate_member", "names", "shadowed", "text")
 
 
 def _subtree_duplicate(value: Any) -> str | None:
@@ -826,6 +838,101 @@ def _first_unpaired_surrogate(value: Any) -> str | None:
         elif isinstance(item, list):
             stack.extend(reversed(item))
     return None
+
+
+def _unpaired_surrogate_escape(raw: str) -> str | None:
+    """The first \\u escape in raw, JSON text json.loads has parsed, that
+    writes one half of a UTF-16 surrogate pair without the other, as raw
+    writes it, the letter case of its hex digits included, or None: a high
+    surrogate (D800 to DBFF) that the next six characters do not complete
+    with the escape of a low one (DC00 to DFFF), or a low surrogate that does
+    not complete a high one. It reads raw as the Go reference verifier's
+    unpairedSurrogateEscape does. Every backslash in raw starts an escape
+    inside a string, and the four characters after a \\u are hex digits."""
+    pos = raw.find("\\")
+    while pos >= 0:
+        if raw[pos + 1] != "u":
+            pos = raw.find("\\", pos + 2)
+            continue
+        unit = int(raw[pos + 2 : pos + 6], 16)
+        if not 0xD800 <= unit <= 0xDFFF:
+            pos = raw.find("\\", pos + 6)
+        elif unit < 0xDC00 and raw.startswith("\\u", pos + 6) and 0xDC00 <= int(raw[pos + 8 : pos + 12], 16) <= 0xDFFF:
+            pos = raw.find("\\", pos + 12)
+        else:
+            return raw[pos : pos + 6]
+    return None
+
+
+def _value_end(text: str, start: int, ends: dict[int, int]) -> int:
+    """The index just past the JSON value that starts at text[start], in a
+    text json.loads has parsed. ends maps the opening quote of each string
+    literal of text to the index just past its closing quote
+    (_string_literals), so a walk of an array or object steps over each
+    string whole and reads no quote or bracket inside one as structure. The
+    walk reads the value once and does not recurse, so a deeply nested value
+    does not exhaust the stack."""
+    if text[start] == '"':
+        return ends[start]
+    if text[start] not in "[{":
+        return _SCALAR_REST.match(text, start).end()
+    depth, pos = 0, start
+    while True:
+        found = _QUOTE_OR_BRACKET.search(text, pos)
+        if found.group() == '"':
+            pos = ends[found.start()]
+            continue
+        depth += 1 if found.group() in "[{" else -1
+        pos = found.end()
+        if depth == 0:
+            return pos
+
+
+def _member_text(text: str, path: tuple[str, ...]) -> str | None:
+    """The value of the member at path in text, a JSON text json.loads has
+    parsed, as text writes it, or None where a value on the way is not an
+    object or holds no such member. Each step of path names a member as Go's
+    encoding/json matches a struct field to one, as _members_by_folded_name
+    reads it: a member whose name folds to the step's (_fold_key), the last
+    of them where there is more than one."""
+    ends = {start: end for start, end, _ in _string_literals(text)}
+    start = _JSON_WHITESPACE.match(text).end()
+    span = None
+    for step in path:
+        if text[start] != "{":
+            return None
+        span = None
+        pos = _JSON_WHITESPACE.match(text, start + 1).end()
+        while text[pos] == '"':
+            name_end = ends[pos]
+            colon = _JSON_WHITESPACE.match(text, name_end).end()
+            value = _JSON_WHITESPACE.match(text, colon + 1).end()
+            value_end = _value_end(text, value, ends)
+            if _fold_key(_go_string(json.loads(text[pos:name_end]))) == _fold_key(step):
+                span = (value, value_end)
+            pos = _JSON_WHITESPACE.match(text, value_end).end()
+            if text[pos] == ",":
+                pos = _JSON_WHITESPACE.match(text, pos + 1).end()
+        if span is None:
+            return None
+        start = span[0]
+    return None if span is None else text[span[0] : span[1]]
+
+
+def _purpose_escape_as_written(fixture: Any) -> str | None:
+    """The first unpaired UTF-16 surrogate escape the declaredPurpose of the
+    fixture's credential writes, as the file writes it
+    (_unpaired_surrogate_escape), or None. The Go reference verifier names
+    that escape as written, from the bytes of declaredPurpose its atx struct
+    holds; json.loads keeps the code unit of an escape and not the letter
+    case of its hex digits, so the escape is read from the text load_fixture
+    parsed. None for a fixture load_fixture did not return, which has no such
+    text."""
+    text = getattr(fixture, "text", None)
+    if text is None:
+        return None
+    purpose = _member_text(text, ("atx", "declaredPurpose"))
+    return None if purpose is None else _unpaired_surrogate_escape(purpose)
 
 
 # The Go type of each credential member the Go reference verifier's atx struct
@@ -1542,12 +1649,16 @@ def verify_fixture(fixture: dict[str, Any]) -> VerifyResult:
             # the TBS, and so does this one: a number beside it written with
             # a fraction part (1.5) would otherwise be refused first, and the
             # credential would reject as SIGNATURE_INVALID. The reason is the
-            # Go verifier's, which repeats the escape as written; this one
-            # writes its hex digits in lower case.
+            # Go verifier's, which names the escape as the file writes it,
+            # \uD800 where the file writes upper-case digits: the escape is
+            # read from the text load_fixture parsed
+            # (_purpose_escape_as_written). A fixture without that text names
+            # it with lower-case digits.
+            escape = _purpose_escape_as_written(fixture) or f"\\u{ord(surrogate):04x}"
             return VerifyResult(
                 reject_category="VERIFIER_CONFIG_ERROR",
                 reason="v1.1 canonicalization failed: declaredPurpose holds an unpaired "
-                f"UTF-16 surrogate escape (\\u{ord(surrogate):04x})",
+                f"UTF-16 surrogate escape ({escape})",
             )
         tbs = _tbs_v11(atx)
         outside = _integer_outside_exact_range(tbs)
@@ -1931,6 +2042,8 @@ def load_fixture(path: str | os.PathLike[str]) -> dict[str, Any]:
     for (node, key), (other, _) in zip(_scalars(fixture), _scalars(shadow)):
         if other[key] is None and isinstance(node[key], str):
             node[key] = _EscapedString(node[key])
+    if isinstance(fixture, _DupMarkedDict):
+        fixture.text = text
     return fixture
 
 

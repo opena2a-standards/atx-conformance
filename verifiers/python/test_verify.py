@@ -959,6 +959,63 @@ GO_SURROGATE_VERDICTS_V11 = (
     (("declaredPurpose",), '["\\\\ud800", 1.5]', "SIGNATURE_INVALID"),
 )
 
+# The reason both verifiers give for a v1.1 declaredPurpose that holds an
+# unpaired UTF-16 surrogate escape, with the escape it names in place of {}.
+UNPAIRED_ESCAPE_REASON = "v1.1 canonicalization failed: declaredPurpose holds an unpaired UTF-16 surrogate escape ({})"
+
+# A declaredPurpose holding an unpaired surrogate escape written with
+# upper-case or mixed-case hex digits, and the escape the reason names: the
+# first one the text writes, as it writes it, which is what the Go reference
+# verifier's unpairedSurrogateEscape returns. (raw literal, escape named).
+UNPAIRED_ESCAPES_AS_WRITTEN = (
+    ('{"s": "\\uD800\\u0041"}', "\\uD800"),
+    ('"\\uDBFF\\uE000"', "\\uDBFF"),
+    ('"\\uDc00"', "\\uDc00"),
+    ('{"x\\uD800\\u0041": 1}', "\\uD800"),
+    ('"\\uD83D\\uDE00\\uDFFF"', "\\uDFFF"),
+    ('["\\"]}{[\\\\", "\\uDBFF\\u0020"]', "\\uDBFF"),
+    ('{\n  "a" : [ 1 , { "b" : "x\\uDbFf\\u0020" } ] ,\n  "c" : 1.5\n}', "\\uDbFf"),
+)
+
+# The expected block of a fixture whose credential is refused for such an
+# escape.
+UNPAIRED_ESCAPE_EXPECTED = {"verifyResult": "REJECT", "rejectCategory": "VERIFIER_CONFIG_ERROR"}
+
+# The files _decoy_purpose_text writes: the names it writes the credential and
+# its declaredPurpose under, as the baseline names them and in another case,
+# which Go's encoding/json reads as the same members, and the raw literal of
+# the credential's first member, a string or one nested 9000 arrays deep.
+# (fixture's member, credential's member, first member's literal).
+DECOY_PURPOSE_FILES = (
+    ("atx", "declaredPurpose", '"\\ud800"'),
+    ("Atx", "DECLAREDPURPOSE", '"\\ud800"'),
+    ("atx", "declaredPurpose", "[" * 9000 + '"\\ud800"' + "]" * 9000),
+)
+
+
+def _decoy_purpose_text(atx_name: str, purpose_name: str, aside: str) -> str:
+    """The v1.1 baseline as JSON text, its credential written under atx_name
+    and its declaredPurpose, written last under purpose_name, holding the
+    escape \\uDBFF and then the escape of a space. Strings before it write an
+    unpaired surrogate escape in lower case: the fixture's description, which
+    also writes the text of a declaredPurpose member, a quote and brackets,
+    and two members of the credential that the signed payload leaves out,
+    the first written as the raw literal aside, the second an object holding
+    a member named declaredPurpose. The escape the reason names is
+    \\uDBFF."""
+    fixture = json.loads(BASELINE_V11.read_text())
+    fixture["expected"] = dict(UNPAIRED_ESCAPE_EXPECTED)
+    fixture["description"] = "@@DESCRIPTION@@"
+    atx = fixture.pop("atx")
+    fixture[atx_name] = {"aside": "@@ASIDE@@", "nested": "@@NESTED@@", **atx, purpose_name: "@@PURPOSE@@"}
+    return (
+        json.dumps(fixture)
+        .replace('"@@DESCRIPTION@@"', '"\\"declaredPurpose\\": \\"\\udc00\\" ]}"')
+        .replace('"@@ASIDE@@"', aside)
+        .replace('"@@NESTED@@"', '{"declaredPurpose": "\\udfff\\u0041"}')
+        .replace('"@@PURPOSE@@"', '"\\uDBFF\\u0020"')
+    )
+
 # trustScore as Go formats it with %.6f into both signed payloads: the float64
 # decode keeps the sign of a zero. (raw literal, formatted).
 GO_TRUST_SCORE_FORMATS = (
@@ -1845,6 +1902,56 @@ class GoUnpairedSurrogate(unittest.TestCase):
                     "v1.1 canonicalization failed: declaredPurpose holds an unpaired "
                     f"UTF-16 surrogate escape ({escape})",
                 )
+
+    def test_declared_purpose_escape_is_named_as_written(self):
+        # The Go verifier names the escape as the file writes it. This one
+        # wrote its hex digits in lower case, so for \uD800 the two reports
+        # of one folder differed (#421).
+        for literal, escape in UNPAIRED_ESCAPES_AS_WRITTEN:
+            with self.subTest(value=literal):
+                got = _at_verdict(BASELINE_V11, ("declaredPurpose",), literal)
+                self.assertEqual(got.reject_category, "VERIFIER_CONFIG_ERROR", got.reason)
+                self.assertEqual(got.reason, UNPAIRED_ESCAPE_REASON.format(escape))
+        with self.subTest(value="DECLAREDPURPOSE"):
+            got = _at_verdict(BASELINE_V11, ("declaredPurpose",), '"\\uD800\\u0041"', rename="DECLAREDPURPOSE")
+            self.assertEqual(got.reason, UNPAIRED_ESCAPE_REASON.format("\\uD800"))
+        with self.subTest(value="a plain dict"):
+            # A fixture load_fixture did not return holds no text to read the
+            # letter case from, and the reason writes the digits in lower case.
+            with tempfile.TemporaryDirectory() as tmp:
+                written = _write_at(Path(tmp), "member.json", BASELINE_V11, ("declaredPurpose",), '"\\uD800\\u0041"')
+                got = verify.verify_fixture(json.loads(written.read_text()))
+            self.assertEqual(got.reason, UNPAIRED_ESCAPE_REASON.format("\\ud800"))
+
+    def test_declared_purpose_escape_is_named_from_declared_purpose(self):
+        # The escape is read from the credential's declaredPurpose, not from
+        # a string before it that writes another one, and the text is read
+        # past a member nested 9000 arrays deep, where a walk that recursed
+        # for each level would pass Python's default recursion limit, 1000.
+        for atx_name, purpose_name, aside in DECOY_PURPOSE_FILES:
+            with self.subTest(atx=atx_name, purpose=purpose_name, aside=aside[:12]), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "decoy.json"
+                path.write_text(_decoy_purpose_text(atx_name, purpose_name, aside))
+                got = verify.verify_fixture(verify.load_fixture(path))
+                self.assertEqual(got.reject_category, "VERIFIER_CONFIG_ERROR", got.reason)
+                self.assertEqual(got.reason, UNPAIRED_ESCAPE_REASON.format("\\uDBFF"))
+
+    def test_member_text_is_the_member_go_reads_as_written(self):
+        # The member a name in another case folds onto, the last such member
+        # where the text writes more than one, written as the text writes
+        # it; None for a value on the way that is not an object or that
+        # holds no such member, and a name written inside a string is no
+        # member.
+        for text, path, want in (
+            ('{"a": {"b": [1, "x\\uD800"] }}', ("a", "b"), '[1, "x\\uD800"]'),
+            ('{"A": 1, "a": {"B" : "\\uDC00"}}', ("a", "b"), '"\\uDC00"'),
+            ('{"a": {"b": 1}, "A": {"b": 2}}', ("a", "b"), "2"),
+            ('{"a": [{"b": 1}]}', ("a", "b"), None),
+            ('{"a": {"c": 1}}', ("a", "b"), None),
+            (' {"x": "{\\"a\\": 1}", "a": null}', ("a",), "null"),
+        ):
+            with self.subTest(text=text, path=path):
+                self.assertEqual(verify._member_text(text, path), want)
 
     def test_declared_purpose_signed_with_the_replacement_character(self):
         # The Go verifier's JCS library reads an unpaired surrogate escape
@@ -4851,8 +4958,11 @@ class BothVerifiersWriteTheSameReport(unittest.TestCase):
     first line, where each names its own usage, and that report holds the
     case's escaped line. With _escape_controls writing each string as it is,
     this verifier's report of the file name case differs from the Go
-    verifier's: escaping in one verifier alone fails the check. Skipped with
-    no go on PATH."""
+    verifier's: escaping in one verifier alone fails the check. The two also
+    write the same report of a folder of v1.1 credentials whose
+    declaredPurpose holds an unpaired UTF-16 surrogate escape written with
+    upper-case or mixed-case hex digits, each reason naming the escape as
+    the file writes it. Skipped with no go on PATH."""
 
     @classmethod
     def setUpClass(cls):
@@ -4898,6 +5008,35 @@ class BothVerifiersWriteTheSameReport(unittest.TestCase):
                 as_is, _ = _report_in_process(case, Path(tmp))
         self.assertEqual(escaped, go_out)
         self.assertNotEqual(as_is, go_out)
+
+    def test_same_report_of_unpaired_surrogate_escapes(self):
+        # One file per row of UNPAIRED_ESCAPES_AS_WRITTEN, then one per row
+        # of DECOY_PURPOSE_FILES, named so that both verifiers report them in
+        # that order. This verifier wrote each escape's hex digits in lower
+        # case, so its report of \uD800 was not the Go verifier's (#421).
+        rows = [(literal, escape) for literal, escape in UNPAIRED_ESCAPES_AS_WRITTEN]
+        rows += [(decoy, "\\uDBFF") for decoy in DECOY_PURPOSE_FILES]
+        reports = {}
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "purpose"
+            folder.mkdir()
+            for i, (written, _) in enumerate(rows):
+                name = f"{i:02d}.json"
+                if isinstance(written, str):
+                    path = ("declaredPurpose",)
+                    _write_at(folder, name, BASELINE_V11, path, written, expected=UNPAIRED_ESCAPE_EXPECTED)
+                else:
+                    (folder / name).write_text(_decoy_purpose_text(*written))
+            for verifier, argv in (("Go", [self.go_verifier]), ("Python", [sys.executable, str(HERE / "verify.py")])):
+                proc = subprocess.run(
+                    [*argv, "purpose"], cwd=tmp, capture_output=True, env={**os.environ, "PWD": tmp}, timeout=300
+                )
+                reports[verifier] = (proc.stdout, proc.stderr, proc.returncode)
+        self.assertEqual(reports["Python"], reports["Go"])
+        observed = [line for line in reports["Go"][0].decode().split("\n") if line.lstrip().startswith("observed:")]
+        reasons = [UNPAIRED_ESCAPE_REASON.format(escape) for _, escape in rows]
+        self.assertEqual(observed, [f"       observed: REJECT[VERIFIER_CONFIG_ERROR: {reason}]" for reason in reasons])
+        self.assertEqual(reports["Go"][2], 0, reports["Go"][0].decode()[-400:])
 
 
 class DocstringsNameTheEscapedBytes(unittest.TestCase):
