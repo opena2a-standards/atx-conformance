@@ -279,6 +279,17 @@ func exportVC(path string, withMLDSA65 bool) ([]byte, error) {
 		return nil, &refusal{exitNativeSignature, "no native signature covers " + behavioralProfileForm + "; not re-signing"}
 	}
 
+	// A declaredPurpose of a "1.1" credential that holds an unpaired UTF-16
+	// surrogate escape is one RFC 8785 cannot canonicalize, and it is
+	// refused before the native bytes are computed, as the reference
+	// verifiers refuse it before they canonicalize: the library that
+	// computes those bytes reads such an escape and an escape directly
+	// after it as a single U+FFFD, so they would not hold the string the
+	// credential carries.
+	if escape := purposeSurrogateEscape(&f.native); escape != "" {
+		return nil, fmt.Errorf("%s: atx cannot be canonicalized (RFC 8785): declaredPurpose holds an unpaired UTF-16 surrogate escape (%s)", path, escape)
+	}
+
 	// A number of a "1.1" credential that the native bytes do not hold as
 	// written is refused before those bytes are computed, as the reference
 	// verifiers refuse it before they canonicalize: the native signatures

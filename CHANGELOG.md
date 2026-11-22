@@ -328,6 +328,15 @@ they should not.
   `SIGNATURE_INVALID`, and the command's message names the member and the
   number as the Go verifier's reason does. A number the command cannot read
   at all, `1e400` for one, makes a fixture it cannot read, and it exits 1.
+  So does the `declaredPurpose` of an ATX v1.1 credential that holds an
+  unpaired UTF-16 surrogate escape. RFC 8785 refuses a string that holds a
+  lone surrogate, and the library that computes the native bytes reads such
+  an escape and a `\u` escape directly after it as a single U+FFFD, so a
+  native signature made over a `declaredPurpose` that holds U+FFFD verifies
+  a credential that writes the two escapes in its place, where another JSON
+  reader reads U+FFFD and the second escape's character; both reference
+  verifiers reject such a credential as `VERIFIER_CONFIG_ERROR`, and the
+  command's message names the escape as the Go verifier's reason does.
   It signs nothing, and exits 3, as well when an ATX v1.1 credential's
   `behavioralProfile` holds null for `checksum`, `generatedAt` or
   `observationDays`, or lacks one of them. The native bytes hold that

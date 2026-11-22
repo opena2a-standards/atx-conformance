@@ -411,6 +411,9 @@ func TestRefusals(t *testing.T) {
 	nullChecksum, _, _ := signedAlteredFixture(t, "v1_1-baseline-valid.json", func(atx map[string]any) {
 		atx["behavioralProfile"].(map[string]any)["checksum"] = nil
 	})
+	unpairedEscape, _, _ := signedAlteredFixture(t, "v1_1-baseline-valid.json", func(atx map[string]any) {
+		atx["declaredPurpose"] = json.RawMessage(`{"s":"` + backslashU + "d800" + backslashU + `0041"}`)
+	})
 	cases := []struct {
 		name  string
 		args  []string
@@ -445,6 +448,8 @@ func TestRefusals(t *testing.T) {
 			`differs from member "trustLevel" only by letter case`},
 		{"duplicate member", []string{"--form", "vc", fixturePath("v1_1-duplicate-purpose-member.json")}, exitInput,
 			"Duplicate key"},
+		{"declaredPurpose with an unpaired surrogate escape, signed over the bytes the library gives", []string{"--form", "vc", unpairedEscape}, exitInput,
+			"atx cannot be canonicalized (RFC 8785): declaredPurpose holds an unpaired UTF-16 surrogate escape (" + backslashU + "d800)\n"},
 		{"no fixture file", []string{"--form", "vc", fixturePath("no-such-fixture.json")}, exitInput,
 			"no-such-fixture.json"},
 	}
@@ -883,6 +888,140 @@ func TestOffsetOutOfRange(t *testing.T) {
 	} {
 		if got := offsetOutOfRange(timestamp); got != want {
 			t.Errorf("%q: %t, want %t", timestamp, got, want)
+		}
+	}
+}
+
+// backslashU opens the JSON escape of a UTF-16 code unit. It is built here,
+// so that this file holds no such escape for a tool to decode on the way in.
+var backslashU = string(rune(0x5c)) + "u"
+
+// TestDeclaredPurposeUnpairedSurrogateEscape holds the command to the Go
+// reference verifier on copies of the v1.1 baseline whose declaredPurpose
+// holds a UTF-16 surrogate escape that is one half of a pair without the
+// other. RFC 8785 refuses such a string. The library that computes the
+// native bytes refuses the escape only when no other escape follows it
+// directly: followed by one, it reads the two as a single U+FFFD, where
+// encoding/json, which decodes the declaredPurpose the credential carries,
+// reads U+FFFD and then the second escape's character. Each such copy is
+// signed again over the bytes the library gives, so its native signature
+// verifies; the verifier rejects it before it canonicalizes, naming the
+// escape, and the command exits 1 naming the same escape, with and without
+// --mldsa65-proof. In a row marked accepted the declaredPurpose holds no
+// unpaired escape: the verifier accepts the copy, and the command exports it
+// with the declaredPurpose the native bytes hold.
+func TestDeclaredPurposeUnpairedSurrogateEscape(t *testing.T) {
+	const (
+		name           = "v1_1-baseline-valid.json"
+		canonicalizing = "v1.1 canonicalization failed: "
+		unpaired       = "declaredPurpose holds an unpaired UTF-16 surrogate escape ("
+	)
+	esc := func(unit string) string { return backslashU + unit }
+	text := func(s string) string { return `{"s":"` + s + `"}` }
+	rows := []struct {
+		name    string
+		purpose string // declaredPurpose as written
+		escape  string // the escape the refusal names; "" for a row that is accepted
+	}{
+		{"a high surrogate, then the escape of a letter", text("x" + esc("d800") + esc("0041") + "y"), esc("d800")},
+		{"a low surrogate, then the escape of a letter", text("x" + esc("dc00") + esc("0041") + "y"), esc("dc00")},
+		{"two high surrogates", text(esc("d800") + esc("d800")), esc("d800")},
+		{"a low surrogate, then a high one", text(esc("dc00") + esc("d800")), esc("dc00")},
+		{"two low surrogates", text(esc("dfff") + esc("dfff")), esc("dfff")},
+		{"the last high surrogate, then the escape of a space", `{"a":[{"b":"` + esc("dbff") + esc("0020") + `"}]}`, esc("dbff")},
+		{"upper-case digits", text(esc("D800") + esc("0041")), esc("D800")},
+		{"in a member name", `{"` + esc("d800") + esc("0041") + `":1}`, esc("d800")},
+		{"a declaredPurpose that is a string", `"` + esc("d800") + esc("0041") + `"`, esc("d800")},
+		{"after a complete pair", text(esc("d83d") + esc("de00") + esc("d800") + esc("0041")), esc("d800")},
+		{"beside a number with an exponent part", `{"n":1e3,"s":"` + esc("d800") + esc("0041") + `"}`, esc("d800")},
+		{"a literal U+FFFD", text("x" + string(rune(0xfffd)) + "y"), ""},
+		{"a complete pair", text("x" + esc("d83d") + esc("de00") + "y"), ""},
+		{"the escape of a letter and of U+FFFD", text(esc("0041") + esc("fffd")), ""},
+		{"an escaped backslash before the letters of an escape", text("x" + string(rune(0x5c)) + backslashU + "d800y"), ""},
+	}
+	for _, row := range rows {
+		file, atxRaw, state := signedAlteredFixture(t, name, func(atx map[string]any) {
+			atx["declaredPurpose"] = json.RawMessage(row.purpose)
+		})
+		if !bytes.Contains(atxRaw, []byte(row.purpose)) {
+			t.Fatalf("%s: the copy does not hold the declaredPurpose as the row writes it", row.name)
+		}
+		outcome := verifier.VerifyCredential(atxRaw, state)
+		if row.escape == "" {
+			if outcome.Verdict != "ACCEPT" {
+				t.Errorf("%s: the reference verifier gives %s %s (%s), want ACCEPT", row.name, outcome.Verdict, outcome.RejectCategory, outcome.Reason)
+				continue
+			}
+			code, out, errOut := export("--form", "vc", file)
+			if code != exitOK {
+				t.Errorf("%s: exit %d, stderr %q; want exit %d and a credential", row.name, code, errOut, exitOK)
+				continue
+			}
+			secured, err := decodeObject([]byte(strings.TrimSuffix(out, "\n")))
+			if err != nil {
+				t.Fatal(err)
+			}
+			subject, _ := secured["credentialSubject"].(map[string]any)
+			written, err := canonicalJSON(subject["declaredPurpose"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			native, err := jcs.Transform([]byte(row.purpose))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(written, native) {
+				t.Errorf("%s: the credential carries the declaredPurpose %s, the native bytes hold %s", row.name, written, native)
+			}
+			continue
+		}
+		wantReason := canonicalizing + unpaired + row.escape + ")"
+		if outcome.Verdict != "REJECT" || outcome.RejectCategory != "VERIFIER_CONFIG_ERROR" || outcome.Reason != wantReason {
+			t.Errorf("%s: the reference verifier gives %s %s (%s), want REJECT VERIFIER_CONFIG_ERROR with the reason %q", row.name, outcome.Verdict, outcome.RejectCategory, outcome.Reason, wantReason)
+			continue
+		}
+		want := "atx-export: " + file + ": atx cannot be canonicalized (RFC 8785): " + strings.TrimPrefix(outcome.Reason, canonicalizing) + "\n"
+		for _, flags := range [][]string{{"--form", "vc"}, {"--form", "vc", "--mldsa65-proof"}} {
+			code, out, errOut := export(append(append([]string{}, flags...), file)...)
+			if code != exitInput || out != "" || errOut != want {
+				t.Errorf("%s %v: exit %d, %d bytes written, stderr %q; want exit %d and stderr %q", row.name, flags, code, len(out), errOut, exitInput, want)
+			}
+		}
+	}
+
+	// An unpaired escape that no other escape follows directly is one the
+	// library refuses, so the command cannot read the copy, which keeps the
+	// fixture's signature: there are no native bytes to sign it over.
+	for _, purpose := range []string{text("x" + esc("d800") + "y"), text(esc("dc00")), text(esc("d800") + string(rune(0x5c)) + "n")} {
+		file, atxRaw, state := alteredFixture(t, name, func(atx map[string]any) {
+			atx["declaredPurpose"] = json.RawMessage(purpose)
+		})
+		outcome := verifier.VerifyCredential(atxRaw, state)
+		if outcome.Verdict != "REJECT" || outcome.RejectCategory != "VERIFIER_CONFIG_ERROR" || !strings.HasPrefix(outcome.Reason, canonicalizing+unpaired) {
+			t.Errorf("declaredPurpose %s: the reference verifier gives %s %s (%s), want REJECT VERIFIER_CONFIG_ERROR naming the escape", purpose, outcome.Verdict, outcome.RejectCategory, outcome.Reason)
+		}
+		code, out, errOut := export("--form", "vc", file)
+		if code != exitInput || out != "" || !strings.Contains(errOut, "atx cannot be canonicalized (RFC 8785)") {
+			t.Errorf("declaredPurpose %s: exit %d, %d bytes written, stderr %q; want exit %d and a message that the atx cannot be canonicalized", purpose, code, len(out), errOut, exitInput)
+		}
+	}
+}
+
+// TestPurposeSurrogateEscapeReadsOnlyV11 checks that the rule is the "1.1"
+// signed bytes' own: a "1.0" credential's signed string holds no part of
+// declaredPurpose, and a "1.1" credential whose signed bytes omit
+// declaredPurpose has no text for the rule to read.
+func TestPurposeSurrogateEscapeReadsOnlyV11(t *testing.T) {
+	unpaired := json.RawMessage(`{"s":"` + backslashU + "d800" + backslashU + `0041"}`)
+	if escape := purposeSurrogateEscape(&ATX{ATCVersion: atcVersion, DeclaredPurpose: unpaired}); escape != "" {
+		t.Errorf("a %q credential: %s", atcVersion, escape)
+	}
+	if escape := purposeSurrogateEscape(&ATX{ATCVersion: atcVersionV11, DeclaredPurpose: unpaired}); escape != backslashU+"d800" {
+		t.Errorf("a %q credential: %q, want the escape of the code unit D800", atcVersionV11, escape)
+	}
+	for _, purpose := range []string{"", "null", "{}", " { } "} {
+		if escape := purposeSurrogateEscape(&ATX{ATCVersion: atcVersionV11, DeclaredPurpose: json.RawMessage(purpose)}); escape != "" {
+			t.Errorf("declaredPurpose %q: %s", purpose, escape)
 		}
 	}
 }

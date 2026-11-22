@@ -562,6 +562,79 @@ func purposeNumbersV11(raw json.RawMessage) []json.Number {
 	}
 }
 
+// purposeSurrogateEscape returns the first unpaired UTF-16 surrogate escape
+// in the declaredPurpose of a "1.1" credential as the TBS carries it, which
+// is as the credential writes it. It returns "" when declaredPurpose holds
+// none, when the TBS omits declaredPurpose, and for a "1.0" credential,
+// whose signed string holds no part of declaredPurpose.
+//
+// RFC 8785 §3.2.2.2 requires a canonicalizer to refuse a string holding a
+// lone surrogate. jcs.Transform refuses a surrogate escape that another
+// backslash-u escape does not follow directly, and readFixture has refused
+// an atx object holding one. It reads a surrogate escape followed directly
+// by an escape that does not complete the pair as a single U+FFFD, the
+// second escape included, where encoding/json, which decodes the
+// declaredPurpose the credential carries, reads U+FFFD and then the second
+// escape's character. A native signature made over a declaredPurpose that
+// holds U+FFFD therefore verifies a credential that writes such a pair of
+// escapes in its place, whose declaredPurpose, as the credential carries
+// it, holds one more character than the native bytes. The reference
+// verifier refuses such a credential before it canonicalizes
+// (verifySignatures in verifiers/go/verifier/verify.go), by the rule
+// copied below.
+func purposeSurrogateEscape(a *ATX) string {
+	if a.ATCVersion != atcVersionV11 {
+		return ""
+	}
+	return unpairedSurrogateEscape(projectDeclaredPurposeV11(a.DeclaredPurpose))
+}
+
+// unpairedSurrogateEscape returns the first backslash-u escape in the JSON
+// text raw that writes one half of a UTF-16 surrogate pair without the
+// other: a high surrogate (D800 to DBFF) that the next six bytes do not
+// complete with the escape of a low one (DC00 to DFFF), or a low surrogate
+// that does not complete a high one. It returns "" when raw has none. raw
+// is JSON that encoding/json has decoded, so every backslash in it starts
+// an escape inside a string. The function and escapedCodeUnit are copied
+// from verifiers/go/verifier/verify.go; the code is unchanged.
+func unpairedSurrogateEscape(raw []byte) string {
+	for i := 0; i+1 < len(raw); i++ {
+		if raw[i] != '\\' {
+			continue
+		}
+		if raw[i+1] != 'u' || i+6 > len(raw) {
+			i++ // the escaped character, a backslash among them
+			continue
+		}
+		unit := escapedCodeUnit(raw[i+2 : i+6])
+		if unit < 0xd800 || unit > 0xdfff {
+			i += 5
+			continue
+		}
+		if unit < 0xdc00 && i+12 <= len(raw) && raw[i+6] == '\\' && raw[i+7] == 'u' {
+			if low := escapedCodeUnit(raw[i+8 : i+12]); 0xdc00 <= low && low <= 0xdfff {
+				i += 11
+				continue
+			}
+		}
+		return string(raw[i : i+6])
+	}
+	return ""
+}
+
+// escapedCodeUnit is the UTF-16 code unit the four hex digits of a
+// backslash-u escape write, or -1 if they are not four hex digits.
+func escapedCodeUnit(digits []byte) rune {
+	var b [2]byte
+	if len(digits) != 4 {
+		return -1
+	}
+	if _, err := hex.Decode(b[:], digits); err != nil {
+		return -1
+	}
+	return rune(b[0])<<8 | rune(b[1])
+}
+
 // jsonNames returns the JSON member names the struct type t declares.
 func jsonNames(t reflect.Type) []string {
 	names := make([]string, 0, t.NumField())

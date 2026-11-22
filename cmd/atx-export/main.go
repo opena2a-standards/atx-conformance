@@ -46,11 +46,21 @@
 // above 24 or minute above 60, which Go 1.22 reads, and one written with a
 // JSON escape, which Go 1.27 reads.
 //
+// An atcVersion "1.1" credential whose declaredPurpose holds an unpaired
+// UTF-16 surrogate escape is one the command cannot read. RFC 8785 refuses
+// a string that holds a lone surrogate, and the library that computes the
+// native bytes reads such an escape and an escape directly after it as a
+// single U+FFFD, so a native signature made over a declaredPurpose that
+// holds U+FFFD verifies a credential that writes the two escapes in its
+// place. The reference verifiers reject the credential.
+//
 // Exit status:
 //
 //	0  the credential was written
 //	1  the fixture, or a vector file it names, cannot be read as the
-//	   conformance suite writes them
+//	   conformance suite writes them; a fixture whose atcVersion "1.1"
+//	   credential holds an unpaired UTF-16 surrogate escape in its
+//	   declaredPurpose is one
 //	2  usage error; --form jws; or the fixture has no native signature of
 //	   the algorithm a proof needs
 //	3  a native signature does not verify over the native bytes, or an
@@ -90,15 +100,16 @@ credential and one line feed; every run writes the same bytes.
                      cryptosuite (a proof set)
 
 Exit status: 0 written; 1 the fixture or a vector file it names cannot be
-read; 2 usage error, or the fixture has no native signature of the algorithm
-a proof needs; 3 a native signature does not verify over the native bytes,
-or an ATX v1.1 credential holds a behavioralProfile or scanSummary member
-those bytes leave out, or a behavioralProfile in which checksum, generatedAt
-or observationDays is null or absent (or whose generatedAt this build reads
-and the reference verifiers do not read as a timestamp), or a number they do
-not hold as written (an integer above 2^53-1 in magnitude, or a
-declaredPurpose number with a fraction or an exponent part), and nothing was
-signed.
+read, or the declaredPurpose of an ATX v1.1 credential holds an unpaired
+UTF-16 surrogate escape; 2 usage error, or the fixture has no native
+signature of the algorithm a proof needs; 3 a native signature does not
+verify over the native bytes, or an ATX v1.1 credential holds a
+behavioralProfile or scanSummary member those bytes leave out, or a
+behavioralProfile in which checksum, generatedAt or observationDays is null
+or absent (or whose generatedAt this build reads and the reference verifiers
+do not read as a timestamp), or a number they do not hold as written (an
+integer above 2^53-1 in magnitude, or a declaredPurpose number with a
+fraction or an exponent part), and nothing was signed.
 `
 
 // refusal is an error that ends the command with its own exit status and
