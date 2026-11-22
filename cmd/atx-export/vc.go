@@ -270,6 +270,15 @@ func exportVC(path string, withMLDSA65 bool) ([]byte, error) {
 		return nil, err
 	}
 
+	// A behavioralProfile of a "1.1" credential that the v1.1 TBS has no
+	// value for is refused before the native bytes are computed, as the
+	// reference verifiers refuse it before they read a signature. Where one
+	// of its three members is null or absent, those bytes hold the member's
+	// zero value, which the credential does not write.
+	if profileOutsideForm(&f.native, f.profile) {
+		return nil, &refusal{exitNativeSignature, "no native signature covers " + behavioralProfileForm + "; not re-signing"}
+	}
+
 	// A number of a "1.1" credential that the native bytes do not hold as
 	// written is refused before those bytes are computed, as the reference
 	// verifiers refuse it before they canonicalize: the native signatures

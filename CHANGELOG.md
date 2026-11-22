@@ -328,6 +328,19 @@ they should not.
   `SIGNATURE_INVALID`, and the command's message names the member and the
   number as the Go verifier's reason does. A number the command cannot read
   at all, `1e400` for one, makes a fixture it cannot read, and it exits 1.
+  It signs nothing, and exits 3, as well when an ATX v1.1 credential's
+  `behavioralProfile` holds null for `checksum`, `generatedAt` or
+  `observationDays`, or lacks one of them. The native bytes hold that
+  member's zero value (an empty `checksum`, the `generatedAt`
+  `0001-01-01T00:00:00Z`, the `observationDays` 0), so a native signature
+  made over the zero value verifies a credential that does not write it;
+  both reference verifiers reject such a credential as `SIGNATURE_INVALID`,
+  and the command's message describes the profile as the Go verifier's
+  reason does. The same refusal meets a `generatedAt` that the build of the
+  command reads and the reference verifiers do not read as a timestamp: a
+  time zone offset with an hour above 24 or a minute above 60, which a
+  build with Go 1.22 reads, and a timestamp written with a JSON escape,
+  which a build with Go 1.27 reads.
   `@digitalbazaar/vc` 7.3.0 with
   `@digitalbazaar/eddsa-jcs-2022-cryptosuite` 1.0.0 verified the output for
   each ACCEPT fixture; on the output with `--mldsa65-proof` it checked the

@@ -35,7 +35,16 @@
 // exponent part. RFC 8785 writes such a number as the double nearest it,
 // 9007199254740993 as 9007199254740992 and 1e3 as 1000, so the native
 // signatures verify whichever of the two the credential writes, and the
-// reference verifiers reject the credential.
+// reference verifiers reject the credential. It refuses as well an
+// atcVersion "1.1" credential whose behavioralProfile holds null for
+// checksum, generatedAt or observationDays, or lacks one of them: the
+// native bytes hold that member's zero value, so a native signature made
+// over the zero value verifies a credential that does not write it, and the
+// reference verifiers reject the credential. The same refusal meets a
+// generatedAt that this build of the command reads and the reference
+// verifiers do not read as a timestamp: one with a time zone offset hour
+// above 24 or minute above 60, which Go 1.22 reads, and one written with a
+// JSON escape, which Go 1.27 reads.
 //
 // Exit status:
 //
@@ -46,8 +55,10 @@
 //	   the algorithm a proof needs
 //	3  a native signature does not verify over the native bytes, or an
 //	   atcVersion "1.1" credential holds a behavioralProfile or scanSummary
-//	   member those bytes leave out, or a number they do not hold as
-//	   written; nothing was signed
+//	   member those bytes leave out, a behavioralProfile in which checksum,
+//	   generatedAt or observationDays is null or absent, or whose
+//	   generatedAt this build reads and the reference verifiers do not, or
+//	   a number those bytes do not hold as written; nothing was signed
 package main
 
 import (
@@ -82,9 +93,12 @@ Exit status: 0 written; 1 the fixture or a vector file it names cannot be
 read; 2 usage error, or the fixture has no native signature of the algorithm
 a proof needs; 3 a native signature does not verify over the native bytes,
 or an ATX v1.1 credential holds a behavioralProfile or scanSummary member
-those bytes leave out, or a number they do not hold as written (an integer
-above 2^53-1 in magnitude, or a declaredPurpose number with a fraction or an
-exponent part), and nothing was signed.
+those bytes leave out, or a behavioralProfile in which checksum, generatedAt
+or observationDays is null or absent (or whose generatedAt this build reads
+and the reference verifiers do not read as a timestamp), or a number they do
+not hold as written (an integer above 2^53-1 in magnitude, or a
+declaredPurpose number with a fraction or an exponent part), and nothing was
+signed.
 `
 
 // refusal is an error that ends the command with its own exit status and

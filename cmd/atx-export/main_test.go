@@ -408,6 +408,9 @@ func TestRefusals(t *testing.T) {
 	emptyTechniques, _, _ := alteredFixture(t, "v1_1-baseline-valid.json", func(atx map[string]any) {
 		atx["scanSummary"].(map[string]any)["techniques"] = []any{}
 	})
+	nullChecksum, _, _ := signedAlteredFixture(t, "v1_1-baseline-valid.json", func(atx map[string]any) {
+		atx["behavioralProfile"].(map[string]any)["checksum"] = nil
+	})
 	cases := []struct {
 		name  string
 		args  []string
@@ -426,6 +429,8 @@ func TestRefusals(t *testing.T) {
 			"atx-export: member scanSummary.extra is not covered by the native signatures; not re-signing\n"},
 		{"empty scanSummary.techniques", []string{"--form", "vc", emptyTechniques}, exitNativeSignature,
 			"atx-export: member scanSummary.techniques is not covered by the native signatures; not re-signing\n"},
+		{"null behavioralProfile.checksum, signed over the empty string", []string{"--form", "vc", nullChecksum}, exitNativeSignature,
+			"atx-export: no native signature covers behavioralProfile, which is not an object of exactly checksum (a string), generatedAt (a timestamp) and observationDays (an integer); not re-signing\n"},
 		{"count above 2^53-1", []string{"--form", "vc", fixturePath("v1_1-integer-outside-exact-range.json")}, exitNativeSignature,
 			"atx-export: no native signature covers scanSummary.criticalFindings: the integer 9007199254740993 is outside the I-JSON exact range, -(2^53-1) to 2^53-1; not re-signing\n"},
 		{"declaredPurpose integer above 2^53-1", []string{"--form", "vc", fixturePath("v1_1-declared-purpose-integer-outside-range.json")}, exitNativeSignature,
@@ -525,6 +530,56 @@ func TestAlteredFixtureCopyExports(t *testing.T) {
 	wantCode, want, _ := export("--form", "vc", fixturePath(name))
 	if code != exitOK || wantCode != exitOK || out == "" || out != want {
 		t.Errorf("an unchanged copy of %s: exit %d, stderr %q; the fixture: exit %d; same output: %t", name, code, errOut, wantCode, out == want)
+	}
+}
+
+// signedAlteredFixture is alteredFixture with every native signature of the
+// copy made again: over the bytes the command computes for the altered
+// credential, with the suite's published test key the signature names. A
+// copy that keeps the fixture's signatures is refused for the first of them
+// whatever else it holds; a copy signed this way is refused only for what it
+// holds. Every native signature of the fixture must be Ed25519, and the
+// command must be able to read the altered copy.
+func signedAlteredFixture(t *testing.T, name string, alter func(atx map[string]any)) (file string, atxRaw, state []byte) {
+	t.Helper()
+	unsigned, _, _ := alteredFixture(t, name, alter)
+	f, err := readFixture(unsigned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	native, err := nativeSignedBytes(&f.native)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make([]string, len(f.native.Signatures))
+	for i, sig := range f.native.Signatures {
+		key, err := f.ed25519Key(sig.KeyID)
+		if err != nil {
+			t.Fatalf("%s: native signature %d: %v", name, i, err)
+		}
+		values[i] = base64.StdEncoding.EncodeToString(ed25519.Sign(key, native))
+	}
+	return alteredFixture(t, name, func(atx map[string]any) {
+		alter(atx)
+		sigs, _ := atx["signatures"].([]any)
+		if len(sigs) != len(values) {
+			t.Fatalf("%s: the altered copy holds %d signatures, the command read %d", name, len(sigs), len(values))
+		}
+		for i, value := range values {
+			sigs[i].(map[string]any)["value"] = value
+		}
+	})
+}
+
+// TestSignedAlteredFixtureCopyIsTheFixture guards the helper above: for a
+// copy that changes nothing, the signature it makes is the fixture's own, so
+// the copy holds the credential the unsigned helper writes.
+func TestSignedAlteredFixtureCopyIsTheFixture(t *testing.T) {
+	const name = "v1_1-baseline-valid.json"
+	_, signed, _ := signedAlteredFixture(t, name, func(map[string]any) {})
+	_, kept, _ := alteredFixture(t, name, func(map[string]any) {})
+	if len(signed) == 0 || !bytes.Equal(signed, kept) {
+		t.Errorf("an unchanged copy of %s, signed again, differs from the copy that keeps the fixture's signature", name)
 	}
 }
 
@@ -679,6 +734,155 @@ func TestScanSummaryTechniquesIsNotCovered(t *testing.T) {
 			if code != exitNativeSignature || out != "" || errOut != want {
 				t.Errorf("techniques %s %v: exit %d, %d bytes written, stderr %q; want exit %d and stderr %q", v.name, flags, code, len(out), errOut, exitNativeSignature, want)
 			}
+		}
+	}
+}
+
+// TestBehavioralProfileOutsideItsForm holds the command to the Go reference
+// verifier on copies of the v1.1 baseline that write behavioralProfile as
+// each row gives it. The v1.1 signed bytes have a value for a profile that
+// is absent or null, and for an object of exactly checksum (a string),
+// generatedAt (a timestamp) and observationDays (an integer); the verifier
+// rejects a copy holding any other profile before it reads a signature.
+//
+// A row marked outside is such a profile. The command writes nothing for
+// it. Where the command can read the copy, it is run twice, keeping the
+// fixture's signature and signed again over the bytes the command computes,
+// and exits 3 both times in the verifier's words, with and without
+// --mldsa65-proof: the typed decode reads a member that is null or absent as
+// its zero value, so the signature made again verifies. Where the typed
+// decode of this Go release refuses the profile, the command cannot read
+// the copy and exits 1; which rows those are depends on the release for the
+// three rows that write generatedAt in a form only some releases read.
+//
+// A row marked member holds a member outside the three, which the command
+// refuses by name once the native signatures have verified. Every other row
+// is a profile the signed bytes have a value for: signed again, the
+// verifier accepts the copy and the command exports it.
+func TestBehavioralProfileOutsideItsForm(t *testing.T) {
+	const (
+		name        = "v1_1-baseline-valid.json"
+		checksum    = `"checksum":"sha256:ghi789"`
+		generatedAt = `"generatedAt":"2026-05-19T00:00:00Z"`
+		days        = `"observationDays":14`
+		wantReason  = noSignatureCovers + "behavioralProfile, which is not an object of exactly checksum (a string), generatedAt (a timestamp) and observationDays (an integer)"
+		wantRefusal = "atx-export: no native signature covers behavioralProfile, which is not an object of exactly checksum (a string), generatedAt (a timestamp) and observationDays (an integer); not re-signing\n"
+		wantMember  = "atx-export: member behavioralProfile.riskLevel is not covered by the native signatures; not re-signing\n"
+	)
+	object := func(members ...string) string { return "{" + strings.Join(members, ",") + "}" }
+	at := func(timestamp string) string { return `"generatedAt":"` + timestamp + `"` }
+	// The baseline's generatedAt with its first hyphen written as the JSON
+	// escape of U+002D. The backslash is built here, so that this file
+	// holds no escape for a tool to decode on the way in.
+	escaped := at("2026" + string(rune(0x5c)) + "u002d05-19T00:00:00Z")
+	const (
+		inside = iota
+		outside
+		member
+	)
+	rows := []struct {
+		name    string
+		profile string // as written; "" for a credential with no behavioralProfile
+		kind    int
+	}{
+		{"the baseline's profile", object(checksum, generatedAt, days), inside},
+		{"null", "null", inside},
+		{"no behavioralProfile", "", inside},
+		{"generatedAt with a time zone offset of +24:00", object(checksum, at("2026-05-19T00:00:00+24:00"), days), inside},
+		{"generatedAt with a time zone offset of +23:60", object(checksum, at("2026-05-19T00:00:00+23:60"), days), inside},
+		{"a member outside the three", object(checksum, generatedAt, days, `"riskLevel":"low"`), member},
+		{"checksum null", object(`"checksum":null`, generatedAt, days), outside},
+		{"no checksum", object(generatedAt, days), outside},
+		{"generatedAt null", object(checksum, `"generatedAt":null`, days), outside},
+		{"no generatedAt", object(checksum, days), outside},
+		{"observationDays null", object(checksum, generatedAt, `"observationDays":null`), outside},
+		{"no observationDays", object(checksum, generatedAt), outside},
+		{"an empty object", object(), outside},
+		{"generatedAt with a time zone offset hour of 25", object(checksum, at("2026-05-19T00:00:00+25:00"), days), outside},
+		{"generatedAt with a time zone offset minute of 61", object(checksum, at("2026-05-19T00:00:00+23:61"), days), outside},
+		{"generatedAt written with a JSON escape", object(checksum, escaped, days), outside},
+		{"generatedAt a date", object(checksum, at("2026-05-19"), days), outside},
+		{"generatedAt a number", object(checksum, `"generatedAt":5`, days), outside},
+		{"checksum a number", object(`"checksum":5`, generatedAt, days), outside},
+		{"observationDays a string", object(checksum, generatedAt, `"observationDays":"14"`), outside},
+		{"observationDays with a fraction part", object(checksum, generatedAt, `"observationDays":14.0`), outside},
+		{"a number", "7", outside},
+		{"an array", "[]", outside},
+	}
+	for _, row := range rows {
+		alter := func(atx map[string]any) {
+			if row.profile == "" {
+				delete(atx, "behavioralProfile")
+				return
+			}
+			atx["behavioralProfile"] = json.RawMessage(row.profile)
+		}
+		if got := profileOutsideForm(&ATX{ATCVersion: atcVersionV11}, json.RawMessage(row.profile)); got != (row.kind == outside) {
+			t.Errorf("%s: profileOutsideForm gives %t", row.name, got)
+		}
+		kept, atxRaw, state := alteredFixture(t, name, alter)
+		if !bytes.Contains(atxRaw, []byte(row.profile)) {
+			t.Fatalf("%s: the copy does not hold the profile as the row writes it", row.name)
+		}
+		// The verifier's reason is the profile's form for a row outside the
+		// form and for a member outside the three, and for no other row.
+		reason := verifier.VerifyCredential(atxRaw, state).Reason
+		if (reason == wantReason) != (row.kind != inside) {
+			t.Errorf("%s: the reference verifier's reason is %q", row.name, reason)
+			continue
+		}
+		if _, err := readFixture(kept); err != nil {
+			code, out, errOut := export("--form", "vc", kept)
+			if row.kind != outside || code != exitInput || out != "" {
+				t.Errorf("%s: the command cannot read the copy (%v): exit %d, %d bytes written, stderr %q; want exit %d and nothing written, for a row outside the form", row.name, err, code, len(out), errOut, exitInput)
+			}
+			continue
+		}
+		signed, signedRaw, _ := signedAlteredFixture(t, name, alter)
+		if row.kind == inside {
+			if outcome := verifier.VerifyCredential(signedRaw, state); outcome.Verdict != "ACCEPT" {
+				t.Errorf("%s, signed again: the reference verifier gives %s %s (%s), want ACCEPT", row.name, outcome.Verdict, outcome.RejectCategory, outcome.Reason)
+			}
+			if code, out, errOut := export("--form", "vc", signed); code != exitOK || out == "" {
+				t.Errorf("%s, signed again: exit %d, %d bytes written, stderr %q; want exit %d and a credential", row.name, code, len(out), errOut, exitOK)
+			}
+			continue
+		}
+		want := wantRefusal
+		if row.kind == member {
+			want = wantMember
+		}
+		for _, file := range []string{kept, signed} {
+			for _, flags := range [][]string{{"--form", "vc"}, {"--form", "vc", "--mldsa65-proof"}} {
+				code, out, errOut := export(append(append([]string{}, flags...), file)...)
+				if code != exitNativeSignature || out != "" || errOut != want {
+					t.Errorf("%s, signed again %t, %v: exit %d, %d bytes written, stderr %q; want exit %d and stderr %q", row.name, file == signed, flags, code, len(out), errOut, exitNativeSignature, want)
+				}
+			}
+		}
+	}
+	if profileOutsideForm(&ATX{ATCVersion: atcVersion}, json.RawMessage("{}")) {
+		t.Errorf("a %q credential: profileOutsideForm reads its behavioralProfile, which no %q signature covers", atcVersion, atcVersion)
+	}
+}
+
+// TestOffsetOutOfRange checks the reading of a time zone offset that
+// profileOutsideForm applies to a generatedAt this Go release has decoded.
+func TestOffsetOutOfRange(t *testing.T) {
+	for timestamp, want := range map[string]bool{
+		"2026-05-19T00:00:00Z":      false,
+		"2026-05-19T00:00:00+00:00": false,
+		"2026-05-19T00:00:00+24:00": false,
+		"2026-05-19T00:00:00+23:60": false,
+		"2026-05-19T00:00:00-24:60": false,
+		"2026-05-19T00:00:00+25:00": true,
+		"2026-05-19T00:00:00-25:00": true,
+		"2026-05-19T00:00:00+23:61": true,
+		"2026-05-19T00:00:00+99:99": true,
+		"":                          false,
+	} {
+		if got := offsetOutOfRange(timestamp); got != want {
+			t.Errorf("%q: %t, want %t", timestamp, got, want)
 		}
 	}
 }

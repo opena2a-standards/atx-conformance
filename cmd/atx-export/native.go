@@ -240,6 +240,9 @@ type fixture struct {
 	native ATX
 	// members holds the same atx object member by member, numbers as written.
 	members map[string]any
+	// profile holds the atx object's behavioralProfile member as written,
+	// and is empty when the object has none.
+	profile json.RawMessage
 	refs    []keypairRef
 	// root is the directory the keypairRefs' vector paths are relative to:
 	// the parent of the fixture's own directory.
@@ -280,6 +283,11 @@ func readFixture(path string) (*fixture, error) {
 	if err := json.Unmarshal(atxRaw, &f.native); err != nil {
 		return nil, fmt.Errorf("%s: atx: %w", path, err)
 	}
+	var written map[string]json.RawMessage
+	if err := json.Unmarshal(atxRaw, &written); err != nil {
+		return nil, fmt.Errorf("%s: atx: %w", path, err)
+	}
+	f.profile = written["behavioralProfile"]
 	if f.refs, err = decodeKeypairRefs(top["keypairRefs"]); err != nil {
 		return nil, fmt.Errorf("%s: keypairRefs: %w", path, err)
 	}
@@ -378,6 +386,99 @@ func memberOutside(obj map[string]any, t reflect.Type) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// behavioralProfileForm describes the one form of a present
+// behavioralProfile that the v1.1 TBS has a value for, in the words of the
+// reference verifier's reason for a credential that holds any other.
+const behavioralProfileForm = "behavioralProfile, which is not an object of exactly checksum (a string), generatedAt (a timestamp) and observationDays (an integer)"
+
+// profileOutsideForm reports whether profile, the behavioralProfile of a
+// "1.1" credential as written, is present, is not null, and is not an
+// object that holds checksum as a JSON string, generatedAt as a timestamp
+// and observationDays as a JSON integer. The v1.1 TBS has no value for such
+// a profile. The typed decode of readFixture reads a member that is null or
+// absent as its zero value (an empty checksum, the generatedAt
+// 0001-01-01T00:00:00Z, the observationDays 0), so the native bytes hold a
+// member the credential does not write, and a native signature made over
+// that zero value verifies. The rule is that of projectBehavioralProfileV11
+// in verifiers/go/verifier/verify.go, by which the reference verifier
+// rejects the credential before it reads a signature. It is applied to the
+// members as written, so that its answer does not depend on which
+// timestamps the decoder of the Go release reads (timestampAsWritten). One
+// clause of that rule is left to uncoveredMember:
+// a member outside the three, which it refuses by name once the native
+// signatures have verified. A name in another letter case is refused by
+// checkMemberCase before this is called. Only a "1.1" credential is
+// checked: a "1.0" signature covers no part of behavioralProfile.
+func profileOutsideForm(a *ATX, profile json.RawMessage) bool {
+	if a.ATCVersion != atcVersionV11 || len(profile) == 0 || string(profile) == "null" {
+		return false // the TBS holds null for a profile that is absent or null
+	}
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(profile, &members); err != nil {
+		return true
+	}
+	// A null member leaves its pointer nil, and an absent one has no text
+	// to decode.
+	var checksum *string
+	if err := json.Unmarshal(members["checksum"], &checksum); err != nil || checksum == nil {
+		return true
+	}
+	var observationDays *int
+	if err := json.Unmarshal(members["observationDays"], &observationDays); err != nil || observationDays == nil {
+		return true
+	}
+	return !timestampAsWritten(members["generatedAt"])
+}
+
+// timestampAsWritten reports whether raw, the value of a member as written,
+// is a JSON string holding a timestamp as the timestamp type of
+// verifiers/go/verifier/verify.go reads one: time.Time's own decoder parses
+// the text between the quotes, so a timestamp written with a JSON escape is
+// not one, and a time zone offset with an hour above 24 or a minute above 60
+// is refused. What encoding/json's decode of a time.Time field reads
+// depends on the Go release: built with go1.22.0 it reads an offset of
+// +25:00, built with go1.27.0 a timestamp written with an escape, and built
+// with go1.26.3 neither. Reading the member as written gives one answer
+// under all three.
+func timestampAsWritten(raw json.RawMessage) bool {
+	if len(raw) == 0 || raw[0] != '"' {
+		return false // absent, null, or not a string
+	}
+	var t time.Time
+	if err := t.UnmarshalJSON(raw); err != nil {
+		return false
+	}
+	return !offsetOutOfRange(string(raw[1 : len(raw)-1]))
+}
+
+// offsetOutOfRange reports whether s, a timestamp that time.Time's decoder
+// has read, ends in a time zone offset whose hour is above 24 or whose
+// minute is above 60. It reads the offset as checkOffset of
+// verifiers/go/verifier/verify.go does: the last six bytes, a sign, two
+// digits of hour, a colon and two digits of minute.
+func offsetOutOfRange(s string) bool {
+	const form = "+00:00"
+	if len(s) < len(form) || s[len(s)-1] == 'Z' {
+		return false
+	}
+	offset := s[len(s)-len(form):]
+	if offset[3] != ':' {
+		return false
+	}
+	twoDigits := func(d string) (int, bool) {
+		if d[0] < '0' || '9' < d[0] || d[1] < '0' || '9' < d[1] {
+			return 0, false
+		}
+		return int(d[0]-'0')*10 + int(d[1]-'0'), true
+	}
+	hour, ok := twoDigits(offset[1:3])
+	minute := 0
+	if ok {
+		minute, _ = twoDigits(offset[4:6])
+	}
+	return hour > 24 || minute > 60
 }
 
 // maxExactInteger is 2^53-1, the largest magnitude of an integer in the
