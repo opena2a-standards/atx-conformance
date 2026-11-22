@@ -512,6 +512,24 @@ they should not.
 
 ### Fixed
 
+- The Python verifier names an unpaired UTF-16 surrogate escape in the
+  `declaredPurpose` of an ATX v1.1 credential as the file writes it, as the
+  Go verifier does (#421). It wrote the escape's hex digits in lower case:
+  for a copy of `fixtures/v1_1-baseline-valid.json` whose `declaredPurpose`
+  is `{"s": "\uD800A"}`, the Go verifier's reason named `\uD800` and
+  the Python verifier's `\ud800`, so the two reports of one folder
+  differed, with the same verdict and category, `REJECT` and
+  `VERIFIER_CONFIG_ERROR`. It now reads the escape from the text of the
+  file it loaded, and the two reports of that folder are the same bytes.
+  `test_declared_purpose_escape_is_named_as_written` and
+  `test_declared_purpose_escape_is_named_from_declared_purpose` in
+  `verifiers/python/test_verify.py` pin the reason for escapes written with
+  upper-case and mixed-case digits, in a member name, after a complete
+  pair, under member names in another case, and after other strings that
+  write an unpaired escape in lower case;
+  `test_same_report_of_unpaired_surrogate_escapes` runs both verifiers over
+  a folder of 10 such files and compares their reports byte for byte. No
+  fixture, expected verdict or workflow file changes.
 - The repository layout in `CONTRIBUTING.md` said the verifier wall lists
   the verifiers whose maintainers ran the interop kit at a released version
   and passed, naming no rule (#417). `wall/README.md`, the docstring and
