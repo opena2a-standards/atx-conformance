@@ -489,6 +489,8 @@ they should not.
   kit answers 47 of 47 credentials, agrees with the answer key on 10 and
   accepts 37 that must fail. `scripts/check_readme_counts.py` does not hold
   these two counts. No fixture or verifier changes.
+- `docs/version-pinning.md` notes where atx-spec `main` governs until this
+  suite re-pins.
 
 ### Fixed
 
