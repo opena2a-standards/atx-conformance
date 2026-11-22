@@ -359,7 +359,7 @@ func uncoveredMember(a *ATX, atx map[string]any) (string, bool) {
 			return "behavioralProfile." + name, true
 		}
 	}
-	if ss, ok := withoutEmptyTechniques(atx["scanSummary"]).(map[string]any); ok {
+	if ss, ok := atx["scanSummary"].(map[string]any); ok {
 		if name, found := memberOutside(ss, reflect.TypeOf(tbsScanSummaryV11{})); found {
 			return "scanSummary." + name, true
 		}

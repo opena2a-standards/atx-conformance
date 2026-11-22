@@ -317,16 +317,17 @@ they should not.
   is not yet published. It signs nothing, and exits 3, when a native
   signature does not verify over the native bytes, or when an ATX v1.1
   credential's `behavioralProfile` or `scanSummary` holds a member those
-  bytes leave out, or when an ATX v1.1 credential writes a number those
-  bytes do not hold as written: an integer of the signed members whose
-  magnitude is above 2^53-1, or a `declaredPurpose` number written with a
-  fraction or an exponent part. RFC 8785 writes such a number as the double
-  nearest it (9007199254740993 as 9007199254740992, `1e3` as 1000), so the
-  native signatures verify whichever of the two the credential writes; both
-  reference verifiers reject such a credential as `SIGNATURE_INVALID`, and
-  the command's message names the member and the number as the Go
-  verifier's reason does. A number the command cannot read at all, `1e400`
-  for one, makes a fixture it cannot read, and it exits 1.
+  bytes leave out (a `scanSummary` member named `techniques` is one, even
+  when it is null or an empty array), or when an ATX v1.1 credential writes
+  a number those bytes do not hold as written: an integer of the signed
+  members whose magnitude is above 2^53-1, or a `declaredPurpose` number
+  written with a fraction or an exponent part. RFC 8785 writes such a number
+  as the double nearest it (9007199254740993 as 9007199254740992, `1e3` as
+  1000), so the native signatures verify whichever of the two the credential
+  writes; both reference verifiers reject such a credential as
+  `SIGNATURE_INVALID`, and the command's message names the member and the
+  number as the Go verifier's reason does. A number the command cannot read
+  at all, `1e400` for one, makes a fixture it cannot read, and it exits 1.
   `@digitalbazaar/vc` 7.3.0 with
   `@digitalbazaar/eddsa-jcs-2022-cryptosuite` 1.0.0 verified the output for
   each ACCEPT fixture; on the output with `--mldsa65-proof` it checked the

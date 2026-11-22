@@ -70,9 +70,7 @@ func credential(atx map[string]any, tbsSHA256 string) (map[string]any, error) {
 		subject["declaredPurpose"] = v
 	}
 	copyMember(subject, "behavioralProfile", atx, "behavioralProfile")
-	if v, ok := atx["scanSummary"]; ok {
-		subject["scanSummary"] = withoutEmptyTechniques(v)
-	}
+	copyMember(subject, "scanSummary", atx, "scanSummary")
 	copyMember(subject, "atxTrustScore", atx, "trustScore")
 	copyMember(subject, "trustLevel", atx, "trustLevel")
 	cred["credentialSubject"] = subject
@@ -92,25 +90,6 @@ func isNullOrEmptyObject(v any) bool {
 	}
 	obj, ok := v.(map[string]any)
 	return ok && len(obj) == 0
-}
-
-// withoutEmptyTechniques returns scanSummary as written, except that its
-// techniques member is left out when it is null or an empty array.
-func withoutEmptyTechniques(v any) any {
-	ss, ok := v.(map[string]any)
-	if !ok {
-		return v
-	}
-	out := make(map[string]any, len(ss))
-	for k, m := range ss {
-		out[k] = m
-	}
-	if t, ok := out["techniques"]; ok {
-		if arr, isArray := t.([]any); t == nil || (isArray && len(arr) == 0) {
-			delete(out, "techniques")
-		}
-	}
-	return out
 }
 
 // proofOptions returns the options of one Data Integrity proof: type,

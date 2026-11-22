@@ -405,6 +405,9 @@ func verifyMLDSA65JCS2024(t *testing.T, secured, proof map[string]any, pub []byt
 
 // TestRefusals checks the exit status and message of each refusal.
 func TestRefusals(t *testing.T) {
+	emptyTechniques, _, _ := alteredFixture(t, "v1_1-baseline-valid.json", func(atx map[string]any) {
+		atx["scanSummary"].(map[string]any)["techniques"] = []any{}
+	})
 	cases := []struct {
 		name  string
 		args  []string
@@ -419,6 +422,10 @@ func TestRefusals(t *testing.T) {
 			"atx-export: --mldsa65-proof needs a native ML-DSA-65 signature\n"},
 		{"member written after signing", []string{"--form", "vc", fixturePath("v1_1-behavioral-profile-extra-member.json")}, exitNativeSignature,
 			"atx-export: member behavioralProfile.riskLevel is not covered by the native signatures; not re-signing\n"},
+		{"scanSummary member written after signing", []string{"--form", "vc", fixturePath("v1_1-scan-summary-extra-member.json")}, exitNativeSignature,
+			"atx-export: member scanSummary.extra is not covered by the native signatures; not re-signing\n"},
+		{"empty scanSummary.techniques", []string{"--form", "vc", emptyTechniques}, exitNativeSignature,
+			"atx-export: member scanSummary.techniques is not covered by the native signatures; not re-signing\n"},
 		{"count above 2^53-1", []string{"--form", "vc", fixturePath("v1_1-integer-outside-exact-range.json")}, exitNativeSignature,
 			"atx-export: no native signature covers scanSummary.criticalFindings: the integer 9007199254740993 is outside the I-JSON exact range, -(2^53-1) to 2^53-1; not re-signing\n"},
 		{"declaredPurpose integer above 2^53-1", []string{"--form", "vc", fixturePath("v1_1-declared-purpose-integer-outside-range.json")}, exitNativeSignature,
@@ -636,6 +643,42 @@ func TestUncoveredNumberReadsOnlyV11(t *testing.T) {
 		bare := &ATX{ATCVersion: atcVersionV11, TrustLevel: 4, DeclaredPurpose: json.RawMessage(purpose)}
 		if where, literal, _ := uncoveredNumber(bare); where != "" {
 			t.Errorf("declaredPurpose %q and no behavioralProfile or scanSummary: %s %s", purpose, where, literal)
+		}
+	}
+}
+
+// TestScanSummaryTechniquesIsNotCovered checks that a scanSummary member
+// named techniques is refused whatever it holds, null and an empty array
+// included: the v1.1 signed bytes carry scanSummary's six members and no
+// other, and the Go reference verifier rejects each of these copies of the
+// v1.1 baseline because scanSummary holds a member other than its six. The
+// change leaves the signed bytes as they were, so the native signature
+// still verifies and the refusal is of the member.
+func TestScanSummaryTechniquesIsNotCovered(t *testing.T) {
+	values := []struct {
+		name  string
+		value any
+	}{
+		{"null", nil},
+		{"an empty array", []any{}},
+		{"an array of one technique", []any{"T-1001"}},
+		{"an empty object", map[string]any{}},
+		{"an empty string", ""},
+	}
+	for _, v := range values {
+		file, atxRaw, state := alteredFixture(t, "v1_1-baseline-valid.json", func(atx map[string]any) {
+			atx["scanSummary"].(map[string]any)["techniques"] = v.value
+		})
+		outcome := verifier.VerifyCredential(atxRaw, state)
+		if wantReason := noSignatureCovers + "scanSummary, which holds a member other than its six"; outcome.Verdict != "REJECT" || outcome.Reason != wantReason {
+			t.Errorf("techniques %s: the reference verifier gives %s (%s), want REJECT with the reason %q", v.name, outcome.Verdict, outcome.Reason, wantReason)
+		}
+		for _, flags := range [][]string{{"--form", "vc"}, {"--form", "vc", "--mldsa65-proof"}} {
+			code, out, errOut := export(append(append([]string{}, flags...), file)...)
+			want := "atx-export: member scanSummary.techniques is not covered by the native signatures; not re-signing\n"
+			if code != exitNativeSignature || out != "" || errOut != want {
+				t.Errorf("techniques %s %v: exit %d, %d bytes written, stderr %q; want exit %d and stderr %q", v.name, flags, code, len(out), errOut, exitNativeSignature, want)
+			}
 		}
 	}
 }
