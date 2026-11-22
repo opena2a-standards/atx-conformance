@@ -84,6 +84,65 @@ func copyMember(dst map[string]any, to string, src map[string]any, from string) 
 	}
 }
 
+// credentialMembers are the native members credential copies into the
+// credential, in the order of their names.
+var credentialMembers = []string{
+	"agentDid", "agentId", "atcVersion", "behavioralProfile", "buildAttestation", "capabilities",
+	"contentHash", "declaredPurpose", "expiresAt", "id", "issuedAt", "issuerChain", "issuerDid",
+	"publisher", "publisherDid", "scanSummary", "trustLevel", "trustScore", "version",
+}
+
+// rewrittenNumber names the first number of the credential that its output
+// form, RFC 8785 canonical JSON, writes in another form than the native
+// credential does. RFC 8785 writes each number as ECMAScript writes the
+// IEEE 754 double nearest it (canonicalNumber): 9007199254740993 as
+// 9007199254740992, -0 as 0, 1e3 as 1000 and 87.50 as 87.5. where is the
+// native member that holds the number, and for a number inside
+// behavioralProfile or scanSummary that object's member too; literal is the
+// number as the fixture writes it and canonical as RFC 8785 writes it. where
+// is "" when the credential holds no such number. The members are read in
+// the order of credentialMembers, each value as firstNumber reads it, from
+// the atx object decoded with numbers as written, so the answer does not
+// depend on the Go release.
+func rewrittenNumber(atx map[string]any) (where, literal, canonical string) {
+	rewritten := func(n string) bool { return canonicalNumber(n) != n }
+	for _, name := range credentialMembers {
+		v, ok := atx[name]
+		if !ok {
+			continue
+		}
+		if obj, isObject := v.(map[string]any); isObject && (name == "behavioralProfile" || name == "scanSummary") {
+			for _, member := range sortedNames(obj) {
+				if literal, found := firstNumber(obj[member], rewritten); found {
+					return name + "." + member, literal, canonicalNumber(literal)
+				}
+			}
+			continue
+		}
+		if literal, found := firstNumber(v, rewritten); found {
+			return name, literal, canonicalNumber(literal)
+		}
+	}
+	return "", "", ""
+}
+
+// canonicalNumber returns the JSON number literal s as RFC 8785 writes it
+// (§3.2.2.3): the ECMAScript serialization of the IEEE 754 double nearest
+// its value, which jcs.NumberToJSON writes. The double is decided on every
+// digit written (nearestFloat64), so the answer for a literal of more than
+// 800 digits does not depend on the Go release, where the RFC 8785
+// library's own reading of one does: built with go1.22.0 or go1.26.3 it
+// writes 875 followed by 900 zeros and e-901 as 8.75e-102, and built with
+// go1.27.0 as 87.5. It returns "" for a literal outside the double range,
+// which readFixture has refused.
+func canonicalNumber(s string) string {
+	out, err := jcs.NumberToJSON(nearestFloat64(s))
+	if err != nil {
+		return ""
+	}
+	return out
+}
+
 func isNullOrEmptyObject(v any) bool {
 	if v == nil {
 		return true
@@ -300,6 +359,16 @@ func exportVC(path string, withMLDSA65 bool) ([]byte, error) {
 			reason = fmt.Sprintf("the number %s is written with a fraction or an exponent part, not as an integer", literal)
 		}
 		return nil, &refusal{exitNativeSignature, fmt.Sprintf("no native signature covers %s: %s; not re-signing", where, reason)}
+	}
+
+	// A number that the credential, written as RFC 8785 canonical JSON,
+	// would hold in another form than the fixture writes it is refused
+	// before anything is computed from it, in a credential of either
+	// atcVersion: the proof would sign the number in that form, and a "1.0"
+	// trustLevel of 9007199254740993, which the native signature covers
+	// digit for digit, as 9007199254740992, which it does not cover.
+	if where, literal, canonical := rewrittenNumber(f.members); where != "" {
+		return nil, &refusal{exitNativeSignature, fmt.Sprintf("the credential cannot hold the number %s in %s as written: RFC 8785 writes it as %s; not re-signing", literal, where, canonical)}
 	}
 
 	// Every native signature must verify over the native bytes before

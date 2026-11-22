@@ -46,6 +46,24 @@
 // above 24 or minute above 60, which Go 1.22 reads, and one written with a
 // JSON escape, which Go 1.27 reads.
 //
+// It refuses as well a credential, of either atcVersion, that holds a number
+// the credential it writes would hold in another form. RFC 8785 writes each
+// number as ECMAScript writes the IEEE 754 double nearest it: an atcVersion
+// "1.0" trustLevel of 9007199254740993, which the native signature covers
+// digit for digit, as 9007199254740992, a trustScore of -0 as 0, and a
+// declaredPurpose number 1e3 as 1000. The message names the number, its
+// member and the form RFC 8785 writes it in.
+//
+// A credential that holds a number outside the IEEE 754 double range is one
+// the command cannot read, the range decided on the digits as written
+// whatever Go release builds the command: 1 followed by 1000 zeros and
+// e-650, whose value is 10^350, is outside it, as 1e400 is. So is one whose
+// issuedAt or expiresAt the reference verifiers do not read as a timestamp:
+// one written with a JSON escape, or with a time zone offset hour above 24
+// or minute above 60. The command reads those two members as the Go
+// reference verifier does, whatever Go release builds it, and its message
+// holds that verifier's reason.
+//
 // An atcVersion "1.1" credential whose declaredPurpose holds an unpaired
 // UTF-16 surrogate escape is one the command cannot read. RFC 8785 refuses
 // a string that holds a lone surrogate, and the library that computes the
@@ -60,7 +78,9 @@
 //	1  the fixture, or a vector file it names, cannot be read as the
 //	   conformance suite writes them; a fixture whose atcVersion "1.1"
 //	   credential holds an unpaired UTF-16 surrogate escape in its
-//	   declaredPurpose is one
+//	   declaredPurpose is one, as is one whose credential holds a number
+//	   outside the IEEE 754 double range, or an issuedAt or expiresAt the
+//	   reference verifiers do not read as a timestamp
 //	2  usage error; --form jws; or the fixture has no native signature of
 //	   the algorithm a proof needs
 //	3  a native signature does not verify over the native bytes, or an
@@ -68,7 +88,8 @@
 //	   member those bytes leave out, a behavioralProfile in which checksum,
 //	   generatedAt or observationDays is null or absent, or whose
 //	   generatedAt this build reads and the reference verifiers do not, or
-//	   a number those bytes do not hold as written; nothing was signed
+//	   a number those bytes do not hold as written, or the credential holds
+//	   a number RFC 8785 writes in another form; nothing was signed
 package main
 
 import (
@@ -100,16 +121,20 @@ credential and one line feed; every run writes the same bytes.
                      cryptosuite (a proof set)
 
 Exit status: 0 written; 1 the fixture or a vector file it names cannot be
-read, or the declaredPurpose of an ATX v1.1 credential holds an unpaired
-UTF-16 surrogate escape; 2 usage error, or the fixture has no native
-signature of the algorithm a proof needs; 3 a native signature does not
-verify over the native bytes, or an ATX v1.1 credential holds a
-behavioralProfile or scanSummary member those bytes leave out, or a
-behavioralProfile in which checksum, generatedAt or observationDays is null
-or absent (or whose generatedAt this build reads and the reference verifiers
-do not read as a timestamp), or a number they do not hold as written (an
-integer above 2^53-1 in magnitude, or a declaredPurpose number with a
-fraction or an exponent part), and nothing was signed.
+read, or the credential holds a number outside the IEEE 754 double range or
+an issuedAt or expiresAt the reference verifiers do not read as a timestamp,
+or the declaredPurpose of an ATX v1.1 credential holds an unpaired UTF-16
+surrogate escape; 2 usage error, or the fixture has no native signature of
+the algorithm a proof needs; 3 a native signature does not verify over the
+native bytes, or an ATX v1.1 credential holds a behavioralProfile or
+scanSummary member those bytes leave out, or a behavioralProfile in which
+checksum, generatedAt or observationDays is null or absent (or whose
+generatedAt this build reads and the reference verifiers do not read as a
+timestamp), or a number they do not hold as written (an integer above 2^53-1
+in magnitude, or a declaredPurpose number with a fraction or an exponent
+part), or the credential holds a number RFC 8785 writes in another form
+(9007199254740993 as 9007199254740992, -0 as 0, 1e3 as 1000), and nothing
+was signed.
 `
 
 // refusal is an error that ends the command with its own exit status and
