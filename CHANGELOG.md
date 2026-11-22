@@ -489,6 +489,8 @@ they should not.
   kit answers 47 of 47 credentials, agrees with the answer key on 10 and
   accepts 37 that must fail. `scripts/check_readme_counts.py` does not hold
   these two counts. No fixture or verifier changes.
+- `docs/version-pinning.md` notes where atx-spec `main` governs until this
+  suite re-pins.
 
 ### Fixed
 
@@ -1303,8 +1305,6 @@ they should not.
   count for the commit, and the closing line says so. The kit release's
   count names no tag and is not held. Its self-test adds 24 cases. No
   fixture or verifier changes.
-- `docs/version-pinning.md` notes where atx-spec `main` governs until this
-  suite re-pins.
 
 ## v0.1.0
 
