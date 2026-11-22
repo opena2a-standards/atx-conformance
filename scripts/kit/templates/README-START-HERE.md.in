@@ -4,7 +4,7 @@ This kit carries commit <sha>
 of atx-conformance: <N> fixtures, and both reference verifiers pass all <N>.
 Running a verifier needs no network. Building one fetches what docs/network.md
 names, so this kit carries prebuilt Go binaries for <platforms>.
-
+@nof5
 Check before you run. This folder is a copy of the release at
 <release URL>
 Download SHA256SUMS from that page, not from this folder, and run
@@ -38,7 +38,6 @@ you expect: copy fixtures/baseline-valid.json, put your credential in its atx
 member, your issuer's DID in verifierState.trustedIssuers and its public key in
 verifierState.publicKeys, and set verifierState.clockRfc3339. Field by field:
 README.md and docs/fixtures.md.
-@nof5
 In this folder:
   bin/<os>-<arch>/atx-verify  the Go verifier, one static binary per platform
   fixtures/  MANIFEST.sha256  the fixtures and their SHA-256 pins
@@ -46,3 +45,4 @@ In this folder:
   conformance.json            what the suite covers; notCovered lists the rest
   CONTACT.txt                 who to tell, and the release this copy came from
   README.md                   the repository README at the pinned commit
+Not in this kit: github.com/opena2a-standards/{atp,aip,aap}-conformance

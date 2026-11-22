@@ -8,11 +8,12 @@ check fail.
       Cells that need no network and no gh: the action pins, the release
       workflow's shape, the one-line refusal of a workflow path the checks
       cannot read, SHA256SUMS and the file-list check, the label census,
-      the data protection kit check, the first-run screen's form, the
-      network note the screen names (docs/network.md: each module go.mod
-      requires and each package requirements.lock pins, at its version,
-      and no network package imported by the verifiers it says open no
-      connection), the release notes' --version claim, check-capture as
+      the data protection kit check, the first-run screen's form and its
+      line naming the sibling suites, the network note the screen names
+      (docs/network.md: each module go.mod requires and each package
+      requirements.lock pins, at its version, and no network package
+      imported by the verifiers it says open no connection), the release
+      notes' --version claim, check-capture as
       the release workflow's test job runs it: the kit's own copy, unpacked
       outside any repository, with no Python to call, the version line
       under each Go version tag view, with tags made only in a scratch
@@ -601,6 +602,25 @@ def readme_text() -> tuple[str, str]:
     return (kit / "README-START-HERE.md").read_text(), head_facts()["expected"]
 
 
+SIBLING_SUITES = {"atp", "aip", "aap"}
+
+
+def suites_named_by_url(line: str) -> set[str]:
+    """The sibling suites a line names by URL: one URL each
+    (github.com/opena2a-standards/aap-conformance), or one URL with a brace
+    list (github.com/opena2a-standards/{atp,aip,aap}-conformance)."""
+    named: set[str] = set()
+    for m in re.finditer(r"github\.com/opena2a-standards/(?:\{([a-z,]+)\}|([a-z]+))-conformance", line):
+        named.update(m.group(1).split(",") if m.group(1) else [m.group(2)])
+    return named & SIBLING_SUITES
+
+
+def sibling_suites_lines(text: str) -> list[int]:
+    """The lines that name all three sibling suites by URL and say they are not in this kit."""
+    return [n for n, line in enumerate(text.split("\n")[:-1], 1)
+            if suites_named_by_url(line) == SIBLING_SUITES and re.search(r"\bnot in (this|the) kit\b", line, re.I)]
+
+
 def cells_readme() -> None:
     text, expected = readme_text()
     d = scratch("h")
@@ -641,6 +661,18 @@ def cells_readme() -> None:
         r = run([PY, "-I", KIT / "render.py", "check-readme", m, expected])
         cell(f"h{i} first-run screen mutant refused: {what}", r.returncode == 1 and expect in r.stderr,
              next((l.strip() for l in r.stderr.split("\n") if expect in l), r.stderr.strip()[:100]))
+    hits, hits5 = sibling_suites_lines(text), sibling_suites_lines(t5)
+    cell("h12 first-run screen: one line names atp-, aip- and aap-conformance by URL, none of them in this kit",
+         bool(hits) and bool(hits5),
+         f"line {','.join(map(str, hits)) or 'none'} of {len(lines)}; with the terminal-safety lines, "
+         f"line {','.join(map(str, hits5)) or 'none'} of {len(t5.splitlines())}")
+    m = d / "mutant-sibling-suites.md"
+    m.write_text("".join(line + "\n" for line in lines if not suites_named_by_url(line)))
+    dropped = m.read_text()
+    cell("h13 first-run screen mutant refused: the line naming the sibling suites dropped",
+         dropped != text and not sibling_suites_lines(dropped),
+         "the mutant drops nothing: no line names a sibling suite" if dropped == text
+         else f"{len(dropped.splitlines())} lines, none names the three")
 
     # render.py writes the release notes, which carry the Mac step (cell i4),
     # to its dist folder, not into the kit, so the kit's own screen says where

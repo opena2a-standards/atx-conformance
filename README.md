@@ -67,6 +67,8 @@ before relying on a result.
 - confirmed means we can reproduce it, and we fix it or agree the spec was unclear
 - first reporter of each bug counts; report as a GitHub issue
 
+The bounty is open to registered IETF 127 Hackathon participants. Registration is free and can be remote.
+
 A bug with security impact is reported in private, as [SECURITY.md](https://github.com/opena2a-standards/.github/blob/main/SECURITY.md) describes, and counts the same.
 
 ### Rules
@@ -97,11 +99,11 @@ The kit needs Go 1.22 or later; on macOS 26, Go 1.23 or later. Install it at
 one commit. This line needs the network once; the installed kit does not.
 
 ```bash
-go install github.com/opena2a-standards/atx-conformance/cmd/atx-verify@4f70281a00163ec898e9671ba9ab023907e402b2
+go install github.com/opena2a-standards/atx-conformance/cmd/atx-verify@a38e00017076c4e524d9c99ca296abf441ce0c6b
 ```
 
-This commit carries 41 of the 57 fixtures on main; the Hackathon kit release
-carries 47. Without Go, download the kit from the
+This commit carries 47 of the 57 fixtures on main; it is the Hackathon kit
+release's commit. Without Go, download the kit from the
 [Hackathon kit release](https://github.com/opena2a-standards/atx-conformance/releases).
 
 Then point it at a verifier you run as a command, or at one you run as a
@@ -116,7 +118,7 @@ service (yours goes in the angle brackets):
 ```
 
 To see a result before you connect yours, use `true`, which answers ACCEPT to
-everything: 9 agree, and 32 accepted what must fail.
+everything: 10 agree, and 37 accepted what must fail.
 
 ```bash
 "$(go env GOPATH)/bin/atx-verify" --verifier true --label "always ACCEPT" --report atx-report
@@ -131,7 +133,7 @@ python3 examples/serve_verifier.py 8080 true &
 ```
 
 When it prints its `listening on` line, run the kit against port 8080 on
-this machine; it shows the same 9 agree and 32 accepted what must fail, and
+this machine; it shows the same 10 agree and 37 accepted what must fail, and
 `kill %1` stops the service:
 
 ```bash
