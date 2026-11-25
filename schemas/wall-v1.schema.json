@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/wall-v1.schema.json",
+  "title": "Verifier wall, format v1",
+  "description": "wall/verifiers.json: a JSON array of rows, one per verifier version and released kit version whose run of the interop kit, by the verifier's maintainer, passed by the wall's own rule: acceptedMustFail is 0 and couldNotRead is below fixtureCount. That rule is not the kit's exit status: the kit exits 0 only when every fixture agrees with the answer key, so a row's agree can be below fixtureCount, from a run on which the kit exited 1. This schema holds each row's nine members and their forms: the verifier's name and version as plain text, the UTC date of the run, the released kit version vX.Y.Z, and the run's fixture count and four outcome counts as integers. No member is a report path, a commit or a link: the report stays with the maintainer's run, and the link to that run travels in the pull request's body. scripts/check_wall.py holds the same forms, matching each pattern against the whole value, and, from git alone, what a schema cannot state: kitVersion is a tag of the repository; fixtureCount is the number of fixtures/*.json files at that tag; the four outcome counts sum to fixtureCount; acceptedMustFail is 0 and couldNotRead is below fixtureCount; date is a calendar date, not after the current UTC date and not before the UTC date of the commit the tag names; each count is written as an integer, with no fraction or exponent; the rows are sorted by verifier, then version, then kitVersion, with no two sharing all three; and no object gives a member name twice.",
+  "$comment": "The wall is an array, so it holds no `$schema` member. `properties` below holds this format's identifier in `$schema`, as every schemas/*.schema.json does (scripts/schema_validation.py), and applies to no wall document.",
+  "type": "array",
+  "items": { "$ref": "#/$defs/row" },
+  "properties": {
+    "$schema": {
+      "description": "The identifier of this format. Equal to this schema's `$id`.",
+      "const": "https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/wall-v1.schema.json"
+    }
+  },
+  "$defs": {
+    "row": {
+      "description": "One verifier version whose run of the interop kit at one released kit version passed by the wall's rule, which is not the kit's exit status.",
+      "type": "object",
+      "required": [
+        "verifier",
+        "version",
+        "date",
+        "kitVersion",
+        "fixtureCount",
+        "agree",
+        "acceptedMustFail",
+        "rejectedMustPass",
+        "couldNotRead"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "verifier": {
+          "description": "The verifier's name, plain text: 1 to 64 letters, digits, spaces and . _ + -, opening and closing with a letter or digit. It holds no slash, colon, at sign, backslash, quote, angle bracket or brace, so no path, URL, address or markup.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9]([A-Za-z0-9 ._+-]{0,62}[A-Za-z0-9])?$"
+        },
+        "version": {
+          "description": "The verifier's version, plain text: 1 to 32 letters, digits and . _ + -, opening and closing with a letter or digit.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "pattern": "^[A-Za-z0-9]([A-Za-z0-9._+-]{0,30}[A-Za-z0-9])?$"
+        },
+        "date": {
+          "description": "The UTC date of the run, YYYY-MM-DD.",
+          "type": "string",
+          "format": "date",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "kitVersion": {
+          "description": "The released kit version the run used, vX.Y.Z, a tag of this repository. A released kit records this version as its own and its suite commit as \"unknown\"; the tag names the commit, so the row carries none.",
+          "type": "string",
+          "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+        },
+        "fixtureCount": {
+          "description": "The number of fixtures the kit sent the verifier: the fixtures/*.json files at the kitVersion tag.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "agree": {
+          "description": "The fixtures whose ACCEPT or REJECT from the verifier is the verdict conformance.json expects.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "acceptedMustFail": {
+          "description": "The fixtures conformance.json expects to be rejected that the verifier accepted. A row is admitted only at 0.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "rejectedMustPass": {
+          "description": "The fixtures conformance.json expects to be accepted that the verifier rejected.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "couldNotRead": {
+          "description": "The fixtures for which the kit read no ACCEPT or REJECT from the verifier. A row is admitted only below fixtureCount.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

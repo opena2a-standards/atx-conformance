@@ -3,7 +3,7 @@
 Conformance fixtures and reference verifiers for the
 [ATX v1.0 and v1.1 credential schema](https://github.com/opena2a-standards/atx-spec).
 
-Each fixture is a byte-stable JSON file that bundles an Agent Trust Credential
+Each fixture is a byte-stable JSON file that bundles an ATX
 with verifier configuration and an expected outcome (ACCEPT or REJECT). Two
 SDK-independent reference verifiers (Go and Python) walk the fixture set and
 report PASS or FAIL per vector. Fixture bytes are pinned in
@@ -11,6 +11,10 @@ report PASS or FAIL per vector. Fixture bytes are pinned in
 
 License: Apache 2.0. All keypairs, seeds, and credential identifiers in this
 repository are TEST-ONLY.
+
+The command below needs Go 1.22 or later; on macOS 26, Go 1.23 or later
+([go.dev/dl](https://go.dev/dl/)). The Python verifier needs Python 3.11 or later
+([python.org/downloads](https://www.python.org/downloads/)).
 
 ```bash
 go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@latest
@@ -21,36 +25,179 @@ PASS  fixtures/baseline-valid-hybrid.json
        expected: ACCEPT
        observed: ACCEPT
        signatures: 2/2 valid (ed25519=true mldsa65=true)
-       trustLevel 4 asserted; distinct-authority count (step 7) not performed by this verifier
+       distinct signer authorities (step 7): 1; trustLevel 4 asserted
 ...
 PASS  fixtures/wrong-issuer.json
        expected: REJECT [UNTRUSTED_ISSUER]
-       observed: REJECT[UNTRUSTED_ISSUER: issuer DID did:opena2a:authority:attacker.example is not in the verifier's trusted set (untrusted issuer)]
+       observed: REJECT[UNTRUSTED_ISSUER: issuer DID "did:opena2a:authority:attacker.example" is not in the verifier's trusted set (untrusted issuer)]
 
-summary: 26 pass, 0 fail (26 fixtures)
+summary: 57 pass, 0 fail (57 fixtures)
 ```
+
+At a terminal, when every fixture passes, the command then writes one more
+line, to standard error, below the summary line:
+`Next: to test your own verifier against the fixtures, see https://github.com/opena2a-standards/atx-conformance#try-your-verifier-in-two-minutes`.
+The full output linked above,
+[`docs/captures/go-verifier.txt`](docs/captures/go-verifier.txt), is the
+command's standard output, so it ends at the summary line.
 
 With no argument the verifier walks the fixture set built into the module
 version `go run` fetched, `fixtures/*.json` of that commit, with nothing
 cloned. The command exits 1 when any fixture's result differs from its
-expected outcome. This repository has no release tag, so `@latest` resolves
-to a pseudo-version of a commit on `main`, the one the Go module proxy reports
-as latest. `@<commit>` in its place runs
-the verifier and fixtures of that commit: `cmd/atx-verify@<commit>` for a
-commit that has `cmd/atx-verify`, and `verifiers/go@<commit>` for `ea4b485`
-or a later commit on `main`; `go run` resolves the commit to its release tag,
-or to a pseudo-version when the commit has no tag. `ea4b485`
-is the first commit with `go.mod` at the repository root. Before it,
-`verifiers/go` was a module of its own; the module proxy answers
-`verifiers/go@latest` with a version of that module, and
-`go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest`
-exits 1, so `@latest` goes with `cmd/atx-verify`. On its first run, `go run`
-downloads the module and the modules listed in [`go.mod`](go.mod).
+expected outcome. On its first run, `go run` downloads the module and the
+modules listed in [`go.mod`](go.mod).
+
+This repository has no Go version tag, so `@latest` resolves to a
+pseudo-version (a version Go builds from a commit's time and hash) of the
+commit on `main` that the Go module proxy reports as latest.
+[Which version `go run` fetches](docs/running-the-verifiers.md#which-version-go-run-fetches)
+says how to run the verifier and fixtures of one commit instead.
 
 The suite does not check `contentHash` against an agent binary, transparency
-log inclusion, build attestations or behavioral profiles;
+log inclusion, build attestations or the content of behavioral profiles;
 [docs/scope.md](docs/scope.md) lists what it covers and the notes to read
 before relying on a result.
+
+## Bounty
+
+- 100 US dollars per confirmed bug in the fixtures, kit or spec
+- reported Nov 14 to 20, 2026
+- donated to the open-source project or nonprofit of the finder's choice
+- capped at 1,500 dollars in total
+- confirmed means we can reproduce it, and we fix it or agree the spec was unclear
+- first reporter of each bug counts; report as a GitHub issue
+
+The bounty is open to registered IETF 127 Hackathon participants. Registration is free and can be remote.
+
+A bug with security impact is reported in private, as [SECURITY.md](https://github.com/opena2a-standards/.github/blob/main/SECURITY.md) describes, and counts the same.
+
+### Rules
+
+1. Who can take part: registered IETF 127 Hackathon participants. Registration is free and can be remote. People who work on OpenA2A are not eligible.
+2. How many: each person can earn the bounty for up to three confirmed bugs. More reports are always welcome and credited.
+3. What counts: a fault that makes a verifier, the kit or one of its own checks give a wrong answer, or a place where the spec contradicts itself or can fairly be read two ways. It must reproduce on the Hackathon kit release or on the main branch on the day you report it. Typos, formatting and wording preferences are welcome as issues but are not bounty bugs.
+4. One cause, one bug: reports that share a root cause count once.
+5. Known limits do not count: anything already stated in this README, the scope notes, the spec's coverage section or an open issue.
+6. Test your own copy: the bounty covers the files published in this repository and the ATX spec. Do not test OpenA2A's live services or websites. Reports that come from doing so do not count.
+7. Dates: from November 14 at 00:00 to November 20 at 23:59, Pacific time, by the time on the issue. If the 1,500 dollar cap is reached, reports count in the order they arrived.
+8. The donation: OpenA2A pays it directly to the recipient by January 15, 2027. The recipient must be an established open-source project or a registered nonprofit that can accept donations and is not run by the finder. We may ask for a different choice.
+9. OpenA2A decides whether a report is confirmed, and that decision is final.
+
+## Try your verifier in two minutes
+
+The kit sends each fixture built into it to your verifier and compares its
+verdicts with the answer key in [`conformance.json`](conformance.json). Your
+verifier stays yours. The kit uploads nothing: the fixtures go to your
+verifier only, and the report stays on your laptop unless you share it.
+
+The fixtures are native ATX credentials. A verifier that reads JWT or W3C
+credentials cannot parse them; when it answers as in the "Couldn't read"
+column below, the kit records that as a result, not as a REJECT.
+`--form jws` and `--form vc` are reserved for JWS and VC forms.
+
+The kit needs Go 1.22 or later; on macOS 26, Go 1.23 or later. Install it at
+one commit. This line needs the network once; the installed kit does not.
+
+```bash
+go install github.com/opena2a-standards/atx-conformance/cmd/atx-verify@a38e00017076c4e524d9c99ca296abf441ce0c6b
+```
+
+This commit carries 47 of the 57 fixtures on main; it is the Hackathon kit
+release's commit. Without Go, download the kit from the
+[Hackathon kit release](https://github.com/opena2a-standards/atx-conformance/releases).
+
+Then point it at a verifier you run as a command, or at one you run as a
+service (yours goes in the angle brackets):
+
+```bash
+"$(go env GOPATH)/bin/atx-verify" --verifier "<your command> {file}" --label "<name and version>"
+```
+
+```bash
+"$(go env GOPATH)/bin/atx-verify" --verifier-url "<your URL>" --label "<name and version>"
+```
+
+To see a result before you connect yours, use `true`, which answers ACCEPT to
+everything: 10 agree, and 37 accepted what must fail.
+
+```bash
+"$(go env GOPATH)/bin/atx-verify" --verifier true --label "always ACCEPT" --report atx-report
+```
+
+The URL form has no one-word stand-in: it needs a service that is listening,
+yours or [`examples/serve_verifier.py`](examples/serve_verifier.py), which
+comes with a clone. From the root of a clone, this puts `true` behind a URL:
+
+```bash
+python3 examples/serve_verifier.py 8080 true &
+```
+
+When it prints its `listening on` line, run the kit against port 8080 on
+this machine; it shows the same 10 agree and 37 accepted what must fail, and
+`kill %1` stops the service:
+
+```bash
+"$(go env GOPATH)/bin/atx-verify" --verifier-url http://localhost:8080/ --label "always ACCEPT"
+kill %1
+```
+
+`{file}` becomes each fixture's path; the file holds the credential in `atx`
+and the settings to judge it by in `verifierState`. Without `{file}`, and
+through a URL ([a JSON POST](examples/README.md#a-verifier-behind-a-url)),
+your verifier gets the credential alone and judges it by its own settings.
+The kit starts your command without a shell, so pipes and `$VARIABLES` are
+not expanded.
+
+| Adapter | ACCEPT | REJECT | Couldn't read |
+|---|---|---|---|
+| Command | exit 0 | exit 1 | any other exit, a crash, or a timeout |
+| URL | 2xx | 4xx | 5xx, no answer, or a timeout |
+| Either, if it prints JSON | "verdict": "ACCEPT" or "valid": true | "verdict": "REJECT" or "valid": false | "verdict": "ERROR" |
+
+When the whole answer is one JSON object, a "verdict" of ACCEPT, REJECT or
+ERROR in any letter case decides; without one of those words, a boolean
+"valid" decides; without either, the exit or status code decides.
+
+An optional "reason" string is recorded, and the first 200 characters of each
+raw response are kept in the report, so a person can judge.
+
+The kit prints four numbers: agree, accepted what must fail, rejected what
+must pass, and couldn't read. It exits 0 only when every fixture agrees.
+`--report <dir>` writes `atx-interop-report.md` and `atx-interop-report.json`;
+`--verifier --help` lists every option. To share a result, open an issue on
+this repository titled `<verifier> fails <fixture>.json at <suite commit>`, or
+email info@opena2a.org.
+
+Wrappers that put any verifier behind this contract are in
+[`examples/`](examples/); `go install` does not fetch them, so copy the file
+you need.
+
+## The guided tour
+
+[`cmd/atx-tour`](cmd/atx-tour/) walks through the suite step by step from a
+clone: each step says what is about to happen, runs the real commands and shows
+the lines that matter. Steps that need Python or Node are left out when those
+are not installed.
+
+The tour needs Go 1.22 or later; on macOS 26, Go 1.23 or later. This line
+needs the network once:
+
+```bash
+git clone https://github.com/opena2a-standards/atx-conformance.git && cd atx-conformance && git checkout 4f70281a00163ec898e9671ba9ab023907e402b2 && go run ./cmd/atx-tour --setup
+```
+
+The pre-flight and the tour do not:
+
+```bash
+go run ./cmd/atx-tour --check
+go run ./cmd/atx-tour
+```
+
+In the tour, Enter shows the next step, `r` repeats a step and `q` quits.
+`--demo <path>` and `--matrix <path>` add steps when the presenter has a
+checkout of the delegation demo or of the agent threat matrix at that path,
+at the commit the steps were measured at; the pre-flight names the reason
+when a step stays hidden.
 
 ## Running the verifiers
 
@@ -75,15 +222,17 @@ The Python verifier, from the repository root:
 cd verifiers/python
 python3 -m venv .venv
 . .venv/bin/activate
-python3 -m pip install -r requirements.txt
+python3 -m pip install --disable-pip-version-check -r requirements.txt
 python3 verify.py ../../fixtures
 ```
 
 The commands expect a virtual environment: the second and third lines
 create one in `verifiers/python/.venv` and activate it, and
 `python3 -m pip install` downloads the packages `requirements.txt` names,
-and their dependencies, into it. Outside a virtual environment a system may
-provide `python3` and `pip3` only, with no `python` or `pip` on `PATH`.
+and their dependencies, into it.
+[docs/running-the-verifiers.md](docs/running-the-verifiers.md#python-full-hybrid-ed25519-plus-ml-dsa-65)
+says what `--disable-pip-version-check` does and what a system may provide
+outside a virtual environment.
 
 Each verifier needs a minimum toolchain release,
 and the release can change a result on inputs no fixture carries:
@@ -92,7 +241,7 @@ minimums, the modules and packages each verifier pins, and those inputs.
 
 ### Expected output
 
-Both verifiers report `summary: 26 pass, 0 fail (26 fixtures)` against the
+Both verifiers report `summary: 57 pass, 0 fail (57 fixtures)` against the
 shipped fixture set.
 
 A verifier prints a FAIL line when its result on a
@@ -119,8 +268,8 @@ modified fixture reads `FAILED` and the command exits non-zero. On Linux,
 
 | Implementation | Verifier | Status |
 |---|---|---|
-| `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 26 / 26 PASS |
-| `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 26 / 26 PASS |
+| `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 57 / 57 PASS |
+| `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 57 / 57 PASS |
 
 To list an independent second-party implementation here, or to arrange a
 cosignature, open an issue on this repository's
@@ -135,8 +284,12 @@ The cosignature itself is recorded by pull request, as
 - [Fixtures](docs/fixtures.md): the issuer, agent, verifier clock and keys
   every fixture shares, and what each fixture exercises.
 - [Running the verifiers](docs/running-the-verifiers.md): the exit code,
-  toolchain minimums, pinned modules and packages, and results that depend on
-  the toolchain release.
+  the module version `go run` fetches, toolchain minimums, pinned modules and
+  packages, results that depend on the toolchain release, and the benchmark
+  of each verifier.
+- [What needs the network](docs/network.md): what building the Go verifier
+  and installing the Python verifier's packages fetch, and the runs that
+  measured both verifiers with the network denied.
 - [Continuous verification](docs/continuous-verification.md): the gates CI
   runs on every pull request.
 - [Reproducing the fixtures](docs/reproducing-the-fixtures.md): what the

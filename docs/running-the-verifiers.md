@@ -1,8 +1,9 @@
 # atx-conformance: running the verifiers
 
-What each reference verifier depends on, and where the toolchain release
-changes a result. The [README](../README.md#running-the-verifiers) runs both
-verifiers and says what they print.
+What each reference verifier depends on, where the toolchain release
+changes a result, and how each one's benchmark runs. The
+[README](../README.md#running-the-verifiers) runs both verifiers and says
+what they print.
 
 ## Exit code
 
@@ -10,7 +11,32 @@ Exit code is 0 if every fixture's observed result matches the expected
 result and the rejection category matches (when declared). A file that is
 not a fixture, one with no `expected.verifyResult` of `ACCEPT` or `REJECT`,
 is a load error: both verifiers print `FAIL  <file>  (load error: <reason>)`
-for it, count it as a fail and exit 1.
+for it, count it as a fail and exit 1. So is a file that writes a member
+more than once outside its `atx` member, under one name or under two that
+Go's `encoding/json` reads as one, such as `expected` and `EXPECTED`: both
+print `FAIL  <file>  (load error: the fixture repeats the member "<member>")`,
+naming the member as written the second time, while a member written twice
+inside `atx` still rejects as `PARSE_ERROR`. A file that is not JSON, one whose
+value is not a JSON object and one whose arrays and objects nest deeper
+than 10000 levels are load errors too, with the same reason in both
+verifiers: `fixture is not valid JSON`, `fixture is not a JSON object` and
+`arrays and objects nested deeper than 10000 levels (the limit of Go's encoding/json)`.
+A file that writes a value as `NaN`, `Infinity` or `-Infinity`, inside its
+`atx` member or outside it, is a file that is not JSON: RFC 8259 §6 has
+none of them.
+A file that is not JSON and also nests deeper than 10000 levels fails with
+the reason for whichever comes first in its text, the first error Go's
+`encoding/json` reads: `[x,` or `[NaN,` before 10001 nested arrays is a
+file that is not JSON, and those arrays with `x` or `NaN` inside the
+deepest nest too deep.
+A fixture with no `atx` member, such as one of another conformance suite,
+is reported as `observed: REJECT[PARSE_ERROR: the fixture has no atx member]`,
+with ` (its $schema is "<value>")` before the `]` when its `$schema` is a
+string. When a REJECT fixture's credential rejects in the expected
+category with a reason that does not contain `expected.reasonContains`,
+the FAIL block adds the line `reason does not contain "<substring>"` under
+`observed:`. The summary line counts `(1 fixture)` for one fixture and
+`(N fixtures)` for any other count.
 
 ## Arguments
 
@@ -23,12 +49,20 @@ first `--` ends the options: each argument after it is a path, one that
 starts with `-` included, so `-- -h.json` names a fixture file `-h.json`.
 Then an empty argument is a usage error,
 `error: an empty argument names no fixture file or directory` with exit 2,
-and nothing is verified. A directory is walked for `fixtures/*.json` when its
+and nothing is verified. An argument `help` or `version` that names no file
+is a missing path whose line adds the option meant:
+`error: help: no such file or directory (--help prints the usage)` and
+`error: version: no such file or directory (--version prints the version line)`,
+each with exit 2. A directory is walked for `fixtures/*.json` when its
 `fixtures` entry is a directory, so a repository root can be passed, and for
 its own `*.json` otherwise, as when `fixtures` is a file. Of the `*.json`
 entries a walk finds, a directory is skipped: for a directory holding
 `x.json` and a subdirectory `sub.json`, both verifiers verify `x.json`
-alone. A symbolic link is kept whatever it links to, so a link to a fixture
+alone. A walk is one level deep: when the directories named hold no
+`*.json` at that level, both verifiers write
+`no fixture *.json files found in <dirs> (subdirectories are not walked)`
+with exit 2, `<dirs>` naming each directory listed, a repository root's
+`fixtures` directory for a root, separated by `, `. A symbolic link is kept whatever it links to, so a link to a fixture
 is verified and a link to a directory is a load error. A path named twice
 is verified twice. A file is named in the report as its argument spells it,
 `./` and `//` included: for `../../fixtures/./baseline-valid.json` both
@@ -53,14 +87,29 @@ being the directory argument as spelled or, for a repository root, its
 000 holding a fixture, and `error: open r/fixtures: permission denied` for
 `r`, whose `fixtures` directory has mode 000. The line naming an unknown
 option and an error line write an argument that is not UTF-8 as the bytes
-it was given: for the one byte 0xff, which names no file, both verifiers
-write `error: `, that byte, then `: no such file or directory`, with exit
-2, and for `-` followed by that byte, `unknown option: -` and that byte.
+it was given, a byte 0x80 to 0x9f aside (see below): for the one byte
+0xff, which names no file, both verifiers write `error: `, that byte, then
+`: no such file or directory`, with exit 2, and for `-` followed by that
+byte, `unknown option: -` and that byte.
 A fixture whose path is not UTF-8 is named in its report line by the path's
 bytes too, where the file system takes such a name (APFS refuses it): for
 `d`, a directory holding a copy of `fixtures/baseline-valid.json` named by
 the byte 0xff then `.json`, and for that file named as an argument, both
 verifiers write `PASS  d/`, that byte, then `.json`.
+Each string a fixture, a file name or a path supplies is written with its
+control characters escaped, so a line of the report is one line on a
+terminal: a C0 control (U+0000 to U+001F, the line feed and the tab among
+them) and DEL (U+007F) as `\xHH`, a C1 control (U+0080 to U+009F) as
+`\u00HH`, and a byte 0x80 to 0x9f that is not UTF-8 as `\xHH`. For a copy of
+`fixtures/baseline-valid.json` named `a`, a tab, then `b.json`, both
+verifiers write `PASS  a\x09b.json`.
+A reason that names the credential's `issuerDid`, a signature's `algorithm`
+or its `keyId` writes that value in double quotes, escaped as Go's
+`strconv.QuoteToASCII` escapes it: a line feed as `\n`, U+2028 as
+`\u2028`, a double quote as `\"` and a backslash as `\\`. A missing or null
+`keyId` is written `""`. For `fixtures/wrong-issuer.json` both verifiers
+write
+`issuer DID "did:opena2a:authority:attacker.example" is not in the verifier's trusted set (untrusted issuer)`.
 A fixture file that cannot be read is a load error worded as the error Go's
 `os.ReadFile` returns, which names the step that failed and the path as
 spelled. Run as a user other than root, with `d/x.json` a copy of
@@ -90,28 +139,74 @@ The parity gate runs both verifiers on each of these shapes, no argument
 and `--` alone included, which it holds to this difference
 ([continuous verification](continuous-verification.md)).
 
+## Which version `go run` fetches
+
+This repository has no Go version tag, so `@latest` resolves to a
+pseudo-version of a commit on `main`, the one the Go module proxy reports
+as latest. A Go version tag is a tag named for a semantic version, such as
+`v0.1.0`. A pseudo-version is the version Go gives a commit that carries no
+Go version tag, built from the commit's time in UTC and the first 12
+characters of its hash: at `20799e3`, `v0.0.0-20261018142916-20799e3db50c`.
+
+`@<commit>` in place of `@latest` runs the verifier and fixtures of that
+commit: `cmd/atx-verify@<commit>` for a commit that has `cmd/atx-verify`,
+and `verifiers/go@<commit>` for `ea4b485` or a later commit on `main`;
+`go run` resolves the commit to its Go version tag, or to a pseudo-version
+when the commit has no Go version tag. Commit `a38e000` carries the tag
+`kit-2026-11-14`, which is not a Go version tag, and resolves to the
+pseudo-version `v0.0.0-20261112212443-a38e00017076`. `ea4b485` is the first
+commit with `go.mod` at the repository root. Before it, `verifiers/go` was a
+module of its own; the module proxy answers `verifiers/go@latest` with a
+version of that module, and
+`go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest`
+exits 1, so `@latest` goes with `cmd/atx-verify`.
+
 ## Which commit a run verified
 
 `--version` prints one line naming what the verifier was built from. The Go
-verifier's line names the module version its binary records:
+verifier's line names the module version its binary records, and when that
+version is `(devel)`, the commit the binary records after it, or
+`no commit recorded`:
 
 - Run through the module proxy, as
   `go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@<version> --version`,
   it names the version `go run` resolved, a pseudo-version naming the commit
-  while the repository has no tags: at `20799e3`,
+  while the repository has no Go version tag: at `20799e3`,
   `v0.0.0-20261018142916-20799e3db50c`.
-- Built from a git clone, it names the commit's pseudo-version under Go 1.24
-  and later (measured with 1.24.0 and 1.26.3) and `(devel)` under Go 1.22 and
-  1.23 (measured with 1.22.12 and 1.23.0). A build in a linked
-  `git worktree` named `(devel)` under 1.26.3.
+- Run with `go run` from a checkout without `-buildvcs=true`, the form of
+  the commands the README and this page give for running the Go verifier on
+  fixtures from a checkout, it names `(devel), no commit recorded` under
+  every Go release (measured with 1.22.12 and 1.26.3): by default `go run`
+  records no version-control information.
+- Built with `go build` or `go install` from a git clone, it names the
+  commit's pseudo-version under Go 1.24 and later (measured with 1.24.0 and
+  1.26.3). Under Go 1.22 and 1.23 the module version is `(devel)` (measured
+  with 1.22.12 and 1.23.0) and the line names the commit after it,
+  `(devel), commit <sha>`, adding `, with uncommitted changes` when the
+  build recorded any (measured with 1.22.12). A build in a linked
+  `git worktree` names `(devel), no commit recorded` under 1.26.3.
 - Built from a source archive, a `git archive` copy with no `.git`, it names
-  `(devel)` (measured with 1.22.12 and 1.26.3): the archive holds no commit.
+  `(devel), no commit recorded` (measured with 1.22.12 and 1.26.3): the
+  archive holds no commit.
 
 The Python verifier's line names the commit git reports for the checkout it
 runs from, and `no commit recorded (not run from a git checkout)` when it
-runs from a source archive. To trace a result to its commit, run the Go
-verifier through the module proxy at that version, or either verifier from a
-git clone, the Go verifier built with Go 1.24 or later.
+runs from a source archive. These trace a result to its commit:
+
+- the Go verifier through the module proxy at that commit, one that has
+  `cmd/atx-verify`,
+  `go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@<commit> --version`;
+- the Go verifier built in a git clone, `go build -o atx-verify ./cmd/atx-verify`
+  at the repository root, then `./atx-verify --version`;
+- the Go verifier run from a git clone with `-buildvcs=true`,
+  `go run -buildvcs=true ./cmd/atx-verify --version` at the repository root,
+  which named the commit's pseudo-version with Go 1.26.3 and
+  `(devel), commit <sha>` with Go 1.22.12;
+- the Python verifier run from a git clone, `python3 verify.py --version` in
+  `verifiers/python`.
+
+`go run` from a checkout without `-buildvcs=true` traces no commit: its
+line says `no commit recorded`.
 
 ## Dependencies
 
@@ -123,10 +218,20 @@ go run github.com/opena2a-standards/atx-conformance/cmd/atx-verify@latest
 
 With no argument the verifier walks the fixture set built into the module
 version `go run` fetched, `fixtures/*.json` of that commit; name fixture
-files or a directory to walk those instead. `go.mod` at the repository root
-declares the module, `github.com/opena2a-standards/atx-conformance`. The
-verifier is the package `verifiers/go/verifier`; `cmd/atx-verify` and
-`verifiers/go` are main packages that run it, so from a checkout:
+files or a directory to walk those instead. When every fixture passes and
+standard error is a terminal, that run of `cmd/atx-verify` with no argument
+then writes one more line to standard error, below the summary line:
+`Next: to test your own verifier against the fixtures, see https://github.com/opena2a-standards/atx-conformance#try-your-verifier-in-two-minutes`.
+A run with an argument, `--` alone included, writes no such line, and
+neither does one whose standard error is a pipe or a regular file. The
+README's full output of the run,
+[`docs/captures/go-verifier.txt`](captures/go-verifier.txt), is its
+standard output, so it ends at the summary line.
+
+`go.mod` at the repository root declares the module,
+`github.com/opena2a-standards/atx-conformance`. The verifier is the package
+`verifiers/go/verifier`; `cmd/atx-verify` and `verifiers/go` are main
+packages that run it, so from a checkout:
 
 ```bash
 cd verifiers/go
@@ -135,20 +240,32 @@ go run . ../../fixtures
 
 Depends on:
 
-- Go 1.22 or later. A timestamp whose time zone offset has an hour above 24
+- Go 1.22 or later; on macOS 26, Go 1.23 or later for `cmd/atx-verify`,
+  whose kit links system frameworks (`verifiers/go` runs under Go 1.22 on
+  macOS 26 too). A timestamp whose time zone offset has an hour above 24
   or a minute above 60 (`+25:00`, `+23:61`) is refused under every release;
-  no fixture carries one. Go 1.22's time package decodes such a timestamp and
-  Go 1.23 and later refuse it, so the verifier checks the offset itself
-  (`checkOffset`) and gives Go 1.23's error under Go 1.22 too; the Python
-  verifier refuses it the same way. In a CRL's `issuedAt` or `nextUpdate` or
-  a CRL entry's `revokedAt` the fixture fails to load, in the credential's
-  `issuedAt` or `expiresAt` the rejection is a `PARSE_ERROR`, in the verifier
-  clock `clockRfc3339` it is a `VERIFIER_CONFIG_ERROR`, and in a v1.1
-  credential's `behavioralProfile.generatedAt` the signed payload carries
-  `behavioralProfile` as null, so a signature made over the profile fails as
-  `SIGNATURE_INVALID`. An offset of `+24:00` or `+23:60` decodes. Measured
-  with Go 1.22.12 and Go 1.26.3; to build with the release CI uses, run
-  `GOTOOLCHAIN=go1.22.12 go run . ../../fixtures`.
+  no fixture carries one. Go 1.22's time package decodes such a timestamp, or
+  refuses it for the day when its day is out of range
+  (`2026-02-30T00:00:00+25:00`), and Go 1.23 and later refuse it for the
+  offset, so the verifier checks the offset itself (`checkOffset`), also
+  before it reports a day out of range (`offsetFirst`), and gives Go
+  1.23's error under Go 1.22 too; the Python verifier refuses it the same
+  way. In a CRL's `issuedAt` or `nextUpdate` or a CRL entry's `revokedAt`
+  the fixture fails to load, in the credential's `issuedAt` or `expiresAt`
+  the rejection is a `PARSE_ERROR`, in the verifier clock `clockRfc3339` it
+  is a `VERIFIER_CONFIG_ERROR`, and in a v1.1 credential's
+  `behavioralProfile.generatedAt` the profile is outside its form, so no
+  signature covers it and the credential rejects as `SIGNATURE_INVALID`.
+  An offset of `+24:00` or `+23:60` decodes. Outside
+  the RFC 3339 layout, with text after such an offset
+  (`2099-12-31T23:59:59+25:00x`) or a minute that is not two digits after
+  an hour above 24 (`2026-02-30T00:00:00+25:0a`), Go 1.22 refuses the
+  timestamp for the extra text or as an offset it cannot parse, and Go 1.23
+  and later for the offset; the verifier gives Go 1.23's error there too
+  (`offsetFirst`). The Python verifier refuses such a timestamp as not in
+  the RFC 3339 layout; in a credential's `issuedAt` both verifiers reject
+  it as a `PARSE_ERROR`. Measured with Go 1.22.12 and Go 1.26.3; to build
+  with the release CI uses, run `GOTOOLCHAIN=go1.22.12 go run . ../../fixtures`.
 
   A timestamp written with a JSON escape (the `Z` written as a `\u` escape,
   for example) fails to decode under every release, as it does in the Python
@@ -156,13 +273,15 @@ Depends on:
   `UnmarshalJSON`, which parses the bytes between the quotes. A plain
   `time.Time` field decodes the escaped form when built with Go 1.27.
 
-  The release also sets the Unicode version of the case folding the
-  duplicate-member check applies to a non-ASCII member name. Two names whose
-  lowercase mapping a later Unicode version added are a duplicate, and the
-  credential a `PARSE_ERROR`, under one release and not under another: U+1C89
-  and U+1C8A, mapped in Unicode 16.0, are a duplicate under Go 1.27 (Unicode
-  17.0) and not under Go 1.22 through 1.26 (Unicode 15.0). No fixture carries
-  a non-ASCII member name.
+  The duplicate-member check folds a member name by three fixed mappings,
+  ASCII `A-Z` to `a-z`, U+212A (Kelvin sign) to `k` and U+017F (long s) to
+  `s`, and leaves every other character unchanged, so no Go release changes
+  which names it reports as a duplicate. Once it passes, a member name that
+  holds a character outside printable ASCII (U+0020 to U+007E) in the
+  credential, a signature entry, `scanSummary` or `behavioralProfile` is a
+  `PARSE_ERROR`. That check compares each character with the range and
+  reads no Unicode table, and its reason writes the name and the character
+  in ASCII (`%+q`, `%U`), so no Go release changes it either.
 - `github.com/cloudflare/circl v1.6.2` (resolved by `go mod tidy`)
 - `github.com/gowebpki/jcs v1.0.1` (RFC 8785 canonicalization of the v1.1
   signed payload; resolved the same way)
@@ -173,22 +292,74 @@ Depends on:
 cd verifiers/python
 python3 -m venv .venv
 . .venv/bin/activate
-python3 -m pip install -r requirements.txt
+python3 -m pip install --disable-pip-version-check -r requirements.txt
 python3 verify.py ../../fixtures
 ```
 
 The commands expect a virtual environment, which the second and third lines
 create in `verifiers/python/.venv` and activate; outside one a system may
 provide `python3` and `pip3` only, with no `python` or `pip` on `PATH`.
+`--disable-pip-version-check` stops pip from looking up whether a newer
+release of pip exists; without it, pip writes a notice to standard error
+suggesting an upgrade of pip when there is one.
 
 Depends on:
 
-- Python 3.11 or later. As with the Go release, the Python release sets the
-  Unicode version of the case folding the duplicate-member check applies to a
-  non-ASCII member name: U+1C89 and U+1C8A are a duplicate under Python 3.14
-  (Unicode 16.0) and not under Python 3.12 (Unicode 15.0), which CI uses.
-  `python3 verify.py --help` prints the usage lines, and `--version` the
-  commit of the checkout the verifier runs from
+- Python 3.11 or later. The duplicate-member check folds a member name by
+  the same three fixed mappings as the Go verifier, so no Python release
+  changes which names it reports as a duplicate. The member-name check after
+  it reads the same objects and the same range as the Go verifier's, and
+  writes its reason. `python3 verify.py --help`
+  prints the usage lines, and `--version` the commit of the checkout the
+  verifier runs from
   ([which commit a run verified](#which-commit-a-run-verified)).
 - `cryptography >= 42.0.0`
 - `dilithium-py >= 1.1.0` (ML-DSA-65 per FIPS 204)
+
+## Benchmarks
+
+Each reference verifier carries a benchmark that times the verification of
+one credential: the strict parse of its `atx` member, the checks and every
+signature it declares. Both time the same fixtures, the baseline credential
+of ATX v1.0 and of v1.1, each signed with Ed25519 alone and with Ed25519
+plus ML-DSA-65: `baseline-valid`, `baseline-valid-hybrid`,
+`v1_1-baseline-valid` and `v1_1-baseline-valid-hybrid`. Each reads its
+fixture before its timing starts, so reading the file is not timed, and
+first requires the verifier to accept the credential. The Go benchmark,
+`BenchmarkVerify` in `verifiers/go/verifier/verify_bench_test.go`, times
+`verify`, which parses the credential from its JSON bytes; the Python
+benchmark, `verifiers/python/bench_verify.py`, times `verify_fixture` on
+the fixture `load_fixture` decoded.
+
+From the repository root, with Go and the
+[Python verifier's dependencies](#python-full-hybrid-ed25519-plus-ml-dsa-65)
+installed:
+
+```bash
+python3 scripts/bench_report.py
+```
+
+runs both, for about one second per fixture (`--benchtime <seconds>` sets
+another time), and prints one line per figure, in this form:
+
+```
+verifier=go benchmark=BenchmarkVerify/v1_1-baseline-valid-hybrid msPerOp=<ms> calls=<n> commit=<sha> uncommittedChanges=false cpu="<CPU model>" cores=<n> runtime=<Go release>
+```
+
+Each line gives the verifier, the benchmark's name, the mean time of one
+verification in milliseconds and the number of timed verifications it is
+taken over, the commit `git rev-parse HEAD` names in the checkout the
+script is in, whether a tracked file there differs from that commit, the
+CPU model the operating system reports, the number of logical CPUs and the
+Go or Python release the benchmark ran on. A value that holds a blank is
+written as a JSON string. No exit status depends on a figure: the script
+exits 0 when each benchmark exited 0 and wrote at least one figure, 1 when
+one did not (the other one's figures are still printed), and 2 on an
+argument it does not read.
+
+Each benchmark also runs on its own, from the repository root:
+
+```bash
+go test -run '^$' -bench '^BenchmarkVerify$' -cpu 1 ./verifiers/go/verifier
+python3 verifiers/python/bench_verify.py
+```

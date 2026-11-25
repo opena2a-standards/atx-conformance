@@ -5,13 +5,14 @@ Two passes.
 
 FORMAT. Each fixture and conformance.json names its file format in a `$schema`
 member. That name MUST be the `$id` of a schema this repository ships under
-schemas/*.schema.json (fixture-v1.schema.json, conformance-profile-v1.schema.json),
-and the whole document MUST validate against it. A schema's `$id` MUST be the
-address GitHub serves the file from on this repository's main branch,
-SERVED_FROM followed by the file's path, so following a `$schema` reaches the
-file that defines the format; a schema whose `$id` names any other address
-fails. A `$schema` no tracked file defines fails, as does any document that
-breaks its format.
+schemas/*.schema.json (fixture-v1.schema.json, conformance-profile-v1.schema.json;
+the glob also matches wall-v1.schema.json, the format of wall/verifiers.json,
+a file the format pass does not read), and the whole document MUST validate
+against it. A schema's `$id` MUST be the address GitHub serves the file from
+on this repository's main branch, SERVED_FROM followed by the file's path, so
+following a `$schema` reaches the file that defines the format; a schema
+whose `$id` names any other address fails. A `$schema` no tracked file
+defines fails, as does any document that breaks its format.
 
 CREDENTIAL. The atx-spec schema is the machine-readable model published by
 atx-spec (schemas/atx-credential-v1.1.schema.json), vendored under
@@ -28,7 +29,28 @@ Contract:
   validation on exactly the `declaredPurpose` member, and
 - the case-variant fixture (atx-conformance#16), which carries a decoy
   top-level member whose name folds to a real field, and MUST fail validation
-  on exactly one root `additionalProperties` error.
+  on exactly one root `additionalProperties` error, and
+- the scanSummary type fixture (atx-conformance#173), which carries
+  scanSummary.criticalFindings as a string by design and MUST fail validation
+  on exactly one `type` error, at that member, and
+- the two member-name fixtures (atx-conformance#284), which each carry a
+  top-level member named with a character outside printable ASCII beside the
+  member its name spells, and MUST fail validation on exactly one root
+  `additionalProperties` error naming that member, and
+- the four behavioralProfile fixtures (atx-conformance#277), which each carry
+  a behavioralProfile outside its form by design and MUST fail validation on
+  exactly the errors BEHAVIORAL_PROFILE_PINS lists for that fixture, and
+- the three scanSummary member fixtures (atx-conformance#277), which each
+  carry a scanSummary member under a name other than its six by design and
+  MUST fail validation on exactly the errors SCAN_SUMMARY_MEMBER_PINS lists
+  for that fixture, and
+- the five declaredPurpose number fixtures (atx-conformance#283), which each
+  carry a declaredPurpose of one member, n, holding a number, a member the
+  closed declaredPurpose schema does not define, and MUST fail validation on
+  exactly one `oneOf` error at declaredPurpose carrying the object
+  DECLARED_PURPOSE_NUMBERS lists for that fixture. The verifiers decide the
+  number's form and range, not the schema's members, so the one written as
+  signed is accepted.
 
 Any other schema error means fixture and schema have drifted apart.
 Exit 0 only if the whole contract holds.
@@ -80,6 +102,25 @@ PROFILE = ROOT / "conformance.json"
 SERVED_FROM = "https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/"
 FIXTURE_FORMAT = "schemas/fixture-v1.schema.json"
 PROFILE_FORMAT = "schemas/conformance-profile-v1.schema.json"
+# The member-name fixtures (atx-conformance#284) and the member each adds to
+# its credential: U+0130 followed by d beside id, and U+0131 followed by
+# ssuedAt beside issuedAt.
+NON_ASCII_MEMBERS = {
+    "v1_1-dotted-capital-i-member.json": chr(0x0130) + "d",
+    "v1_1-dotless-i-member.json": chr(0x0131) + "ssuedAt",
+}
+
+# The declaredPurpose number fixtures (atx-conformance#283) and the
+# declaredPurpose each carries, as json.loads reads it and the `oneOf` error
+# message writes it: 1000 as signed, 1000.0, 1e3 and 1E3 each read as 1000.0,
+# and 9007199254740993.
+DECLARED_PURPOSE_NUMBERS = {
+    "v1_1-declared-purpose-integer-signed.json": "{'n': 1000}",
+    "v1_1-declared-purpose-integer-respelled-fraction.json": "{'n': 1000.0}",
+    "v1_1-declared-purpose-integer-respelled-exponent.json": "{'n': 1000.0}",
+    "v1_1-declared-purpose-integer-respelled-upper-exponent.json": "{'n': 1000.0}",
+    "v1_1-declared-purpose-integer-outside-range.json": "{'n': 9007199254740993}",
+}
 
 # The members every v1 fixture carries, as the generator writes them. Listed
 # here rather than read from the schema, so a schema that stops requiring one
@@ -88,6 +129,55 @@ FIXTURE_MEMBERS = (
     "$schema", "name", "description", "requirement", "spec",
     "keypairRefs", "verifierState", "expected", "atx",
 )
+
+# The schema errors each behavioralProfile fixture (atx-conformance#277) MUST
+# fail on, and no others: (validator, absolute path, text the error message
+# carries). The text names the offending member or the type the schema wants,
+# so a fixture that loses its malformed member but gains another cannot pass.
+BEHAVIORAL_PROFILE_PINS = {
+    "v1_1-behavioral-profile-case-variant-member.json": (
+        ("additionalProperties", ("behavioralProfile",), "'OBSERVATIONDAYS'"),
+        ("required", ("behavioralProfile",), "'observationDays'"),
+    ),
+    "v1_1-behavioral-profile-extra-member.json": (
+        ("additionalProperties", ("behavioralProfile",), "'riskLevel'"),
+    ),
+    "v1_1-behavioral-profile-member-outside-type.json": (
+        ("type", ("behavioralProfile", "observationDays"), "'integer'"),
+    ),
+    "v1_1-behavioral-profile-not-object.json": (
+        ("type", ("behavioralProfile",), "'object'"),
+    ),
+}
+
+# The schema errors each scanSummary member fixture (atx-conformance#277) MUST
+# fail on, and no others, in the form of BEHAVIORAL_PROFILE_PINS. The text
+# names the offending member, so a fixture that loses its seventh or renamed
+# member but gains another cannot pass.
+SCAN_SUMMARY_MEMBER_PINS = {
+    "v1_1-scan-summary-case-variant-member.json": (
+        ("additionalProperties", ("scanSummary",), "'CriticalFindings'"),
+        ("required", ("scanSummary",), "'criticalFindings'"),
+    ),
+    "v1_1-scan-summary-extra-member.json": (
+        ("additionalProperties", ("scanSummary",), "'extra'"),
+    ),
+    "v1_1-scan-summary-extra-member-signed.json": (
+        ("additionalProperties", ("scanSummary",), "'extra'"),
+    ),
+}
+
+
+def only_pinned_errors(errors: list, pins: tuple) -> bool:
+    """Whether errors are exactly pins: one error per pin, matched on
+    validator and path, each message carrying its pinned text. Pins are
+    distinct on (validator, path), so sorting both sides pairs each error
+    with its pin."""
+    got = sorted((e.validator, tuple(e.absolute_path), e.message) for e in errors)
+    want = sorted(pins)
+    return len(got) == len(want) and all(
+        g[0] == w[0] and g[1] == w[1] and w[2] in g[2] for g, w in zip(got, want)
+    )
 
 
 def schema_problem(rel: pathlib.PurePath, schema: dict) -> str:
@@ -328,8 +418,12 @@ def _with_id(schema: dict, sid: str) -> dict:
 
 def _address_cases() -> list[tuple[bool, str, str]]:
     """(green, label, detail): each tracked format schema is identified by the
-    address its file is served from, and a copy identified by another address
-    is reported, the hosts that named the two formats before included."""
+    address its file is served from, and a copy of each identified by another
+    address is reported: for every tracked schema, a path under the served
+    prefix that no file has (its path with `.schema.json` read as `.json`),
+    and for the fixture and profile formats, the hosts that named them
+    before, and the profile format's address on a copy of the fixture
+    format."""
     tracked = {path.relative_to(ROOT).as_posix(): json.loads(path.read_text(encoding="utf-8"))
                for path in sorted(ROOT.glob(FORMAT_GLOB))}
     results = []
@@ -337,6 +431,16 @@ def _address_cases() -> list[tuple[bool, str, str]]:
         problem = schema_problem(pathlib.PurePosixPath(rel), schema)
         results.append((not problem, f"tracked {rel} is identified by the address it is served from",
                         problem))
+    # One copy of every tracked schema, so a schema added as
+    # schemas/<name>.schema.json has a case without one being written for it.
+    unserved = []
+    for rel in tracked:
+        path = rel.removesuffix(".schema.json") + ".json"
+        label = f"{rel} identified by a path under the served prefix that no file has"
+        if (ROOT / path).exists():
+            results.append((False, label, f"{path} is a file this repository has"))
+        else:
+            unserved.append((label, rel, SERVED_FROM + path))
     for label, rel, sid in (
             ("fixture format identified on atx.opena2a.org",
              FIXTURE_FORMAT, "https://atx.opena2a.org/schemas/fixture-v1.json"),
@@ -344,8 +448,7 @@ def _address_cases() -> list[tuple[bool, str, str]]:
              PROFILE_FORMAT, "https://specs.opena2a.org/schemas/conformance-profile-v1.json"),
             ("fixture format identified by the profile format's address",
              FIXTURE_FORMAT, SERVED_FROM + PROFILE_FORMAT),
-            ("fixture format identified by a path under the served prefix that no file has",
-             FIXTURE_FORMAT, SERVED_FROM + "schemas/fixture-v1.json")):
+            *unserved):
         if rel not in tracked:
             results.append((False, label, f"no tracked {rel} to alter"))
             continue
@@ -406,6 +509,14 @@ def check_credentials() -> int:
             "v1_1-declared-purpose-number-injected.json",
         )
         expect_case_variant_invalid = path.name == "v1_1-case-variant-member.json"
+        expect_scan_summary_invalid = path.name == "v1_1-scan-summary-member-outside-type.json"
+        # The member each member-name fixture adds: U+0130 followed by d, and
+        # U+0131 followed by ssuedAt.
+        added_member = NON_ASCII_MEMBERS.get(path.name)
+        expect_profile_errors = BEHAVIORAL_PROFILE_PINS.get(path.name)
+        expect_scan_member_errors = SCAN_SUMMARY_MEMBER_PINS.get(path.name)
+        # The declaredPurpose each number fixture carries, {'n': <number>}.
+        purpose_number = DECLARED_PURPOSE_NUMBERS.get(path.name)
         if expect_version_invalid:
             only_version_enum = len(errors) == 1 and list(errors[0].absolute_path) == ["atcVersion"]
             if only_version_enum:
@@ -454,6 +565,82 @@ def check_credentials() -> int:
                     print(f"      {err.json_path}: {err.message}")
                 if not errors:
                     print("      (validated cleanly - fixture no longer carries the case-variant decoy)")
+                failures += 1
+        elif expect_scan_summary_invalid:
+            # The string written over the signed integer count is the one
+            # schema error: a `type` error at scanSummary.criticalFindings.
+            only_count_type = (
+                len(errors) == 1
+                and errors[0].validator == "type"
+                and list(errors[0].absolute_path) == ["scanSummary", "criticalFindings"]
+            )
+            if only_count_type:
+                print(f"PASS  {path.name}: schema-invalid on exactly scanSummary.criticalFindings (type, as pinned)")
+            else:
+                print(f"FAIL  {path.name}: expected exactly one type error at scanSummary.criticalFindings, got:")
+                for err in errors or []:
+                    print(f"      {err.json_path}: {err.message}")
+                if not errors:
+                    print("      (validated cleanly - fixture no longer carries a string count)")
+                failures += 1
+        elif added_member is not None:
+            # The added member is no credential member: exactly one error, at
+            # the root, from additionalProperties, and it names that member.
+            only_added = (
+                len(errors) == 1
+                and errors[0].validator == "additionalProperties"
+                and list(errors[0].absolute_path) == []
+                and repr(added_member) in errors[0].message
+            )
+            if only_added:
+                print(f"PASS  {path.name}: schema-invalid on exactly the added member at root (additionalProperties, as pinned)")
+            else:
+                print(f"FAIL  {path.name}: expected exactly one root additionalProperties error naming {added_member!r}, got:")
+                for err in errors or []:
+                    print(f"      {err.json_path}: {err.message}")
+                if not errors:
+                    print("      (validated cleanly - fixture no longer carries the added member)")
+                failures += 1
+        elif expect_profile_errors is not None:
+            if only_pinned_errors(errors, expect_profile_errors):
+                kinds = ", ".join(w[0] for w in sorted(expect_profile_errors))
+                print(f"PASS  {path.name}: schema-invalid on exactly behavioralProfile ({kinds}, as pinned)")
+            else:
+                print(f"FAIL  {path.name}: expected exactly the pinned behavioralProfile errors, got:")
+                for err in errors or []:
+                    print(f"      {err.json_path}: {err.message}")
+                if not errors:
+                    print("      (validated cleanly - fixture no longer carries a malformed behavioralProfile)")
+                failures += 1
+        elif expect_scan_member_errors is not None:
+            if only_pinned_errors(errors, expect_scan_member_errors):
+                kinds = ", ".join(w[0] for w in sorted(expect_scan_member_errors))
+                print(f"PASS  {path.name}: schema-invalid on exactly scanSummary ({kinds}, as pinned)")
+            else:
+                print(f"FAIL  {path.name}: expected exactly the pinned scanSummary errors, got:")
+                for err in errors or []:
+                    print(f"      {err.json_path}: {err.message}")
+                if not errors:
+                    print("      (validated cleanly - fixture no longer carries a scanSummary member outside its six)")
+                failures += 1
+        elif purpose_number is not None:
+            # The closed declaredPurpose schema defines no member n: exactly
+            # one error, at declaredPurpose, from oneOf, and its message
+            # carries the declaredPurpose the fixture writes.
+            only_purpose_number = (
+                len(errors) == 1
+                and errors[0].validator == "oneOf"
+                and list(errors[0].absolute_path) == ["declaredPurpose"]
+                and errors[0].message.startswith(purpose_number + " ")
+            )
+            if only_purpose_number:
+                print(f"PASS  {path.name}: schema-invalid on exactly declaredPurpose (oneOf, as pinned)")
+            else:
+                print(f"FAIL  {path.name}: expected exactly one oneOf error at declaredPurpose carrying {purpose_number}, got:")
+                for err in errors or []:
+                    print(f"      {err.json_path}: {err.message}")
+                if not errors:
+                    print("      (validated cleanly - fixture no longer carries a declaredPurpose number)")
                 failures += 1
         elif errors:
             print(f"FAIL  {path.name}:")

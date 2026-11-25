@@ -12,10 +12,25 @@
 # checkout carries the tag of that same version.
 #
 # The image (docs/demo/docker/Dockerfile) carries VHS 0.12.0 with its encode regression patched,
-# ttyd, ffmpeg, Chromium, JetBrains Mono, gifsicle, python3 and a Go toolchain. The container's
-# hostname is `laptop` and its home directory /work/demo-user starts empty, so the Go module and
-# build caches start empty too. Only docs/demo is mounted into it, and it receives no variable of
-# the calling environment other than the ones this script names. In the container the script:
+# ttyd, ffmpeg, Chromium, JetBrains Mono, gifsicle, python3 and a Go toolchain. It is built from two
+# images named by the digest of their image index and from the VHS source at one commit; the script
+# reads those pins from the Dockerfile, refuses one that names an image by tag alone or the source
+# by no commit, and the sidecar's `recorder` records them as the Dockerfile writes them. The
+# container's hostname is `laptop` and its home directory /work/demo-user starts empty, so the Go
+# module and build caches start empty too. It runs with --cap-drop ALL, --security-opt
+# no-new-privileges and a --pids-limit derived from the docker host's CPU count (PIDS_BASE below),
+# and with the network: the tape's command resolves the module through the Go module proxy, so a
+# render with no network would record another command, and the sidecar lists --network none as
+# dropped, with that reason. docs/demo is mounted into it read-only, at /work/input/docs/demo. The
+# container runs as root, and root with no capabilities gets the ordinary permission checks, so the
+# render writes into /work/docs/demo in the container's own file system, where root owns /work, and
+# into no bind mount: a rootful Linux Docker Engine without user-namespace remapping keeps a bind
+# mount's host owner and mode, and root without CAP_DAC_OVERRIDE cannot write into a directory the
+# caller owns with mode 0700, as `mktemp -d` makes it. The script makes the container with docker
+# create and runs it with docker start --attach; once it stops, docker cp copies /work/docs/demo
+# into a new empty directory, the copies made as the caller's files, and the script removes the
+# container when it ends. It receives no variable of the calling environment other than the ones
+# this script names. In the container the script:
 #   1. asks the module proxy which version @latest names (`go list -m -json`);
 #   2. renders the tape: atx-verify.gif, out/atx-verify.mp4 and one PNG per step;
 #   3. runs the typed commands once more with NO_COLOR=1 TERM=dumb COLUMNS=110 into
@@ -29,16 +44,27 @@
 #   7. writes the version into atx-verify.narration.json and writes atx-verify.json (schema
 #      demo-sidecar/2).
 # A render whose first command does not exit 0 with a `summary:` line last, or that breaks the pace
-# rule, writes no sidecar and exits 3. The MP4 goes to docs/demo/out/, which is not committed.
+# rule, writes no sidecar and exits 3. After a render that wrote the sidecar, this script copies the
+# files the tape names, the capture, the narration (when its version changed) and the sidecar from
+# the directory docker cp filled into docs/demo, the sidecar last; it copies nothing when that
+# directory holds a link or one of those is not a regular file. The outputs, the capture and the
+# sidecar of an earlier render are removed from docs/demo before the container starts, so a render
+# that stops part way leaves none of them there and copies nothing; the script then names the
+# directory that holds what the render wrote. The MP4 goes to docs/demo/out/, which is not committed.
 #
-# docker build and docker run use a configuration directory of this script's own, removed when the
-# script ends, which names no credential helper and holds no registry credentials; the base images
-# are public. The caller's configuration can name a helper that reads the OS keychain. The endpoint
-# of the docker context in use is carried over as DOCKER_HOST, and the caller's plugin directory and
-# Docker Desktop's (when present) as cliPluginsExtraDirs, so buildx is still found.
+# docker info, build, image inspect, create, start, cp and rm use a configuration directory of this
+# script's own, removed when the script ends, which names no credential helper and holds no
+# registry credentials; the base images are public and are pulled by digest. The caller's
+# configuration can name a helper that reads the OS keychain. The endpoint of the docker context in
+# use is carried over as DOCKER_HOST, and the caller's plugin directory and Docker Desktop's (when
+# present) as cliPluginsExtraDirs, so buildx is still found.
 #
-# --dry-run prints the image, its base images, the tape, the checkout and the files a render writes,
-# then exits 0. It runs git and no docker command, and writes no file.
+# --dry-run prints the image, its base images, the VHS source, the container's flags (the pids limit
+# as the rule a render derives it by), the tape, the checkout and the files a render writes, then
+# exits 0. It runs git and no docker command, and writes no file. Like a render, it exits 1 when the
+# Dockerfile names a base image by tag alone or the VHS source by no commit, references an image
+# other than its two base images, or holds a part the script does not read (read_images lists what
+# it reads).
 #
 # Nothing metered is called: VHS, Go, the Go module proxy and the checksum database are free to use.
 set -euo pipefail
@@ -54,6 +80,10 @@ import hashlib, json, math, os, re, socket, subprocess, sys, time
 
 NAME, MODULE, FRONT_DOOR = sys.argv[1:4]
 os.chdir('/work')
+# The paths are the checkout's. What the render writes goes to /work/docs/demo, a new directory in the
+# container's own file system that the host side copies out with docker cp and then into docs/demo;
+# the checkout's docs/demo is mounted read-only at /work/input/docs/demo, and mounted() names an
+# input's copy there.
 DEMO = 'docs/demo'
 TAPE = f'{DEMO}/{NAME}.tape'
 NARRATION = f'{DEMO}/{NAME}.narration.json'
@@ -62,6 +92,15 @@ SIDECAR = f'{DEMO}/{NAME}.json'
 PATCH = f'{DEMO}/docker/vhs-0.12.0-render-context.patch'
 RECORD = f'{DEMO}/record-{NAME}.sh'
 TITLES = {'s1': "Run the README's first command", 's2': 'Print the exit code'}
+# The container's limits. Each one either ran, as the host side passes it in RUN_FLAGS, or is written
+# here with the reason the render goes without it; a limit that is neither stops the render. The host
+# side derives the number --pids-limit takes from the docker host's CPU count (PIDS_BASE there), so
+# that limit ran when RUN_FLAGS gives it a number.
+LIMITS = ('--network none', '--cap-drop ALL', '--security-opt no-new-privileges', '--pids-limit')
+DROPPED = [{'flag': '--network none',
+            'reason': f"the tape types the README's first command, `go run {MODULE}/cmd/{NAME}@latest`, which "
+                      'resolves the module through the Go module proxy that environment.goproxy names; with no '
+                      'network the recording would show another command'}]
 # The pace rule as numbers. P1 typing speed and typed line length, P2 the hold before Enter, P3 the
 # hold on output (sized from the rows on screen and the narration at 150 words a minute), P4 no
 # scrolling or cut inside output, P5 no blinking cursor, P6 length, P7 framing, P8 formats and size.
@@ -87,6 +126,16 @@ def run(*args, cwd=None):
 def sha256(path):
     with open(path, 'rb') as f:
         return hashlib.sha256(f.read()).hexdigest()
+
+
+def mounted(path):
+    return f'/work/input/{path}'
+
+
+def pinned(variable):
+    """An image the Dockerfile names by the digest of its index, as its reference and that digest."""
+    ref, _, digest = os.environ.get(variable, '').partition('@')
+    return {'ref': ref or None, 'digest': digest or None}
 
 
 def tidy(x):
@@ -229,20 +278,30 @@ def measure(tape):
 
 if socket.gethostname() != 'laptop':
     fail(f'the hostname is {socket.gethostname()}, not laptop; not recording.')
-with open(TAPE, encoding='utf-8') as f:
+with open(mounted(TAPE), encoding='utf-8') as f:
     tape = parse_tape(f.read())
 if not any(f'cd {FRONT_DOOR}' in text for text, _n in tape['hidden']):
     fail(f'the hidden set-up of {TAPE} does not enter {FRONT_DOOR}; not recording.')
 steps, enters, problems = measure(tape)
 problems = tape['problems'] + problems
 commands = [step['command'] for step in steps]
-with open(NARRATION, encoding='utf-8') as f:
+with open(mounted(NARRATION), encoding='utf-8') as f:
     narration = json.load(f)
+# The limits the container runs with, as the host side ran them, and the ones it goes without.
+ran_flags = re.findall(r'--\S+(?: (?!--)\S+)?', os.environ.get('RUN_FLAGS', ''))
 
-# A render that stops part way leaves no output and no sidecar from an earlier one.
-for path in [SIDECAR, CAPTURE, *tape['outputs'], *tape['screenshots']]:
-    if os.path.lexists(path):
-        os.remove(path)
+
+def ran(limit):
+    if limit == '--pids-limit':
+        return any(re.fullmatch(r'--pids-limit [1-9][0-9]*', flag) for flag in ran_flags)
+    return limit in ran_flags
+
+
+dropped = [d for d in DROPPED if d['flag'] not in ran_flags]
+unaccounted = [flag for flag in LIMITS if not ran(flag) and flag not in [d['flag'] for d in dropped]]
+if unaccounted:
+    fail(f'the container runs without {", ".join(unaccounted)}, and {RECORD} gives no reason for it in DROPPED; '
+         'not recording.')
 os.makedirs(f'{DEMO}/out', exist_ok=True)
 os.makedirs(os.environ['HOME'], exist_ok=True)
 
@@ -250,7 +309,7 @@ latest = json.loads(run('go', 'list', '-m', '-json', f'{MODULE}@latest'))
 version = latest['Version']
 ran_at = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
 started = time.monotonic()
-if subprocess.run(['vhs', TAPE], stdin=subprocess.DEVNULL).returncode != 0:
+if subprocess.run(['vhs', mounted(TAPE)], stdin=subprocess.DEVNULL).returncode != 0:
     fail(f'vhs {TAPE} failed; no sidecar was written.')
 wall_clock = round(time.monotonic() - started, 1)
 for path in tape['outputs'] + tape['screenshots']:
@@ -282,7 +341,7 @@ if not exit_codes or exit_codes[0] != 0 or not last or not last[0].startswith('s
     first = commands[0] if commands else '(no command)'
     printed_last = repr(last[0]) if last else 'nothing'
     fail(f'`{first}` exited {exit_codes[0] if exit_codes else "-"} and printed {printed_last} last, not a summary '
-         f'line after exit 0; no sidecar was written (see {CAPTURE}).', 3)
+         f'line after exit 0; no sidecar was written (see {NAME}-capture.txt in the directory named below).', 3)
 
 # One module version served the hidden set-up, the recording and the capture, and it is the version
 # `go list` named before the render and `atx-verify --version` names after it.
@@ -427,9 +486,15 @@ sidecar = {
     'commit': commit,
     'prerelease': version not in head_tags,
     'script': TAPE,
-    'scriptSha256': sha256(TAPE),
+    'scriptSha256': sha256(mounted(TAPE)),
     'recorder': {'name': 'vhs', 'version': run('vhs', '--version').split()[-1], 'container': f'{DEMO}/docker/Dockerfile',
-                 'patch': PATCH, 'image': os.environ.get('IMAGE'), 'imageId': os.environ.get('IMAGE_ID')},
+                 'patch': PATCH, 'image': os.environ.get('IMAGE'), 'imageId': os.environ.get('IMAGE_ID'),
+                 'baseImage': dict(pinned('BASE_IMAGE'), version=os.environ.get('BASE_VERSION') or None,
+                                   revision=os.environ.get('BASE_REVISION') or None),
+                 'builderImage': dict(pinned('BUILDER_IMAGE'), go=run('go', 'env', 'GOVERSION')),
+                 'source': {'repository': os.environ.get('SOURCE_REPOSITORY') or None,
+                            'tag': os.environ.get('SOURCE_TAG') or None, 'commit': os.environ.get('SOURCE_COMMIT') or None},
+                 'runFlags': ran_flags, 'droppedFlags': dropped},
     'commands': commands,
     'steps': [{'id': s['id'], 'title': TITLES.get(s['id'], s['id']), 'anchorFrame': s['anchorFrame'],
                'holdSeconds': tidy(s['holdSeconds']), 'minHoldSeconds': tidy(s['minHoldSeconds']),
@@ -461,7 +526,7 @@ sidecar = {
                'origin': origin or None, 'sum': module_sum, 'versionLine': version_line},
     'fixtureShaOf': f'MANIFEST.sha256 of {MODULE}@{version}, from the Go module proxy',
     'recordScript': RECORD,
-    'recordScriptSha256': sha256(RECORD),
+    'recordScriptSha256': sha256(mounted(RECORD)),
     'fixturePath': FRONT_DOOR,
     'homePath': os.environ['HOME'],
     'hostname': socket.gethostname(),
@@ -470,7 +535,7 @@ sidecar = {
     'framerate': int(setting('Framerate')),
     'gifsicle': '-O3 --lossy=40 --batch',
     'wallClockSeconds': wall_clock,
-    'vhsPatchSha256': sha256(PATCH),
+    'vhsPatchSha256': sha256(mounted(PATCH)),
     'edits': ['set-up not shown: the hidden set-up enters an empty directory and runs the command once, so the module is downloaded and built before the first frame'],
     'environment': {'os': os_name, 'go': run('go', 'version'), 'goproxy': run('go', 'env', 'GOPROXY'),
                     'gosumdb': run('go', 'env', 'GOSUMDB'), 'gotoolchain': run('go', 'env', 'GOTOOLCHAIN')},
@@ -500,9 +565,177 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 DOCKER="${DOCKER:-docker}"
 DOCKER_DIR="$REPO_ROOT/docs/demo/docker"
 PATCH_FILE="vhs-0.12.0-render-context.patch"
+# The container's limits (see the header). The sidecar records them as they ran, and --network none,
+# which the render goes without, with its reason. A render adds --pids-limit once it has the docker
+# host's CPU count.
+RUN_FLAGS=(--cap-drop ALL --security-opt no-new-privileges)
+# The pids limit. The pids cgroup counts threads as well as processes, and the render's peak grows
+# with the CPU count: read from the render container's pids.peak on Docker Desktop (linux/arm64), it
+# was 254 tasks with 16 CPUs, and 211 with the render held to 8 of them by --cpuset-cpus 0-7; it came
+# after the recording, while VHS encoded the GIF and the MP4 with Chromium still running.
+# --pids-limit is PIDS_BASE plus PIDS_PER_CPU for each CPU `docker info` counts on the docker host:
+# 768 with 8 CPUs and 1024 with 16, and 32 more for each CPU past that, where the peak grew by 43
+# from 8 CPUs to 16. A render stops before the build when `docker info` exits non-zero or prints no
+# CPU count.
+PIDS_BASE=512
+PIDS_PER_CPU=32
 
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d" " -f1; else shasum -a 256 | cut -d" " -f1; fi
+}
+
+# Ends the script on a part of the Dockerfile it does not read: $1 is its line, $2 says what it is.
+refuse() {
+  echo "record-$NAME.sh: docs/demo/docker/Dockerfile:$1: $2; not recording." >&2
+  exit 1
+}
+
+lower() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+# The images the build uses, read from the Dockerfile ($1) into BUILDER_IMAGE and BASE_IMAGE. The
+# sidecar records two images, so the script refuses a Dockerfile that references another, and
+# refuses a part of the Dockerfile it does not read instead of skipping it. It reads the Dockerfile
+# one instruction at a time: a line that ends in a backslash continues on the next one, and comment
+# lines and blank lines inside an instruction are skipped. It lower-cases an instruction's keyword, a
+# flag name and a from= key before reading them.
+#   FROM      read in two forms, each once, with one space between words: `FROM <image> AS vhsbuild`,
+#             the build stage, and `FROM <image>`, the render stage. A FROM line in another form is
+#             refused, with or without --platform.
+#   COPY      the value of --from must be vhsbuild.
+#   RUN       the value of a from= key of --mount must be vhsbuild.
+#             A flag of COPY or RUN written with a quote or a backslash is refused.
+#   ONBUILD   refused, and so is a word that is not a Dockerfile instruction.
+# Also refused: a heredoc (<<); a byte other than printable ASCII or a tab outside a comment; a NUL
+# byte; and, above the first instruction, a comment in the form of a parser directive (# name=value):
+# `# syntax=` names an image of its own and `# escape=` changes how lines continue.
+read_images() {
+  # The C locale makes the character classes below match bytes; in a UTF-8 locale, [[:print:]] also
+  # matches a character of more than one byte.
+  local LC_ALL=C
+  local n=0 start=0 text="" raw started=0 continued=0
+  local comment='^[[:blank:]]*#' blank='^[[:blank:]]*$' other='[^[:print:][:blank:]]'
+  local directive='^[[:space:]]*#[[:space:]]*[A-Za-z][A-Za-z0-9]*[[:space:]]*='
+  local continues='(^|[^\\])\\[[:blank:]]*$'
+  BUILDER_IMAGE="" BASE_IMAGE=""
+  if IFS= read -r -d '' raw < "$1"; then
+    echo "record-$NAME.sh: docs/demo/docker/Dockerfile holds a NUL byte, which the script does not read; not recording." >&2
+    exit 1
+  fi
+  while IFS= read -r raw || [ -n "$raw" ]; do
+    n=$((n + 1))
+    if [[ $raw =~ $comment ]]; then
+      if [ "$started" = 0 ] && [[ $raw =~ $directive ]]; then
+        refuse "$n" "a comment above the first instruction in the form of a parser directive (# name=value), which the script does not read"
+      fi
+      continue
+    fi
+    if [[ $raw =~ $other ]]; then
+      refuse "$n" "a character other than printable ASCII or a tab outside a comment, which the script does not read"
+    fi
+    if [[ $raw =~ $blank ]]; then
+      continue
+    fi
+    if [ "$continued" = 0 ]; then
+      start=$n text=""
+    fi
+    started=1
+    text="$text$raw"
+    if [[ $text =~ $continues ]]; then
+      text="${text%\\*}"
+      continued=1
+    else
+      continued=0
+      read_instruction "$start" "$text"
+    fi
+  done < "$1"
+  if [ "$continued" = 1 ]; then
+    read_instruction "$start" "$text"
+  fi
+}
+
+# One instruction of the Dockerfile ($2), which starts at line $1; see read_images.
+read_instruction() {
+  local line="$1" text="${2#"${2%%[![:blank:]]*}"}" keyword kind word name value field
+  local build_stage='^FROM ([^[:blank:]]+) AS vhsbuild$' render_stage='^FROM ([^[:blank:]]+)$'
+  local -a words fields
+  [ -n "$text" ] || return 0
+  keyword="${text%%[[:blank:]]*}"
+  kind="$(lower "$keyword")"
+  if [[ $text == *'<<'* ]]; then
+    refuse "$line" "$keyword carries <<, the form of a heredoc, which the script does not read"
+  fi
+  case "$kind" in
+    from)
+      if [[ $text =~ $build_stage ]]; then
+        [ -z "$BUILDER_IMAGE" ] || refuse "$line" "a second FROM line of the build stage (AS vhsbuild); the script reads one"
+        BUILDER_IMAGE="${BASH_REMATCH[1]}"
+      elif [[ $text =~ $render_stage ]]; then
+        [ -z "$BASE_IMAGE" ] || refuse "$line" "a second FROM line with no stage name; the script reads one, the render stage"
+        BASE_IMAGE="${BASH_REMATCH[1]}"
+      else
+        refuse "$line" "\`$text\` is a FROM line the script does not read. It reads two, \`FROM <image> AS vhsbuild\` and \`FROM <image>\`, and the sidecar records the image of no other"
+      fi
+      ;;
+    copy | run)
+      # The flags are the words after the keyword that start with --, up to the first that does not
+      # or a word that is -- alone.
+      read -r -a words <<< "${text#"$keyword"}"
+      for word in ${words[@]+"${words[@]}"}; do
+        case "$word" in
+          --) break ;;
+          --*) ;;
+          *) break ;;
+        esac
+        case "$word" in
+          *[\"\'\\]*) refuse "$line" "$keyword flag $word is written with a quote or a backslash, which the script does not read" ;;
+        esac
+        name="$(lower "${word%%=*}")"
+        value=""
+        if [[ $word == *=* ]]; then value="${word#*=}"; fi
+        if [ "$kind" = copy ] && [ "$name" = --from ] && [ "$value" != vhsbuild ]; then
+          refuse "$line" "\`$keyword $word\`: the script reads a --from of COPY only when it is vhsbuild, the build stage, and the sidecar records no other image"
+        fi
+        if [ "$kind" = run ] && [ "$name" = --mount ]; then
+          IFS=, read -r -a fields <<< "$value"
+          for field in ${fields[@]+"${fields[@]}"}; do
+            if [ "$(lower "${field%%=*}")" = from ] && [ "${field#*=}" != vhsbuild ]; then
+              refuse "$line" "\`$keyword $word\`: the script reads a from= key of RUN --mount only when it is vhsbuild, the build stage, and the sidecar records no other image"
+            fi
+          done
+        fi
+      done
+      ;;
+    onbuild) refuse "$line" "$keyword, which the script does not read" ;;
+    add | arg | cmd | entrypoint | env | expose | healthcheck | label | maintainer | shell | stopsignal | user | volume | workdir) ;;
+    *) refuse "$line" "$keyword is not an instruction the script reads" ;;
+  esac
+}
+
+# The pins of the render image as the Dockerfile writes them: the builder and the base image by the
+# digest of their image index, and the repository, tag and commit of the VHS source. The sidecar
+# records these strings, so a sidecar names the pins of the Dockerfile at the commit it ran from.
+read_pins() {
+  local by_digest='^[^@[:space:]]+@sha256:[0-9a-f]{64}$' by_commit='^[0-9a-f]{40}$' ref
+  read_images "$1"
+  SOURCE_REPOSITORY="$(sed -n -E 's/^ARG VHS_REPOSITORY=(.+)$/\1/p' "$1")"
+  SOURCE_TAG="$(sed -n -E 's/^ARG VHS_TAG=(.+)$/\1/p' "$1")"
+  SOURCE_COMMIT="$(sed -n -E 's/^ARG VHS_COMMIT=(.+)$/\1/p' "$1")"
+  for ref in "$BUILDER_IMAGE" "$BASE_IMAGE"; do
+    if [ -z "$ref" ]; then
+      echo "record-$NAME.sh: docs/demo/docker/Dockerfile has no FROM line for the build stage (AS vhsbuild) or for the render stage; not recording." >&2
+      exit 1
+    fi
+    if ! [[ $ref =~ $by_digest ]]; then
+      echo "record-$NAME.sh: docs/demo/docker/Dockerfile names $ref in a FROM line, not an image by the digest of its index. \`docker buildx imagetools inspect ${ref%%@*}\` prints that digest; write the line as FROM ${ref%%@*}@sha256:<digest> and run again." >&2
+      exit 1
+    fi
+  done
+  if ! [[ $SOURCE_COMMIT =~ $by_commit ]] || [ -z "$SOURCE_REPOSITORY" ] || [ -z "$SOURCE_TAG" ]; then
+    echo "record-$NAME.sh: docs/demo/docker/Dockerfile does not name the VHS source by ARG VHS_REPOSITORY, VHS_TAG and VHS_COMMIT, a commit of 40 hex digits. \`git ls-remote --tags ${SOURCE_REPOSITORY:-<repository>} ${SOURCE_TAG:-<tag>}\` prints the tag's commit, on its ^{} line when the tag is annotated; write the three lines and run again." >&2
+    exit 1
+  fi
 }
 
 # The image is named after the recipe it is built from, so an edit to the Dockerfile or the patch
@@ -512,11 +745,14 @@ HEAD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
 HEAD_TAGS="$(git -C "$REPO_ROOT" tag --points-at HEAD | paste -s -d " " -)"
 
 if [ "$DRY_RUN" = 1 ]; then
+  read_pins "$DOCKER_DIR/Dockerfile"
   echo "record-$NAME.sh --dry-run: runs git and no docker command; no file is written."
   echo "  image     $IMAGE, built with $DOCKER from docs/demo/docker/Dockerfile"
-  echo "  bases     $(sed -n -E 's/^FROM ([^ ]+).*/\1/p' "$DOCKER_DIR/Dockerfile" | paste -s -d " " -)"
+  echo "  bases     $BUILDER_IMAGE $BASE_IMAGE"
+  echo "  source    $SOURCE_REPOSITORY $SOURCE_TAG, commit $SOURCE_COMMIT"
   echo "  tape      $TAPE"
   echo "  runs      go run $MODULE/cmd/$NAME@latest, the version the Go module proxy names when it runs"
+  echo "  container ${RUN_FLAGS[*]} --pids-limit $PIDS_BASE plus $PIDS_PER_CPU for each CPU of the docker host, with the network; docs/demo mounted read-only; the render's files copied out of the container with docker cp, then into docs/demo"
   echo "  checkout  $HEAD_SHA${HEAD_TAGS:+, tags $HEAD_TAGS}"
   echo "  writes    $(sed -n -E 's/^(Output|Screenshot) (.*)$/\2/p' "$REPO_ROOT/$TAPE" | paste -s -d " " -) docs/demo/$NAME-capture.txt docs/demo/$NAME.json, and the version in docs/demo/$NAME.narration.json"
   echo "  docker    a configuration of the script's own, with no credential helper and no registry credentials"
@@ -525,9 +761,33 @@ fi
 
 CONTEXT="$(mktemp -d)"
 OWN_DOCKER_CONFIG="$(mktemp -d)"
-cleanup() { rm -rf "$CONTEXT" "$OWN_DOCKER_CONFIG"; }
+RENDER_DIR="$(mktemp -d)"
+KEEP_RENDER_DIR=0
+CONTAINER=""
+cleanup() {
+  if [ -n "$CONTAINER" ]; then
+    "$DOCKER" rm --force "$CONTAINER" >/dev/null \
+      || echo "record-$NAME.sh: $DOCKER rm --force $CONTAINER failed; remove that container by hand." >&2
+  fi
+  rm -rf "$CONTEXT" "$OWN_DOCKER_CONFIG"
+  if [ "$KEEP_RENDER_DIR" = 0 ]; then rm -rf "$RENDER_DIR"; fi
+}
 trap cleanup EXIT
 cp "$DOCKER_DIR/Dockerfile" "$DOCKER_DIR/$PATCH_FILE" "$CONTEXT/"
+read_pins "$CONTEXT/Dockerfile"
+
+# The files a render writes into docs/demo, by their paths in the checkout: the tape's Output and
+# Screenshot files, each of which must lie under docs/demo, and the capture.
+WRITES=()
+under_demo='^docs/demo/([A-Za-z0-9_-][A-Za-z0-9._-]*/)*[A-Za-z0-9_-][A-Za-z0-9._-]*$'
+while IFS= read -r path; do
+  if ! [[ $path =~ $under_demo ]]; then
+    echo "record-$NAME.sh: $TAPE names $path as an output, which is not a file under docs/demo; not recording." >&2
+    exit 1
+  fi
+  WRITES+=("$path")
+done < <(sed -n -E 's/^(Output|Screenshot) (.*)$/\2/p' "$REPO_ROOT/$TAPE")
+WRITES+=("docs/demo/$NAME-capture.txt")
 
 # The docker configuration of this script's own (see the header). The endpoint and the plugin
 # directories are read with the caller's configuration, before it is replaced.
@@ -549,20 +809,74 @@ printf '{\n  "cliPluginsExtraDirs": [%s]\n}\n' "$PLUGIN_DIRS" > "$OWN_DOCKER_CON
 export DOCKER_HOST
 export DOCKER_CONFIG="$OWN_DOCKER_CONFIG"
 
+# The docker host's CPU count, which the pids limit is derived from (see PIDS_BASE).
+CPUS="$("$DOCKER" info --format '{{.NCPU}}')" && INFO_STATUS=0 || INFO_STATUS=$?
+if [ "$INFO_STATUS" != 0 ] || ! [[ $CPUS =~ ^[1-9][0-9]{0,5}$ ]]; then
+  echo "record-$NAME.sh: \`$DOCKER info --format '{{.NCPU}}'\` exited $INFO_STATUS and printed '$CPUS', not the docker host's CPU count, which the pids limit is derived from; not recording." >&2
+  exit 1
+fi
+RUN_FLAGS+=(--pids-limit "$((PIDS_BASE + PIDS_PER_CPU * CPUS))")
+
 "$DOCKER" build -t "$IMAGE" "$CONTEXT"
 IMAGE_ID="$("$DOCKER" image inspect --format '{{.Id}}' "$IMAGE")"
-"$DOCKER" run --rm --pull never --hostname laptop --shm-size=1g \
+# The base image's version and revision labels, which the image built on it carries unchanged.
+BASE_VERSION="$("$DOCKER" image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$IMAGE")"
+BASE_REVISION="$("$DOCKER" image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE")"
+
+# A render that stops part way leaves no output and no sidecar from an earlier one in docs/demo.
+rm -f "$REPO_ROOT/docs/demo/$NAME.json"
+for path in "${WRITES[@]}"; do rm -f "$REPO_ROOT/$path"; done
+
+# The render writes into /work/docs/demo in the container's own file system, where root owns /work,
+# and into no bind mount (see the header). Once the container stops, docker cp copies that directory
+# into RENDER_DIR, the copies made as the caller's files; cleanup removes the container.
+CONTAINER="$("$DOCKER" create --pull never --hostname laptop --shm-size=1g "${RUN_FLAGS[@]}" \
   -e HOME=/work/demo-user \
   -e HEAD_TAGS="$HEAD_TAGS" \
   -e IMAGE="$IMAGE" \
   -e IMAGE_ID="$IMAGE_ID" \
-  -v "$REPO_ROOT/docs/demo":/work/docs/demo \
-  --entrypoint bash "$IMAGE" "docs/demo/record-$NAME.sh" --in-container
+  -e BASE_IMAGE="$BASE_IMAGE" \
+  -e BASE_VERSION="$BASE_VERSION" \
+  -e BASE_REVISION="$BASE_REVISION" \
+  -e BUILDER_IMAGE="$BUILDER_IMAGE" \
+  -e SOURCE_REPOSITORY="$SOURCE_REPOSITORY" \
+  -e SOURCE_TAG="$SOURCE_TAG" \
+  -e SOURCE_COMMIT="$SOURCE_COMMIT" \
+  -e RUN_FLAGS="${RUN_FLAGS[*]}" \
+  -v "$REPO_ROOT/docs/demo":/work/input/docs/demo:ro \
+  --entrypoint bash "$IMAGE" "/work/input/docs/demo/record-$NAME.sh" --in-container)"
+STATUS=0
+"$DOCKER" start --attach "$CONTAINER" || STATUS=$?
+COPY_STATUS=0
+"$DOCKER" cp "$CONTAINER:/work/docs/demo/." "$RENDER_DIR" || COPY_STATUS=$?
 
-# The line a release record or a task log keeps: which sidecar this render wrote, by its hash.
-SIDECAR="$REPO_ROOT/docs/demo/$NAME.json"
-if [ ! -f "$SIDECAR" ]; then
-  echo "record-$NAME.sh: the render wrote no docs/demo/$NAME.json." >&2
+# The render's files reach docs/demo only after it wrote the sidecar, and only as regular files from
+# a directory that holds no link, so a render places nothing there but its own files. The sidecar is
+# copied last.
+stop() {
+  KEEP_RENDER_DIR=1
+  echo "record-$NAME.sh: $2; nothing was copied into docs/demo, and what the render wrote is in $RENDER_DIR." >&2
+  exit "$1"
+}
+[ "$STATUS" = 0 ] || stop "$STATUS" "the render exited $STATUS"
+if [ "$COPY_STATUS" != 0 ]; then
+  KEEP_RENDER_DIR=1
+  echo "record-$NAME.sh: $DOCKER cp exited $COPY_STATUS; nothing was copied into docs/demo, and what it copied of the render's files is in $RENDER_DIR." >&2
   exit 1
 fi
-echo "sidecar: docs/demo/$NAME.json sha256 $(sha256_of < "$SIDECAR")"
+COPIES=("${WRITES[@]}")
+if [ -e "$RENDER_DIR/$NAME.narration.json" ] || [ -L "$RENDER_DIR/$NAME.narration.json" ]; then
+  COPIES+=("docs/demo/$NAME.narration.json")
+fi
+COPIES+=("docs/demo/$NAME.json")
+[ -z "$(find "$RENDER_DIR" -type l | head -n 1)" ] || stop 1 "the render's directory holds a link"
+for path in "${COPIES[@]}"; do
+  [ -f "$RENDER_DIR/${path#docs/demo/}" ] || stop 1 "the render wrote no file $path"
+done
+for path in "${COPIES[@]}"; do
+  mkdir -p "$(dirname "$REPO_ROOT/$path")"
+  cp "$RENDER_DIR/${path#docs/demo/}" "$REPO_ROOT/$path"
+done
+
+# The line a release record or a task log keeps: which sidecar this render wrote, by its hash.
+echo "sidecar: docs/demo/$NAME.json sha256 $(sha256_of < "$REPO_ROOT/docs/demo/$NAME.json")"

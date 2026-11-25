@@ -12,12 +12,12 @@
     {
       "language": "go",
       "path": "verifiers/go",
-      "coverage": "full: Ed25519 and ML-DSA-65 (FIPS 204) hybrid signatures, v1.0 pipe canonical form and v1.1 JCS(TBS)"
+      "coverage": "full: Ed25519 and ML-DSA-65 (FIPS 204) hybrid signatures, v1.0 pipe canonical form and v1.1 JCS(TBS), and the distinct signer-authority count of ATX core.md section 1.3 step 7"
     },
     {
       "language": "python",
       "path": "verifiers/python",
-      "coverage": "full: Ed25519 and ML-DSA-65 (FIPS 204, via dilithium-py) hybrid signatures, v1.0 pipe canonical form and v1.1 JCS(TBS) via vendored RFC 8785"
+      "coverage": "full: Ed25519 and ML-DSA-65 (FIPS 204, via dilithium-py) hybrid signatures, v1.0 pipe canonical form and v1.1 JCS(TBS) via vendored RFC 8785, and the distinct signer-authority count of ATX core.md section 1.3 step 7"
     }
   ],
   "additionalGates": [
@@ -30,23 +30,27 @@
   "notCovered": [
     {
       "item": "Distinct signer-authority count (ATX core.md section 1.3 step 7)",
-      "reason": "no fixture carries verified signatures from more than one distinct authority, and the fixture format has no field for the required trust level that step 7's condition reads, so a verifier that omits step 7 entirely passes the suite; a length-of-issuerChain test is not step 7 (the spec says the chain length MUST NOT be counted) and implementations MUST self-attest this requirement until a fixture exists for it"
+      "reason": "the v1_1-two-authority-cosignature fixture and the four REJECT fixtures that share its credential exercise the count at a required trust level of 3 (verifierState.requiredTrustLevel), and both reference verifiers perform it; the entry stays because the Coverage paragraph of core.md at the pinned atx-spec commit still lists step 7 among the requirements no fixture exercises, and this list and that paragraph drop step 7 together"
     },
     {
-      "item": "k-of-n threshold issuance (ATX core.md section 3.1 step 8: cosignatures from 2 of 3 key holders)",
-      "reason": "the fixture format has no field for the required signature count and neither reference verifier reads one: both require every declared signature to verify and at least one to be present, so the threshold fixture's credential cut to one of its three signatures is accepted, and a verifier that checks only the first signature passes the threshold fixture"
+      "item": "k-of-n threshold issuance, a threshold the credential meets (ATX core.md section 3.1 step 8: cosignatures from 2 of 3 key holders)",
+      "reason": "threshold-1of3-cosignature sets requiredSignatures 2 in its verifier state and pins the REJECT of a credential whose one signature verifies; no fixture sets a threshold that its credential meets, so a verifier that rejects every credential whose verifier state sets requiredSignatures passes the suite, and threshold-2of3-cosignature, whose three signatures verify, sets none"
     },
     {
       "item": "Cosignature requirements (ATX core.md section 7: federation cosigning, and the root cosignature at trust level 4)",
-      "reason": "the threshold fixture pins three signatures over the signing bytes, each of which must verify; no fixture asserts that a trust level 4 credential carries the root cosignature or that a federated issuance carries its peer's cosignature"
+      "reason": "threshold-2of3-cosignature pins three signatures over the signing bytes, made by three keys of one authority, each of which must verify; the v1_1-two-authority-cosignature fixture and the four REJECT fixtures that share its credential pin the section 1.3 step 7 count at a required trust level of 3; no fixture asserts that a trust level 4 credential carries the root cosignature (section 7 rule 4) or that a federated issuance carries its peer's cosignature, and none exercises the root's cross-org attestation for an issuer outside the verifier's trusted list (section 7 rule 3)"
     },
     {
       "item": "Revocation propagation timing (ATX core.md section 3.3)",
-      "reason": "the revoked-crl-only fixture pins the verdict for an agentId that is on the verifier's CRL; no fixture exercises the 5-minute cache bound or a stale-CRL window"
+      "reason": "the revoked-crl-only fixture pins the verdict for an agentId that is on the verifier's CRL, and v1_1-crl-past-nextupdate-beyond-skew-hybrid pins the freshness rule of section 1.3 step 6 for a list that carries its own nextUpdate; no fixture exercises the 5-minute window counted from the verifier's own fetch, which the fixture format has no member for"
     },
     {
       "item": "Transparency-log monitor behavior (ATX core.md section 6.4)",
       "reason": "no fixture models a monitor and the conformance verifiers do not consult a log"
+    },
+    {
+      "item": "Resource attestation statements: the statement form, its signing projection, validity, revocation and acceptance rules, and the subject result (ATX core.md section 1.6)",
+      "reason": "no fixture is a resource attestation statement, and the fixture format has no member that carries one"
     }
   ],
   "requirements": [
@@ -179,6 +183,52 @@
       "description": "An ATX v1.0 credential issued by the primary authority (issuerDid = did:opena2a:authority:opena2a.org) but signed by a DIFFERENT trusted authority's key (did:opena2a:authority:partner.example#key-1). The signature is valid over the canonical payload and the signing authority is independently trusted, yet that key is not controlled by the credential's issuer and is not in its issuerChain. A verifier MUST bind each signature to a key controlled by the credential's issuer and MUST REJECT with a signature-validation reason, so a trusted authority cannot impersonate another. A verifier that tries every configured key would wrongly ACCEPT."
     },
     {
+      "fixture": "fixtures/expired-beyond-skew.json",
+      "name": "atx-v1/expired-beyond-skew",
+      "requirement": "§1.3 step 2: expiry is evaluated within the family clock-skew bound of ATP §10.2, at most 60 seconds, so a credential whose expiresAt is 61 seconds earlier than the verifier's clock is rejected at every tolerance the bound allows",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.1 Legacy form (`atcVersion` = \"1.0\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "ATP",
+          "ref": "https://github.com/opena2a-standards/agent-trust-protocol/blob/e6b4e29f037469133683482bc9ab923f5704aa85/ATP-SPEC.md",
+          "section": "§10.2 Trust Proof Validity (clock skew: at most 60 seconds, symmetrically, for issuedAt and expiresAt in ATX credentials)"
+        }
+      ],
+      "expected": "REJECT[EXPIRED]",
+      "description": "The baseline-valid.json credential, ATX v1.0, with expiresAt 2026-05-23T23:58:59Z, 61 seconds earlier than the verifier's pinned clock, 2026-05-24T00:00:00Z, and its one Ed25519 signature made over that expiresAt. core.md §1.3 step 2 evaluates expiry within the family clock-skew bound of ATP §10.2: a verifier tolerates at most 60 seconds of clock skew, and the tolerance extends no TTL or cache window. At every tolerance from 0 to 60 seconds the credential is expired, so a verifier MUST REJECT with an expiry reason. A verifier that tolerates more than 61 seconds of skew, outside the bound, wrongly ACCEPTs; expired.json, whose expiresAt is 508 days earlier than the clock, is rejected at any tolerance short of 508 days, so it does not tell such a verifier from one inside the bound. An expiresAt less than 60 seconds before the clock pins no verdict: a verifier with no tolerance rejects it and one with 60 seconds accepts it. 61 seconds is one second past the bound, so the verdict does not turn on whether a verifier holds a credential expired at the instant its expiresAt plus its tolerance equals its clock."
+    },
+    {
       "fixture": "fixtures/expired.json",
       "name": "atx-v1/expired",
       "requirement": "§1.3 step 2: a credential whose expiresAt is earlier than the verifier's clock is rejected",
@@ -218,6 +268,149 @@
       ],
       "expected": "REJECT[EXPIRED]",
       "description": "An otherwise-valid ATX whose ExpiresAt is earlier than the verifier's pinned clock. Verifier MUST REJECT with an expiry reason."
+    },
+    {
+      "fixture": "fixtures/foreign-did-method-altered-after-signing.json",
+      "name": "atx-v1/foreign-did-method-altered-after-signing",
+      "requirement": "§1.3 step 4: the legacy canonical form signs agentDid as written (§1.3a.1), so a did:web agentDid changed after signing is a signature failure",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.1 Legacy form (`atcVersion` = \"1.0\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (hybrid Ed25519 + ML-DSA-65 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "The foreign-did-method-valid.json credential with its agentDid changed after signing, from did:web:platform.example:agents:billing-agent to did:web:platform.example:agents:other-agent; every other member, both signatures included, is unchanged. agentDid is the second of the eleven fields the legacy canonical form signs (§1.3a.1), so the canonical bytes the verifier computes from this credential are not the bytes either signature covers, and the Ed25519 signature does not verify (§1.3 step 4). A verifier MUST REJECT with a signature-validation reason. The signature binds the credential to the did:web identifier its issuer signed: a holder cannot move it to another agent identifier."
+    },
+    {
+      "fixture": "fixtures/foreign-did-method-valid.json",
+      "name": "atx-v1/foreign-did-method-valid",
+      "requirement": "§1.3 step 3: the verifier resolves the issuerDid, not the subject's DIDs, and no step reads the DID method of agentDid or publisherDid, so a v1.0 hybrid credential whose agentDid and publisherDid are did:web identifiers, signed by its trusted did:opena2a issuer, is accepted",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.1 Legacy form (`atcVersion` = \"1.0\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (hybrid Ed25519 + ML-DSA-65 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "ACCEPT",
+      "description": "The baseline-valid-hybrid.json credential, ATX v1.0, with its subject named under a DID method other than its issuer's: agentDid is did:web:platform.example:agents:billing-agent and publisherDid is did:web:platform.example, while issuerDid stays did:opena2a:authority:opena2a.org, the trusted issuer whose keys make its Ed25519 and ML-DSA-65 signatures over the same canonical payload. The verifier resolves the issuerDid to the issuer's keys (§1.3 step 3); no step of §1.3 reads the DID method of agentDid or publisherDid, and the credential schema's DID pattern admits any method. The legacy canonical form signs agentDid as written (§1.3a.1); it does not sign publisherDid. A verifier MUST verify both signatures and ACCEPT. A verifier that requires the subject's DIDs to use the issuer's DID method, or did:opena2a, rejects a credential the algorithm accepts."
+    },
+    {
+      "fixture": "fixtures/hybrid-pq-only.json",
+      "name": "atx-v1/hybrid-pq-only",
+      "requirement": "§13, Cryptographic agility: under atcVersion 1.0 too, a credential that declares an ML-DSA-65 signature must also carry a verifying Ed25519 signature, so an ML-DSA-65 signature alone over the legacy canonical bytes is a signature failure",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.1 Legacy form (`atcVersion` = \"1.0\")"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "13. Security considerations"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (an ML-DSA-65 signature with no Ed25519 signature)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "An ATX v1.0 credential carrying a single ML-DSA-65 signature that verifies over the legacy canonical payload, and no Ed25519 signature: the v1.0 hybrid baseline with its Ed25519 entry removed. The spec requires a credential that declares an ML-DSA-65 entry to also carry a verifying Ed25519 entry, and names no atcVersion, so a post-quantum signature alone cannot verify a v1.0 credential either. Verifier MUST REJECT with a signature-validation reason. A verifier that checks only that every declared signature verifies, or that applies the rule to atcVersion 1.1 alone, wrongly ACCEPTs."
     },
     {
       "fixture": "fixtures/malformed-schema.json",
@@ -345,7 +538,7 @@
         }
       ],
       "expected": "REJECT[REVOKED]",
-      "description": "A previously-valid ATX whose credential-level Revoked flag is set and whose AgentID also appears in the verifier's CRL. Verifier MUST REJECT with revocation reason. Both rejection paths are exercised."
+      "description": "A previously-valid ATX whose credential-level Revoked flag is set and whose AgentID also appears in the verifier's CRL. Verifier MUST REJECT with revocation reason. The flag is what rejects it in both reference verifiers, which read the flag before the CRL and return on it; fixtures/revoked-crl-only.json is the fixture whose verdict depends on the CRL."
     },
     {
       "fixture": "fixtures/tampered-signature.json",
@@ -389,6 +582,52 @@
       "description": "An ATX whose Ed25519 signature has been flipped by one bit after signing. All other fields are unchanged. Verifier MUST REJECT with a signature-validation reason."
     },
     {
+      "fixture": "fixtures/threshold-1of3-cosignature.json",
+      "name": "atx-v1/threshold-1of3-cosignature",
+      "requirement": "§3.1 step 8: under a verifier state that requires the signatures of 2 of the issuer's 3 Ed25519 keys, a credential whose one signature verifies is a signature failure",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.1 Legacy form (`atcVersion` = \"1.0\")"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "3.1 Issuance flow"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "The threshold-2of3-cosignature credential cut to one of its three signatures, the primary's, under a verifier state that holds the issuer's three Ed25519 keys and requires two of them (requiredSignatures: 2). The one signature verifies, so a verifier that checks only that every declared signature verifies, and reads no threshold, wrongly accepts. Verifier MUST REJECT with a threshold reason."
+    },
+    {
       "fixture": "fixtures/threshold-2of3-cosignature.json",
       "name": "atx-v1/threshold-2of3-cosignature",
       "requirement": "§1.3 step 5: every declared signature verifies, here three Ed25519 signatures by three keys, so the credential is accepted; the 2-of-3 threshold of §3.1 step 8 is not tested",
@@ -427,7 +666,7 @@
         }
       ],
       "expected": "ACCEPT",
-      "description": "An ATX cosigned by all three keys of a 2-of-3 threshold issuer (primary plus two cosigners). All three signatures are Ed25519 and cover the same canonical payload. Verifier MUST ACCEPT. A spec-conformant verifier additionally MUST validate at least two of the three signatures for trust level 4."
+      "description": "An ATX v1.0 credential at trustLevel 4 signed by all three keys of one authority's threshold key set: did:opena2a:authority:opena2a.org#key-1 (primary) plus #key-2 and #key-3 (cosigners). All three signatures are Ed25519 over the same canonical payload, and every declared signature MUST verify. The verifier state sets no required trust level. Verifier MUST ACCEPT. The three keys belong to one authority, so the distinct signer-authority count of atx-spec core.md §1.3 step 7 counts them once; fixtures/v1_1-one-authority-threshold-keys.json signs with the same three keys at a required trust level of 3, where the verifier MUST REJECT."
     },
     {
       "fixture": "fixtures/v1_1-baseline-valid-hybrid.json",
@@ -517,6 +756,170 @@
       "description": "A baseline ATX v1.1 credential. The single Ed25519 signature covers JCS(TBS) per atx-spec core.md §1.3a.2, so capabilities, scanSummary, issuerChain, publisher, and behavioralProfile are integrity-protected. Verifier MUST ACCEPT. The canonical bytes equal the jcs-vectors baseline vector."
     },
     {
+      "fixture": "fixtures/v1_1-behavioral-profile-case-variant-member.json",
+      "name": "atx-v1_1/behavioral-profile-case-variant-member",
+      "requirement": "§1.1: behavioralProfile member names are compared exactly, so observationDays renamed OBSERVATIONDAYS after signing leaves a profile the TBS has no value for, a signature failure",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "An ATX v1.1 credential signed with the baseline behavioralProfile, carrying its observationDays member under the name OBSERVATIONDAYS, value unchanged (14), renamed AFTER signing. Member names are compared exactly, and the credential schema of atx-spec §1.1 gives behavioralProfile exactly checksum, generatedAt and observationDays (additionalProperties false), so this profile lacks observationDays and carries a member outside the three: JCS(TBS) has no value for it (§1.3a.2) and no signature covers it. The verifier MUST REJECT with a signature-validation reason. Go's encoding/json matches a member name to a struct field case-insensitively, so a verifier that decodes the profile into a struct reads OBSERVATIONDAYS as observationDays, projects the signed profile and wrongly ACCEPTs, while a case-sensitive reader of the same bytes finds no observationDays. The renamed member is the only one of its name, so a duplicate-member check does not reject it."
+    },
+    {
+      "fixture": "fixtures/v1_1-behavioral-profile-extra-member.json",
+      "name": "atx-v1_1/behavioral-profile-extra-member",
+      "requirement": "§1.1: the credential schema gives behavioralProfile exactly checksum, generatedAt and observationDays, so a fourth member added after signing leaves a profile the TBS has no value for, a signature failure",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "An ATX v1.1 credential signed with the baseline behavioralProfile (checksum, generatedAt, observationDays), carrying a fourth member in it, riskLevel \"low\", written AFTER signing. The credential schema of atx-spec §1.1 gives behavioralProfile exactly those three members (additionalProperties false), and JCS(TBS) holds the profile as those three members (§1.3a.2), so no signature covers a profile with a fourth. The verifier MUST REJECT with a signature-validation reason. A verifier that decodes the profile into its three fields drops the fourth member, projects the signed profile and wrongly ACCEPTs a credential carrying a member its signature does not cover."
+    },
+    {
+      "fixture": "fixtures/v1_1-behavioral-profile-member-outside-type.json",
+      "name": "atx-v1_1/behavioral-profile-member-outside-type",
+      "requirement": "§1.3a.2 rule 1: a behavioralProfile added after signing whose observationDays is a string has no value in the TBS, where a credential with no profile holds null, so it is a signature failure",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "An ATX v1.1 credential signed with no behavioralProfile, carrying one added AFTER signing whose observationDays is the JSON string \"14\", not an integer; its checksum and generatedAt are the baseline's. JCS(TBS) holds null for a credential with no profile (atx-spec §1.3a.2 rule 1) and otherwise the profile's three members with their types (the credential schema of §1.1: observationDays an integer), so no signature covers a profile with a string there. The verifier MUST REJECT with a signature-validation reason. A verifier that projects a profile it cannot decode as null, the absent form, reaches the bytes the signature covers and wrongly ACCEPTs a credential carrying a profile its signature does not cover."
+    },
+    {
+      "fixture": "fixtures/v1_1-behavioral-profile-not-object.json",
+      "name": "atx-v1_1/behavioral-profile-not-object",
+      "requirement": "§1.3a.2 rule 1: the TBS holds null for a credential with no behavioralProfile and otherwise an object of its three members, so a string added as the profile after signing is a signature failure",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "An ATX v1.1 credential signed with no behavioralProfile, carrying the JSON string \"sha256:ghi789\" as its behavioralProfile, added AFTER signing. JCS(TBS) holds null for a credential with no profile (atx-spec §1.3a.2 rule 1) and otherwise an object of the profile's three members (the credential schema of §1.1), so no signature covers a profile that is not an object. The verifier MUST REJECT with a signature-validation reason. A verifier that projects a profile it cannot decode as null, the absent form, reaches the bytes the signature covers and wrongly ACCEPTs a credential carrying a profile its signature does not cover."
+    },
+    {
       "fixture": "fixtures/v1_1-case-variant-member.json",
       "name": "atx-v1_1/case-variant-member",
       "requirement": "§1.3 step 1: parsing the credential rejects two member names that fold to one field (TRUSTLEVEL and trustLevel) as PARSE_ERROR before any field is read (§12)",
@@ -556,6 +959,277 @@
       ],
       "expected": "REJECT[PARSE_ERROR]",
       "description": "An ATX v1.1 credential carrying a decoy top-level TRUSTLEVEL member (value 9) injected before the signed trustLevel member (value 4) — two names that fold to the same field. Go's encoding/json resolves struct fields case-insensitively last-wins, so it collapses the pair to the signed trustLevel=4: a lenient Go verifier ACCEPTs, silently carrying a stray fold-colliding TRUSTLEVEL member. The same bytes read differently under other conforming parsers: a case-insensitive first-wins parser reads 9, and a case-sensitive parser (this suite's Python json.loads) keeps both as distinct members, reading trustLevel=4 alongside a separate TRUSTLEVEL=9. A case-SENSITIVE duplicate check flags neither. Because encoding/json's field folding makes the credential mean different things to different conforming parsers — the RFC 8259 §4 first-wins/last-wins parser divergence the strict parse exists to close — verifiers MUST fold member names and REJECT fold-colliding members with PARSE_ERROR before interpreting any field. Reference: foldKey in verifiers/go and verifiers/python (atx-conformance#16)."
+    },
+    {
+      "fixture": "fixtures/v1_1-cosigner-named-not-signed.json",
+      "name": "atx-v1_1/cosigner-named-not-signed",
+      "requirement": "§1.3 step 7: presence in the signed issuerChain is not a signature, so at a required trust level of 3 a credential only its issuer signed is rejected although the chain names a second trusted authority",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "REJECT[INSUFFICIENT_SIGNER_AUTHORITIES]",
+      "description": "The credential of v1_1-two-authority-cosignature (ATX v1.1, trustLevel 3, a signed two-element issuerChain naming the partner authority did:opena2a:authority:partner.example and the primary authority did:opena2a:authority:opena2a.org) carrying only the primary authority's Ed25519 signature. The verifier trusts both authorities, holds the partner authority's key, and requires trust level 3. The chain names a second authority, but presence in issuerChain is not a signature and its length is not counted: one authority has produced a signature the verifier verifies, so the distinct signer-authority count of atx-spec core.md §1.3 step 7 is 1 and the verifier MUST REJECT. A verifier that omits step 7, or counts the issuerChain or the trusted authorities it names, wrongly ACCEPTs."
+    },
+    {
+      "fixture": "fixtures/v1_1-crl-fresh-agent-absent-hybrid.json",
+      "name": "atx-v1_1/crl-fresh-agent-absent-hybrid",
+      "requirement": "§1.3 step 6: a CRL the verifier holds that is current at its clock and does not list the agentId is evidence that the agent is not revoked, so a credential that passes every other step is accepted",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (hybrid Ed25519 + ML-DSA-65 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "ACCEPT",
+      "description": "The v1_1-baseline-valid-hybrid credential, byte for byte, under a verifier state that holds a CRL issued 2026-05-23T12:00:00Z whose nextUpdate is 2026-05-30T12:00:00Z, so the list is current at the verifier clock, and whose one entry names another agent, agent_conformance_test_other. A current list that does not name the agent is evidence that the agent is not revoked (atx-spec core.md §1.3 step 6), and every other step passes. Verifier MUST ACCEPT. A verifier that rejects whenever it holds a revocation list, or that reads a current list as saying nothing, wrongly REJECTs."
+    },
+    {
+      "fixture": "fixtures/v1_1-crl-issued-after-clock-beyond-skew-hybrid.json",
+      "name": "atx-v1_1/crl-issued-after-clock-beyond-skew-hybrid",
+      "requirement": "§1.3 step 6: a held CRL whose issuedAt is more than the family clock-skew bound of ATP §10.2, at most 60 seconds, after the verifier's clock is no evidence for an agentId it does not list, so revocation is unknown and the credential is rejected",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (hybrid Ed25519 + ML-DSA-65 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "REJECT[REVOCATION_UNKNOWN]",
+      "description": "The v1_1-baseline-valid-hybrid credential, byte for byte, under a verifier state that holds a CRL whose issuedAt, 2026-05-24T00:01:01Z, is 61 seconds after the verifier clock, one second past the family clock-skew bound of ATP §10.2, and whose nextUpdate is 2026-05-31T00:01:01Z. Its one entry names another agent, agent_conformance_test_other. A list issued after the clock beyond the skew bound is one its producer cannot have issued at that clock: it is no evidence about the agent, not a revocation of it, so revocation is unknown (atx-spec core.md §1.3 step 6). Verifier MUST REJECT with a reason that names issuedAt. A verifier that never reads a held list's issuedAt wrongly ACCEPTs."
+    },
+    {
+      "fixture": "fixtures/v1_1-crl-past-nextupdate-beyond-skew-hybrid.json",
+      "name": "atx-v1_1/crl-past-nextupdate-beyond-skew-hybrid",
+      "requirement": "§1.3 step 6: a held CRL whose nextUpdate is more than the family clock-skew bound of ATP §10.2, at most 60 seconds, before the verifier's clock is no evidence for an agentId it does not list, so revocation is unknown and the credential is rejected",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (hybrid Ed25519 + ML-DSA-65 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "REJECT[REVOCATION_UNKNOWN]",
+      "description": "The v1_1-baseline-valid-hybrid credential, byte for byte, under a verifier state that holds a CRL issued 2026-05-23T22:58:59Z whose nextUpdate, 2026-05-23T23:58:59Z, is 61 seconds before the verifier clock: one second past the family clock-skew bound of ATP §10.2, at most 60 seconds. Its one entry names another agent, agent_conformance_test_other. A list past its nextUpdate beyond the skew bound is no evidence that an agent it does not name is not revoked, so revocation is unknown (atx-spec core.md §1.3 step 6). Verifier MUST REJECT with a reason that names nextUpdate. A verifier that reads a held list's entries and never its nextUpdate, or that tolerates more than 60 seconds of skew, wrongly ACCEPTs."
+    },
+    {
+      "fixture": "fixtures/v1_1-crl-past-nextupdate-lists-agent-hybrid.json",
+      "name": "atx-v1_1/crl-past-nextupdate-lists-agent-hybrid",
+      "requirement": "§1.3 step 6: an agentId listed on a held CRL is revoked whatever the list's dates, so a list past its nextUpdate that lists the agent rejects the credential as revoked, not as revocation unknown",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (hybrid Ed25519 + ML-DSA-65 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "REJECT[REVOKED]",
+      "description": "The v1_1-baseline-valid-hybrid credential, byte for byte, under a verifier state that holds the CRL of v1_1-crl-past-nextupdate-beyond-skew-hybrid, issued 2026-05-23T22:58:59Z with its nextUpdate 61 seconds before the verifier clock, except that its one entry names this credential's agentId. An entry stays true after its list ages: only the silence of a list past its nextUpdate stops being evidence. A verifier reads a held list's entries before its freshness (atx-spec core.md §1.3 step 6), so the agent is revoked and the verdict is REVOKED, not unknown. Verifier MUST REJECT with a revocation reason that names the CRL. A verifier that sets a list past its nextUpdate aside before reading its entries, or that reports such a list as unknown before reading them, reports the wrong category."
+    },
+    {
+      "fixture": "fixtures/v1_1-crl-required-none-held-hybrid.json",
+      "name": "atx-v1_1/crl-required-none-held-hybrid",
+      "requirement": "§1.3 step 6: a verifier required to hold a revocation list that holds none has nothing that says the agent is not revoked, so revocation is unknown and the credential is rejected",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (hybrid Ed25519 + ML-DSA-65 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "FIPS 204",
+          "ref": "https://csrc.nist.gov/pubs/fips/204/final",
+          "section": "ML-DSA-65 (Module-Lattice-Based DSA)"
+        }
+      ],
+      "expected": "REJECT[REVOCATION_UNKNOWN]",
+      "description": "The v1_1-baseline-valid-hybrid credential, byte for byte, under a verifier state that holds no CRL and sets revocationListRequired: the verifier under test is required to hold a revocation list. With none held, nothing says the agent is not revoked, so revocation is unknown (atx-spec core.md §1.3 step 6). Verifier MUST REJECT with a reason that names the missing revocation list. A verifier that reads no list as no revocation, or that sets aside a list it cannot use and then proceeds as if none were required, wrongly ACCEPTs."
     },
     {
       "fixture": "fixtures/v1_1-cross-issuer-key.json",
@@ -689,6 +1363,261 @@
       ],
       "expected": "ACCEPT",
       "description": "An ATX v1.1 credential signed with no declaredPurpose, carrying a whitespace-empty declaredPurpose object ({ }) appended after signing. Emptiness is a JSON-parse-level property (atx-spec §1.3a.2 rule 5): any serialization of the empty object is the empty object, treated as absent and omitted from the TBS, so the signature still verifies. Verifier MUST ACCEPT. A verifier that compares the raw byte string against \"{}\" instead of parsing wrongly includes the value and REJECTs."
+    },
+    {
+      "fixture": "fixtures/v1_1-declared-purpose-integer-outside-range.json",
+      "name": "atx-v1_1/declared-purpose-integer-outside-range",
+      "requirement": "§1.3a.2 rule 3: RFC 8785 number serialization is kept out of cross-language scope, and outside the I-JSON exact range it does not write every integer as its digits, so declaredPurpose n 9007199254740993, which it writes as 9007199254740992, has no value the signature covers and is a signature failure",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.5 Declared purpose (optional)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "RFC 7493",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc7493",
+          "section": "§2.2 Numbers (the I-JSON exact integer range, -(2^53-1) to 2^53-1)"
+        },
+        {
+          "id": "RFC 8785",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8785",
+          "section": "§3.2.2.3 Serialization of Numbers"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "An ATX v1.1 credential carrying declaredPurpose {\"n\": 9007199254740993}: the integer 2^53+1, written as its digits, outside the I-JSON exact range, -(2^53-1) to 2^53-1 (RFC 7493 §2.2). Its Ed25519 signature covers JCS(TBS) as an RFC 8785 serializer that reads each number as an IEEE 754 double writes it, with n 9007199254740992: the bytes that serializer writes for a credential carrying 9007199254740992 too. declaredPurpose enters the TBS as written (atx-spec §1.3a.2 rule 5), and §1.3a.2 rule 3 keeps RFC 8785 number serialization out of cross-language scope, so the signature does not cover the number this credential carries. The verifier MUST REJECT as SIGNATURE_INVALID with a reason that names declaredPurpose. A verifier that canonicalizes the number as that serializer does verifies the signature and wrongly ACCEPTs."
+    },
+    {
+      "fixture": "fixtures/v1_1-declared-purpose-integer-respelled-exponent.json",
+      "name": "atx-v1_1/declared-purpose-integer-respelled-exponent",
+      "requirement": "§1.3a.2 rule 3: RFC 8785 number serialization is kept out of cross-language scope, so a declaredPurpose number written with an exponent part, 1e3 where the signature covers 1000, has no bytes the signature covers and is a signature failure",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.5 Declared purpose (optional)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "RFC 8785",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8785",
+          "section": "§3.2.2.3 Serialization of Numbers"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "An ATX v1.1 credential signed over declaredPurpose {\"n\": 1000}, carrying {\"n\": 1e3}: the same value written with an exponent part. declaredPurpose enters the TBS as written (atx-spec §1.3a.2 rule 5), and §1.3a.2 rule 3 keeps RFC 8785 number serialization out of cross-language scope, so no signature covers a number there written with a fraction part or an exponent part. Its form is decided from the credential's JSON text, not from the value a JSON parser returns for it. The verifier MUST REJECT as SIGNATURE_INVALID with a reason that names declaredPurpose. An RFC 8785 serializer that reads each number as an IEEE 754 double writes 1e3 as 1000, the bytes the signature covers, so a verifier that canonicalizes the number that way verifies the signature and wrongly ACCEPTs."
+    },
+    {
+      "fixture": "fixtures/v1_1-declared-purpose-integer-respelled-fraction.json",
+      "name": "atx-v1_1/declared-purpose-integer-respelled-fraction",
+      "requirement": "§1.3a.2 rule 3: RFC 8785 number serialization is kept out of cross-language scope, so a declaredPurpose number written with a fraction part, 1000.0 where the signature covers 1000, has no bytes the signature covers and is a signature failure",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.5 Declared purpose (optional)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "RFC 8785",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8785",
+          "section": "§3.2.2.3 Serialization of Numbers"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "An ATX v1.1 credential signed over declaredPurpose {\"n\": 1000}, carrying {\"n\": 1000.0}: the same value written with a fraction part. declaredPurpose enters the TBS as written (atx-spec §1.3a.2 rule 5), and §1.3a.2 rule 3 keeps RFC 8785 number serialization out of cross-language scope, so no signature covers a number there written with a fraction part or an exponent part. Its form is decided from the credential's JSON text, not from the value a JSON parser returns for it. The verifier MUST REJECT as SIGNATURE_INVALID with a reason that names declaredPurpose. An RFC 8785 serializer that reads each number as an IEEE 754 double writes 1000.0 as 1000, the bytes the signature covers, so a verifier that canonicalizes the number that way verifies the signature and wrongly ACCEPTs."
+    },
+    {
+      "fixture": "fixtures/v1_1-declared-purpose-integer-respelled-upper-exponent.json",
+      "name": "atx-v1_1/declared-purpose-integer-respelled-upper-exponent",
+      "requirement": "§1.3a.2 rule 3: RFC 8785 number serialization is kept out of cross-language scope, so a declaredPurpose number written with an exponent part that opens with an upper-case E, 1E3 where the signature covers 1000, has no bytes the signature covers and is a signature failure",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.5 Declared purpose (optional)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "RFC 8785",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8785",
+          "section": "§3.2.2.3 Serialization of Numbers"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "An ATX v1.1 credential signed over declaredPurpose {\"n\": 1000}, carrying {\"n\": 1E3}: the same value written with an exponent part that opens with an upper-case E. declaredPurpose enters the TBS as written (atx-spec §1.3a.2 rule 5), and §1.3a.2 rule 3 keeps RFC 8785 number serialization out of cross-language scope, so no signature covers a number there written with a fraction part or an exponent part. Its form is decided from the credential's JSON text, not from the value a JSON parser returns for it. The verifier MUST REJECT as SIGNATURE_INVALID with a reason that names declaredPurpose. An RFC 8785 serializer that reads each number as an IEEE 754 double writes 1E3 as 1000, the bytes the signature covers, so a verifier that canonicalizes the number that way, or that finds an exponent part by a lower-case e alone, verifies the signature and wrongly ACCEPTs."
+    },
+    {
+      "fixture": "fixtures/v1_1-declared-purpose-integer-signed.json",
+      "name": "atx-v1_1/declared-purpose-integer-signed",
+      "requirement": "§1.3a.2 rule 5: declaredPurpose enters the TBS as written, and so does an integer in it written as its digits inside the I-JSON exact range, so a credential signed over {\"n\": 1000} that carries it as signed is accepted",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.5 Declared purpose (optional)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "ACCEPT",
+      "description": "An ATX v1.1 credential signed over declaredPurpose {\"n\": 1000}, which it carries as signed. declaredPurpose enters the TBS as written (atx-spec §1.3a.2 rule 5), and so does the number 1000: an integer written with no fraction part and no exponent part, inside the I-JSON exact range, -(2^53-1) to 2^53-1, which RFC 8785 writes as its decimal digits, so the signature covers it. Verifier MUST ACCEPT. A verifier that refuses every number in declaredPurpose, where it should decide each number's form from the credential's JSON text, wrongly REJECTs."
     },
     {
       "fixture": "fixtures/v1_1-declared-purpose-number-injected.json",
@@ -827,6 +1756,88 @@
       ],
       "expected": "ACCEPT",
       "description": "A baseline ATX v1.1 credential carrying a populated declaredPurpose (atx-spec §1.5): vocabVersion, statement, category, taskScopes, capabilityJustification, autonomy, dataScopes, egressScopes. declaredPurpose is the one presence-based TBS member (§1.3a.2 rule 5); when present it is signed as part of JCS(TBS). Verifier MUST ACCEPT. Canonical bytes equal the jcs-vectors 08-declared-purpose vector."
+    },
+    {
+      "fixture": "fixtures/v1_1-dotless-i-member.json",
+      "name": "atx-v1_1/dotless-i-member",
+      "requirement": "§1.3 step 1: parsing the credential rejects a member name outside printable ASCII in an object the verifier decodes (U+0131 followed by ssuedAt, beside issuedAt) as PARSE_ERROR before any field is read (§12)",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "REJECT[PARSE_ERROR]",
+      "description": "An ATX v1.1 credential whose Ed25519 signature verifies, carrying one member its issuer did not write: a member named U+0131 (LATIN SMALL LETTER DOTLESS I) followed by ssuedAt, holding 2099-01-01T00:00:00Z, written directly after its signed issuedAt member once the credential is signed. JCS(TBS) holds no member the credential does not specify, so the signature does not cover it. Java 25's String.equalsIgnoreCase compares that name equal to issuedAt, so a relying party that binds the credential's JSON again by such a comparison, keeping the last of the members it joins, reads an issuedAt of 2099-01-01T00:00:00Z, where the signature covers 2026-05-23T00:00:00Z. Verifiers MUST reject a member name outside printable ASCII (U+0020 to U+007E) in an object they decode (the credential, a signature entry, scanSummary or behavioralProfile) as PARSE_ERROR before interpreting any field, a rule that needs no case table. A verifier that folds names by ASCII case, or by a table that keeps U+0131 apart from i, wrongly ACCEPTs."
+    },
+    {
+      "fixture": "fixtures/v1_1-dotted-capital-i-member.json",
+      "name": "atx-v1_1/dotted-capital-i-member",
+      "requirement": "§1.3 step 1: parsing the credential rejects a member name outside printable ASCII in an object the verifier decodes (U+0130 followed by d, beside id) as PARSE_ERROR before any field is read (§12)",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "REJECT[PARSE_ERROR]",
+      "description": "An ATX v1.1 credential whose Ed25519 signature verifies, carrying one member its issuer did not write: a member named U+0130 (LATIN CAPITAL LETTER I WITH DOT ABOVE) followed by d, holding x, written directly after its id member once the credential is signed. JCS(TBS) holds no member the credential does not specify, so the signature does not cover it. Java 25's String.equalsIgnoreCase compares that name equal to id, so a relying party that binds the credential's JSON again by such a comparison, keeping the last of the members it joins, reads x as the credential's id, where the verifier read the id the issuer wrote. Verifiers MUST reject a member name outside printable ASCII (U+0020 to U+007E) in an object they decode (the credential, a signature entry, scanSummary or behavioralProfile) as PARSE_ERROR before interpreting any field, a rule that needs no case table. A verifier that folds names by ASCII case, or by a table that keeps U+0130 apart from i, wrongly ACCEPTs."
     },
     {
       "fixture": "fixtures/v1_1-duplicate-purpose-member.json",
@@ -972,6 +1983,62 @@
       "description": "An ATX v1.1 credential carrying a single ML-DSA-65 signature that verifies over JCS(TBS), and no Ed25519 signature. The spec requires a credential that declares an ML-DSA-65 entry to also carry a verifying Ed25519 entry, so a post-quantum signature alone cannot verify a credential. Verifier MUST REJECT with a signature-validation reason. A verifier that checks only that every declared signature verifies wrongly ACCEPTs."
     },
     {
+      "fixture": "fixtures/v1_1-integer-outside-exact-range.json",
+      "name": "atx-v1_1/integer-outside-exact-range",
+      "requirement": "§1.3a.2 rule 3: RFC 8785 number serialization is kept out of cross-language scope, and outside the I-JSON exact range it does not write every integer as its digits, so criticalFindings 9007199254740993, which it writes as 9007199254740992, has no value the signature covers and is a signature failure",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.4 Authorization on signed fields requires v1.1"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        },
+        {
+          "id": "RFC 7493",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc7493",
+          "section": "§2.2 Numbers (the I-JSON exact integer range, -(2^53-1) to 2^53-1)"
+        },
+        {
+          "id": "RFC 8785",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8785",
+          "section": "§3.2.2.3 Serialization of Numbers"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "An ATX v1.1 credential carrying scanSummary.criticalFindings 9007199254740993, which is 2^53+1 and outside the I-JSON exact range, -(2^53-1) to 2^53-1 (RFC 7493 §2.2). Its Ed25519 signature covers JCS(TBS) as an RFC 8785 serializer that reads each number as an IEEE 754 double writes it, with criticalFindings 9007199254740992: the bytes that serializer writes for a credential carrying 9007199254740992 too. The signature does not tell the two counts apart, so it does not cover the count this credential carries (atx-spec §1.3a.2 rule 3 keeps RFC 8785 number serialization out of cross-language scope). The verifier MUST REJECT with a signature-validation reason. A verifier that canonicalizes the count as that serializer does verifies the signature and wrongly ACCEPTs a count its signature does not cover."
+    },
+    {
       "fixture": "fixtures/v1_1-no-transparency-log-index.json",
       "name": "atx-v1_1/no-transparency-log-index",
       "requirement": "§1.1: transparencyLogIndex is optional and outside JCS(TBS), so a v1.1 credential that omits it is accepted",
@@ -1011,6 +2078,298 @@
       ],
       "expected": "ACCEPT",
       "description": "An ATX v1.1 credential that omits the optional transparencyLogIndex. The field is assigned by the log after signing and is outside JCS(TBS), so its absence changes no canonical bytes and no signature; this credential's JCS(TBS) is byte-identical to the v1.1 baseline's. Verifier MUST ACCEPT. A verifier that requires the field, or that reads its presence as evidence of transparency-log inclusion, wrongly REJECTs."
+    },
+    {
+      "fixture": "fixtures/v1_1-one-authority-threshold-keys.json",
+      "name": "atx-v1_1/one-authority-threshold-keys",
+      "requirement": "§1.3 step 7: each authority counts once however many of its keys signed, so at a required trust level of 3 a credential signed by three keys of one authority is rejected",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "REJECT[INSUFFICIENT_SIGNER_AUTHORITIES]",
+      "description": "The credential of v1_1-two-authority-cosignature (ATX v1.1, trustLevel 3, a signed issuerChain naming the partner authority and the primary authority) signed by the three keys of one authority's threshold key set: did:opena2a:authority:opena2a.org#key-1, #key-2 and #key-3, the keys of threshold-2of3-cosignature. All three Ed25519 signatures verify over JCS(TBS), and the verifier requires trust level 3. Each authority counts once however many of its keys signed, and a threshold key set held by one authority is one authority (atx-spec core.md §1.3 step 7), so the distinct signer-authority count is 1 and the verifier MUST REJECT. A verifier that counts verified signatures or distinct keys instead of distinct authorities wrongly ACCEPTs."
+    },
+    {
+      "fixture": "fixtures/v1_1-one-key-under-two-dids.json",
+      "name": "atx-v1_1/one-key-under-two-dids",
+      "requirement": "§1.3 step 7: two signatures that verify under the same public key count once whatever keyId values they carry, so at a required trust level of 3 one key's signature carried under two trusted DIDs is rejected",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "REJECT[INSUFFICIENT_SIGNER_AUTHORITIES]",
+      "description": "The credential of v1_1-two-authority-cosignature (ATX v1.1, trustLevel 3, a signed issuerChain naming the partner authority and the primary authority) carrying two signature entries with the same Ed25519 value, made by the primary authority's key: one with keyId did:opena2a:authority:opena2a.org#key-1 and one with keyId did:opena2a:authority:partner.example#key-2. The verifier trusts both authorities and publishes the primary authority's public key under both DIDs, so each entry verifies under a key published by the DID its keyId names, and the verifier requires trust level 3. Distinctness is over keys as well as names: two signatures that verify under the same public key count once whatever keyId values they carry (atx-spec core.md §1.3 step 7), so the distinct signer-authority count is 1 and the verifier MUST REJECT. A verifier that counts distinct keyId DIDs wrongly ACCEPTs."
+    },
+    {
+      "fixture": "fixtures/v1_1-own-key-labelled-as-cosigner.json",
+      "name": "atx-v1_1/own-key-labelled-as-cosigner",
+      "requirement": "§1.3 step 7: a signature counts for the authority its keyId names only when it verifies under a key that authority publishes, so at a required trust level of 3 a signature by a second key of the issuer carrying the partner authority's keyId is rejected",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "REJECT[INSUFFICIENT_SIGNER_AUTHORITIES]",
+      "description": "The credential of v1_1-two-authority-cosignature (ATX v1.1, trustLevel 3, a signed issuerChain naming the partner authority and the primary authority) carrying two Ed25519 signatures made by two keys of the primary authority: one by did:opena2a:authority:opena2a.org#key-1 under that keyId, and one by #key-2 whose entry carries the partner authority's keyId, did:opena2a:authority:partner.example#key-1. Both verify over JCS(TBS) under keys of an authority the verifier trusts for this credential, and the verifier requires trust level 3. A signature counts for the authority its keyId names only when it verifies under a key published by that authority (atx-spec core.md §1.3 step 7): the partner authority publishes one key, and it does not verify the second signature. One authority is counted, so the verifier MUST REJECT. A verifier that attributes a signature to the DID its keyId names without checking that the verifying key is published under that DID wrongly ACCEPTs, even if it counts each public key once."
+    },
+    {
+      "fixture": "fixtures/v1_1-scan-summary-case-variant-member.json",
+      "name": "atx-v1_1/scan-summary-case-variant-member",
+      "requirement": "§1.1: scanSummary member names are compared exactly, so criticalFindings renamed CriticalFindings after signing leaves a scanSummary the TBS has no value for, a signature failure",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "An ATX v1.1 credential signed with the baseline scanSummary, carrying its criticalFindings member under the name CriticalFindings, value unchanged (0), renamed AFTER signing. Member names are compared exactly, and the credential schema of atx-spec §1.1 gives scanSummary exactly hma, criticalFindings, highFindings, secretless, cryptoServe and oasbLevel (additionalProperties false), so this scanSummary lacks criticalFindings and carries a member outside the six: JCS(TBS) has no value for it (§1.3a.2 rule 2) and no signature covers it. The verifier MUST REJECT with a signature-validation reason. Go's encoding/json matches a member name to a struct field case-insensitively, so a verifier that decodes scanSummary into a struct reads CriticalFindings as criticalFindings, projects the signed scanSummary and wrongly ACCEPTs. The renamed member is the only one of its name, so a duplicate-member check does not reject it."
+    },
+    {
+      "fixture": "fixtures/v1_1-scan-summary-extra-member-signed.json",
+      "name": "atx-v1_1/scan-summary-extra-member-signed",
+      "requirement": "§1.3a.2 rule 2: the TBS holds scanSummary as its six members, so a seventh member leaves a scanSummary the TBS has no value for, a signature failure although the credential's signature covers that member as written",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "An ATX v1.1 credential carrying the baseline scanSummary with a seventh member, extra \"x\", whose Ed25519 signature covers JCS(TBS) with that member in scanSummary as written. The credential schema of atx-spec §1.1 gives scanSummary exactly hma, criticalFindings, highFindings, secretless, cryptoServe and oasbLevel (additionalProperties false), and JCS(TBS) holds scanSummary as those six members (§1.3a.2 rule 2), so the TBS has no value for this scanSummary and no signature covers the credential, its own included. The verifier MUST REJECT with a signature-validation reason. A verifier that writes every scanSummary member it reads into the TBS reaches the bytes the signature covers and wrongly ACCEPTs a credential carrying a member the specification does not define."
+    },
+    {
+      "fixture": "fixtures/v1_1-scan-summary-extra-member.json",
+      "name": "atx-v1_1/scan-summary-extra-member",
+      "requirement": "§1.1: the credential schema gives scanSummary exactly hma, criticalFindings, highFindings, secretless, cryptoServe and oasbLevel, so a seventh member added after signing leaves a scanSummary the TBS has no value for, a signature failure",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "An ATX v1.1 credential signed with the baseline scanSummary (hma, criticalFindings, highFindings, secretless, cryptoServe, oasbLevel), carrying a seventh member in it, extra \"x\", written AFTER signing. The credential schema of atx-spec §1.1 gives scanSummary exactly those six members (additionalProperties false), and JCS(TBS) holds scanSummary as those six members (§1.3a.2 rule 2), so no signature covers a scanSummary with a seventh. The verifier MUST REJECT with a signature-validation reason. A verifier that decodes scanSummary into its six fields drops the seventh member, projects the signed scanSummary and wrongly ACCEPTs a credential carrying a member its signature does not cover."
+    },
+    {
+      "fixture": "fixtures/v1_1-scan-summary-member-outside-type.json",
+      "name": "atx-v1_1/scan-summary-member-outside-type",
+      "requirement": "§1.3a.2 rule 2: each scanSummary member enters the TBS with its type, so a member written outside that type after signing, criticalFindings as the string \"3\", has no value the signature covers and is a signature failure",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.4 Authorization on signed fields requires v1.1"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "REJECT[SIGNATURE_INVALID]",
+      "description": "An ATX v1.1 credential signed with scanSummary.criticalFindings 0, carrying the JSON string \"3\" in that member, written AFTER signing. v1.1 signs JCS(TBS), which holds each scanSummary member with its type, criticalFindings as an integer (atx-spec §1.3a.2 rule 2), so no signature covers a string there. The verifier MUST REJECT with a signature-validation reason. A verifier that leaves a member it cannot decode at its zero value projects the signed 0 and wrongly ACCEPTs a credential carrying a count its signature does not cover."
     },
     {
       "fixture": "fixtures/v1_1-tampered-capabilities.json",
@@ -1103,6 +2462,47 @@
       ],
       "expected": "REJECT[SIGNATURE_INVALID]",
       "description": "An ATX v1.1 credential whose declaredPurpose.category was rewritten from financial-operations to agent-orchestration AFTER signing. Because v1.1 signs JCS(TBS) and declaredPurpose is part of it, the verifier recomputes the canonical bytes, finds they no longer match the signature, and MUST REJECT. This is the integrity property that makes a declared purpose binding and non-repudiable (§1.5)."
+    },
+    {
+      "fixture": "fixtures/v1_1-two-authority-cosignature.json",
+      "name": "atx-v1_1/two-authority-cosignature",
+      "requirement": "§1.3 step 7: at a required trust level of 3, a credential carrying signatures by two distinct trusted authorities, each verifying under a key its own DID publishes, is accepted",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "ACCEPT",
+      "description": "An ATX v1.1 credential issued by the primary authority (did:opena2a:authority:opena2a.org) at trustLevel 3, whose signed root-first issuerChain names the partner authority (did:opena2a:authority:partner.example) and the primary authority, carrying two Ed25519 signatures over the same JCS(TBS) bytes: one by the primary authority's key (#key-1) and one by the partner authority's key (#key-1). The verifier trusts both authorities, publishes each key under its own DID, and requires trust level 3 (verifierState.requiredTrustLevel). Two distinct authorities have each produced a signature the verifier verifies itself, so the distinct signer-authority count of atx-spec core.md §1.3 step 7 is 2. Verifier MUST ACCEPT. This is the control for the four fixtures that carry the same credential with a different signature set and MUST REJECT: v1_1-cosigner-named-not-signed, v1_1-one-authority-threshold-keys, v1_1-one-key-under-two-dids and v1_1-own-key-labelled-as-cosigner."
     },
     {
       "fixture": "fixtures/v1_1-untrusted-chain-authority.json",

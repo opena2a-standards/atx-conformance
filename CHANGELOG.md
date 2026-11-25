@@ -1,18 +1,1460 @@
 # Changelog
 
-This repository carries no tag yet: the section `v0.1.0` lists the changes
-its first tag, `v0.1.0`, is to carry, and the section below it, named for
-commit `e2f9dc4`, lists the fixtures that commit changed. Until that tag
-exists, a consumer pins this repository at a commit. Changes to an existing
-fixture's credential, signatures, verifier state or expected outcome are
-listed here whenever one lands;
+This repository carries no Go version tag yet: the section `v0.1.0` lists
+the changes its first Go version tag, `v0.1.0`, is to carry, and the
+section below it, named for commit `e2f9dc4`, lists the fixtures that
+commit changed. Until that tag exists, a consumer pins this repository at a
+commit. Changes to an existing fixture's credential, signatures, verifier
+state or expected outcome are listed here whenever one lands;
 [`docs/versioning.md`](docs/versioning.md) "Versioning and stability" says
 they should not.
+
+## [Unreleased]
+
+### Added
+
+- `python3 scripts/kit/test/test_kit.py --offline` measures on macOS and on
+  Linux, on the commit checked out, whether the reference verifiers run
+  with the network denied, as `docs/network.md` says they do. It denies the
+  network with `sandbox-exec` on macOS, and on Linux with
+  `unshare --user --net`, which runs each command in a new user and network
+  namespace. It checks that a listener on 127.0.0.1 is reachable outside the
+  denial and refused inside it, and that inside it a UDP socket cannot be
+  connected to 192.0.2.1 or to 2001:db8::1; builds `atx-verify` and the Go
+  verifier from a copy of the commit with `go build`, and installs the
+  Python verifier from the wheels `requirements.lock` pins; then runs
+  `atx-verify` over its embedded fixtures and over `fixtures/`, the kit's
+  `./verify` launcher, the Go verifier and the Python verifier with the
+  network denied and with it allowed. Each run must exit 0 with the network
+  denied, end with the summary line of every fixture passing, and print the
+  same standard output both ways; the same checks refuse three stand-in
+  verifiers, one of them a verifier that exits 1 when it cannot connect to
+  127.0.0.1. With `--log <folder>`, a new or empty folder, it keeps the
+  record of the run there: `offline.log` names the commit it copied, the
+  time and the system, and holds the line of each cell and the command of
+  each run, and beside it each run's standard output and standard error,
+  with the network denied and with it allowed. It then reads the folder
+  back, and refuses altered copies of it. The control's line says how the
+  connection to 127.0.0.1 was refused inside the denial. With
+  `--commit <commit>`, a tag, a branch or a sha of this repository, it
+  measures that commit's verifiers over that commit's fixtures with the
+  checks of the commit checked out, and `offline.log` names both commits;
+  `--commit` without `--offline`, with no commit after it, or naming no
+  commit of this repository exits 2 before any check runs. Run so on the
+  commit the kit release `kit-2026-11-14` carries, a38e000, each of its
+  five verifier runs passed every fixture of that commit with the network
+  denied, on macOS and on Linux. With `--kit <folder>`, an unpacked
+  interop day kit, it measures the kit's own files instead, with neither
+  git nor Go: it installs the Python verifier from the kit's wheels with
+  the network denied, then runs the kit's `atx-verify` for the machine,
+  its `./verify` launcher and the Python verifier with the network denied
+  and allowed, and with the network denied `./verify` must print the
+  kit's capture for that machine when the kit holds one. Run so on the kit
+  of the release `kit-2026-11-14`, it passed 14 of 14 cells on macOS on
+  arm64, in containers on Linux on arm64 and on amd64, and in a virtual
+  machine on Linux on arm64 that had no network adapter, each of the four
+  runs passing every fixture of the kit with the network denied.
+  `docs/network.md` names the check. No fixture, verifier or module
+  dependency changed.
+- `atx-verify` with no argument, run at a terminal, ends with a `Next:` line
+  below the summary line when every fixture passes. The line links to the
+  README section "Try your verifier in two minutes", which installs the
+  interop kit and points it at a verifier of the reader's own. It is written
+  to standard error, and only when standard error is a terminal: the report
+  on standard output is unchanged, and a run whose standard error is a pipe
+  or a file writes nothing it did not write before.
+  `cmd/atx-verify/main_test.go` holds the line, its link to that README
+  heading, and the output of a piped run. `docs/captures/go-verifier.json`
+  is taken again for the new `cmd/atx-verify` tree, and
+  `docs/captures/go-verifier.txt` is unchanged. No fixture, verifier result
+  or module dependency changed.
+- `docs/network.md` names what building the Go verifier and installing the
+  Python verifier's packages fetch: the modules `go.mod` requires
+  (`github.com/cloudflare/circl v1.6.2`, `github.com/gowebpki/jcs v1.0.1`
+  and `golang.org/x/sys v0.28.0`), the atx-conformance module itself and the
+  checksum database lookups when `go run` or `go install` names a version,
+  and the Python packages `cryptography`, `dilithium-py`, `cffi` and
+  `pycparser`, with the releases `requirements.lock` pins for the kit. It
+  says running a reference verifier makes no network request, and lists the
+  runs on macOS and Linux that measured it with the network denied; Windows
+  is listed as not measured. The kit's first-run screen names the page in
+  its network sentence, and `scripts/kit/test/test_kit.py --ci` holds the
+  page to `go.mod` and the lock, and the reference verifiers' sources to
+  importing no network package. No fixture, verifier or module dependency
+  changed.
+- `conformance.json` lists the resource attestation statements of ATX
+  `core.md` §1.6 under `notCovered`, generated from the new entry in
+  `scripts/conformance_profile.py`: no fixture is a resource attestation
+  statement, and the fixture format has no member that carries one.
+- `atx-verify --verifier "<command>"` and `atx-verify --verifier-url <url>`
+  send each embedded fixture to an outside verifier and compare its
+  verdicts with the answer key in `conformance.json`; `--report <dir>` writes
+  `atx-interop-report.json` and `atx-interop-report.md`. With none of the new
+  options, atx-verify's output is unchanged. On macOS 26, a binary built with
+  Go 1.22 stops at start with a dyld error, also with none of the new options,
+  because the kit's `net/http` import links system frameworks; built with
+  Go 1.23 or later it runs. `atx-tour` stops the same way under Go 1.22 on
+  macOS 26, `go run ./cmd/atx-tour` included, and runs under Go 1.23 or later.
+  `answerkey.go` embeds
+  `conformance.json` and `MANIFEST.sha256` in the module's root package. No
+  fixture, expected verdict, verifier logic, schema or module dependency changed.
+- `examples/wrap-verifier.sh` and `examples/serve_verifier.py` put a verifier
+  behind the kit's contract without editing it.
+- `cmd/atx-tour` is a guided tour of the suite, run from a clone. Its pre-flight
+  (`--check`) runs every step with the network blocked and decides which steps
+  the tour shows.
+- `atx-tour --demo <path>` runs steps 6 and 7 against a checkout of the
+  delegation demo, and `--matrix <path>` runs step 8 against a checkout of the
+  agent threat matrix; each is hidden with its reason when the checkout is not ready.
+  The demo's launcher runs outside the tour's sandbox; the steps check its
+  connection log.
+- Two fixtures built by the generator name the credential subject under
+  the `did:web` DID method. `fixtures/foreign-did-method-valid.json` is the
+  `baseline-valid-hybrid.json` credential (ATX v1.0) with `agentDid`
+  `did:web:platform.example:agents:billing-agent` and `publisherDid`
+  `did:web:platform.example`, signed with both suites by the trusted
+  issuer `did:opena2a:authority:opena2a.org`, and expects `ACCEPT`.
+  `fixtures/foreign-did-method-altered-after-signing.json` is the same
+  credential with `agentDid` changed after signing to
+  `did:web:platform.example:agents:other-agent`, and expects
+  `REJECT [SIGNATURE_INVALID]` with a reason containing `signature`. Both
+  reference verifiers report the expected outcome on each with no change to
+  them. The 41 existing fixtures and their `MANIFEST.sha256` lines are
+  byte-identical; the manifest gains two lines. `conformance.json` and the
+  capture under `docs/captures/` are regenerated; the capture gains the
+  fixtures' eight lines, and its summary line's pass and fixture counts go
+  from 41 to 43. The fixture counts in README.md (the first command's
+  summary line, the expected output and the implementation table),
+  COSIGNERS.md, CONTRIBUTING.md, `docs/continuous-verification.md` and
+  `docs/sibling-repositories.md` go from 41 to 43 (the sibling row's v1.0
+  count from 12 to 14), the count of fixtures reaching signature
+  verification in `docs/scope.md` goes from 32 of 41 to 34 of 43 and its
+  count of ACCEPT fixtures from 9 to 10, and `docs/fixtures.md` gains a row
+  for each. The fixture, accept and reject counts of the kit's self-tests
+  in `interop/run_test.go` go from 41, 9 and 32 to 43, 10 and 33.
+  README.md's kit section keeps 9 agree and 32 accepted what must fail:
+  those are the counts of the kit at commit `4f70281`, which its install
+  line pins.
+- `fixtures/expired-beyond-skew.json`, built by the generator, is the
+  `baseline-valid.json` credential (ATX v1.0) with `expiresAt`
+  `2026-05-23T23:58:59Z`, 61 seconds before the pinned verifier clock
+  `2026-05-24T00:00:00Z`, signed over that value, and expects
+  `REJECT [EXPIRED]` with a reason containing `expired`. core.md §1.3 step 2
+  evaluates expiry within the family clock-skew bound of ATP §10.2, under
+  which a verifier tolerates at most 60 seconds of skew, so the credential
+  is expired at every tolerance the bound allows. Both reference verifiers
+  read the clock at the expiry step alone, so moving a fixture's clock back
+  stands in for a verifier that tolerates that much skew: moved back 61
+  seconds, and 3600, the 43 fixtures before this one passed in both
+  verifiers, and this one fails in both; moved back 60 seconds, every
+  fixture passes in both. A test in `verifiers/go/verifier` runs the fixture
+  at its clock moved back by each whole second from 0 to 61: rejected as
+  `EXPIRED` from 0 to 60, accepted at 61, where the clock equals
+  `expiresAt`. Both reference verifiers report the expected outcome with no
+  change to them. The 43 existing fixtures and their `MANIFEST.sha256` lines
+  are byte-identical; the manifest gains one line. The fixture cites
+  ATP-SPEC.md §10.2 at commit `e6b4e29`, which `docs/version-pinning.md`
+  gains a row for. `conformance.json` and the capture under `docs/captures/`
+  are regenerated; the capture gains the fixture's three lines, and its
+  summary line's pass and fixture counts go from 43 to 44. The fixture
+  counts in README.md (the first command's summary line, the expected
+  output and the implementation table), COSIGNERS.md, CONTRIBUTING.md,
+  `docs/continuous-verification.md` and `docs/sibling-repositories.md` go
+  from 43 to 44 (the sibling row's v1.0 count from 14 to 15), the count of
+  fixtures reaching signature verification in `docs/scope.md` goes from 34
+  of 43 to 34 of 44, `docs/scope.md` gains a row for the bound, and
+  `docs/fixtures.md` gains a row. The fixture, accept and reject counts of
+  the kit's self-tests in `interop/run_test.go` go from 43, 10 and 33 to
+  44, 10 and 34.
+- Three fixtures, built by the generator, hold a v1.1 `scanSummary` to the
+  six members the credential schema of core.md §1.1 gives it.
+  `fixtures/v1_1-scan-summary-extra-member.json` is the v1.1 baseline with
+  a seventh `scanSummary` member, `extra` `"x"`, written after signing.
+  `fixtures/v1_1-scan-summary-extra-member-signed.json` carries the same
+  member with an Ed25519 signature over `JCS(TBS)` holding it as written,
+  so a verifier that writes every `scanSummary` member it reads into
+  `JCS(TBS)` verifies that signature.
+  `fixtures/v1_1-scan-summary-case-variant-member.json` is the v1.1
+  baseline with `scanSummary.criticalFindings` renamed `CriticalFindings`
+  after signing, the value 0 unchanged. Each expects
+  `REJECT [SIGNATURE_INVALID]` with a reason containing `signature`. Before
+  the change to the verifiers under Changed, both reference verifiers
+  accepted the first and the third, and rejected the second because its
+  signature did not verify over the six members they project. The 44
+  existing fixtures and their `MANIFEST.sha256` lines are byte-identical;
+  the manifest gains three lines. `scripts/schema_validation.py` pins the
+  schema errors each fails on: one `additionalProperties` error at
+  `scanSummary` naming `extra` for the first two, and for the third that
+  error naming `CriticalFindings` and the `required` error for
+  `criticalFindings`. `conformance.json` and the capture under
+  `docs/captures/` are regenerated; the capture gains the fixtures' nine
+  lines, and its summary line's pass and fixture counts go from 44 to 47.
+  The fixture counts in README.md (the first command's summary line, the
+  expected output and the implementation table), COSIGNERS.md,
+  CONTRIBUTING.md, `docs/continuous-verification.md` and
+  `docs/sibling-repositories.md` go from 44 to 47 (the sibling row's v1.1
+  count from 29 to 32), the count of fixtures reaching signature
+  verification in `docs/scope.md` goes from 34 of 44 to 37 of 47,
+  `docs/fixtures.md` gains a row for each, and the reproduction steps in
+  `docs/reproducing-the-fixtures.md` name the payload the second is signed
+  over, `canonicalPayloadV11WithScanSummaryMember`. The fixture, accept and
+  reject counts of the kit's self-tests in `interop/run_test.go` go from
+  44, 10 and 34 to 47, 10 and 37 (#277).
+- A benchmark for each reference verifier. `BenchmarkVerify` in
+  `verifiers/go/verifier/verify_bench_test.go` and
+  `verifiers/python/bench_verify.py` time the verification of one
+  credential on the baseline credential of ATX v1.0 and of v1.1, each
+  signed with Ed25519 alone and with Ed25519 plus ML-DSA-65.
+  `scripts/bench_report.py` runs both and prints each figure on a line of
+  its own with the benchmark's name, the commit of the checkout, the CPU
+  model and the number of logical CPUs; no exit status depends on a figure.
+  `docs/running-the-verifiers.md` gains a section, "Benchmarks". No
+  fixture, expected verdict, verifier logic, schema or module dependency
+  changed.
+- Five fixtures, built by the generator, exercise the distinct
+  signer-authority count of atx-spec `core.md` §1.3 step 7. The fixture
+  format gains `verifierState.requiredTrustLevel`, the trust level the
+  relying party requires (`schemas/fixture-v1.schema.json`: an integer from
+  0 to 4, absent meaning none), and the reject category
+  `INSUFFICIENT_SIGNER_AUTHORITIES`. Each fixture carries one ATX v1.1
+  credential at `trustLevel` 3 whose signed `issuerChain` names the partner
+  authority and the primary authority, under a verifier state that trusts
+  both and sets `requiredTrustLevel` 3.
+  `fixtures/v1_1-two-authority-cosignature.json`, signed by both
+  authorities, expects `ACCEPT`.
+  `fixtures/v1_1-cosigner-named-not-signed.json` (the primary's signature
+  alone), `fixtures/v1_1-one-authority-threshold-keys.json` (three keys of
+  the primary), `fixtures/v1_1-one-key-under-two-dids.json` (the primary
+  key's signature under its own `keyId` and under a partner `keyId` that
+  publishes the same key) and
+  `fixtures/v1_1-own-key-labelled-as-cosigner.json` (a second primary key's
+  signature carrying the partner's `keyId`) each expect
+  `REJECT [INSUFFICIENT_SIGNER_AUTHORITIES]` with a reason containing
+  `distinct signer authorities`. Before the change to the verifiers under
+  Changed, both reference verifiers accepted each of the four.
+  `vectors/issuer-primary-under-partner-did.json` holds the primary's
+  public key as `partner.example` publishes it, and no seed. The 47
+  existing fixtures keep their credential, signatures, verifier
+  state and expected outcome; the description of
+  `fixtures/threshold-2of3-cosignature.json` is corrected (under Changed),
+  so its `MANIFEST.sha256` line changes, and the manifest gains five lines.
+  `conformance.json` and the capture under `docs/captures/` are
+  regenerated; the capture's summary line's pass and fixture counts go from
+  47 to 52. The fixture counts in README.md (the first command's summary
+  line, the expected output and the implementation table), COSIGNERS.md,
+  CONTRIBUTING.md, `docs/continuous-verification.md` and
+  `docs/sibling-repositories.md` go from 47 to 52 (the sibling row's v1.1
+  count from 32 to 37), the count of fixtures reaching signature
+  verification in `docs/scope.md` goes from 37 of 47 to 42 of 52 and its
+  count of ACCEPT fixtures signed with Ed25519 alone from 7 of 10 to 8 of
+  11, `docs/fixtures.md` gains a row for each and a section, "Required
+  trust level: the distinct signer-authority count", and the reproduction
+  steps in `docs/reproducing-the-fixtures.md` name the vector that holds no
+  seed and the two fixtures that relabel a signature entry after signing.
+  The fixture, accept and reject counts of the kit's self-tests in
+  `interop/run_test.go` go from 47, 10 and 37 to 52, 11 and 41.
+- `scripts/check_step7_coverage.py` fails when `conformance.json` lists
+  §1.3 step 7 under `notCovered` and the Coverage paragraph of the vendored
+  `core.md` does not list it among the requirements no fixture exercises,
+  or the other way round, and, once neither lists it, unless a fixture with
+  `verifierState.requiredTrustLevel` 3 or higher expects `ACCEPT` and
+  another expects `REJECT [INSUFFICIENT_SIGNER_AUTHORITIES]`.
+  `scripts/conformance_profile.py --check` runs its self-test and check
+  after those of `scripts/check_spec_refs.py`.
+- Five fixtures, built by the generator, exercise the revocation list a
+  verifier holds (atx-spec `core.md` §1.3 step 6): its dates, read within
+  the family clock-skew bound of ATP §10.2, at most 60 seconds; the order of
+  its entries and its dates; and a list required and not held. Each carries
+  the `fixtures/v1_1-baseline-valid-hybrid.json` credential byte for byte,
+  and only its verifier state differs from that fixture's.
+  `fixtures/v1_1-crl-fresh-agent-absent-hybrid.json`, a current list that
+  names another agent, expects `ACCEPT`.
+  `fixtures/v1_1-crl-past-nextupdate-beyond-skew-hybrid.json`, a list whose
+  `nextUpdate` is 61 seconds before the verifier clock, and
+  `fixtures/v1_1-crl-issued-after-clock-beyond-skew-hybrid.json`, a list
+  whose `issuedAt` is 61 seconds after it, each naming another agent, expect
+  `REJECT [REVOCATION_UNKNOWN]` with a reason containing `nextUpdate` and
+  `issuedAt` respectively.
+  `fixtures/v1_1-crl-past-nextupdate-lists-agent-hybrid.json`, the first of
+  those lists naming the credential's agent, expects `REJECT [REVOKED]` with
+  a reason containing `CRL`.
+  `fixtures/v1_1-crl-required-none-held-hybrid.json`, a verifier state that
+  holds no list and sets `revocationListRequired`,
+  expects `REJECT [REVOCATION_UNKNOWN]` with a reason containing
+  `no revocation list`. `schemas/fixture-v1.schema.json` gains two members
+  and one enum value, a minor version of the fixture format
+  (`docs/versioning.md`): `verifierState.revocationListRequired`, a boolean
+  that, absent or false, leaves a fixture with no `crl` outside step 6; a
+  `description` of `verifierState.crl.signature`, which says the reference
+  verifiers do not verify it; and the reject category `REVOCATION_UNKNOWN`.
+  The 52 existing fixtures and their `MANIFEST.sha256` lines are
+  byte-identical; the manifest gains five lines. `conformance.json` and the
+  capture under `docs/captures/` are regenerated; the capture's summary
+  line's pass and fixture counts go from 52 to 57, and the reason of the
+  `notCovered` entry for `core.md` §3.3 names the fixture that pins a
+  list's `nextUpdate` and the window counted from the verifier's own fetch,
+  which no fixture exercises. The fixture counts in README.md (the first
+  command's summary line, the count beside the pinned install command, the
+  expected output and the implementation table), COSIGNERS.md,
+  CONTRIBUTING.md, `docs/continuous-verification.md` and
+  `docs/sibling-repositories.md` go from 52 to 57 (the sibling row's v1.1
+  count from 37 to 42), the count of fixtures reaching signature
+  verification in `docs/scope.md` goes from 42 of 52 to 43 of 57 and its
+  count of ACCEPT fixtures signed with Ed25519 alone from 8 of 11 to 8 of
+  12, `docs/scope.md` gains two rows and lists the list's `signature` among
+  what the suite does not verify, and `docs/fixtures.md` gains a row for
+  each, a sentence on the `revoked.json` row and a section, "Revocation
+  lists: freshness and a list required". The fixture, accept and reject
+  counts of the kit's self-tests in `interop/run_test.go` go from 52, 11 and
+  41 to 57, 12 and 45.
+- `atx-export --form vc <fixture>` writes the credential of a native fixture
+  as a W3C Verifiable Credential 2.0 with one `eddsa-jcs-2022` Data Integrity
+  proof, signed with the suite's published test keys, the same bytes on every
+  run; `--mldsa65-proof` adds a second proof with the experimental
+  `mldsa65-jcs-2024` suite, as the 2026-03-01 revision of the W3C
+  Quantum-Resistant Cryptosuites Editor's Draft defines it (later revisions
+  leave the ML-DSA-65 suites out). This is a draft form, and its description
+  is not yet published. It signs nothing, and exits 3, when a native
+  signature does not verify over the native bytes, or when an ATX v1.1
+  credential's `behavioralProfile` or `scanSummary` holds a member those
+  bytes leave out (a `scanSummary` member named `techniques` is one, even
+  when it is null or an empty array), or when an ATX v1.1 credential writes
+  a number those bytes do not hold as written: an integer of the signed
+  members whose magnitude is above 2^53-1, or a `declaredPurpose` number
+  written with a fraction or an exponent part. RFC 8785 writes such a number
+  as the double nearest it (9007199254740993 as 9007199254740992, `1e3` as
+  1000), so the native signatures verify whichever of the two the credential
+  writes; both reference verifiers reject such a credential as
+  `SIGNATURE_INVALID`, and the command's message names the member and the
+  number as the Go verifier's reason does. A number outside the IEEE 754
+  double range, `1e400` for one, makes a fixture the command cannot read,
+  and it exits 1 naming the member and the number. The range is decided on
+  the digits as written, so 1 followed by 1000 zeros and `e-650`, whose
+  value is 10^350, is outside it whatever Go release builds the command;
+  the RFC 8785 library reads that literal as 1e+149 built with Go 1.22.0 or
+  Go 1.26.3. It signs nothing, and exits 3, when the credential, of either
+  atcVersion, holds a number that RFC 8785, the form the credential is
+  written in, writes in another form: RFC 8785 writes each number as the
+  IEEE 754 double nearest it, so an ATX v1.0 `trustLevel` of
+  9007199254740993, which the native signature covers digit for digit,
+  would be written as 9007199254740992, a `trustScore` of -0 as 0, and a
+  `declaredPurpose` number `1e3` as 1000. Its message names the number, its
+  member and the form RFC 8785 writes it in. `issuedAt` and `expiresAt` are
+  read as the Go reference verifier reads a timestamp, whatever Go release
+  builds the command: one written with a JSON escape, which encoding/json
+  reads into a plain `time.Time` built with Go 1.27.0, or with a time zone
+  offset hour above 24 or minute above 60, which it reads built with Go
+  1.22.0, makes a fixture the command cannot read, and it exits 1 with that
+  verifier's reason.
+  So does the `declaredPurpose` of an ATX v1.1 credential that holds an
+  unpaired UTF-16 surrogate escape. RFC 8785 refuses a string that holds a
+  lone surrogate, and the library that computes the native bytes reads such
+  an escape and a `\u` escape directly after it as a single U+FFFD, so a
+  native signature made over a `declaredPurpose` that holds U+FFFD verifies
+  a credential that writes the two escapes in its place, where another JSON
+  reader reads U+FFFD and the second escape's character; both reference
+  verifiers reject such a credential as `VERIFIER_CONFIG_ERROR`, and the
+  command's message names the escape as the Go verifier's reason does.
+  It signs nothing, and exits 3, as well when an ATX v1.1 credential's
+  `behavioralProfile` holds null for `checksum`, `generatedAt` or
+  `observationDays`, or lacks one of them. The native bytes hold that
+  member's zero value (an empty `checksum`, the `generatedAt`
+  `0001-01-01T00:00:00Z`, the `observationDays` 0), so a native signature
+  made over the zero value verifies a credential that does not write it;
+  both reference verifiers reject such a credential as `SIGNATURE_INVALID`,
+  and the command's message describes the profile as the Go verifier's
+  reason does. The same refusal meets a `generatedAt` that the build of the
+  command reads and the reference verifiers do not read as a timestamp: a
+  time zone offset with an hour above 24 or a minute above 60, which a
+  build with Go 1.22 reads, and a timestamp written with a JSON escape,
+  which a build with Go 1.27 reads.
+  `@digitalbazaar/vc` 7.3.0 with
+  `@digitalbazaar/eddsa-jcs-2022-cryptosuite` 1.0.0 verified the output for
+  each ACCEPT fixture; on the output with `--mldsa65-proof` it checked the
+  Ed25519 proof only. No fixture, expected verdict, verifier, schema or
+  module dependency changed.
+
+### Changed
+
+- Both reference verifiers print fixture fields and file names with control characters escaped.
+- Reason lines write the credential's `issuerDid`, signature `algorithm` and
+  `keyId` in double quotes, escaped as Go's `strconv.QuoteToASCII` escapes
+  them, so both verifiers print the same bytes.
+- README.md states above its first command the toolchain each verifier
+  needs, Go 1.22 or later and Python 3.11 or later, the minimums the
+  dependency lists of `docs/running-the-verifiers.md` state (#305). Its
+  paragraph on how `@latest` and the `@<commit>` forms resolve through the
+  Go module proxy moved to that page, under "Which version `go run`
+  fetches", which also says what a pseudo-version is; README.md keeps a
+  sentence on what `@latest` resolves to and a link to that section. The
+  Python verifier's install line in README.md, that page and COSIGNERS.md
+  passes `--disable-pip-version-check`: in a new virtual environment with
+  pip 26.0, the line without it wrote two `[notice]` lines to standard
+  error, that pip 26.3 was available and how to upgrade, and with it wrote
+  nothing there. `scripts/check_readme_counts.py` holds the text above
+  README.md's first command to the minimums those lists state, and each
+  `pip install` line in a fenced block of the README, its pages and
+  COSIGNERS.md to the flag. Its self-test adds 21 cases. No fixture or
+  verifier changes.
+- README.md says each fixture bundles an ATX, the name the vendored
+  specification text `schemas/vendor/atx-spec/core.md` gives the
+  credential, where it said an Agent Trust Credential, a name core.md does
+  not use (#315). The wire names `atcVersion` and the
+  `Agent-Trust-Credential` header are unchanged.
+  `scripts/check_readme_counts.py` holds each `Agent Trust <word>` name in
+  the README and its pages to the names core.md uses, Agent Trust
+  eXtension and Agent Trust Protocol; a name written with hyphens is not
+  held. Its self-test adds 9 cases. No fixture or verifier changes.
+- Both reference verifiers reject a v1.1 credential whose `scanSummary`
+  holds a member under a name other than `hma`, `criticalFindings`,
+  `highFindings`, `secretless`, `cryptoServe` and `oasbLevel`, the names
+  compared exactly, as `SIGNATURE_INVALID` before they read a signature,
+  with the reason
+  `no signature covers scanSummary, which holds a member other than its six`
+  (#277). The credential schema core.md §1.1 points to gives `scanSummary`
+  those six members (`additionalProperties` false), so `JCS(TBS)` has no
+  value for any other. The Go verifier decoded `scanSummary` with
+  `encoding/json`, which matches a member name to its field
+  case-insensitively and drops a member it has no field for, and the
+  Python verifier read the names the same way, so the v1.1 baseline
+  verified carrying a seventh member or `criticalFindings` under the name
+  `CriticalFindings`. A `scanSummary` holding only the six names keeps the
+  reason
+  `no signature covers scanSummary, which holds a member outside its type or is not an object`
+  for a member outside its type, as does one that is not an object; one
+  holding a name outside the six and a member outside its type reports the
+  name. The projection into `JCS(TBS)` is unchanged: the baseline with a
+  seventh member or with `CriticalFindings` still projects the six members
+  it signs, and the refusal comes before a signature over it is read. At
+  this pin of the vendored specification a member under any other name is
+  refused, `techniques` included; the set of names widens to admit
+  `techniques` when the vendored specification is re-pinned at a revision
+  that defines it. `verifiers/python/test_verify.py` held `scanSummary.hma`
+  renamed `HMA` on the v1.1 baseline to `ACCEPT`, the Go verdict before
+  this change, and now holds it to `SIGNATURE_INVALID`.
+- Both reference verifiers perform the distinct signer-authority count of
+  atx-spec `core.md` §1.3 step 7. Once a credential's declared signatures
+  have verified and the Ed25519 companion and `requiredSignatures` checks
+  have passed, they count the authorities that produced a signature they
+  verified: a signature counts for the DID its `keyId` names only when that
+  DID is a trusted issuer eligible for the credential and publishes the
+  verifying key, and signatures that share an authority or a public key
+  count once. With `verifierState.requiredTrustLevel` 3 or higher, a count
+  below 2 rejects as `INSUFFICIENT_SIGNER_AUTHORITIES`. Under each fixture
+  that reaches step 7 they print `distinct signer authorities (step 7): N;
+  trustLevel T asserted`, where they printed `trustLevel T asserted;
+  distinct-authority count (step 7) not performed by this verifier` under
+  each accepted fixture at trust level 3 or higher: in the capture under
+  `docs/captures/`, lines of the first form go from 0 to 15 and lines of the
+  second from 10 to 0. The coverage of each verifier in `conformance.json`
+  names the count; its step 7 `notCovered` entry stays, with a reason that
+  says the Coverage paragraph of `core.md` at the pinned atx-spec commit
+  still lists step 7 and that the two drop it together.
+  `verifiers/python/test_verify.py` held the Python verifier's coverage list
+  to claiming no step 7 check, and now holds it to claiming the count it
+  performs.
+- The description of `fixtures/threshold-2of3-cosignature.json` is
+  corrected in place: it said a verifier must validate at least two of the
+  three signatures for trust level 4, while every declared signature must
+  verify and the three keys belong to one authority, which §1.3 step 7
+  counts once. Its credential, signatures, verifier state and expected
+  outcome are unchanged.
+- Both reference verifiers read a held CRL's dates at their step 3
+  (atx-spec `core.md` §1.3 step 6), after the credential's `revoked` flag
+  and the agent's entry on the list, which revokes whatever the list's
+  dates: a list whose `nextUpdate` is more than 60 seconds before the
+  verifier clock, or whose `issuedAt` is more than 60 seconds after it,
+  rejects as `REVOCATION_UNKNOWN`, and so does no list where the verifier
+  state sets `revocationListRequired`. The 60 seconds is one constant in each
+  verifier, `atpMaxSkew` in Go and `ATP_MAX_SKEW_SECONDS` in Python, named
+  for ATP §10.2. Each reason opens with `revocation unknown:` and names the
+  date and the verifier clock, or the missing list. Neither verifier reads
+  the list's `signature`. The Python verifier type-checks
+  `verifierState.revocationListRequired` as the Go verifier decodes it: a
+  value that is not a JSON boolean fails to load. In the capture under
+  `docs/captures/`, the lines of the 52 existing fixtures are unchanged.
+  `go test` in `verifiers/go` holds
+  `fixtures/v1_1-crl-past-nextupdate-beyond-skew-hybrid.json` and
+  `fixtures/v1_1-crl-issued-after-clock-beyond-skew-hybrid.json` to
+  rejecting at every tolerance from 0 to 60 seconds and accepting at 61,
+  and each of the five to carrying the baseline credential byte for byte;
+  rows added to `verifiers/python/test_verify.py` hold the Python
+  verifier's reading of `revocationListRequired` and of the list's dates to
+  the Go verifier's.
+  `scripts/check_readme_counts.py` places `REVOCATION_UNKNOWN` at step 3,
+  before signature verification.
+- The interop day kit's `README-START-HERE.md` ends with
+  `Not in this kit: github.com/opena2a-standards/{atp,aip,aap}-conformance`,
+  one line that names the sibling suites atp-conformance, aip-conformance
+  and aap-conformance by URL and says none of the three is in the kit. The
+  line takes the place of a blank line, so the screen keeps its line count
+  and its anchors within line 30: without the terminal-safety lines, the
+  blank line above `In this folder:`; with them, the blank line above
+  `Check before you run`. `scripts/kit/test/test_kit.py --ci` adds two
+  cells: one fails unless a line of each render names the three by URL and
+  says they are not in the kit, and one drops that line and must be
+  refused. No fixture or verifier changes.
+- README.md's kit section, `Try your verifier in two minutes`, installs the
+  kit at commit `a38e000`, the commit the kit release `kit-2026-11-14`
+  carries, where it installed the kit at `4f70281`, and the count of
+  fixtures it gives for the commit it installs goes from 41 to 47. Its two
+  sentences on what the kit reports for `true`, which answers ACCEPT to
+  everything, said 9 agree and 32 accepted what must fail, the counts of
+  the kit at `4f70281`. They now say 10 agree and 37 accepted what must
+  fail: the fixtures at `a38e000` hold 10 that must pass and 37 that must
+  fail. Built from `a38e000` and run with `--verifier true`, and with
+  `--verifier-url` against `examples/serve_verifier.py` serving `true`, the
+  kit answers 47 of 47 credentials, agrees with the answer key on 10 and
+  accepts 37 that must fail. `scripts/check_readme_counts.py` does not hold
+  these two counts. No fixture or verifier changes.
+- `docs/version-pinning.md` notes where atx-spec `main` governs until this
+  suite re-pins.
+
+### Fixed
+
+- The Python verifier names an unpaired UTF-16 surrogate escape in the
+  `declaredPurpose` of an ATX v1.1 credential as the file writes it, as the
+  Go verifier does (#421). It wrote the escape's hex digits in lower case:
+  for a copy of `fixtures/v1_1-baseline-valid.json` whose `declaredPurpose`
+  is `{"s": "\uD800A"}`, the Go verifier's reason named `\uD800` and
+  the Python verifier's `\ud800`, so the two reports of one folder
+  differed, with the same verdict and category, `REJECT` and
+  `VERIFIER_CONFIG_ERROR`. It now reads the escape from the text of the
+  file it loaded, and the two reports of that folder are the same bytes.
+  `test_declared_purpose_escape_is_named_as_written` and
+  `test_declared_purpose_escape_is_named_from_declared_purpose` in
+  `verifiers/python/test_verify.py` pin the reason for escapes written with
+  upper-case and mixed-case digits, in a member name, after a complete
+  pair, under member names in another case, and after other strings that
+  write an unpaired escape in lower case;
+  `test_same_report_of_unpaired_surrogate_escapes` runs both verifiers over
+  a folder of 10 such files and compares their reports byte for byte. No
+  fixture, expected verdict or workflow file changes.
+- The repository layout in `CONTRIBUTING.md` said the verifier wall lists
+  the verifiers whose maintainers ran the interop kit at a released version
+  and passed, naming no rule (#417). `wall/README.md`, the docstring and
+  usage text of `scripts/check_wall.py` and the description of
+  `schemas/wall-v1.schema.json` say that the wall's pass rule,
+  `acceptedMustFail` is 0 and `couldNotRead` is below `fixtureCount`, is
+  not the kit's exit status, which is 0 only when every fixture agrees.
+  The layout's `wall/` line now says the runs passed by the wall's own
+  rule, not the kit's exit status, and that `wall/README.md` says what
+  passed means on the wall. `TheWallsOwnRule` in
+  `scripts/test_check_wall.py` reads that line too, as
+  `scripts/check_readme_counts.py` reads the layout, and fails when it
+  lacks the phrase `passed by the wall's own rule` or
+  `not the kit's exit status`; on the layout as it was, it failed, naming
+  both. No fixture, expected verdict or workflow file changes.
+- The repository layout in `CONTRIBUTING.md` names the verifier wall, and
+  `scripts/check_readme_counts.py` holds the layout to the tree (#415). The
+  layout gave no line to `wall/`; its `schemas/*.schema.json` line named the
+  fixture-v1 and conformance-profile-v1 formats but not wall-v1; it gave no
+  line to `scripts/test_check_wall.py`, while each other test module the
+  workflow runs has one; and it gave none to `scripts/check_wall.py`, which
+  no workflow step runs, while its `scripts/*.py` line labels the scripts CI
+  gates. The script exited 0 on that layout. It counted `check_wall.py` as
+  run because `scripts/test_check_wall.py`, a test module the Python unit
+  tests step discovers, imports it; it now follows imports from the scripts
+  a step names, and reports `check_wall.py` as not run. It also fails now
+  when a top-level directory holding a file git tracks, other than one
+  whose name opens with a dot, opens no line of the layout, when the
+  `schemas/*.schema.json` line does not name the format of each file that
+  glob matches, and when a test module the workflow's unittest discovery
+  imports has no line of its own. On the layout as it stood, it exits 1 and
+  lists four failures, one for each omission. The layout gains lines for
+  `wall/`, `scripts/check_wall.py` (run by hand, with the command that runs
+  it) and `scripts/test_check_wall.py`, and its `schemas/*.schema.json`
+  line names wall-v1; with them the script exits 0. Its self-test adds 14
+  cases. No fixture, expected verdict or workflow file changes.
+- The self-test of `scripts/schema_validation.py` builds, for each schema
+  `schemas/*.schema.json` matches, a copy identified by a path under the
+  served prefix that no file has, and requires the address check to report
+  it (#415). It altered copies of the fixture-v1 and conformance-profile-v1
+  schemas alone, while `docs/continuous-verification.md` says the
+  self-test proves the check fails "on copies of each schema that name
+  another address": `schemas/wall-v1.schema.json` had no such case. The
+  self-test adds two cases, a copy of the conformance-profile-v1 schema and
+  a copy of the wall-v1 schema, and the fixture-v1 schema's case is built
+  the same way. No fixture, expected verdict or workflow file changes.
+- `python3 -I scripts/check_wall.py`, on a wall row whose `agree` and
+  `rejectedMustPass` were each the digit 9 written 4300 times, ended in a
+  Python traceback, `ValueError: Exceeds the limit (4300 digits) for
+  integer string conversion`, and printed no refusal line (#413): the sum
+  of the two has 4301 digits, which Python 3.14.3 refuses to write. It now
+  prints one `sum` refusal line for the row, in which a count or sum of
+  more than 80 digits is written as its first 77 digits and `...`, and
+  exits 1. The `fixture-count` and `pass` refusals cut such a count the
+  same way; a count of at most 80 digits is written in full, as before.
+  Its self-test adds two cases. No fixture, verifier or expected verdict
+  changes.
+- `scripts/check_wall.py` called its rule that `acceptedMustFail` is 0 and
+  `couldNotRead` is below `fixtureCount` the rule by which a run of the kit
+  passes, and its usage text called it the pass rule; `wall/README.md` said
+  the wall lists verifiers whose maintainers ran the kit and passed, and
+  the descriptions in `schemas/wall-v1.schema.json` said each row's
+  verifier version passed a run of the interop kit (#414). The kit exits 0
+  only when every fixture agrees with the answer key, and 1 when any does
+  not, while the check admits a row whose `agree` is below `fixtureCount`,
+  0 included. Those texts now say that the pass rule is the wall's own, not
+  the kit's exit status, and what passed means on the wall: `acceptedMustFail`
+  is 0 and `couldNotRead` is below `fixtureCount`, the verifier accepting
+  no fixture that must fail and the kit reading an ACCEPT or REJECT from it
+  on at least one fixture. The refusal for an `acceptedMustFail` above 0
+  now ends `a row is admitted only at 0`, where it ended
+  `a run passes only at 0`. A new class of `scripts/test_check_wall.py`,
+  `TheWallsOwnRule`, fails when the module docstring, the usage text, the
+  README or the schema's description lacks one of the phrases
+  `acceptedMustFail is 0 and couldNotRead is below fixtureCount`,
+  `not the kit's exit status` and
+  `the kit exits 0 only when every fixture agrees`, or when that refusal
+  says a run passes; on the texts as they were, it failed on each of the
+  four and on the refusal. It also holds the end of the kit's run in
+  `interop/run.go`, and its usage text, to that exit status, and checks
+  that the wall admits a row in which no fixture agreed. No rule or exit
+  status of the check changes, and no fixture, verifier or expected
+  verdict changes.
+- `python3 scripts/kit/test/test_kit.py --offline`, with git not on PATH,
+  ended in a Python traceback, `FileNotFoundError: [Errno 2] No such file
+  or directory: 'git'`, exited 1 and left its `kit-test-*` scratch folder
+  in `TMPDIR` (#405). Without `--kit`, it now exits 2 before any check
+  runs, the first line of its standard error saying that `--offline`
+  without `--kit` needs git, which is not on PATH, and that
+  `--offline --kit KIT` needs neither git nor Go. The scratch folder that
+  `test_kit.py` makes when it starts is now also removed when a run exits
+  before its checks. Measured on this tree, none is left by each run the
+  `--ci` cells make it refuse, by a run with an option it does not know,
+  or by a run that ends in a traceback before its checks
+  (`--offline --log /dev/null/x` was one until #408, below, made it
+  exit 2); on the commit before, each of the refused runs left one. The
+  `--ci` cells that run `test_kit.py` with options it refuses now also
+  check that each run leaves no scratch folder in its
+  `TMPDIR`, and add three runs with git not on PATH: `--offline`,
+  `--offline --commit` with HEAD's sha, and `--offline --kit` naming a
+  folder that holds each file the `--kit` checks read, which gets past the
+  `--kit` check to the `--log` one. No fixture, verifier or expected
+  verdict changes.
+- `python3 scripts/kit/test/test_kit.py --offline --log /dev/null/x`, a
+  `--log` path under a file that is not a folder (`/dev/null` is a
+  character device), where no folder can be made, ended in a Python
+  traceback, `NotADirectoryError: [Errno 20] Not a directory`,
+  and exited 1 (#408). It now exits 2 before any check runs, the first line
+  of its standard error reading
+  `test_kit: --log /dev/null/x: no folder can be made there (Not a directory)`,
+  as measured on macOS. The `--ci` cells that run `test_kit.py` with
+  options it refuses add one such run, `--offline --log` naming a path
+  under a regular file. No fixture, verifier or expected verdict changes.
+- `python3 scripts/kit/test/test_kit.py --offline --log <path>` ended in a
+  Python traceback and exited 1 before any check ran (#411): with Python
+  3.9.6, 3.12.12 and 3.13.12, for a `--log` path in a folder with mode
+  000, a path under a file in such a folder, or a path whose last name is
+  300 bytes long, where `Path.exists()` raised `PermissionError` or
+  `OSError` (File name too long); and with those and 3.14.3, for an
+  existing empty folder with mode 000, which it could not list, or with
+  mode 500, where it could not write `offline.log`. Each of these runs now
+  exits 2 before any check runs, the first line of its standard error
+  naming the reason: `no folder can be made there (Permission denied)`,
+  `no folder can be made there (File name too long)`,
+  `the folder cannot be listed (Permission denied)` or
+  `offline.log cannot be written there (Permission denied)`, as measured
+  on macOS with Python 3.9.6, 3.12.12, 3.13.12 and 3.14.3. The `--ci`
+  cells that run `test_kit.py` with options it refuses add these five
+  runs. Each first checks that the mode, or the name's length, denies the
+  step to the user running the cells; when it does not, the cell fails
+  and the run is not started. No fixture, verifier or expected verdict
+  changes.
+- README.md gives `docs/captures/go-verifier.txt` as the full output of
+  `atx-verify` with no argument, and neither it nor
+  `docs/running-the-verifiers.md` said that at a terminal a run in which
+  every fixture passes writes one more line, the `Next:` line, to standard
+  error, below the summary line where the capture ends (#403). Both now
+  quote that line where they describe the run with no argument, say a run
+  at a terminal writes it to standard error, and say the capture is the
+  run's standard output; `docs/running-the-verifiers.md` adds that a run
+  with an argument, `--` alone included, or one whose standard error is a
+  pipe or a regular file writes no such line. `TestDocsQuoteTheNextStep` in
+  `cmd/atx-verify/main_test.go` fails when either page has no paragraph
+  outside a fenced block that quotes the line, or when that paragraph does
+  not name the terminal, standard error, the summary line, standard output
+  and the capture; on both pages as they were, it fails for the missing
+  quote. `docs/captures/go-verifier.json` is taken again for the new
+  `cmd/atx-verify` tree, and `docs/captures/go-verifier.txt` is unchanged.
+  No verifier code, fixture or expected verdict changes.
+- Three sentences of this file's top section, in the entries for #302 and
+  #308, gave the go1.22 and go1.26 reading of `strconv.ParseFloat`, and of
+  the Go verifier's JCS library that reads numbers with it, without naming
+  a Go release (#399). Each now names the release whose reading it gives,
+  and gives the go1.27 reading beside it.
+  `GoReleaseOfEachParseFloatReading`, the test added for #397 in
+  `verifiers/python/test_verify.py`, now also reads the top section of this
+  file, and fails on a sentence there that names `strconv.ParseFloat`, or
+  its go1.22 and go1.26 reading 1e+149, and no Go release; on this file as
+  it was, it finds those three sentences and the one in the #397 entry that
+  describes that test, which now names the two releases too. No verifier
+  code, fixture or expected verdict changes.
+- Five comments of the Python reference verifier, in
+  `verifiers/python/verify.py` and `verifiers/python/test_verify.py`, gave
+  the go1.22 and go1.26 reading of `strconv.ParseFloat`, and of the Go
+  verifier's JCS library that reads numbers with it, for numbers written
+  with more than 800 digits without naming a Go release. Each now names the
+  release whose reading it gives, and gives the go1.27 reading beside it:
+  built with go1.27, `strconv.ParseFloat` refuses 1 followed by 1000 zeros
+  and e-650 as outside the float64 range, where go1.22 and go1.26 read it as
+  1e+149, and reads 875 followed by 900 zeros and e-901 as 87.5, where they
+  read it as 8.75e-102. A new test in `test_verify.py` fails on a comment or
+  docstring sentence of either file that names `strconv.ParseFloat`, or its
+  go1.22 and go1.26 reading 1e+149, and no Go release. No verifier code,
+  fixture or expected verdict changes.
+- The Go verifier's unit tests pass under go1.27 as under go1.22 and go1.26:
+  two tests expected `strconv.ParseFloat`, and the JCS library that reads
+  numbers with it, to read 1 followed by 1000 zeros and e-650, whose value is
+  10^350, as 1e+149 with no error, which go1.26 does and go1.27, refusing it
+  as outside the float64 range, does not. They now accept either reading and
+  check the verdict, the same under both: a v1.1 `declaredPurpose` number
+  outside the float64 range rejects as SIGNATURE_INVALID, with a reason that
+  quotes it as written. `docs/captures/go-verifier.txt` is unchanged byte for
+  byte; its sidecar, `docs/captures/go-verifier.json`, records the tree ids
+  `verifiers/go/verifier` and `conformance.json` have now, both changed since
+  it was taken, so `scripts/capture_go_verifier.py --check` passes, where it
+  failed before. No fixture, expected verdict or workflow file changes.
+- `scripts/check_readme_counts.py` reads in either letter case the words by
+  which two of its rules find a sentence that gives a pseudo-version to a
+  commit with no tag (#389): the rule on the whole-line comments of the four
+  files that say what version `go run` resolves, and the rule on the README
+  and this file's opening paragraph while the repository carries a tag that
+  names no version. Both read those words in lower case only, so a sentence
+  opening with one of them passed. Appended to
+  `verifiers/go/verifier/verify.go` with a line of code after each, the
+  comments `// Untagged commits resolve to a pseudo-version.`, `// Commits
+  that carry no tag resolve to a pseudo-version.`, `// Pseudo-versions name
+  untagged commits.` and `// It has no tag, so Go resolves the commit to a
+  pseudo-version.` left the script at exit 0, with `Commits that carry no tag
+  resolve to a pseudo-version.` and `Pseudo-versions name commits that have no
+  tag.` appended to `README.md` as well. With the same six it now exits 1 and
+  lists one failure quoting each, those for the comments naming `verify.go`.
+  The self-test adds 10 cases: six comments, each opening with a word of the
+  comment rule's patterns capitalized, the four above among them; the two
+  README sentences; and a comment and a README sentence opening with
+  `Commits` that say the commits carry no Go version tag, which pass. No
+  fixture, expected verdict or workflow file changes.
+- The comment above `versionLine` in `verifiers/go/verifier/verify.go` and the
+  comment above `version_line()` in `scripts/kit/assemble.sh` say a commit
+  resolves to a pseudo-version while the commit carries no Go version tag
+  (#386). The first said "a pseudo-version naming the commit when it has no
+  tag", the second "a clean clone of an untagged commit". This repository
+  carries one tag, `kit-2026-11-14`, on commit `a38e000`, and it is not a Go
+  version tag: `go list -m` of the module at that commit answers the
+  pseudo-version `v0.0.0-20261112212443-a38e00017076`.
+  `docs/running-the-verifiers.md` and this file's opening paragraph were
+  corrected to this wording (#375); these two comments were not.
+  `scripts/check_readme_counts.py` holds the whole-line comments of the four
+  files that say what version `go run` resolves, `verify.go`,
+  `interop/suite.go`, `assemble.sh` and `docs/demo/record-atx-verify.sh`, to
+  it: a sentence of such a comment that names a pseudo-version, by that word
+  or by the `v0.0.0-` form Go builds, names a commit, and says a commit has no
+  tag, carries no tag or is untagged, fails. The rule reads none of the
+  repository's tags, so a shallow clone is held to it too. Run against the two
+  comments this change starts from, the script names both and exits 1. Its
+  self-test adds 11 cases. The Go verifier and the kit script change in one
+  comment each. `docs/captures/go-verifier.txt` is unchanged byte for byte;
+  its sidecar, `docs/captures/go-verifier.json`, records the new tree id of
+  `verifiers/go/verifier`, so `scripts/capture_go_verifier.py --check`
+  passes. No fixture, expected verdict or workflow file changes.
+- `scripts/check_readme_counts.py` fails a README sentence saying this
+  repository has no Go version tag once the repository carries a version tag
+  (#376). Its pattern allowed only `release` or `version` between `no` and
+  `tag`, so the README sentence "This repository has no Go version tag, so
+  `@latest` resolves to a pseudo-version ..." was not held: called with the
+  tag `v0.1.0`, `release_tag_failures()` returned no failure for the README.
+  It now allows up to two words there and returns one failure for that
+  sentence. The self-test adds a case for the wording `no Go version tag`.
+  No fixture changes.
+- The Python unit tests step of `conformance.yml` runs the tests of
+  `docs/demo/test_record_atx_verify.py`, among them the ones that hold
+  `docs/demo/record-atx-verify.sh` to refusing a Dockerfile that references an
+  image it does not read (#325). The step's `unittest discover` run reads
+  `scripts/` and held 3 tests, none from `docs/demo`.
+  `scripts/test_demo_recording.py`, which that run matches, adds that file's
+  tests to the run, and that run now fails on a Dockerfile the script refuses
+  and on a `docs/demo/test_record_atx_verify.py` that is gone. No workflow file
+  changes.
+- Both reference verifiers reject a v1.1 credential whose `declaredPurpose`
+  holds a number outside the float64 range as `SIGNATURE_INVALID`, with a
+  reason that quotes the number as written (#302). They rejected it as
+  `VERIFIER_CONFIG_ERROR`, with the reason `v1.1 canonicalization failed:
+  declaredPurpose holds a number outside the float64 range`, where they
+  reject `1e3` and `2.5` as `SIGNATURE_INVALID`:
+  `fixtures/v1_1-declared-purpose-number-injected.json` with its `1.5`
+  replaced by `1e400`, or by `1` followed by 400 zeros, counted as a failure
+  in each verifier, and a run over either copy exited 1. Each copy now counts
+  as a pass, and that run exits 0. Such a number is written with a fraction
+  or an exponent part, or is an integer outside the I-JSON exact range, so
+  the scan that refuses each of those (`integerOutsideExactRangeV11` in the
+  Go verifier, `_integer_outside_exact_range` in the Python one) refuses it
+  too, with the reason it gives them: `no signature covers declaredPurpose:
+  the number 1e400 is written with a fraction or an exponent part, not as an
+  integer`, and, for an integer, `no signature covers declaredPurpose: the
+  integer <digits> is outside the I-JSON exact range, -(2^53-1) to 2^53-1`.
+  The first such number the credential writes decides, so `[1.5, 1e400]`
+  quotes `1.5`. In the Go verifier the scan now runs before the JCS library
+  reads the payload, which it ran after: the library refuses `1e400` and an
+  integer of 401 digits, and writes `1` followed by 1000 zeros and `e-650`
+  as `1e+149` built with go1.22 or go1.26 (built with go1.27, it refuses
+  that number too). An unpaired surrogate escape in `declaredPurpose` is
+  still refused first, as `VERIFIER_CONFIG_ERROR`. Neither verifier decides
+  the float64 range now, so `numberOutsideFloat64Range`,
+  `float64OverflowDigits`, `hasNumberOutsideFloat64RangeV11` and
+  `_holds_number_outside_float64` are removed, and the Python scan now
+  refuses an integer with more digits than `int()` converts, which the
+  removed check refused before it. This replaces the category the `v0.1.0`
+  entries for #151, #289 and #293 give such a number.
+  `TestDeclaredPurposeNumberOutsideFloat64Range` in the Go verifier and
+  `GO_PURPOSE_FORM_BESIDE_FLOAT64_EDGE` and
+  `GO_PURPOSE_INTEGERS_BESIDE_FLOAT64_EDGE` in the Python one pin the verdict
+  and reason on either side of 2^1024 - 2^970; built with Go 1.26.3 and run
+  under Python 3.14.3, the two verifiers print the same lines over those
+  tables' rows. Their reports over `fixtures/` are unchanged byte for byte,
+  and no fixture carries such a number. `docs/captures/go-verifier.txt` is
+  unchanged, and its sidecar, `docs/captures/go-verifier.json`, records the
+  new tree id of `verifiers/go/verifier`, so
+  `scripts/capture_go_verifier.py --check` passes. No fixture changes.
+- `docs/demo/record-atx-verify.sh`, `--dry-run` included, reads
+  `docs/demo/docker/Dockerfile` one instruction at a time and exits 1 on an
+  image reference other than the FROM lines of the build stage and the
+  render stage, the two images the sidecar's `recorder` records as
+  `builderImage` and `baseImage` (#314). It read those two lines,
+  `FROM <image> AS vhsbuild` and `FROM <image>`, and no other, so
+  `--dry-run` exited 0 with a third FROM line
+  (`FROM busybox:latest AS helper`, the same in lower case, or with
+  `--platform=linux/amd64`), and with
+  `COPY --from=busybox:latest /bin/busybox /bin/busybox` or
+  `RUN --mount=type=bind,from=busybox:latest,target=/bb true` in the
+  render stage, that COPY split over continuation lines included; a second
+  FROM line of either form was refused as an image not named by digest,
+  with both references in one message. The script joins a line that ends
+  in a backslash to the next, skips comment and blank lines, and refuses: a
+  FROM line in another form (`from` and `From` lines, and lines with
+  `--platform`, among them), or either form twice; a `COPY --from` value,
+  or a `from=` key of a `RUN --mount` value, other than `vhsbuild`; a
+  flag of `COPY` or `RUN` written with a quote or a backslash; `ONBUILD`;
+  a word that is not a Dockerfile instruction; `<<`, the form of a
+  heredoc; a byte other than printable ASCII or a tab outside a comment; a
+  NUL byte; and, above the first instruction, a comment in the form of a
+  parser directive (`# syntax=` names an image of its own). Each of these
+  refusals but the NUL byte's names its line. The two images it reads are
+  still refused unless written as `<name>@sha256:<64 hex digits>`. On the
+  committed Dockerfile, `--dry-run` prints what it printed before.
+  `docs/demo/test_record_atx_verify.py` holds the script to each of these,
+  with and without `--dry-run`. The committed outputs and sidecar are not
+  re-rendered.
+- The module docstring of `verifiers/python/verify.py` and the docstrings
+  of `_say`, `_say_err` and `_write_surrogate_escapes_as_bytes` name a byte
+  0x80 to 0x9f as the exception where they say a line writes an argument
+  or a path that is not UTF-8 as its bytes, as
+  `docs/running-the-verifiers.md` names it (#317). They said such an
+  argument or path is written as its bytes, the module docstring "and not
+  as a backslash escape", while `_escape_controls` writes a byte 0x80 to
+  0x9f that is not UTF-8 as `\xHH` before the line is written: run in
+  `verifiers/python`, `python3 verify.py "$(printf 'x\x9by.json')"` writes
+  `error: x\x9by.json: no such file or directory`, the four characters
+  `\x9b` where the docstrings said the byte is written. The module
+  docstring now also names `_escape_controls` and says it writes each
+  control character as a visible escape. With the byte between `x` and
+  `y.json` each of the 128 bytes 0x80 to 0xff in turn, the Go verifier
+  built with Go 1.26.3 writes the same error line as the Python verifier
+  under Python 3.14.3: `\xHH` for the 32 bytes 0x80 to 0x9f and the byte
+  itself for the 96 bytes 0xa0 to 0xff. On a Linux file system, which
+  takes such a name, both verifiers write `PASS  d/\x9b.json` for `d`, a
+  directory holding a copy of `fixtures/baseline-valid.json` named by the
+  byte 0x9b then `.json`, and for that file named as an argument, and
+  `FAIL  d/\x9b.json  (load error: open d/\x9b.json: permission denied)`
+  for both once the file has mode 000, run as a user other than root.
+  `DocstringsNameTheEscapedBytes` in `verifiers/python/test_verify.py`
+  holds each of the four docstrings to name the bytes `_escape_controls`
+  writes as an escape, each line they quote for the byte 0x9b to the line
+  the verifier writes, and the load error of a fixture listed under that
+  byte to write it as `\x9b`. `verify.py` changes in its docstrings alone,
+  and no fixture changes.
+- `scripts/check_readme_counts.py` holds each of the six scans its
+  self-test times to its bound in its own process's CPU time, read from
+  `time.process_time()`, where it read wall-clock time, which also counts
+  the time the process waits for a CPU (#307). The bounds are unchanged:
+  1.5 s for the closed-tracker scan and 0.5 s for each of the other five.
+  On a 16-CPU machine at a load average above 20, the script exited 1 at
+  the commit before this change, with no change to the tree, on
+  `only-number claim scan over one 16,000-character word`, which took
+  0.5 s. In ten runs there at load averages of 20 to 23, each of the six
+  took 0.08 s of CPU time or less. The self-test adds one case: a 0.6 s
+  sleep, in which the process does not run, held to a 0.5 s bound, which
+  the wall-clock reading fails. No fixture changes.
+- The Go reference verifier builds the v1.0 and v1.1 signed payloads from
+  the `trustScore` value the credential writes, decided on every digit
+  written, as the Python reference verifier's `float()` reads it (#308).
+  It read `trustScore` with `strconv.ParseFloat`, which in go1.22 and
+  go1.26 keeps at most 800 digits of a literal and places the decimal point
+  by the digits it kept: built with either, it read `875` followed by 900
+  zeros and `e-901`, whose value is 87.5, as 8.75e-102 (go1.27 reads 87.5),
+  and refused the v1.0 and v1.1 baselines carrying it as
+  `SIGNATURE_INVALID`, where the Python verifier accepts them. Built with
+  go1.22 or go1.26, it read `1` followed by 1000 zeros and `e-650`, whose
+  value is 10^350, as 1e+149 (go1.27 refuses it as outside the float64
+  range), where the Python verifier refuses it as `PARSE_ERROR`; the Go
+  verifier now refuses it as `PARSE_ERROR` too, with the reason it gives
+  for `1e400`, built with go1.22, go1.26 or go1.27. It decides that range
+  with `numberOutsideFloat64Range` and `float64OverflowDigits`, which
+  the #302 entry above removes with the `declaredPurpose` check they
+  served; they stay for `trustScore`, and `TestNumberOutsideFloat64Range`
+  pins them at 2^1024 - 2^970 again. No fixture changes.
+- `docs/demo/record-atx-verify.sh` gives the render container a
+  `--pids-limit` of 512 plus 32 for each CPU `docker info` counts on the
+  docker host, 768 with 8 CPUs and 1024 with 16, where it gave 256 whatever
+  the CPU count (#311). The pids cgroup counts threads as well as processes,
+  and the render's peak grows with the CPU count: read from the render
+  container's `pids.peak` on Docker Desktop (linux/arm64), it was 254 tasks
+  with 16 CPUs, 2 under the limit, and 211 with the render held to 8 of them
+  by `--cpuset-cpus 0-7`. A render runs `docker info` before the build and
+  stops there, with exit code 1, when it exits non-zero or prints no CPU
+  count; `--dry-run` prints the rule in place of the number. The check
+  inside the container counts `--pids-limit` as run when `RUN_FLAGS` gives
+  it a positive whole number in digits with no leading zero (`4096` is
+  taken; `0`, `-1` and no number are not), where it required
+  `--pids-limit 256`. `docs/demo/test_record_atx_verify.py` runs the script
+  with a stub in place of docker and holds the limit to at least twice each
+  measured peak, and its growth a CPU to at least twice the peak's from 8
+  CPUs to 16. The committed GIF, frames, capture and sidecar are not
+  re-rendered.
+- `scripts/check_readme_counts.py` reads an empty argument, written `''`
+  or `""`, on a `python3 -m unittest discover` line of the workflow as an
+  argument, as unittest reads it (#327). It had read such an argument as
+  a shell operator and stopped with an `IndexError` traceback, printing
+  no verdict. With the workflow's discover line given `-p ''`, on which
+  unittest runs no test, it now reports `scripts/test_script_options.py`
+  as not run and exits 1. The self-test adds three discover steps: an
+  empty argument before `-s` and `-p`, which `-s` replaces as the start
+  directory; the empty pattern `-p ''`; and an empty argument after `-s`
+  and `-p`, which unittest reads as the start directory, the directory it
+  is run from. Given to the check as it was before this change, each of
+  the three raises `IndexError`. No fixture changes.
+- `scripts/check_readme_counts.py` reads the word `discover` of a
+  `python3 -m unittest discover` run in either case of each of its letters,
+  as unittest does: `unittest/main.py` in Python 3.12.12, 3.13.12 and 3.14.3
+  compares `argv[1].lower()` to `discover` (#328). The check matched the
+  lowercase word alone. With that word of the workflow's discover line
+  written `DISCOVER`, which ran the same three tests and exited 0, it
+  reported `README layout calls scripts/test_script_options.py a CI gate,
+  but .github/workflows/conformance.yml does not run it` and exited 1; it
+  now exits 0. The match holds to the word's ASCII letters, as `(?i)` alone
+  also reads the word written with U+0130, U+0131 or U+017F: given
+  `-s scripts -p 'test_*.py'` after such a word, unittest exits 2 and runs
+  no test. The self-test adds six cases: `DISCOVER` and `Discover` must
+  count as a run, and those three spellings and a module named `UNITTEST`
+  must not. No fixture changes.
+- `docs/demo/record-atx-verify.sh` has the render write its output into the
+  container's own file system instead of a bind-mounted directory of the
+  caller's (#312). The container runs as root with `--cap-drop ALL`, so root
+  has no `CAP_DAC_OVERRIDE` and gets the ordinary permission checks, and a
+  rootful Linux Docker Engine without user-namespace remapping keeps a bind
+  mount's host owner and mode. In the directory `mktemp -d` made (owned by
+  the caller, mode 0700) and mounted at `/work/docs/demo`, the render's first
+  write, `os.makedirs('docs/demo/out')`, was refused with
+  `Permission denied`. The render now writes into `/work/docs/demo` in the
+  container, where root owns `/work`. The script makes the container with
+  `docker create`, runs it with `docker start --attach`, copies
+  `/work/docs/demo` out with `docker cp` once it stops, the copies made as
+  the caller's files, and removes the container with `docker rm --force`
+  when it ends. `--cap-drop ALL`, `--security-opt no-new-privileges` and
+  the `--pids-limit` the #311 entry above derives from the docker host's
+  CPU count are unchanged, as are the sidecar's `runFlags`. `RenderOutput`
+  in `docs/demo/test_record_atx_verify.py` runs the script against a
+  stand-in for `docker` that refuses the render's calls as the kernel of
+  such an engine refuses them, and the stub of its `PidsLimit` cases reads
+  the limit from the arguments of `docker create` in place of `docker run`.
+- `scripts/check_readme_counts.py` reads a `run:` command written as a
+  plain YAML scalar on more than one line as YAML reads it, each line break
+  folded into one space and each empty line into one line break, before it
+  reads the command as bash does (#335). It joined the lines with the line
+  break, which ends the arguments of a `python3 -m unittest discover` run.
+  With the workflow's Python unit tests step written as
+  `run: python3 -m unittest discover -v` with
+  `-s scripts -t scripts -p 'test_*.py'` on the next line, indented past
+  the key, which PyYAML 6.0.3 reads as the one line
+  `python3 -m unittest discover -v -s scripts -t scripts -p 'test_*.py'`,
+  it reported `README layout calls scripts/test_demo_recording.py a CI
+  gate, but .github/workflows/conformance.yml does not run it`, the same
+  for `scripts/test_script_options.py`, and exited 1; it now exits 0. The
+  self-test adds five cases: the arguments on the line after
+  `run: python3 -m unittest discover`, on the line after a command that
+  starts on the line under `run:`, and on the second line of a step written
+  as a flow mapping must each count as a run; arguments an empty line sets
+  apart from the run, which YAML reads as a line break, and a run whose
+  first line ends in a backslash, which YAML keeps before the space it
+  folds the line break into, must not. All but the empty-line case failed
+  before the change. No fixture changes.
+- `scripts/check_readme_counts.py` reads a `run:` command written as a
+  single- or double-quoted YAML scalar as YAML reads it, in a block-style
+  step and in a step written as a flow mapping, before it reads the command
+  as bash does (#339): the quotes are removed, `''` in single quotes is read
+  as `'`, the escapes of double quotes are undone, and a line break is
+  folded into one space, or into one line break for each empty line after
+  it. It kept the quotes, so a closing quote that ended the arguments of a
+  `python3 -m unittest discover` run was read as an unbalanced quote, and
+  the run counted no script. A quoted scalar that does not close, holds an
+  escape YAML does not define, or has text other than a comment after its
+  closing quote is kept as it is written, as before. In a copy of the tree
+  whose discovery run over `scripts/` is moved into a step of its own,
+  written
+  `run: "python3 -m unittest discover -v -s scripts -t scripts -p 'test_*.py'"`,
+  which PyYAML 6.0.3 reads without the quotes, the check reported
+  `README layout calls scripts/test_demo_recording.py a CI gate, but
+  .github/workflows/conformance.yml does not run it`, the same for
+  `scripts/test_script_options.py`, and exited 1; it now exits 0. The
+  unaltered tree exits 0 before and after. The self-test adds nine cases: a
+  run double-quoted, single-quoted with its `'` written `''`, double-quoted
+  with its arguments on a second line indented past the key in a block-style
+  step and in a flow mapping, double-quoted with a backslash ending its
+  first line, double-quoted with a `\t` escape before its arguments, and
+  double-quoted with a comment after the closing quote must each count as a
+  run; a double-quoted run whose arguments an empty line sets apart, and one
+  holding the escape `\q`, which YAML does not define, must not. All but
+  those last two failed before the change. No fixture changes.
+- The entries of this section for #305, #307, #315, #325, #327, #328, #335
+  and #339 say what each change adds, with no running total, and
+  `scripts/check_readme_counts.py` holds the top section of this file to
+  stating none in the forms below (#333). In a3ead8a, the commit that
+  carried the #325 and #327 entries, the first gave `docs/demo/test_record_atx_verify.py` 2 tests
+  where `grep -c 'def test_'` printed 8, and the second gave the self-test
+  319 sites where the script printed 324. A sentence of the top section now
+  fails the check, which exits 1 and names the total, when it states how
+  many tests a file or a run holds (`the N tests`, `holds N tests`,
+  `runs N tests`, `Ran N tests`) or a self-test's total
+  (`N altered count sites`, `N cases green`, `N cases, from M`).
+  `adds 3 cases`, `held 3 tests`, `Ran 1 test`, `the N tests that` and a
+  section below the top one are not held. Its self-test adds 30 cases. No
+  fixture or verifier changes.
+- `scripts/check_readme_counts.py` reads a double-quoted `run:` scalar whose
+  first line ends in a backslash followed by a space or a tab as YAML reads
+  it (#341): the backslash escapes the space or tab, and the line break
+  after it is still folded into one space. It removed the white space that
+  ends the line before it read the scalar, so it read a backslash that ends
+  the line and joined the next line to the first with nothing between
+  them. Given the step
+  `- run: "python3 -m unittest discover -s scripts -t scripts -p 'test_*.py'\ `
+  with `-v"` on the next line, indented past the key, it read the command
+  as ending in `-p 'test_*.py'-v` and counted no script; it now reads
+  `-p 'test_*.py'  -v`, with two spaces, as PyYAML 6.0.3 does, and counts
+  `test_x.py`. The same holds for that step with the command starting on
+  the line under `run:`, and for it with a tab after the backslash, which
+  the check now reads, as PyYAML 6.0.3 does, as a tab followed by a space.
+  A step written as a flow mapping was read so before. In a copy of the tree whose discovery run over `scripts/` is
+  moved into a step of its own written so, the check reported
+  `README layout calls scripts/test_demo_recording.py a CI gate, but
+  .github/workflows/conformance.yml does not run it`, the same for
+  `scripts/test_script_options.py`, and exited 1; it now exits 0. The
+  unaltered tree exits 0 before and after. The self-test adds three cases:
+  a double-quoted run whose first line ends in a backslash and a space, on
+  the key's line and on the line under `run:`, and one whose first line
+  ends in a backslash and a tab, must each count as a run. Each failed
+  before the change. No fixture changes.
+- The entries of this section for the two `did:web` fixtures and for
+  `fixtures/expired-beyond-skew.json` say how each fixture count they name
+  went, the `atx-verify --verifier` entry says it sends each embedded
+  fixture, and `scripts/check_readme_counts.py` holds the top section of
+  this file to stating no fixture total in the forms below (#347). The
+  `did:web` entry said that the capture's summary line, the kit's
+  self-tests and the
+  `atx-verify --verifier` entry counted 43 fixtures and `docs/scope.md`
+  34 of 43; the entry for `fixtures/expired-beyond-skew.json` took each of
+  those to 44 while the `did:web` entry stayed as it was. A sentence of the
+  top section now fails the check, which exits 1 and names the total, when
+  it states one (`counts N`, `count N fixtures`, `N of M fixtures`,
+  `the N fixtures`, `the N embedded fixtures`, `holds N fixtures`,
+  `embeds N fixtures`, `runs N fixtures`). `go from N to M`, `counted N`,
+  `adds two fixtures`, `the N existing fixtures`, `the N new fixtures`,
+  `the N fixtures before this one`, `the N fixtures that`, a count reached
+  in a sentence on how it went and a section below the top one are not
+  held. Its self-test adds 27 cases. No fixture or verifier changes.
+- `scripts/check_readme_counts.py` fails a sentence of the top section of
+  this file that states a total of tests as `all N tests`, `has N tests`,
+  `contains N tests` or `includes N tests`, or one of fixtures as
+  `all N fixtures`, `has N fixtures`, `contains N fixtures`,
+  `includes N fixtures` or `(N fixtures)`, as a verifier's summary line
+  ends, and its success line names the forms of total the check holds
+  (#349). With N as 44, a sentence opening the top section that said all N
+  fixtures pass in both verifiers, that `atx-verify --verifier` sends all N
+  embedded fixtures to an outside verifier, that `fixtures/` has N fixtures
+  or that the capture ends `summary: N pass, 0 fail (N fixtures)` passed
+  the check, which exited 0, and so did one saying all N tests pass, with N
+  as 8. Each now fails it, which exits 1 and names the total. `existing` or
+  `new` after the count and `before` after `fixtures` exempt
+  `all N fixtures`, as they exempt `the N fixtures`, and a `that` after it
+  exempts nothing. The success line said that no sentence of the top
+  section states a running total of tests, of a self-test or of fixtures;
+  it now names the forms the check holds, and the self-test fails when the
+  check passes one of them. A total in another form, such as a count
+  opening a sentence, still passes. The entries above for #333 and #347 say
+  that the check holds the top section to stating no total in the forms
+  they list, where they said it held the top section to stating none. Its
+  self-test adds 21 cases. No fixture or verifier changes.
+- README.md's kit section, `Try your verifier in two minutes`, says the kit
+  sends each fixture built into it and exits 0 only when every fixture
+  agrees, with no count (#345). Its sentences on what the kit sends and on
+  when it exits 0 said 41, the number of fixtures when they came in, and
+  still said 41 after the two `did:web` fixtures and
+  `fixtures/expired-beyond-skew.json` were added. Built from commit
+  `4f70281`, which the section's install line pins, the kit sends 41;
+  built from a tree holding 44 fixtures, it sends 44.
+  `scripts/check_readme_counts.py` holds each count either sentence states
+  in digits to the number of `fixtures/*.json`. It passed the two sentences
+  stating 41, and now exits 1 naming each. The section's other counts,
+  9 agree and 32 accepted what must fail, are what the kit at `4f70281`
+  reports for `true`, and are not held. Its self-test adds 19 cases. No
+  fixture or verifier changes.
+- `scripts/check_readme_counts.py` reads a count written after `e.g.` or
+  `i.e.` in the README kit section's sentences on what the kit sends and on
+  when it exits 0 (#352). It split a sentence at the `.` that closes either
+  abbreviation, so the count fell in a part of the sentence the check did
+  not hold: with the sentence on what the kit sends written as `The kit
+  sends each fixture built into it (e.g. all 41) to your verifier`, or as
+  `The kit sends each fixture, i.e. 41 of them, to your verifier`, the
+  script exited 0. It now exits 1 naming 41. The sentences it reads from
+  README.md and the pages it links, from CHANGELOG.md's opening paragraph
+  and from the files the Python dependency check reads do not end at the
+  `.` closing `e.g.` or `i.e.`, in either letter case; on this tree that
+  joins one sentence outside the kit section, in `jcs-vectors/README.md`,
+  and the script exits 0. Its self-test adds 10 cases. No fixture or
+  verifier changes.
+- `scripts/check_readme_counts.py` reads a count written after `incl.`,
+  `approx.`, `ca.`, `cf.` or `viz.` in the README kit section's sentences on
+  what the kit sends and on when it exits 0 (#354). It split a sentence at
+  the `.` that closes each of these abbreviations, so the count fell in a
+  part of the sentence the check did not hold: with the sentence on what the
+  kit sends written as `The kit sends each fixture built into it (incl. 41
+  that must fail) to your verifier`, or the one on when it exits 0 written
+  as `It exits 0 only when every fixture agrees (approx. 41).`, the script
+  exited 0. It now exits 1 naming 41. The sentences it reads from README.md
+  and the pages it links, from CHANGELOG.md's opening paragraph and from the
+  files the Python dependency check reads do not end at the `.` closing one
+  of the five, in lower case or capitalized; `replica.`, `example.ca.` and
+  `etc.` still end one. On this tree those sentences are the same as before
+  this change, and the script exits 0. Its self-test adds 22 cases. No
+  fixture or verifier changes.
+- `scripts/check_readme_counts.py` holds a `go run` command that a sentence
+  of CHANGELOG.md's top section names as README.md's first command to the
+  command README.md opens with when `e.g.`, `i.e.`, `incl.`, `approx.`,
+  `ca.`, `cf.` or `viz.` stands between the command and those words (#355).
+  It split the top section's sentences at the `.` that closes each of these
+  abbreviations, so the command fell in a part of the sentence the check did
+  not hold: with a list item opening with the Go verifier's command, the one
+  ending `verifiers/go@latest`, and going on `runs the Go verifier, i.e. with
+  nothing cloned, and is README.md's first command`, or with `runs a
+  verifier, e.g. the Go one, with nothing cloned, and is` in place of the
+  `i.e.` clause, the script exited 0. It now exits 1 naming the command. The
+  top section's sentences do not end at the `.` closing `e.g.` or `i.e.`, in
+  either letter case, or one of `incl.`, `approx.`, `ca.`, `cf.` and `viz.`,
+  in lower case or capitalized, the rule the sentences it reads from
+  README.md follow since #354; so a sentence saying a result can still
+  differ by release is also read with a timestamp it quotes after one of
+  them, and the check fails when `verifiers/go/verifier/verify_test.go`
+  writes that timestamp. On this tree the top section's sentences are the
+  ones the check read before this change, and the script exits 0. Its
+  self-test adds 19 cases. No fixture or verifier changes.
+- The `aip-conformance` row in `docs/sibling-repositories.md` names AIP
+  v1.2.0-draft, the `spec.version` that `opena2a-standards/aip-conformance`
+  declares in its `conformance.json` at commit `169d5d6`, where it named AIP
+  v1.0.0-draft, and states 14 §5.1 challenge-response fixtures, where it
+  stated 4 (#360). `scripts/check_sibling_rows.py` takes each fixture count
+  over the `fixtures/*.json` files directly in a sibling repository's
+  `fixtures/` directory. It counted the `.json` files in its subdirectories
+  too, so at that commit it counted 16 challenge-response fixtures: the 14
+  `fixtures/challenge-response-*.json` files and 2 files of that name in
+  `fixtures/load-errors/`, which that repository's `docs/checks.md` says are
+  not part of `fixtures/*.json`. Run against the sibling repositories, the
+  script exits 0, where it reported the count of 4 and AIP v1.0.0-draft and
+  exited 1. Its self-test keeps the row published before the Spec cell was
+  checked, which named AIP v1.2.0-draft, among the retracted rows; that
+  repository now declares that version, so the case expects the failure on
+  the 4 the row states as its §5.1 count. The row this change replaces is
+  added to them and fails with `aip-conformance row's Spec cell names AIP
+  v1.0.0-draft, but`; on the page of the previous commit, which publishes
+  that row, both cases are red and the self-test exits 1. The self-test adds
+  1 case. `scripts/test_check_sibling_rows.py`, which the Python unit tests
+  step of `conformance.yml` runs, holds the count to a tree with a file in
+  `fixtures/load-errors/` and runs the self-test, with no network. No
+  fixture changes.
+- `scripts/kit/check_workflow.py release` refuses a run: line with a `%...%`
+  expansion directly before `>` in a step that sets no `shell:` and takes
+  `cmd` from `defaults: run: shell:`, its job's or, when the job sets no
+  shell there, the workflow's (#365). It refused that line only in a step
+  that sets `shell: cmd` itself, so a copy of
+  `.github/workflows/kit-release.yml` whose Windows step in the test job
+  takes `cmd` from the job's defaults and writes
+  `echo %ERRORLEVEL%> ..\capture.rc` printed `7 jobs, 0 problems` and
+  exited 0; that copy now exits 1 naming the step. A step's own `shell:`
+  comes before its job's `defaults: run: shell:`, and the job's before the
+  workflow's. A `defaults:`, or a `run:` under it, whose value is neither a
+  mapping nor empty now exits 1 with `cannot read the workflow`.
+  `scripts/kit/test/test_kit.py --ci` adds 4 cells: a step that sets no
+  shell under the job's cmd default and one under the workflow's, which the
+  check refuses, and a step that sets `shell: bash` under the job's cmd
+  default and one that sets no shell in a job whose bash default sits under
+  the workflow's cmd, which it accepts. No fixture, verifier or workflow
+  file changes.
+- `scripts/kit/check_workflow.py` refuses a workflow path that does not
+  exist, a directory, a file it may not read and a file that is not UTF-8
+  text on one line of standard error, `check_workflow: cannot read the
+  workflow: '<path>': <reason>`, with exit 1 and nothing on standard output
+  (#366). For each of the four, `release` and `pins` printed a Python
+  traceback ending in `FileNotFoundError`, `IsADirectoryError`,
+  `PermissionError` or `UnicodeDecodeError`, and exited 1. A file whose YAML
+  the reader refuses was already refused with that prefix and exit 1.
+  `scripts/kit/test/test_kit.py --ci` adds 7 cells, which run both commands
+  on a path that does not exist, a directory and a file holding the Latin-1
+  byte `0xe9`, and `pins` with `--job` on a path that does not exist; run
+  against the script as it was before this change, each of the 7 fails. No
+  fixture changes.
+- `scripts/kit/check_workflow.py release` holds a step whose shell's first
+  word is `cmd` to the rule against a `%...%` expansion directly before `>`,
+  so a step whose `shell:` is a custom template such as
+  `cmd /D /E:ON /V:OFF /S /C "CALL "{0}""` is held to it as one that sets
+  `shell: cmd` is (#370). It held a step to that rule only when its
+  shell was exactly `cmd`, so a copy of `.github/workflows/kit-release.yml`
+  whose Windows step in the test job sets that template as its `shell:` and
+  writes `echo %ERRORLEVEL%> ..\capture.rc` printed `7 jobs, 0 problems` and
+  exited 0; that copy now exits 1 naming the step. The template is read the
+  same way when it comes from the job's or the workflow's
+  `defaults: run: shell:`. `scripts/kit/test/test_kit.py --ci` adds 4 cells:
+  a step that sets the template, and a step that sets no shell under the
+  job's template default and one under the workflow's, which the check
+  refuses, and a step that sets `shell: pwsh -command ". '{0}'"`, which it
+  accepts; run against the script as it was before this change, each of the
+  3 refusal cells fails. No fixture, verifier or workflow file changes.
+- README.md holds no paragraph over 69 words and at most one over 60. Five
+  of its paragraphs were over 60 words: the third bounty rule (69), the kit
+  section's paragraphs on `{file}` (70) and on a JSON answer (62), the
+  guided tour's opening (63) and the Python verifier's virtual-environment
+  note (83). The note keeps its sentence on what the install line downloads
+  and links `docs/running-the-verifiers.md`, which says what
+  `--disable-pip-version-check` does and what a system may provide outside
+  a virtual environment. The `{file}` paragraph drops its clause on the
+  `ATX-Fixture` header, which `examples/README.md` states, and links that
+  page's section on a verifier behind a URL. The tour's opening is split
+  above its Go minimum, and the JSON paragraph above its sentence on what
+  the report keeps, with no word changed. The bounty rules are unchanged;
+  the third, at 69 words, is the one left over 60.
+  `scripts/check_readme_counts.py` reads the length of each paragraph of
+  README.md and fails one over 69 words, or more than one over 60, naming
+  each; on the previous README.md it exits 1 naming the five. Its
+  self-test adds 12 cases. No fixture or verifier changes.
+- The module docstring of `scripts/check_step7_coverage.py` names
+  `docs/fixtures.md` as the file that says `conformance.json`'s
+  `notCovered` and the Coverage paragraph of the vendored `core.md` drop
+  §1.3 step 7 together (#373). It named the README, and README.md holds no
+  such sentence; `docs/fixtures.md` holds it in the section "Required trust
+  level: the distinct signer-authority count".
+  `scripts/test_check_step7_coverage.py`, which the Python unit tests step
+  of `conformance.yml` discovers, holds the file the docstring names as
+  saying "the two drop it together" to holding that sentence; run against
+  the docstring this change starts from, its test fails, as the repository
+  root holds no file named README. The script changes in its docstring
+  alone. No fixture changes.
+- `scripts/kit/check_workflow.py release` holds a step to the rule against a
+  `%...%` expansion directly before `>` when its shell's first word, less
+  any directory part up to its last `\` or `/`, is `cmd` or `cmd.exe` in
+  any letter case (#372). It held a step to that rule only when that word
+  was exactly `cmd`, so a copy of `.github/workflows/kit-release.yml` whose
+  Windows step in the test job writes `echo %ERRORLEVEL%> ..\capture.rc`
+  and sets as its `shell:` any of
+  `cmd.exe /D /E:ON /V:OFF /S /C "CALL "{0}""`,
+  `CMD /D /E:ON /V:OFF /S /C "CALL "{0}""`, `Cmd.exe /C {0}` or
+  `C:\Windows\System32\cmd.exe /D /S /C "CALL "{0}""` printed
+  `7 jobs, 0 problems` and exited 0; each of those copies now exits 1
+  naming the step. `scripts/kit/test/test_kit.py --ci` adds 5 cells: a step
+  that sets each of those four templates, which the check refuses, and a
+  step that sets `shell: C:\cmd\pwsh.exe -command ". '{0}'"`, whose first
+  word names `pwsh.exe` in a directory named `cmd`, which it accepts; run
+  against the script as it was before this change, each of the 4 refusal
+  cells fails. No fixture, verifier or workflow file changes.
+- `docs/running-the-verifiers.md` and this file's opening paragraph say
+  this repository, or a commit, has no Go version tag where they said it
+  has no tag (#375). The repository carries the tag `kit-2026-11-14`, which
+  is not a Go version tag: `git ls-remote --tags` of the repository prints
+  that one tag, on commit `a38e000`, and `go list -m` of the module at that
+  commit, like `go run` of its `cmd/atx-verify` with `--version`, names the
+  pseudo-version `v0.0.0-20261112212443-a38e00017076`. The page said the
+  repository has no release tag and no tags, and that `go run` resolves a
+  commit to its release tag, or to a pseudo-version when the commit has no
+  tag, and this file said the repository carries no tag yet. The page also
+  says what a Go version tag is and gives that commit as an example.
+  `scripts/check_readme_counts.py` reads every tag the checkout carries,
+  where it read the version tags alone. While the repository carries a
+  tag, a sentence of the README, its pages or this file's opening that says
+  the repository has or carries no tag, no tags or no release tag fails;
+  one that says it has no version tag or no Go version tag fails only
+  while one of its tags is a version tag, as it did; and while it carries
+  a tag that is not a version tag, one that names a pseudo-version and says
+  a commit has or carries no tag or no release tag fails. On the previous
+  commit's page and opening, in a checkout carrying `kit-2026-11-14`, it
+  names the four sentences and exits 1. Its self-test adds 22 cases. No
+  fixture or verifier changes.
+- `scripts/check_readme_counts.py` counts a release-tag self-test case as
+  caught when the check fails the sentence the case adds and the README,
+  one of its pages or this file's opening already holds that sentence,
+  where it reported the case as not caught by the check (#385). Each such
+  case counted the failures absent from those of the published text held
+  to the case's tags, so a sentence the published text already held added
+  none: with `This repository has no Go version tag, so` on line 144 of
+  `docs/running-the-verifiers.md` changed to `This repository has no
+  release tag, so`, the run printed `self-test FAILED: 1 of 562 case(s) not
+  caught by the check` and a red line for the case "README restating the
+  no-release-tag clause held to the tag `kit-2026-11-14`", and exited 1,
+  and in a shallow clone, which is what the conformance workflow checks
+  out, no line named the page or the sentence. A case now counts the
+  failures that name a sentence it adds, that sentence counted once more
+  when the published text already holds it. Where the checkout's tags
+  cannot be read, a sentence the published text holds that a case adds and
+  expects the check to fail, and that the check fails held to that case's
+  tags, is reported with the check's failures, opening with the file that
+  holds it and naming the case. On that edit, a shallow clone prints
+  `self-test passed`, then a failure opening with
+  `docs/running-the-verifiers.md` that names the sentence, and exits 1; a
+  clone carrying `kit-2026-11-14` prints `self-test passed`, then the
+  check's failure naming the sentence, and exits 1. Its self-test adds 7
+  cases over the published text with three of the clauses #375 retracted
+  placed in `docs/running-the-verifiers.md`, README.md and this file's
+  opening, and beside the first a sentence the check passes held to
+  `kit-2026-11-14`: the release-tag cases stay green; with the tags unread,
+  one failure is reported for each clause and none for that sentence; with
+  `kit-2026-11-14` read, none is reported and the check names each clause.
+  No fixture or verifier changes.
+- `scripts/check_readme_counts.py` holds the fixture counts README.md's kit
+  section states under its install line (#377). That sentence says how many
+  fixtures the commit the line pins carries, how many are on main and how
+  many the Hackathon kit release carries, and the script held none of them:
+  it exited 0 with the count for main taken to 51, and, in a clone with
+  history, with the count for the commit taken to 40. A count the section
+  states as fixtures on main must now be the number of `fixtures/*.json`,
+  so it is named as soon as a fixture is added, and the count `This commit
+  carries` states must be the number of `fixtures/*.json` in the tree of
+  the commit the install line above it names, where the checkout holds that
+  commit. With either count altered so on the previous commit's README, the
+  script names it and exits 1. A copy of the tree outside the repository,
+  and a shallow clone that does not hold the commit, are not held to the
+  count for the commit, and the closing line says so. The kit release's
+  count names no tag and is not held. Its self-test adds 24 cases. No
+  fixture or verifier changes.
 
 ## v0.1.0
 
 ### Added
 
+- A tag-triggered release workflow builds the interop day kit on hosted
+  runners, attests every file, writes one SHA256SUMS, publishes an
+  immutable release and verifies what it published.
+- Four MUST-REJECT fixtures built by the generator hold both reference
+  verifiers to the form of a present v1.1 `behavioralProfile` (#277):
+  `fixtures/v1_1-behavioral-profile-extra-member.json`, the v1.1 baseline
+  with a fourth member, `riskLevel`, written in its profile after signing;
+  `fixtures/v1_1-behavioral-profile-case-variant-member.json`, the baseline
+  with `observationDays` renamed `OBSERVATIONDAYS` after signing;
+  `fixtures/v1_1-behavioral-profile-not-object.json`, a credential signed
+  with no profile carrying the string `"sha256:ghi789"` as one; and
+  `fixtures/v1_1-behavioral-profile-member-outside-type.json`, a credential
+  signed with no profile carrying one whose `observationDays` is the string
+  `"14"`. Each expects `REJECT [SIGNATURE_INVALID]` with a reason
+  containing `signature`; both reference verifiers reported ACCEPT on each
+  before the change to them under Changed. The 32 existing fixtures and
+  their `MANIFEST.sha256` lines are byte-identical; the manifest gains four
+  lines. `conformance.json` and the capture under `docs/captures/` are
+  regenerated; the capture gains the fixtures' twelve lines, and its
+  summary line counts 36. The fixture counts in README.md, COSIGNERS.md,
+  CONTRIBUTING.md, `docs/continuous-verification.md` and
+  `docs/sibling-repositories.md` go from 32 to 36 (the sibling row's v1.1
+  count from 20 to 24), and `docs/scope.md` counts 27 of 36 fixtures that
+  reach signature verification, where it counted 23 of 32.
+  `docs/fixtures.md` and `docs/scope.md` list the fixtures, and
+  `scripts/schema_validation.py` holds each to the schema errors
+  `BEHAVIORAL_PROFILE_PINS` lists for it, all under `behavioralProfile`.
+- A MUST-REJECT fixture built by the generator, `fixtures/hybrid-pq-only.json`,
+  holds the Ed25519 companion rule under `atcVersion` 1.0 (#151). It is the
+  credential of `fixtures/baseline-valid-hybrid.json` with its Ed25519
+  signature removed: one ML-DSA-65 signature that verifies over the legacy
+  canonical bytes, and no Ed25519 signature. core.md §13, Cryptographic
+  agility, says "a credential that declares an ML-DSA-65 entry MUST also
+  carry a verifying Ed25519 entry" and names no `atcVersion`, while
+  `fixtures/v1_1-hybrid-pq-only.json` was the one fixture for the rule, so
+  a verifier that applies it to v1.1 alone passed the suite. The fixture
+  expects `REJECT [SIGNATURE_INVALID]` with a reason containing
+  `signature`, and both reference verifiers report
+  `REJECT[SIGNATURE_INVALID: ML-DSA-65 signature declared without a
+  verifying Ed25519 signature (an ML-DSA-65 entry requires an Ed25519
+  companion)]` on it; `verify.go` and `verify.py` do not change. In the Go
+  verifier, `TestSuitePinsEd25519CompanionUnderEachVersion` requires, for
+  `atcVersion` 1.0 and for 1.1, a shipped fixture that the verifier rejects
+  for the missing companion as that fixture pins; on the fixtures of the
+  commit before this change it names `atcVersion` 1.0 and fails. The other
+  27 existing fixtures and their `MANIFEST.sha256` lines are
+  byte-identical, `fixtures/revoked.json` changing in its description alone
+  (under Fixed); the manifest gains one line. `conformance.json` and the
+  capture under `docs/captures/` are regenerated; the capture gains the
+  fixture's three lines, and its summary line counts 29. The fixture
+  counts in README.md, COSIGNERS.md, CONTRIBUTING.md,
+  `docs/continuous-verification.md` and `docs/sibling-repositories.md` go
+  from 28 to 29 (the sibling row's v1.0 count from 11 to 12), and
+  `docs/scope.md` counts 22 of 29 fixtures that reach signature
+  verification, where it counted 21 of 28. `docs/fixtures.md` lists the
+  fixture, and `docs/scope.md`, `docs/reproducing-the-fixtures.md` and
+  COSIGNERS.md name it beside `fixtures/v1_1-hybrid-pq-only.json`.
+- A verifier state can set a k-of-n signature threshold, and a MUST-REJECT
+  fixture built by the generator, `fixtures/threshold-1of3-cosignature.json`,
+  holds both reference verifiers to it (#132). The fixture is the
+  credential of `fixtures/threshold-2of3-cosignature.json` cut to its first
+  signature, the primary's, under the same verifier state with
+  `"requiredSignatures": 2`, and expects `REJECT [SIGNATURE_INVALID]` with a
+  reason containing `threshold`. `schemas/fixture-v1.schema.json` gives the
+  verifier state an optional `requiredSignatures` member, an integer of at
+  least 1: the least number of distinct Ed25519 keys under which the
+  credential's declared signatures must verify (core.md §3.1 step 8,
+  cosignatures from 2 of 3 key holders). A key counts once however many
+  signatures verify under it, whatever `keyId` they carry, and an ML-DSA-65
+  signature does not count, as core.md §1.3a.2 names the Ed25519 signatures
+  the threshold signatures and the ML-DSA-65 one the hybrid signature. Both
+  verifiers write `signature threshold not met: requiredSignatures is 2,
+  distinct Ed25519 keys that verified a declared signature: 1` on the
+  fixture, and report a `requiredSignatures` below 1 as
+  `VERIFIER_CONFIG_ERROR` (`bad requiredSignatures: 0 is not a positive
+  integer`) before step 1, as they report a bad clock. With the member
+  absent or null no threshold applies, and none of the 27 fixtures before
+  it sets one. The verifiers of `ba3fc6c` read no threshold: on the
+  fixture each reports `observed: ACCEPT`, a FAIL line. The fixture cites
+  AIP-SPEC.md at the commit `docs/version-pinning.md` pins as the other
+  Ed25519-only fixtures do, §3.1 "Cryptographic Identity" (Ed25519
+  signing) and then §6.1 "Multi-Factor Algorithm", so 24 fixtures carry
+  the Ed25519 signing citation. In the Go
+  verifier, `TestRequiredSignaturesThreshold`,
+  `TestRequiredSignaturesCountsKeysNotKeyIDs`,
+  `TestRequiredSignaturesCountsEd25519Only`,
+  `TestRequiredSignaturesBelowOneIsAConfigError`,
+  `TestRequiredSignaturesDecode` and `TestSuiteCatchesThresholdBlindVerifier`
+  pin it; in the Python verifier, the `RequiredSignaturesThreshold` class,
+  whose decode tables were recorded from the Go verifier. The parity gate
+  reports `go=PASS:REJECT[SIGNATURE_INVALID]
+  python=PASS:REJECT[SIGNATURE_INVALID]` on the fixture. The 27 existing
+  fixtures and their `MANIFEST.sha256` lines are byte-identical; the
+  manifest gains one line. `conformance.json` and the capture under
+  `docs/captures/` are regenerated; the capture gains the fixture's three
+  lines, and its summary line counts 28. The `notCovered` entry for k-of-n
+  threshold issuance now names what no fixture covers: a threshold the
+  credential meets, so a verifier that rejects every credential whose
+  verifier state sets `requiredSignatures` passes the suite. The fixture
+  counts in
+  README.md, COSIGNERS.md, CONTRIBUTING.md,
+  `docs/continuous-verification.md` and `docs/sibling-repositories.md` go
+  from 27 to 28 (the sibling row's v1.0 count from 10 to 11), and
+  `docs/scope.md` counts 21 of 28 fixtures that reach signature
+  verification, where it counted 20 of 27, and lists the threshold as
+  covered by the fixture, where it listed it as not covered.
+  `docs/fixtures.md` lists the fixture, and says the 2-of-3 fixture's
+  verifier state sets no `requiredSignatures`, where it said no verifier
+  reads a threshold.
 - `scripts/check_sibling_rows.py` holds the Spec cell of each sibling row
   in `docs/sibling-repositories.md` to the `spec.id` and `spec.version` that
   repository's `conformance.json` declares, where it left that cell
@@ -26,18 +1468,23 @@ they should not.
   `declaredPurpose`, carrying `"declaredPurpose": 1.5` added after signing.
   §1.3a.2 rule 5 puts a present non-object value into the TBS verbatim, so
   it expects `REJECT [SIGNATURE_INVALID]` with a reason containing
-  `signature`. The Go verifier canonicalizes the number and its Ed25519
-  signature does not verify. The Python verifier's serializer refuses a
-  number that is not an integer, so it has no bytes to verify a signature
-  over; it now runs its signature loop with no key to verify against and
-  writes the reason the Go verifier writes, `Ed25519 signature
+  `signature`. Both verifiers refuse a `declaredPurpose` number written
+  with a fraction or an exponent part before any signature is checked, and
+  write `no signature covers declaredPurpose: the number 1.5 is written
+  with a fraction or an exponent part, not as an integer` (the change that
+  closes #283). At #130 the Go verifier canonicalized the number and its
+  Ed25519 signature did not verify, and the Python verifier, whose
+  serializer refuses a number that is not an integer and so had no bytes
+  to verify a signature over, ran its signature loop with no key to verify
+  against and wrote the reason the Go verifier wrote, `Ed25519 signature
   did:opena2a:authority:opena2a.org#key-1 did not verify against any
-  configured public key`, where it wrote `no signature can be verified: the
-  to-be-signed object cannot be canonicalized (...)`. The category is
-  `SIGNATURE_INVALID` either way, and `test_verify.GoReportText` holds the
-  Python report over `fixtures/` to the Go capture byte for byte, so with
-  the old reason it failed on this fixture. `InjectedNumberPurpose` pins
-  the reason for `1.5`, `{"autonomy": 0.5}` and `["billing:inquiry", 0.25]`.
+  configured public key`, where it had written `no signature can be
+  verified: the to-be-signed object cannot be canonicalized (...)`. The
+  category is `SIGNATURE_INVALID` in each case, and
+  `test_verify.GoReportText` holds the Python report over `fixtures/` to
+  the Go capture byte for byte, so with the old reason it failed on this
+  fixture. `InjectedNumberPurpose` pins the reason for `1.5`,
+  `{"autonomy": 0.5}` and `["billing:inquiry", 0.25]`.
   The Python verifier of `b0e094b`, the commit before its fix for #130,
   ends with `TypeError: not enough arguments for format string` on this
   fixture. None of the 25 fixtures before it carried a number that is not
@@ -154,9 +1601,194 @@ they should not.
   sidecar and exits 3. `docs/demo/atx-verify.narration.json` holds the words
   each hold is sized for. The MP4 a render writes goes to `docs/demo/out/`,
   which is not committed. No fixture changes.
+- `fixtures/v1_1-scan-summary-member-outside-type.json`, a MUST-REJECT
+  fixture (#173): the v1.1 baseline, which signs
+  `scanSummary.criticalFindings` 0, with that member written as the string
+  `"3"` after signing. It expects `REJECT[SIGNATURE_INVALID]` with
+  `reasonContains` "signature"; both reference verifiers reported ACCEPT
+  on it before the change to them below. The 26 existing fixtures and their
+  `MANIFEST.sha256` lines are byte-identical; the manifest gains one line.
+  `conformance.json` and the capture under `docs/captures/` are
+  regenerated, the fixture counts in README.md, COSIGNERS.md,
+  CONTRIBUTING.md, `docs/continuous-verification.md` and
+  `docs/sibling-repositories.md` go from 26 to 27 (the sibling row's v1.1
+  count from 16 to 17), and `docs/scope.md` counts 20 of 27 fixtures that
+  reach signature verification, where it counted 19 of 26.
+  `docs/fixtures.md` and `docs/scope.md` list the fixture, and
+  `scripts/schema_validation.py` holds it to one schema error, the `type`
+  of `scanSummary.criticalFindings`.
 
 ### Changed
 
+- `docs/demo/record-atx-verify.sh` builds its render image from pinned
+  inputs and runs it with the container's privileges dropped.
+  `docs/demo/docker/Dockerfile` names its two images by the digest of
+  their image index,
+  `golang:1.26-trixie@sha256:a050dcceee6eb9bf110151662dfac7662f3bec40927c7dee48731e3d92083d42`
+  (Go 1.26.10) and
+  `ghcr.io/charmbracelet/vhs@sha256:ea49a6a1c529be83153e88321892b5585964418f0b9055e8c1e0d732194234a3`
+  (VHS v0.12.1, revision `24fa2254a9806091e6ee6a980e9f3bcfe0a9ba53`),
+  where it named `golang:1.26-trixie` and
+  `ghcr.io/charmbracelet/vhs:latest`; it fetches the VHS source at
+  `db96d7374f7d7a3774f69a43f4fcc5c5a1fd74e3`, the commit tag `v0.12.0`
+  points to, where it cloned the tag; it builds VHS with
+  `GOTOOLCHAIN=local` where it set `auto`, so a `go` directive newer than
+  Go 1.26.10 fails the build; and it runs `apt-get upgrade` before
+  installing `ca-certificates` and `gifsicle`. The render stage sets
+  `GOPROXY=https://proxy.golang.org`, with no `,direct`, and
+  `GOSUMDB=sum.golang.org`. The container runs with `--cap-drop ALL`,
+  `--security-opt no-new-privileges` and `--pids-limit 256`. `docs/demo`
+  is mounted into it read-only and the render writes into a new empty
+  directory; after a render that wrote the sidecar, the script copies the
+  files the tape names, the capture, the narration and the sidecar from
+  that directory into `docs/demo`, the sidecar last, and it copies nothing
+  from a directory that holds a link. The sidecar's `recorder` gains
+  `baseImage` and `builderImage`, each image's reference and digest as the
+  Dockerfile writes them, with the base image's version and revision
+  labels and the builder's Go release; `source`, the VHS repository, tag
+  and commit; `runFlags`, the three flags as they ran; and
+  `droppedFlags`. The render keeps the network: `droppedFlags` lists
+  `--network none` with its reason, that README.md's first command, which
+  the tape types, resolves the module through the module proxy that
+  `environment.goproxy` names. The script, `--dry-run` included, exits 1
+  on a Dockerfile that names a base image by tag alone or the VHS source
+  by no commit. The committed GIF, frames, capture and sidecar are not
+  re-rendered.
+- The Go verifier's `--version` line names the commit a `(devel)` binary
+  records, or says that it records none. It wrote
+  `atx-verify: <module> (devel), built with <Go release>`, which named no
+  commit, for `go run` from a checkout without `-buildvcs=true`, the form of
+  the commands README.md and `docs/running-the-verifiers.md` give for
+  running the Go verifier on fixtures from a checkout, and for a `go build`
+  of a git clone under Go 1.22 and 1.23. After `(devel)` it now
+  reads the binary's `vcs.revision` and `vcs.modified` build settings and
+  writes `atx-verify: <module> (devel), commit <sha>, built with <Go release>`,
+  `atx-verify: <module> (devel), commit <sha>, with uncommitted changes, built with <Go release>`
+  when `vcs.modified` is `true`, and
+  `atx-verify: <module> (devel), no commit recorded, built with <Go release>`
+  when the binary records no `vcs.revision`; `<sha>` is the revision as
+  recorded, in full, and nothing runs `git`. A tag or pseudo-version is
+  written as before, with no commit added. `docs/running-the-verifiers.md`
+  says under "Which commit a run verified" that `go run` from a checkout
+  without `-buildvcs=true` names `(devel), no commit recorded` under every
+  Go release, that `go build` and `go install` of a git clone name the
+  commit, and which commands trace a result to its commit: the module proxy
+  at that commit, `go build -o atx-verify ./cmd/atx-verify` in a git clone,
+  the Python verifier run from a git clone, and `go run -buildvcs=true` from
+  a git clone. `docs/captures/go-verifier.txt` is unchanged byte for byte;
+  its sidecar, `docs/captures/go-verifier.json`, records the new tree id of
+  `verifiers/go/verifier`, so `scripts/capture_go_verifier.py --check`
+  passes. No fixture changes.
+- Both reference verifiers refuse a v1.1 `declaredPurpose` number written
+  with a fraction or an exponent part as `SIGNATURE_INVALID`, with a
+  reason that names `declaredPurpose` and the number as written (#283):
+  `no signature covers declaredPurpose: the number <literal> is written
+  with a fraction or an exponent part, not as an integer`, where
+  `<literal>` is the number as the credential writes it.
+  Two entries under `v0.1.0` are amended: the #130 entry under Added and
+  the earlier #283 entry under Fixed now name `no signature covers
+  declaredPurpose: the number <literal> is written with a fraction or an
+  exponent part, not as an integer` in place of the `Ed25519 signature`
+  line both verifiers wrote for these credentials before this change.
+  atx-spec core.md §1.3a.2 rule 3 (`da5d2c9`) has a verifier decide the
+  form of a number in `declaredPurpose` from the credential's JSON text.
+  Both verifiers make the refusal in the scan that refuses an integer
+  outside the I-JSON exact range, before any signature is checked, and
+  the first number in `declaredPurpose`'s text that is written with `.`,
+  `e` or `E`, or is an integer outside the exact range, decides:
+  `{"b": 1.5, "a": 9007199254740993}` gets this reason, and
+  `{"a": 9007199254740993, "b": 1.5}` the exact-range reason, which is
+  unchanged. The unpaired-surrogate and float64-range refusals still run
+  before that scan. The Go verifier takes the number as written from its
+  `json.Number`, and the Python verifier keeps it at decode with a
+  `parse_float` hook. The paths that checked each declared signature of
+  such a credential against no key, the Go verifier's
+  `hasNumberWithFractionOrExponentV11` and the Python verifier's
+  `NotImplementedError` fallback, are removed. Five fixtures written by
+  the generator pin the rule: the v1.1 baseline signed over
+  `declaredPurpose` `{"n": 1000}`, carrying it as signed
+  (`fixtures/v1_1-declared-purpose-integer-signed.json`, `ACCEPT`) or as
+  `{"n": 1000.0}`, `{"n": 1e3}` or `{"n": 1E3}`
+  (`...-integer-respelled-fraction.json`,
+  `...-integer-respelled-exponent.json` and
+  `...-integer-respelled-upper-exponent.json`), and the baseline signed
+  over the bytes the JCS library writes for `{"n": 9007199254740993}`,
+  carrying it (`fixtures/v1_1-declared-purpose-integer-outside-range.json`).
+  The four that reject expect `REJECT [SIGNATURE_INVALID]` with a reason
+  containing `declaredPurpose`. On the commit before this change both
+  verifiers rejected the three respelled fixtures with the
+  `Ed25519 signature` line, which does not contain `declaredPurpose`, and
+  gave the other two the outcomes they expect.
+  `fixtures/v1_1-declared-purpose-number-injected.json` keeps its verdict,
+  its category and a reason containing `signature`. The 36 existing
+  fixtures and their `MANIFEST.sha256` lines are byte-identical; the
+  manifest gains five lines. `conformance.json` and the capture under
+  `docs/captures/` are regenerated, and `scripts/schema_validation.py`
+  holds each new fixture to one `oneOf` error at `declaredPurpose`. The
+  fixture counts in README.md, COSIGNERS.md, CONTRIBUTING.md,
+  `docs/continuous-verification.md` and `docs/sibling-repositories.md` go
+  from 36 to 41 (the sibling row's v1.1 count from 24 to 29, its
+  declaredPurpose count from 7 to 12), and `docs/scope.md` counts 32 of
+  41 fixtures that reach signature verification, where it counted 27 of
+  36, and 7 of its 9 ACCEPT fixtures that carry Ed25519 signatures only.
+  `docs/fixtures.md` and `docs/scope.md` list the fixtures.
+- Both reference verifiers reject a v1.1 credential whose
+  `behavioralProfile` is present and is not an object of exactly
+  `checksum` (a string), `generatedAt` (a timestamp) and `observationDays`
+  (an integer), under those names as written, as `SIGNATURE_INVALID` with
+  the reason `no signature covers behavioralProfile, which is not an object
+  of exactly checksum (a string), generatedAt (a timestamp) and
+  observationDays (an integer)` (#277). The credential schema core.md §1.1
+  points to gives the profile those three members and no other, and the
+  signed payload holds null for a credential with no profile (§1.3a.2
+  rule 1), so no signature covers such a profile. Both verifiers projected
+  a profile that did not decode to null, the absent form, dropped a member
+  outside the three and matched member names case-insensitively: on the
+  v1.1 baseline, a fourth member in the profile, and `observationDays`
+  renamed `OBSERVATIONDAYS`, verified, and a credential signed with no
+  profile verified carrying `{"checksum": 1, "generatedAt": "x",
+  "observationDays": "many"}` or a string as its profile. An absent or null
+  `behavioralProfile` still verifies as the absent form, and the check does
+  not run under `atcVersion` 1.0, which signs no `behavioralProfile`. A
+  `behavioralProfile.generatedAt` whose offset is out of range is rejected
+  by this check; before, the signed payload held such a profile as null, so
+  a signature made over the profile failed, and a credential signed with no
+  profile verified carrying it (`docs/running-the-verifiers.md`).
+  `TestBehavioralProfileForm`, `TestBehavioralProfileProjection`,
+  `TestSuitePinsBehavioralProfileForm` and the Python verifier's
+  `GoBehavioralProfileForm` class pin it. A `scanSummary` member outside its
+  six is unchanged; its treatment waits on the atx-spec decision on rule 2.
+  A `behavioralProfile` member name outside printable ASCII is still
+  rejected as `PARSE_ERROR` (#284) before the profile's form is checked.
+- Six kinds of line in the two reference verifiers' output change wording
+  (#276).
+  The summary line counts `(1 fixture)` for one fixture, where it read
+  `(1 fixtures)`; the shipped set's line, `(29 fixtures)`, is unchanged. An
+  argument `help` or `version` that names no file adds the option meant to
+  its line, `error: help: no such file or directory (--help prints the usage)`
+  and `error: version: no such file or directory (--version prints the version line)`.
+  Directories holding no `*.json` at their top level are reported as
+  `no fixture *.json files found in <dirs> (subdirectories are not walked)`,
+  naming each directory listed, where the line named none. A fixture with
+  no `atx` member, such as one of another conformance suite, rejects with
+  `PARSE_ERROR: the fixture has no atx member`, adding
+  ` (its $schema is "<value>")` when its `$schema` is a string, where the Go
+  verifier wrote `unexpected end of JSON input` and the Python verifier
+  added that phrase in parentheses. A file that is not JSON, one whose
+  value is not a JSON object and one nested deeper than 10000 levels are
+  load errors with one reason each in both verifiers,
+  `fixture is not valid JSON`, `fixture is not a JSON object` and
+  `arrays and objects nested deeper than 10000 levels (the limit of Go's encoding/json)`,
+  where each verifier wrote its JSON decoder's own error, the Go one naming
+  the type `verifier.fixture`. A REJECT fixture that fails on its
+  `expected.reasonContains` alone adds `reason does not contain "<substring>"`
+  under its `observed:` line. Exit codes, verdicts and categories do not
+  change, and both verifiers report `29 pass, 0 fail (29 fixtures)` on the
+  shipped set. The argument table of `scripts/parity/parity.py` adds five
+  cases, 46 from 41: the bare `help` and `version` words, and a file that is
+  not a JSON object, one that is not JSON and one nested 10001 levels deep;
+  run with the verifiers of the commit before, the gate fails on the last
+  three. `docs/running-the-verifiers.md` says what each line reads.
 - The `$schema` member of the 26 fixtures and of `conformance.json` names
   the address GitHub serves the schema of its format from on `main`,
   `https://raw.githubusercontent.com/opena2a-standards/atx-conformance/main/schemas/fixture-v1.schema.json`
@@ -208,6 +1840,29 @@ they should not.
   fixture's bytes, its `MANIFEST.sha256` line and `conformance.json` do, and
   `docs/captures/go-verifier.json` records the new tree of `fixtures/`. The
   Go verifier's output, `docs/captures/go-verifier.txt`, is unchanged.
+- Both reference verifiers reject a v1.1 credential whose `scanSummary`
+  holds a member outside its type, or is not an object, as
+  `SIGNATURE_INVALID` with a reason naming `scanSummary` (#173). The signed
+  payload holds each of its six members typed (core.md §1.3a.2 rule 2), so
+  no signature covers such a value. Both verifiers left the member at its
+  zero value: the v1.1 baseline, which signs `criticalFindings` 0, verified
+  carrying `criticalFindings` `"3"` or `3.5`, and a credential signed with a
+  zero `scanSummary` verified carrying a `scanSummary` of `7`. An absent or
+  null `scanSummary`, or member, is still the zero value, and the check does
+  not run under `atcVersion` 1.0, which signs no `scanSummary`.
+  `TestScanSummaryOutsideItsType` and the Python verifier's
+  `GoScanSummaryOutsideItsType` class pin it.
+- The Go verifier rejects a v1.1 `declaredPurpose` holding an unpaired
+  UTF-16 surrogate escape as `VERIFIER_CONFIG_ERROR`, naming the escape,
+  where the Python verifier rejects it too (#173). Its JCS library read
+  such an escape followed directly by a `\u` escape that does not complete
+  the pair, `\ud800\ud800` for one, as a single U+FFFD: the Go verifier
+  reported `SIGNATURE_INVALID` on the v1.1 baseline with one, and a
+  credential signed with U+FFFD in `declaredPurpose` verified with such a
+  pair written in its place. RFC 8785 §3.2.2.2 requires a canonicalizer to
+  refuse a lone surrogate. A lone escape, `\ud800`, was refused already; its
+  reason names the escape, where it read `Missing surrogate`.
+  `TestDeclaredPurposeUnpairedSurrogateEscape` pins it. No fixture changes.
 - The argument table of `scripts/parity/parity.py` runs twelve argument
   shapes that the "Arguments" section of `docs/running-the-verifiers.md`
   describes, whose closing sentence says the parity gate runs both
@@ -832,6 +2487,569 @@ they should not.
 
 ### Fixed
 
+- The Go reference verifier decides the float64 range of a number in a
+  v1.1 `declaredPurpose` on its digits as written, at 2^1024 - 2^970, the
+  edge Python's `float()` rounds to infinity at, so both reference
+  verifiers reject a credential carrying `1` followed by 1000 zeros and
+  `e-650`, whose value is 10^350, as `VERIFIER_CONFIG_ERROR` with the
+  reason `v1.1 canonicalization failed: declaredPurpose holds a number
+  outside the float64 range` (#293). `hasNumberOutsideFloat64RangeV11`
+  decided the range with `strconv.ParseFloat`, which keeps at most 800
+  digits of a literal, places the decimal point by the digits it kept and
+  caps the exponent it reads: it reads that number as `1e+149` with no
+  error, so the Go verifier canonicalized the credential and rejected it
+  as `SIGNATURE_INVALID` through the fraction-or-exponent rule. On
+  `fixtures/v1_1-declared-purpose-number-injected.json` with that number
+  in place of `1.5`, `go run .` in `verifiers/go` printed
+  `REJECT[SIGNATURE_INVALID: Ed25519 signature
+  did:opena2a:authority:opena2a.org#key-1 did not verify against any
+  configured public key]` and exited 0, where `python3 verify.py` in
+  `verifiers/python` printed `REJECT[VERIFIER_CONFIG_ERROR: v1.1
+  canonicalization failed: declaredPurpose holds a number outside the
+  float64 range]` and exited 1; the Go verifier now prints that line and
+  exits 1 there too, and both exit 1 on `fixtures/v1_1-baseline-valid.json`
+  with a `declaredPurpose` of that number added. The new
+  `numberOutsideFloat64Range` in `verifiers/go/verifier/verify.go` reads
+  the sign, the digits, the decimal point and the exponent of the literal,
+  drops leading zeros, stops reading an exponent 400 past the literal's
+  length, and compares the position of the decimal point, then the digits,
+  with the 309 digits of 2^1024 - 2^970 (`float64OverflowDigits`, computed
+  with `math/big`); a literal with no nonzero digit is zero.
+  `TestNumberOutsideFloat64Range` pins it on 54 literals, among them `0`,
+  `-0`, `0e400`, `1e-400`, `1e308`, `1e309`, `0.1e309`, `0.1e310`,
+  2^1024 - 2^970 and 2^1024 - 2^970 - 1 as digits, with a fraction, with a
+  leading `0.` and `e309`, and with 1000 trailing zeros and `e-1000`, `1`
+  followed by 1000 zeros and `e-691` (10^309) and `e-692` (10^308), `0.`
+  followed by 200000 zeros, `1` and `e200400` (10^399) and `e200308`
+  (10^307), and exponents of 20 digits; on each literal of at most 800
+  bytes it holds the decision to `strconv.ParseFloat` returning `ErrRange`.
+  A run of 6000 random literals at and around the edge, written short and
+  written long, agreed with exact rational arithmetic and with Python
+  3.14.3's `float()` on each. `TestDeclaredPurposeNumberOutsideFloat64Range`
+  expects `VERIFIER_CONFIG_ERROR` with that reason on 34 `declaredPurpose`
+  values, 12 of them written with more than 800 digits and an exponent
+  part: the 10 forms #293 lists, then 10^309 and 2^1024 - 2^970 written
+  with 1000 trailing zeros and `e-1000`; its controls add 10^308, 10^300,
+  10^307 and 2^1024 - 2^970 - 1 written so, which reject as
+  `SIGNATURE_INVALID` as before. The Go verifier of the commit before this
+  change fails the 12 with `SIGNATURE_INVALID`.
+  `TestDecoderWithoutUseNumberOnOutOfRangeNumbers` expects
+  `VERIFIER_CONFIG_ERROR` on the 10^350 credential, where it expected
+  `SIGNATURE_INVALID`. In the Python verifier, `GO_PURPOSE_NUMBER_VERDICTS`
+  gains those 16 rows, 12 expecting `VERIFIER_CONFIG_ERROR` and 4
+  `SIGNATURE_INVALID`, and
+  `test_number_outside_float64_range_that_go_reads_as_finite` is
+  `test_number_outside_float64_range_written_with_more_than_800_digits`;
+  `verify.py` changes in two docstrings and a comment alone. Built with
+  Go 1.26.3 and run under Python 3.14.3. `go run .` in `verifiers/go` with
+  no argument reports `36 pass, 0 fail`, as `docs/captures/go-verifier.txt`
+  records; that capture is unchanged byte for byte, and its sidecar,
+  `docs/captures/go-verifier.json`, records the new tree id of
+  `verifiers/go/verifier`, so `scripts/capture_go_verifier.py --check`
+  passes. No fixture changes.
+- Four comments limit what they say Go does with a number outside the
+  float64 range to a number `strconv.ParseFloat` refuses as out of range,
+  such as `1e400` or an integer of 401 digits (#294). The docstring of
+  `_holds_number_outside_float64` in `verifiers/python/verify.py` said
+  `strconv.ParseFloat` refuses a number that is not finite as a float64;
+  the comment in `test_number_outside_float64_range_reaches_the_go_category`
+  in `verifiers/python/test_verify.py` said Python's `float()` rounds at
+  the same edge; the comment on `UseNumber` in `rawDuplicateMember` in
+  `verifiers/go/verifier/verify.go`, and the one on the #187 cases of
+  `TestRawDuplicateMember`, said that without `UseNumber` a number outside
+  the float64 range aborts the duplicate-member scan, the first saying
+  that `Token()` returns an error on it. Built with Go 1.26.3 and with
+  Go 1.22.12, `strconv.ParseFloat` reads `1` followed by 1000 zeros and
+  `e-650`, whose value is 10^350, as `1e+149` with no error, and a
+  `json.Decoder` without `UseNumber` reads that number in an array with no
+  `Token()` error; under Python 3.13.12 and 3.14.3, `float()` returns `inf`
+  for it. The docstring and the comments in `test_verify.py` and in
+  `rawDuplicateMember` now name that number.
+  `TestDecoderWithoutUseNumberOnOutOfRangeNumbers` in the Go verifier pins
+  those Go results, the `Token()` error on `1e400`, `-1e400` and an integer
+  of 401 digits, the duplicate member `rawDuplicateMember` reports after
+  each of the four numbers, and `SIGNATURE_INVALID` on a v1.1 credential
+  whose `declaredPurpose` is that number.
+  `test_number_outside_float64_range_that_go_reads_as_finite` in the Python
+  verifier pins `float()` returning `inf` for it, and the Python verifier's
+  `VERIFIER_CONFIG_ERROR` on that credential with the reason `v1.1
+  canonicalization failed: declaredPurpose holds a number outside the
+  float64 range`. `verify.go` changes in a comment alone, and `verify.py`
+  in a docstring alone. No fixture changes.
+- Both reference verifiers reject as `PARSE_ERROR` a credential holding a
+  member name with a character outside printable ASCII (U+0020 to U+007E)
+  in an object they decode: the credential, an entry of its `signatures`,
+  its `scanSummary` or its `behavioralProfile` (#284). The duplicate-member
+  check joins a name to a specified member by a fixed fold (#173), and a
+  relying party that binds the credential's JSON again may join by another:
+  Java 25's `String.equalsIgnoreCase` compares a member named U+0130
+  followed by `d` equal to `id`, and one named U+0131 followed by `ssuedAt`
+  equal to `issuedAt`, two pairs the fold keeps apart.
+  `fixtures/v1_1-baseline-valid.json` with either member added, which no
+  signature covers, was ACCEPT on both verifiers. Both now report
+  `REJECT[PARSE_ERROR: credential member name <name> holds U+0130,
+  outside printable ASCII (strict parse: a member name in the credential, a
+  signature entry, scanSummary or behavioralProfile must be printable
+  ASCII, U+0020 to U+007E)]` for the first, `<name>` being the name as Go's
+  `%+q` writes it, U+0130 written as a `\u` escape, and the same rule holds
+  on `fixtures/baseline-valid.json`. The check runs once the duplicate-member
+  check passes and before any member is decoded. It names the first such
+  name in document order and the first such character in it, written in
+  ASCII (`%+q` and `%U` in the Go verifier, the same text in the Python
+  one), so no Unicode table decides the reason. It reads no other object:
+  such a name in `declaredPurpose`, which v1.1 signs as written, or in a
+  member the verifiers do not declare keeps the verdict it had. A member
+  named with the Kelvin sign for the `k` of `revoked`, or with the long s
+  for the `s` of `signatures`, which Go's `encoding/json` reads as that
+  member, is now a `PARSE_ERROR` naming it. Before this change,
+  `fixtures/v1_1-baseline-valid.json` with that member renamed was, on
+  both verifiers built with Go 1.26.3 and run under Python 3.14.3, ACCEPT
+  with the baseline's own values (`false` for `revoked`, its one signature
+  entry for `signatures`), `REVOKED` with `revoked` holding `true`, and
+  `SIGNATURE_INVALID` with `signatures` holding `[]`, the two values the
+  rows of `GO_NON_ASCII_RENAMES` use; each of those four is now that
+  `PARSE_ERROR`. Written beside the member it spells, it is still a
+  duplicate member. Members named `É` and `é` in the credential,
+  two members and ACCEPT on both since #173, are a `PARSE_ERROR` too; in a
+  member the verifiers do not declare they are still two members.
+  Two MUST-REJECT fixtures built by the generator, one per spelling, hold
+  a verifier to the rule: `fixtures/v1_1-dotted-capital-i-member.json` and
+  `fixtures/v1_1-dotless-i-member.json`, each the credential of
+  `fixtures/v1_1-baseline-valid.json` with the member added after signing,
+  directly after the member it spells, expecting `REJECT [PARSE_ERROR]`
+  with a reason containing `printable ASCII`. Both reference verifiers at
+  the previous commit report ACCEPT on each. The 30 existing fixtures and
+  their `MANIFEST.sha256` lines are byte-identical, and the manifest gains
+  two lines. `scripts/schema_validation.py` holds each new fixture to
+  exactly one root `additionalProperties` error naming its added member.
+  The stated counts go from 30 to 32 (the sibling row's v1.1 count from 18
+  to 20, and 23 of 32 fixtures reach signature verification),
+  `conformance.json` and the Go verifier capture are regenerated, and both
+  verifiers report `summary: 32 pass, 0 fail (32 fixtures)`.
+  `TestMemberNameOutsidePrintableASCII` and
+  `TestSuitePinsMemberNamesOutsidePrintableASCII` hold the rule in the Go
+  verifier, and `GoMemberNameOutsidePrintableASCII` in the Python one; the
+  two rows of `GO_FOLDED_NAME_VERDICTS` for the Kelvin sign and the long s
+  move to `GO_NON_ASCII_RENAMES`, with the new verdict.
+- The Go reference verifier gives the reason the Python reference verifier
+  gives when a v1.1 credential's `declaredPurpose` holds a number that
+  `strconv.ParseFloat` refuses as outside the float64 range, such as
+  `1e400`, `-1e400` or an integer of 401 digits (#289). Both rejected such a
+  credential as `VERIFIER_CONFIG_ERROR`: the Go verifier wrote the error its
+  JCS library returned, whose text the Go release sets, as `v1.1
+  canonicalization failed: strconv.ParseFloat: parsing "1e400": value out of
+  range`, and the Python verifier wrote `v1.1 canonicalization failed:
+  declaredPurpose holds a number outside the float64 range`, which names the
+  member. The Go verifier now refuses such a number before its JCS library
+  reads it, with the Python verifier's reason, and still refuses an unpaired
+  surrogate escape in `declaredPurpose` first, as the Python verifier does.
+  On `fixtures/v1_1-declared-purpose-number-injected.json` with its
+  `declaredPurpose` written as `{"n": 1e400}`, `1e400` or `{"n": -1e400}`,
+  the two verifiers now print the same lines, built with Go 1.26.3 and run
+  under Python 3.14.3. `TestDeclaredPurposeNumberOutsideFloat64Range` in the
+  Go verifier expects that reason on 22 `declaredPurpose` values, among them
+  `1E400`, `1e+400`, `1.7976931348623159e308`, 2^1024 - 2^970 written as its
+  digits, integers of 401 and 5001 digits and `1e400` nested in 9997
+  arrays; the Go verifier of the commit before this change fails each of the
+  22 with the `strconv.ParseFloat` error, in the same category. Its controls
+  keep the verdicts and reasons they had: `1.7976931348623158e308`,
+  `1e-400`, 2^1024 - 2^970 - 1, and `1e400` written in a string or as a
+  member name reject as `SIGNATURE_INVALID`, and under `atcVersion` 1.0 the
+  baseline carrying `{"n": 1e400}` is accepted. In the Python verifier,
+  `GO_PURPOSE_NUMBER_VERDICTS` adds `{"n": 1e400}`, `{"n": -1e400}`, `1E400`
+  and `1e+400`; `InjectedNumberPurpose` expects that reason on the 13 values
+  the table expects `VERIFIER_CONFIG_ERROR` for, and `LongInteger` on its 8
+  values holding an integer of 401 or 5001 digits. `strconv.ParseFloat` can
+  read a number written with more than 800 digits and an exponent part as
+  finite when its value is outside the float64 range: it reads `1` followed
+  by 1000 zeros and `e-650`, whose value is 10^350, as `1e+149`. The Go
+  verifier does not refuse such a number as outside the range, and rejects
+  the credential as `SIGNATURE_INVALID`, as it did before this change, where
+  the Python verifier rejects it as `VERIFIER_CONFIG_ERROR`. `verify.py`
+  changes in its comments alone. `docs/captures/go-verifier.txt` is
+  unchanged. No fixture changes.
+- The Python reference verifier fails to load a file that is not JSON and
+  nests arrays and objects deeper than 10000 levels with the reason for
+  whichever comes first in its text, as the Go reference verifier does
+  (#287). It counted the nesting over the whole file before it parsed it,
+  so the depth won wherever the token that is not JSON stood; it now parses
+  the text through the bracket that passes the limit, and gives the depth
+  reason only where that text is the start of a JSON text. On `[x,` or
+  `[NaN,` before 10001 nested arrays, both verifiers print
+  `FAIL  <file>  (load error: fixture is not valid JSON)` and exit 1, where
+  the Python verifier wrote `arrays and objects nested deeper than 10000
+  levels (the limit of Go's encoding/json)`; it exited 1 before this change
+  too, so only its reason changes. On those arrays with `x` or `NaN` inside
+  the deepest, both give the depth reason, before this change and after it.
+  `docs/running-the-verifiers.md` and the Python verifier's module docstring
+  say so. `TestLoadErrorIsTheFirstInTheText` in the Go verifier and
+  `test_load_error_is_the_first_in_the_text` in the Python one pin the same
+  11 rows, among them the bracket that passes the limit standing where a
+  member name belongs, and a 5001-digit integer before the nesting. The
+  Python verifier of the commit before this change fails 6 of them, the 6
+  in which the token that is not JSON comes first; `verify.go` does not
+  change, and passes all 11. The argument table of
+  `scripts/parity/parity.py` adds two cases (57, from 55) on files under
+  `shapes/` in its scratch directory: a file that stops being JSON before
+  it nests too deep, `[x,` and `[NaN,` before 10001 nested arrays, and one
+  that nests too deep before it stops being JSON, those arrays with `x` and
+  `NaN` inside the deepest. The verifiers of the commit before this change
+  differ on the first case and agree on the second; they agree on both
+  after it. No fixture changes.
+- The Go reference verifier verifies no signature over a v1.1 credential
+  whose `declaredPurpose` writes a number with a fraction or an exponent
+  part, as the Python reference verifier verifies none (#283). Its JCS
+  library writes such a number as the IEEE 754 double nearest it, so built
+  with Go 1.26.3 it accepted the v1.1 baseline signed over `declaredPurpose`
+  `{"n": 1000}` and carrying `{"n": 1000.0}`, `{"n": 1e3}` or `{"n": 1E3}`,
+  and signed over the bytes the library writes for `{"n":
+  9007199254740993}` and carrying `{"n": 9007199254740993.0}` or `{"n":
+  9.007199254740993e15}`, which the exact-range check (#278) skipped
+  because their text holds `.`, `e` or `E`. The Python verifier, whose
+  serializer writes no such number, rejected each: core.md §1.3a.2 rule 3
+  keeps RFC 8785 number serialization out of cross-language scope. Both
+  verifiers now refuse such a number in the scan that refuses an integer
+  outside the exact range, before any signature is checked, and reject the
+  credential as `SIGNATURE_INVALID` with `no signature covers
+  declaredPurpose: the number <literal> is written with a fraction or an
+  exponent part, not as an integer`, where `<literal>` is the number as
+  the credential writes it, `1000.0`, `1e3` or `1E3` above (the change
+  that closes #283). The first number in `declaredPurpose`'s text that is
+  written with `.`, `e` or `E`, or is an integer outside the exact range,
+  decides and gets its own reason, so `{"n": 9007199254740993}` keeps its
+  reason; an integer written as its digits in the exact range, or a `.` or
+  `e` inside a string or a member name, is verified over the bytes JCS
+  writes, as before. `TestDeclaredPurposeNumberWithFractionOrExponent` in
+  the Go verifier and `GoPurposeNumberSpellings` in the Python verifier
+  each sign 12 such spellings over the bytes the library writes for them
+  and expect that rejection, and 5 controls written as signed, which they
+  expect accepted. The Go verifier of the commit before this change
+  accepts each of the 12. On the 21 files the Python tests' helpers write
+  for the 12 spellings, the 5 controls, the exact-range control and the 3
+  numbers of `InjectedNumberPurpose`, the two verifiers print the same
+  verdict, reason and summary lines. Until the change that closes #283,
+  the Go verifier checked each declared signature of such a credential
+  against no key, as the Python verifier did, and both wrote `Ed25519
+  signature did:opena2a:authority:opena2a.org#key-1 did not verify against
+  any configured public key`; at this change the shipped fixtures'
+  verdicts and reasons did not change:
+  `fixtures/v1_1-declared-purpose-number-injected.json` rejected with that
+  line, as before, `docs/captures/go-verifier.txt` was unchanged and the
+  capture sidecar recorded the verifier's new tree id. The change that
+  closes #283 gives that fixture the `declaredPurpose` reason above, keeps
+  its verdict, its category and a reason containing `signature`, and
+  regenerates the capture. No fixture changes.
+- The Python reference verifier fails to load a file that writes a value as
+  `NaN`, `Infinity` or `-Infinity`, its arrays and objects nested no deeper
+  than 10000 levels, with the reason the Go reference verifier gives,
+  `fixture is not valid JSON`, where it wrote `<literal> is not a JSON value
+  (RFC 8259 §6)`, as `NaN is not a JSON value (RFC 8259 §6)` (#282). On
+  `{"name": NaN}`, `{"name": Infinity}` and
+  `{"name": -Infinity}`, and on an `atx` member whose `trustLevel` is
+  written as each of the three, both verifiers print
+  `FAIL  <file>  (load error: fixture is not valid JSON)` and exit 1; the
+  Python verifier exited 1 on each of the six before this change too, so
+  only its reason changes. `docs/running-the-verifiers.md` says such a file
+  is a file that is not JSON. `TestLoadErrorNamesTheFileShape` in the Go
+  verifier and `test_load_error_names_the_file_shape` in the Python one add
+  four rows each, `{"name": NaN}`, `{"name": Infinity}`,
+  `{"name": -Infinity}` and `[NaN]`, which expect that reason, and the
+  Python verifier's `NonStandardConstant` tests expect it where they
+  expected the literal named. The Python verifier of the commit before this
+  change fails its four rows and both of those tests; `verify.go` does not
+  change, and passes its four rows. The argument table of
+  `scripts/parity/parity.py` adds two cases (55, from 53) on files under
+  `shapes/` in its scratch directory: a file holding NaN, Infinity or
+  -Infinity, the three objects above, and a credential holding NaN,
+  `fixtures/baseline-valid.json` with its credential's `trustLevel` written
+  as `NaN`. The verifiers of the commit before this change differ on both
+  cases, and agree on both after it. No fixture changes.
+- Both reference verifiers fail to load a fixture file that writes a member
+  more than once outside its `atx` member, under one name or under two that
+  Go's `encoding/json` reads as one, such as `expected` and `EXPECTED`. Each
+  prints `FAIL  <file>  (load error: the fixture repeats the member
+  "<member>")`, naming the member as written the second time, with no
+  `expected:` or `observed:` line, counts it as a fail and exits 1. The Go
+  verifier decoded each repeat into the one field of its fixture struct, so
+  a member a later object omits kept the earlier object's value, while the
+  Python verifier read the later object alone, and the two gave one file
+  opposite verdicts: `fixtures/wrong-issuer.json` with its `expected` set
+  to `REJECT [SIGNATURE_INVALID]` and a second `"expected": {"verifyResult":
+  "REJECT"}` appended failed in the Go verifier, exit 1, and passed in the
+  Python verifier, exit 0, as it did with the second member spelled
+  `EXPECTED` and with a first `expected` whose `reasonContains` the reason
+  does not hold, and `fixtures/v1_1-baseline-valid.json` with a second
+  `verifierState` holding only its `clockRfc3339` passed in the Go verifier
+  and failed in the Python verifier as `UNTRUSTED_ISSUER`. So before this
+  change a fixture that wrote a member twice outside `atx` could reach a
+  different verdict in each verifier, and for a repeated `verifierState`
+  that difference decided whether its CRL and its signature threshold
+  (`requiredSignatures`) were applied. The repeat is
+  checked once the file parses as JSON and before any member is decoded,
+  so it is named in place of a type error in the member repeated, and every
+  member outside `atx` is checked, those the fixture format does not
+  declare included. A member written twice inside `atx` is still the strict
+  parse's verdict, `REJECT[PARSE_ERROR]`, which
+  `fixtures/v1_1-duplicate-purpose-member.json` and
+  `fixtures/v1_1-case-variant-member.json` pin, and a member written once
+  in another case, `EXPECTED` with no `expected`, is read as before. No
+  shipped fixture writes a member twice outside `atx`, and both verifiers
+  pass the 30 fixtures as before. `TestRepeatedFixtureMemberIsALoadError`
+  and the Python verifier's `RepeatedFixtureMember` tests hold both
+  verifiers to the rule; the Python tables of repeated fixture members
+  (`GO_REPEATED_EXPECTED_NAMES`, `GO_UNLOADABLE_REPEATS`,
+  `GO_REPEATS_INSIDE_THEIR_TYPE`, `GO_THRESHOLD_REPEATS`) and the two
+  repeated members of `TestRequiredSignaturesDecode` now expect the load
+  error, which the Go verifier built with Go 1.26.3 writes on each. The
+  argument table of `scripts/parity/parity.py` adds seven cases (53, from
+  46) on files under `repeat/` in its scratch directory, written at run
+  time from `fixtures/baseline-valid.json`, `fixtures/wrong-issuer.json`
+  and `fixtures/v1_1-baseline-valid.json`: `expected` twice, `expected` and
+  `EXPECTED`, a second `EXPECTED` that omits a member, `verifierState`
+  twice, `verifyResult` twice and `clockRfc3339` twice inside the one
+  `verifierState`, each a load error both verifiers must word alike, and a
+  credential that writes a member twice, a verdict on both. Its self-test
+  adds one case (80, from 79): a verifier that verifies the first of those
+  files where the other fails to load it. No fixture changes.
+- Both verifiers fold a credential member name by a fixed table, ASCII
+  `A-Z` to `a-z`, U+212A (Kelvin sign) to `k` and U+017F (long s) to `s`,
+  and leave every other character unchanged, where they lowercased every
+  other character by the Unicode tables of the release they ran under
+  (`unicode.ToLower` in `verify.go`, `str.lower()` in `verify.py`), so
+  which names were a duplicate member depended on the Go and Python release
+  (#173). The credential of `fixtures/v1_1-baseline-valid.json` with two
+  unsigned members added, named U+1C89 followed by `x` and U+1C8A followed
+  by `x` (a case pair from Unicode 16.0), was ACCEPT built with Go 1.26.3
+  and under Python 3.13.12 and a `PARSE_ERROR` built with Go 1.27.2 and
+  under Python 3.14.3; it is ACCEPT under all four. Members named `É`
+  and `é` are two members, ACCEPT on both, where both reported
+  `PARSE_ERROR`; `É` written twice stays a `PARSE_ERROR`, as do
+  `TRUSTLEVEL` beside `trustLevel`, the Kelvin sign beside `k` and the long
+  s beside `s`. With Go 1.26.3 and Python 3.14.3 the two verifiers also
+  split on U+0130, which `unicode.ToLower` maps to `i` and `str.lower()` to
+  `i` followed by U+0307: a member named U+0130 followed by `d` beside the
+  credential's `id` was a `PARSE_ERROR` in the Go verifier and ACCEPT in
+  the Python one, and members named U+0130 followed by `x` and `i`, U+0307,
+  `x` the reverse; each is ACCEPT on both. Go's `encoding/json` matches a
+  name to an ASCII struct field through no non-ASCII letter but the Kelvin
+  sign and the long s, and RFC 8259 §8.3 compares names code unit by code
+  unit, so neither reference verifier's decoder joins the names the fold no
+  longer joins.
+  `docs/running-the-verifiers.md` says the fold is fixed where it said each
+  release set its Unicode version. `TestFoldKey` and
+  `TestRawDuplicateMember` hold the table in the Go verifier, and
+  `GoMemberNameFolding.test_non_ascii_names_fold_only_through_the_fixed_table`,
+  which replaces `test_non_ascii_names_fold_through_lowercase`, holds it in
+  the Python one. No fixture changes.
+- Both reference verifiers reject a v1.1 credential whose signed payload
+  holds an integer of magnitude above 2^53-1, outside the I-JSON exact
+  range (RFC 7493 §2.2), as `SIGNATURE_INVALID`, with one reason naming the
+  member and the integer: `trustLevel`, `scanSummary.criticalFindings`,
+  `scanSummary.highFindings`, `behavioralProfile.observationDays` or an
+  integer in `declaredPurpose` (#278). The Go verifier's JCS library reads
+  each number as an IEEE 754 double and writes 9007199254740993 as
+  9007199254740992, so it accepted a credential carrying 9007199254740993
+  under a signature over those bytes, which the Python verifier, writing
+  the digits, rejected because the signature did not verify. The check
+  runs once the payload canonicalizes, so a `declaredPurpose` number
+  outside the float64 range or an unpaired surrogate escape still rejects
+  as `VERIFIER_CONFIG_ERROR`. The vendored RFC 8785 serializer
+  (`verifiers/python/rfc8785.py` and `jcs-vectors/python/rfc8785.py`)
+  refuses such an integer where it wrote its digits, as it refuses a
+  float. A MUST-REJECT fixture built by the generator,
+  `fixtures/v1_1-integer-outside-exact-range.json`, carries
+  `scanSummary.criticalFindings` 9007199254740993 signed over the bytes the
+  JCS library writes for it; the Go verifier reported ACCEPT on it before
+  this change. The 29 existing fixtures and their `MANIFEST.sha256` lines
+  are byte-identical, the manifest gains one line, the stated counts go
+  from 29 to 30, and `conformance.json` and the Go verifier capture are
+  regenerated.
+- `scripts/parity/parity.py` checks a `--json` symbolic link whose target
+  ends in `/` or `/.` at the directory that target names, where it checked
+  the directory of a file of that name, as pathlib drops that `/` or `/.`
+  in joining the target (#274). Run with Python 3.12 and with Python 3.14
+  on macOS from a directory holding `file`, a regular file, and symbolic
+  links `tsl` to `newdir/`, `dot` to `newdir/.`, `fsl` to `file/` and
+  `via` to `b/`, with `b` a symbolic link to `newdir` and no `newdir`:
+  `--json tsl`, `--json dot` and `--json via` are refused as `no such
+  directory: newdir` and `--json fsl` as `not a directory: file`, exit 2
+  and one line naming the path and why, before any verifier runs, where
+  the check accepted each and writing the report to it, as the gate does,
+  raised `FileNotFoundError`, and `NotADirectoryError` for `fsl`. A link
+  to `missing/x/` with no `missing` and one to `file/x/`, refused before
+  as `no such directory: missing` and `not a directory: file`, are refused
+  as `no such directory: missing/x` and `no such directory: file/x`, as
+  `--json missing/x/y.json` and `--json file/x/y.json` are. The self-test
+  adds one case (79, from 78): links to `newdir/` and `newdir/.` with no
+  `newdir`, to a file's name followed by `/`, and to the name of a link it
+  accepts followed by `/`. No fixture changes.
+- `scripts/parity/parity.py` refuses a `--json` path the report cannot be
+  written to as a usage error, exit 2 and one line naming the path and why,
+  before any verifier runs, and its self-test holds the docstring's Report
+  keys block exactly (#271). Run with Python 3.12 and with Python 3.14 from
+  a directory holding `ro/` of mode 555, `ro/existing.json` of mode 444,
+  `locked/sub/` under `locked/` of mode 000, and `dangling`, a symbolic
+  link to `missing/parity-report.json`, with no `missing/`: `--json
+  ro/parity-report.json` is
+  refused as `directory not writable: ro`, `--json ro/existing.json` as
+  `not writable` and `--json dangling` as `no such directory: missing`,
+  where on both releases the check accepted each and writing the report
+  raised `PermissionError` or `FileNotFoundError`. `--json
+  locked/parity-report.json`, `--json locked/sub` and `--json
+  locked/sub/parity-report.json` are refused as `Permission denied`, and a
+  path through a missing directory with a 300-character name as `File name
+  too long`, where with Python 3.12 the check raised `PermissionError` or
+  `OSError`, and with Python 3.14 it accepted the first two, said `no such
+  directory: locked/sub` for the third, a directory that exists, and `no
+  such directory` for the fourth. The check reads each path with
+  `os.stat`, whose error, other than a missing path, is the reason, where
+  `Path.is_dir` and `Path.exists` return False for a permission error on
+  Python 3.14 and raise it on Python 3.12. The self-test's case holding the Report keys
+  block equal to `REPORT_KEYS` now needs the block on lines of its own and
+  followed by a blank line, so a key line appended after its last entry
+  turns the case red, where it stayed green. The Report keys entry for
+  `unreported`, and the docstrings of `build_report` and `render_table`,
+  say a verifier is listed when it exited non-zero before reporting any
+  fixture, as `compare` lists it; one that exits 0 without reporting any
+  fixture is a fixture set mismatch. The self-test adds four cases (78,
+  from 74): the refusals above, under stand-ins for the permission errors
+  that deny access whatever user the self-test runs as, paths it accepts,
+  the appended key line, and a verifier exiting 0 without reporting any
+  fixture absent from `unreported`. No fixture changes.
+- The description of `fixtures/revoked.json` says that the credential's
+  revoked flag is what rejects it in both reference verifiers, which read
+  the flag before the CRL and return on it, and that
+  `fixtures/revoked-crl-only.json` is the fixture whose verdict depends on
+  the CRL, where it ended "Both rejection paths are exercised." (#151).
+  Both verifiers report `REJECT[REVOKED: credential revoked field is true]`
+  on it and never read its CRL entry, as `docs/fixtures.md` says. Only the
+  description changes, at its source in the generator:
+  `scripts/check_fixture_immutability.py` finds the fixture's `atx`,
+  `verifierState` and `expected` members unchanged, and its
+  `MANIFEST.sha256` line and its `conformance.json` entry change with the
+  description, as `docs/versioning.md` allows for documentation.
+- `scripts/parity/parity.py` ends with an exit code, not a traceback, on two
+  paths, and documents its `--json` report's keys (#126). A `--json` path
+  that is a directory or whose directory does not exist is a usage error:
+  exit 2 and one line naming the path, before any verifier runs, where the
+  gate ran both verifiers and the argument table and then raised an
+  `OSError` writing the report. A verifier that cannot start is reported as
+  `[parity] <name> verifier could not start: <reason>`, exiting 127 before
+  reporting any fixture and named in `unreported`, and the argument table's
+  `go build` that cannot start is a build error; run with no `go` on PATH,
+  the gate ends `PARITY: FAIL` naming both and exits 1, where it raised
+  `FileNotFoundError`. The module docstring lists the six keys of the
+  report under `Report keys:`, held equal to `REPORT_KEYS`, whose names the
+  self-test holds equal to the keys `build_report` returns. The self-test's
+  no-fixtures case now runs stand-ins that exit 1, so a gate that ran a
+  verifier before finding no fixture would leave that exit on stderr and
+  turn the case red; a control shows the same stand-ins leave it when run
+  over a fixture. The self-test adds six cases (74, from 68). No fixture
+  changes.
+- The #259 entry below says that outside the RFC 3339 layout the Go
+  verifier's error still differed by release, and that the #266 entry above
+  it makes the Go 1.22.12 build name the offset too, where it said the error
+  can still differ (#268). Built with Go 1.22.0, 1.22.12, 1.23.0 or 1.26.3,
+  the Go verifier rejects `fixtures/baseline-valid.json` with an `issuedAt`
+  of `2099-12-31T23:59:59+25:00x` as `PARSE_ERROR: parsing time
+  "2099-12-31T23:59:59+25:00x": time zone offset hour out of range`; on the
+  commit before #266, built with Go 1.22.12, it named the extra text
+  (`extra text: "x"`). `scripts/check_readme_counts.py` fails when a
+  sentence of this file's top section says a result can still differ by
+  release, or still differs between Go releases, and quotes as a code span
+  a timestamp that `verifiers/go/verifier/verify_test.go` writes as a
+  string literal: what those tests expect of a timestamp does not depend on
+  the Go release that runs them. On this file as the previous commit left
+  it, the check names the #259 sentence and exits 1. The self-test adds
+  eleven cases (272 altered sites, from 261). No fixture changes.
+- The Go verifier names the time zone offset, as Go 1.23 and later do, when
+  a timestamp outside the RFC 3339 layout has an offset hour above 24 or
+  minute above 60 and text follows the offset or the offset's sign or
+  minute is malformed (#266). Built with Go 1.22.12, it rejected a
+  credential whose `issuedAt` was `2099-12-31T23:59:59+25:00x` with
+  `PARSE_ERROR: parsing time "2099-12-31T23:59:59+25:00x": extra text:
+  "x"`, and one whose `issuedAt` was `2026-02-30T00:00:00+25:0a` for an
+  offset it could not parse (`cannot parse "+25:0a" as "Z07:00"`); built
+  with Go 1.26.3 it named `time zone offset hour out of range` in each. The
+  Python verifier rejects both as a `PARSE_ERROR`, as not in the RFC 3339
+  layout, so the verdict category did not differ. Go 1.23 and later check
+  the offset's range before the text after it, its sign and its minute's
+  digits; the verifier now gives their error under Go 1.22 too
+  (`offsetFirst`, which replaces `offsetBeforeDay` and still names the
+  offset before a day out of range). `TestTimestampDecode` adds nine such
+  timestamps and eight controls whose error does not change, and
+  `TestOffsetOutsideLayoutVerdict` pins the two values above as an
+  `issuedAt` on the v1.0 and v1.1 baselines, as a clock and as a CRL
+  `issuedAt`. Built with Go 1.22.0 and Go 1.22.12, both tests fail without
+  the change; with it they pass built with each of Go 1.22.0, 1.22.12,
+  1.23.0, 1.24.0, 1.25.0, 1.25.3, 1.25.7, 1.26.0, 1.26.3, 1.26.5, 1.26.7,
+  1.26.8, 1.27.2 and 1.27.3. `docs/running-the-verifiers.md` states the
+  case, and the sidecar `docs/captures/go-verifier.json`, re-taken with
+  `scripts/capture_go_verifier.py`, records the new tree of
+  `verifiers/go/verifier`; `docs/captures/go-verifier.txt` is unchanged
+  byte for byte. No fixture changes.
+- The Go verifier names the time zone offset, as Go 1.23 and later and the
+  Python verifier do, when a timestamp's day is out of range and its offset
+  has an hour above 24 or a minute above 60 (#259). Built with Go 1.22.12,
+  it rejected a credential whose `issuedAt` was `2026-02-30T00:00:00+25:00`
+  with `PARSE_ERROR: parsing time "2026-02-30T00:00:00+25:00": day out of
+  range`, and named the day for that value in `clockRfc3339` and in a CRL's
+  `issuedAt` too; built with Go 1.23.0 or Go 1.26.3 it named `time zone
+  offset hour out of range` in each, as the Python verifier does. The
+  verdict category did not differ between them. Go 1.22's time package
+  refuses such a timestamp for the day, and `checkOffset` ran only on a
+  timestamp Go had decoded; the verifier now checks the offset before it
+  reports a day out of range (`offsetBeforeDay`), and built with Go 1.22.12
+  and with Go 1.26.3 it names the offset in each of the three. The offsets
+  table in `TestTimestampDecode` adds `2099-02-30T23:59:59+25:00` and
+  `1900-02-29T00:00:00+23:61`, with three controls whose offset is in range
+  and whose error names the day, and `TestOffsetOutOfRangeVerdict` adds
+  `2026-02-30T00:00:00+25:00` as an `issuedAt`, a clock and a CRL
+  `issuedAt`. Built with Go 1.22.12, both tests fail without the change;
+  with it they pass built with each of Go 1.22.0, 1.22.12, 1.23.0, 1.24.0,
+  1.25.0, 1.25.3, 1.25.7, 1.26.0, 1.26.3, 1.26.5, 1.26.7, 1.26.8, 1.27.2
+  and 1.27.3. `GO_OFFSET_OUT_OF_RANGE`, `GO_OFFSET_VERDICTS`,
+  `GO_UNLOADABLE_OFFSETS` and the clock test in
+  `verifiers/python/test_verify.py` carry the new rows, and
+  `docs/running-the-verifiers.md` says Go 1.22 refuses such a timestamp for
+  the day when its day is out of range. Outside the RFC 3339 layout the
+  error still differed by release: built with Go 1.22.12 the verifier
+  named the extra text in an `issuedAt` of `2099-12-31T23:59:59+25:00x`,
+  and built with Go 1.23.0 or Go 1.26.3 the offset; the #266 entry above
+  makes it name the offset built with Go 1.22.12 too. The sidecar
+  `docs/captures/go-verifier.json`, re-taken with
+  `scripts/capture_go_verifier.py`, records the new tree of
+  `verifiers/go/verifier`; `docs/captures/go-verifier.txt` is unchanged
+  byte for byte. No fixture changes.
+- The Python verifier rejects a v1.1 credential whose `declaredPurpose`
+  holds an unpaired UTF-16 surrogate escape as `VERIFIER_CONFIG_ERROR` when
+  it also holds a number its JCS serializer cannot write, `1.5` for one, as
+  the Go verifier does (#173). It refused an escape in a string only as it
+  encoded the payload, after the number had stopped it and left no
+  payload, so it reported `SIGNATURE_INVALID`: on
+  `{"a": 1.5, "b": "\ud800"}`, and on
+  `{"a": 1.5, "b": "\ud800\ud800"}` once the Go verifier refused that
+  escape too (above). It now refuses the escape before it canonicalizes the
+  payload, so an escape beside a number outside the float64 range is named
+  in place of the number, as in the Go verifier. Its reason, which quoted
+  the encoder's error, is the one the Go verifier writes, naming the first
+  unpaired escape, with its hex digits in lower case.
+  `GO_SURROGATE_VERDICTS_V11` and
+  `test_declared_purpose_escape_is_refused_before_a_number` in
+  `verifiers/python/test_verify.py` pin it. No fixture changes.
+- The `aip-conformance` row in `docs/sibling-repositories.md` names AIP
+  v1.0.0-draft, the `spec.id` and `spec.version` that
+  `opena2a-standards/aip-conformance` declares in its `conformance.json`,
+  where it named AIP v1.2.0-draft (#261). Run against the sibling
+  repositories, `scripts/check_sibling_rows.py` exits 0, where it reported
+  that the row's Spec cell names AIP v1.2.0-draft and exited 1. Its
+  self-test keeps the row that named AIP v1.2.0-draft among the retracted
+  rows the check must still fail on, checked against sibling data built
+  from the published rows: put in place of this commit's row, it fails
+  with `aip-conformance row's Spec cell names AIP v1.2.0-draft, but`, and
+  on the page of the previous commit, which publishes that row, the case
+  is red and the self-test exits 1. The self-test runs 18 cases, from 17.
+  No fixture changes.
 - Both reference verifiers refuse a timestamp whose time zone offset has an
   hour above 24 or a minute above 60 (`+25:00`, `+23:61`), and the Go
   verifier's verdict on one no longer depends on the Go release that built it

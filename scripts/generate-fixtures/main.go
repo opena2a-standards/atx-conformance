@@ -49,8 +49,15 @@ const jcsBaselineCanonicalHex = "7b226167656e74446964223a226469643a6f70656e61326
 const jcsDeclaredPurposeCanonicalHex = "7b226167656e74446964223a226469643a6f70656e6132613a6167656e743a6167656e745f636f6e666f726d616e63655f746573745f303031222c226167656e744964223a226167656e745f636f6e666f726d616e63655f746573745f303031222c2261746356657273696f6e223a22312e31222c226265686176696f72616c50726f66696c65223a7b22636865636b73756d223a227368613235363a676869373839222c2267656e6572617465644174223a22323032362d30352d31395430303a30303a30305a222c226f62736572766174696f6e44617973223a31347d2c226275696c644174746573746174696f6e223a2268747470733a2f2f736c73612e6465762f70726f76656e616e63652f7631236f70656e6132612d636f6e666f726d616e6365222c226361706162696c6974696573223a5b2264623a72656164222c2264623a7772697465225d2c22636f6e74656e7448617368223a2230303030313131313232323233333333343434343535353536363636373737373838383839393939616161616262626263636363646464646565656566666666222c226465636c61726564507572706f7365223a7b226175746f6e6f6d79223a2273757065727669736564222c226361706162696c6974794a757374696669636174696f6e223a7b2264623a72656164223a5b2262696c6c696e673a696e7175697279225d2c2264623a7772697465223a5b2262696c6c696e673a726566756e64225d7d2c2263617465676f7279223a2266696e616e6369616c2d6f7065726174696f6e73222c226461746153636f706573223a5b22637573746f6d65722e62696c6c696e67222c22637573746f6d65722e636f6e74616374225d2c2265677265737353636f706573223a5b226170692e7374726970652e636f6d222c22686f6f6b732e696e7465726e616c2e61636d652e636f6d225d2c2273746174656d656e74223a2250726f63657373657320637573746f6d65722062696c6c696e6720696e7175697269657320616e642069737375657320726566756e647320757020746f20612073757065727669736f722d736574206c696d69742e20e58c97e4baac222c227461736b53636f706573223a5b2262696c6c696e673a696e7175697279222c2262696c6c696e673a726566756e64225d2c22766f63616256657273696f6e223a2231227d2c22657870697265734174223a22323039392d31322d33315432333a35393a35395a222c226973737565644174223a22323032362d30352d32335430303a30303a30305a222c22697373756572436861696e223a5b226469643a6f70656e6132613a617574686f726974793a6f70656e6132612e6f72672d726f6f74222c226469643a6f70656e6132613a617574686f726974793a6f70656e6132612e6f7267225d2c22697373756572446964223a226469643a6f70656e6132613a617574686f726974793a6f70656e6132612e6f7267222c227075626c6973686572223a226f70656e6132612d636f6e666f726d616e6365222c227075626c6973686572446964223a226469643a6f70656e6132613a7075626c69736865723a6f70656e6132612d636f6e666f726d616e6365222c227363616e53756d6d617279223a7b22637269746963616c46696e64696e6773223a302c2263727970746f5365727665223a226e6f2d7765616b2d63727970746f222c226869676846696e64696e6773223a302c22686d61223a22706173736564222c226f6173624c6576656c223a224c31222c227365637265746c657373223a22636c65616e227d2c2274727573744c6576656c223a342c22747275737453636f7265223a2238372e353030303030222c2276657273696f6e223a22312e302e30227d"
 
 // fixedClock pins the verifier clock for the entire suite. Valid fixtures
-// have ExpiresAt later than this; the expired fixture has ExpiresAt earlier.
+// have ExpiresAt later than this; the two expired fixtures have ExpiresAt
+// earlier.
 const fixedClockRFC3339 = "2026-05-24T00:00:00Z"
+
+// atpMaxSkew is the family clock-skew bound that core.md §1.3 step 2
+// evaluates expiresAt within, stated in ATP-SPEC §10.2 (atpSpecRef): a
+// verifier tolerates at most 60 seconds of clock skew, and the tolerance
+// extends no TTL or cache window.
+const atpMaxSkew = 60 * time.Second
 
 // outDir is the conformance repo root, derived at run time relative to this
 // generator's location.
@@ -224,6 +231,30 @@ func canonicalPayloadV11(a *ATX) []byte {
 	return out
 }
 
+// canonicalPayloadV11WithScanSummaryMember is JCS(TBS) of a with one more
+// scanSummary member, name, holding the JSON value raw: the bytes an issuer
+// that signs every scanSummary member it writes would sign. The TBS holds
+// scanSummary as its six members (atx-spec §1.3a.2 rule 2), so a verifier
+// that holds it to those six does not reach these bytes.
+func canonicalPayloadV11WithScanSummaryMember(a *ATX, name string, raw json.RawMessage) []byte {
+	var tbs map[string]json.RawMessage
+	must(json.Unmarshal(canonicalPayloadV11(a), &tbs))
+	var ss map[string]json.RawMessage
+	must(json.Unmarshal(tbs["scanSummary"], &ss))
+	if _, ok := ss[name]; ok {
+		panic("canonicalPayloadV11WithScanSummaryMember: scanSummary already holds " + name)
+	}
+	ss[name] = raw
+	b, err := json.Marshal(ss)
+	must(err)
+	tbs["scanSummary"] = b
+	b, err = json.Marshal(tbs)
+	must(err)
+	out, err := jcs.Transform(b)
+	must(err)
+	return out
+}
+
 // projectDeclaredPurposeV11 implements the presence-based rule for the optional
 // declaredPurpose TBS member (atx-spec §1.3a.2 rule 5, degenerate inputs pinned
 // per issue #11), mirrored in ../verifiers: emptiness is a JSON-parse-level
@@ -325,11 +356,28 @@ type SpecRef struct {
 }
 
 // VerifierState is the configuration the verifier MUST apply before running.
+//
+// RequiredTrustLevel is the trust level the relying party requires, the input
+// atx-spec core.md §1.3 step 7 reads: at 3 or higher the verifier MUST reject
+// unless at least two distinct authorities have each produced a signature it
+// verified itself. Zero means no level is required, and omitempty keeps it out
+// of every fixture that does not set it, so those fixtures' bytes are unchanged.
 type VerifierState struct {
-	ClockRFC3339   string       `json:"clockRfc3339"`
-	TrustedIssuers []string     `json:"trustedIssuers"`
-	PublicKeys     []KeypairRef `json:"publicKeys"`
-	CRL            *CRL         `json:"crl,omitempty"`
+	ClockRFC3339       string       `json:"clockRfc3339"`
+	TrustedIssuers     []string     `json:"trustedIssuers"`
+	RequiredTrustLevel int          `json:"requiredTrustLevel,omitempty"`
+	PublicKeys         []KeypairRef `json:"publicKeys"`
+	// RequiredSignatures is the k of a k-of-n signature threshold: the number
+	// of distinct Ed25519 keys whose signatures must verify. Zero is left out,
+	// so a fixture that sets no threshold carries no such member.
+	RequiredSignatures int  `json:"requiredSignatures,omitempty"`
+	CRL                *CRL `json:"crl,omitempty"`
+	// RevocationListRequired is true when the verifier under test is required
+	// to hold a revocation list: with no CRL the verdict is REJECT
+	// REVOCATION_UNKNOWN. False is left out, so a fixture that does not set it
+	// carries no such member, and one of those that holds no CRL does not
+	// exercise core.md §1.3 step 6.
+	RevocationListRequired bool `json:"revocationListRequired,omitempty"`
 }
 
 // CRL is the same shape as opena2a-registry/pkg/atcverify CRL.
@@ -362,6 +410,10 @@ var (
 	expiredAt   = mustParseTime("2025-01-01T00:00:00Z")
 	createdAt   = mustParseTime("2026-05-23T00:00:00Z")
 	revokedTime = mustParseTime("2026-05-23T12:00:00Z")
+
+	// expiredBeyondSkewAt is one second past atpMaxSkew before the pinned
+	// verifier clock: 2026-05-23T23:58:59Z.
+	expiredBeyondSkewAt = mustParseTime(fixedClockRFC3339).Add(-(atpMaxSkew + time.Second))
 )
 
 // Fixed test agent + content hash used across fixtures so reviewers can see at
@@ -373,6 +425,21 @@ const (
 	testVersion    = "1.0.0"
 	testContentSha = "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff"
 	testBuildAtt   = "https://slsa.dev/provenance/v1#opena2a-conformance"
+)
+
+// testOtherAgentID is the one agent a revocation list names when it does not
+// name the test agent.
+const testOtherAgentID = "agent_conformance_test_other"
+
+// The subject of the foreign-did-method fixtures, named under the did:web
+// method rather than the issuer's did:opena2a: an agent and its publisher on a
+// platform that issues its own identifiers, under the reserved example domain
+// platform.example (RFC 2606). foreignAgentDIDAltered is the agentDid the
+// altered-after-signing fixture carries in place of the signed one.
+const (
+	foreignAgentDID        = "did:web:platform.example:agents:billing-agent"
+	foreignAgentDIDAltered = "did:web:platform.example:agents:other-agent"
+	foreignPublisherDID    = "did:web:platform.example"
 )
 
 // presentDeclaredPurpose is the populated declaredPurpose object the present-case
@@ -476,6 +543,13 @@ func main() {
 		defaultVerifierState.PublicKeys...),
 		keypairRefFor(untrusted, "vectors/issuer-untrusted.json"))
 
+	// Threshold verifier state: the default state, which holds the issuer's
+	// three Ed25519 keys (primary and two cosigners), requiring the signatures
+	// of two of them (core.md section 3.1 step 8: cosignatures from 2 of 3 key
+	// holders). Used by the threshold-1of3-cosignature fixture.
+	thresholdVerifierState := defaultVerifierState
+	thresholdVerifierState.RequiredSignatures = 2
+
 	// Revoking verifier state: the default state plus a CRL whose one entry
 	// names the test agent, issued before the pinned clock and not yet due for
 	// its next update. Used by both revocation fixtures.
@@ -490,6 +564,104 @@ func main() {
 			Reason:    "key compromise (test)",
 		}},
 		Signature: "TEST_ONLY_UNSIGNED_CRL",
+	}
+
+	// Revocation-list verifier states: the hybrid state, the one
+	// fixtures/v1_1-baseline-valid-hybrid.json runs under, plus a CRL in the
+	// revoking state's form (version 1, one entry, TEST_ONLY_UNSIGNED_CRL)
+	// with the dates and the listed agent each fixture gives it. A verifier
+	// reads a held list's entries first, whatever its dates, and then its
+	// freshness: a list whose nextUpdate is more than atpMaxSkew before the
+	// clock, or whose issuedAt is more than atpMaxSkew after it, is no
+	// evidence about an agent it does not list. Used by the v1_1-crl-*
+	// fixtures.
+	hybridStateHoldingCRL := func(issued, next time.Time, listedAgentID string) VerifierState {
+		vs := hybridVerifierState
+		vs.CRL = &CRL{
+			Version:    1,
+			IssuedAt:   issued,
+			NextUpdate: next,
+			Entries: []CRLEntry{{
+				AgentID:   listedAgentID,
+				RevokedAt: revokedTime,
+				Reason:    "key compromise (test)",
+			}},
+			Signature: "TEST_ONLY_UNSIGNED_CRL",
+		}
+		return vs
+	}
+	// The fresh list: the revoking state's dates, issued before the clock and
+	// not yet due for its next update.
+	freshCRLIssuedAt := mustParseTime("2026-05-23T12:00:00Z")
+	freshCRLNextUpdate := mustParseTime("2026-05-30T12:00:00Z")
+	// The list past its nextUpdate: due 61 seconds before the clock
+	// (2026-05-23T23:58:59Z), one second past atpMaxSkew, and issued an hour
+	// before that.
+	staleCRLNextUpdate := mustParseTime(fixedClockRFC3339).Add(-(atpMaxSkew + time.Second))
+	staleCRLIssuedAt := staleCRLNextUpdate.Add(-time.Hour)
+	// The list issued after the clock: issued 61 seconds after it
+	// (2026-05-24T00:01:01Z), one second past atpMaxSkew, and due seven days
+	// after that.
+	futureCRLIssuedAt := mustParseTime(fixedClockRFC3339).Add(atpMaxSkew + time.Second)
+	futureCRLNextUpdate := futureCRLIssuedAt.Add(7 * 24 * time.Hour)
+	// The verifier state that holds no CRL where one is required.
+	listRequiredNoneHeldVerifierState := hybridVerifierState
+	listRequiredNoneHeldVerifierState.RevocationListRequired = true
+
+	// newBaselineV11HybridATX is the credential of
+	// fixtures/v1_1-baseline-valid-hybrid.json, which the v1_1-crl-* fixtures
+	// carry byte for byte: the v1.1 baseline with an Ed25519 signature and an
+	// ML-DSA-65 signature over the same JCS(TBS). Both signatures are
+	// deterministic (RFC 8032 Ed25519; ML-DSA-65 with randomized signing off),
+	// so the values are the baseline's own. Only the verifier state, outside
+	// the signed bytes, differs from that fixture.
+	newBaselineV11HybridATX := func() ATX {
+		atx := newBaselineV11ATX()
+		ed := signV11WithKey(primary, atx)
+		pq, _ := signMLDSA65(mldsa.SeedHex, canonicalPayloadV11(&atx))
+		pq.KeyID = mldsa.KeyID
+		atx.Signatures = []ATCSignature{ed, pq}
+		return atx
+	}
+	hybridKeypairRefs := []KeypairRef{
+		keypairRefFor(primary, "vectors/issuer-primary.json"),
+		{Role: mldsa.Role, Path: "vectors/mldsa65-seed.json", Algorithm: mldsa.Algorithm, PublicKeyHex: mldsa.PublicKeyHex, KeyID: mldsa.KeyID},
+	}
+
+	// Required-trust-level verifier state: the cross-issuer state (the primary
+	// and partner authorities trusted, each key published under its own DID)
+	// plus a required trust level of 3, which makes atx-spec core.md §1.3 step 7
+	// reject unless two distinct authorities each produced a verified signature.
+	// Used by the distinct signer-authority fixtures.
+	requiredLevel3VerifierState := crossIssuerVerifierState
+	requiredLevel3VerifierState.RequiredTrustLevel = 3
+
+	// The same state, additionally publishing the primary authority's Ed25519
+	// public key under the partner authority's DID (#key-2), as
+	// vectors/issuer-primary-under-partner-did.json records it. One key
+	// published by two trusted DIDs is still one key: step 7 counts two
+	// signatures that verify under the same public key once, whatever keyId
+	// values they carry.
+	const primaryUnderPartnerPath = "vectors/issuer-primary-under-partner-did.json"
+	primaryKeyUnderPartnerDID := keypairRefFor(
+		mustLoadPublishedKey(primaryUnderPartnerPath, primary, secondary.IssuerDID),
+		primaryUnderPartnerPath)
+	oneKeyTwoDIDsVerifierState := requiredLevel3VerifierState
+	oneKeyTwoDIDsVerifierState.PublicKeys = append(append([]KeypairRef{},
+		requiredLevel3VerifierState.PublicKeys...),
+		primaryKeyUnderPartnerDID)
+
+	// newTwoAuthorityV11ATX is the credential the step 7 fixtures share,
+	// differing only in their signatures: the v1.1 baseline at trustLevel 3
+	// (below 4, so the §7 rule 4 root cosignature is not in play) with a signed,
+	// root-first two-element issuerChain naming the partner authority and the
+	// primary authority (the issuer). Naming the partner in the signed chain
+	// makes its key eligible under step 4, so its signature can be counted.
+	newTwoAuthorityV11ATX := func() ATX {
+		a := newBaselineV11ATX()
+		a.TrustLevel = 3
+		a.IssuerChain = []string{secondary.IssuerDID, primary.IssuerDID}
+		return a
 	}
 
 	type fixtureSpec struct {
@@ -524,6 +696,76 @@ func main() {
 				ExpectedOutcome{VerifyResult: "ACCEPT"},
 				atx)
 		}},
+		// ---- subject named under a foreign DID method ----
+		// The baseline-valid-hybrid credential whose agentDid and publisherDid
+		// are did:web identifiers, issued and signed, with both suites, by the
+		// trusted did:opena2a issuer every other fixture uses. The verifier
+		// resolves the issuerDid (core.md §1.3 step 3); no step reads the DID
+		// method of the subject's DIDs. The legacy canonical form signs
+		// agentDid as written (§1.3a.1), so the second fixture, which changes
+		// agentDid after signing, pins that the signature binds the foreign
+		// identifier. Under atcVersion 1.0 publisherDid is outside the signed
+		// bytes (§1.3a.1).
+		{"fixtures/foreign-did-method-valid.json", func() Fixture {
+			atx := newBaselineATX()
+			atx.AgentDID = foreignAgentDID
+			atx.PublisherDID = foreignPublisherDID
+			ed := signWithKey(primary, atx)
+			pq, _ := signMLDSA65(mldsa.SeedHex, canonicalPayload(&atx))
+			pq.KeyID = mldsa.KeyID
+			atx.Signatures = []ATCSignature{ed, pq}
+			return wrap("atx-v1/foreign-did-method-valid",
+				"The baseline-valid-hybrid.json credential, ATX v1.0, with its subject named under a DID method other than its issuer's: agentDid is did:web:platform.example:agents:billing-agent and publisherDid is did:web:platform.example, while issuerDid stays did:opena2a:authority:opena2a.org, the trusted issuer whose keys make its Ed25519 and ML-DSA-65 signatures over the same canonical payload. The verifier resolves the issuerDid to the issuer's keys (§1.3 step 3); no step of §1.3 reads the DID method of agentDid or publisherDid, and the credential schema's DID pattern admits any method. The legacy canonical form signs agentDid as written (§1.3a.1); it does not sign publisherDid. A verifier MUST verify both signatures and ACCEPT. A verifier that requires the subject's DIDs to use the issuer's DID method, or did:opena2a, rejects a credential the algorithm accepts.",
+				[]KeypairRef{
+					keypairRefFor(primary, "vectors/issuer-primary.json"),
+					{Role: mldsa.Role, Path: "vectors/mldsa65-seed.json", Algorithm: mldsa.Algorithm, PublicKeyHex: mldsa.PublicKeyHex, KeyID: mldsa.KeyID},
+				},
+				hybridVerifierState,
+				ExpectedOutcome{VerifyResult: "ACCEPT"},
+				atx)
+		}},
+		{"fixtures/foreign-did-method-altered-after-signing.json", func() Fixture {
+			atx := newBaselineATX()
+			atx.AgentDID = foreignAgentDID
+			atx.PublisherDID = foreignPublisherDID
+			ed := signWithKey(primary, atx)
+			pq, _ := signMLDSA65(mldsa.SeedHex, canonicalPayload(&atx))
+			pq.KeyID = mldsa.KeyID
+			atx.Signatures = []ATCSignature{ed, pq}
+			atx.AgentDID = foreignAgentDIDAltered
+			return wrap("atx-v1/foreign-did-method-altered-after-signing",
+				"The foreign-did-method-valid.json credential with its agentDid changed after signing, from did:web:platform.example:agents:billing-agent to did:web:platform.example:agents:other-agent; every other member, both signatures included, is unchanged. agentDid is the second of the eleven fields the legacy canonical form signs (§1.3a.1), so the canonical bytes the verifier computes from this credential are not the bytes either signature covers, and the Ed25519 signature does not verify (§1.3 step 4). A verifier MUST REJECT with a signature-validation reason. The signature binds the credential to the did:web identifier its issuer signed: a holder cannot move it to another agent identifier.",
+				[]KeypairRef{
+					keypairRefFor(primary, "vectors/issuer-primary.json"),
+					{Role: mldsa.Role, Path: "vectors/mldsa65-seed.json", Algorithm: mldsa.Algorithm, PublicKeyHex: mldsa.PublicKeyHex, KeyID: mldsa.KeyID},
+				},
+				hybridVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
+		{"fixtures/hybrid-pq-only.json", func() Fixture {
+			// The missing-classical-companion control under atcVersion 1.0.
+			// The v1.0 hybrid baseline with the Ed25519 entry removed, so the
+			// credential carries one ML-DSA-65 signature that verifies over
+			// the legacy canonical bytes. core.md section 13 (Cryptographic
+			// agility) requires a credential that declares an ML-DSA-65 entry
+			// to also carry a verifying Ed25519 entry, and names no
+			// atcVersion. fixtures/v1_1-hybrid-pq-only.json pins the rule
+			// under atcVersion 1.1, so without this fixture a verifier that
+			// applies it to v1.1 alone passes the suite.
+			atx := newBaselineATX()
+			pq, _ := signMLDSA65(mldsa.SeedHex, canonicalPayload(&atx))
+			pq.KeyID = mldsa.KeyID
+			atx.Signatures = []ATCSignature{pq}
+			return wrap("atx-v1/hybrid-pq-only",
+				"An ATX v1.0 credential carrying a single ML-DSA-65 signature that verifies over the legacy canonical payload, and no Ed25519 signature: the v1.0 hybrid baseline with its Ed25519 entry removed. The spec requires a credential that declares an ML-DSA-65 entry to also carry a verifying Ed25519 entry, and names no atcVersion, so a post-quantum signature alone cannot verify a v1.0 credential either. Verifier MUST REJECT with a signature-validation reason. A verifier that checks only that every declared signature verifies, or that applies the rule to atcVersion 1.1 alone, wrongly ACCEPTs.",
+				[]KeypairRef{
+					{Role: mldsa.Role, Path: "vectors/mldsa65-seed.json", Algorithm: mldsa.Algorithm, PublicKeyHex: mldsa.PublicKeyHex, KeyID: mldsa.KeyID},
+				},
+				hybridVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
 		{"fixtures/revoked.json", func() Fixture {
 			atx := newBaselineATX()
 			atx.Signatures = []ATCSignature{signWithKey(primary, atx)}
@@ -537,7 +779,7 @@ func main() {
 			atx.RevokedAt = &rt
 			atx.RevocationReason = "key compromise (test)"
 			return wrap("atx-v1/revoked",
-				"A previously-valid ATX whose credential-level Revoked flag is set and whose AgentID also appears in the verifier's CRL. Verifier MUST REJECT with revocation reason. Both rejection paths are exercised.",
+				"A previously-valid ATX whose credential-level Revoked flag is set and whose AgentID also appears in the verifier's CRL. Verifier MUST REJECT with revocation reason. The flag is what rejects it in both reference verifiers, which read the flag before the CRL and return on it; fixtures/revoked-crl-only.json is the fixture whose verdict depends on the CRL.",
 				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
 				revokingVerifierState,
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "REVOKED", ReasonContains: "revoked"},
@@ -566,8 +808,14 @@ func main() {
 			ed2 := signWithKey(cos1, atx)
 			ed3 := signWithKey(cos2, atx)
 			atx.Signatures = []ATCSignature{ed1, ed2, ed3}
+			// The description was corrected in place (README, Versioning and
+			// stability): it said a verifier MUST validate at least two of the
+			// three signatures for trust level 4, but every declared signature
+			// must verify (§1.3 step 5) and the three keys are one authority's,
+			// which §1.3 step 7 counts once. The credential, signatures,
+			// verifier state and expected outcome are unchanged.
 			return wrap("atx-v1/threshold-2of3-cosignature",
-				"An ATX cosigned by all three keys of a 2-of-3 threshold issuer (primary plus two cosigners). All three signatures are Ed25519 and cover the same canonical payload. Verifier MUST ACCEPT. A spec-conformant verifier additionally MUST validate at least two of the three signatures for trust level 4.",
+				"An ATX v1.0 credential at trustLevel 4 signed by all three keys of one authority's threshold key set: did:opena2a:authority:opena2a.org#key-1 (primary) plus #key-2 and #key-3 (cosigners). All three signatures are Ed25519 over the same canonical payload, and every declared signature MUST verify. The verifier state sets no required trust level. Verifier MUST ACCEPT. The three keys belong to one authority, so the distinct signer-authority count of atx-spec core.md §1.3 step 7 counts them once; fixtures/v1_1-one-authority-threshold-keys.json signs with the same three keys at a required trust level of 3, where the verifier MUST REJECT.",
 				[]KeypairRef{
 					keypairRefFor(primary, "vectors/issuer-primary.json"),
 					keypairRefFor(cos1, "vectors/issuer-cosigner-1.json"),
@@ -577,6 +825,23 @@ func main() {
 				ExpectedOutcome{VerifyResult: "ACCEPT"},
 				atx)
 		}},
+		{"fixtures/threshold-1of3-cosignature.json", func() Fixture {
+			// The threshold-2of3-cosignature credential cut to the first of
+			// its three signatures, the primary's, under a verifier state that
+			// requires two of the three keys (atx-conformance#132). The one
+			// signature verifies, so a verifier that checks only that every
+			// declared signature verifies, and reads no threshold, accepts it.
+			atx := newBaselineATX()
+			atx.TrustLevel = 4
+			atx.IssuerChain = []string{primary.IssuerDID, "did:opena2a:authority:opena2a.org-root"}
+			atx.Signatures = []ATCSignature{signWithKey(primary, atx)}
+			return wrap("atx-v1/threshold-1of3-cosignature",
+				"The threshold-2of3-cosignature credential cut to one of its three signatures, the primary's, under a verifier state that holds the issuer's three Ed25519 keys and requires two of them (requiredSignatures: 2). The one signature verifies, so a verifier that checks only that every declared signature verifies, and reads no threshold, wrongly accepts. Verifier MUST REJECT with a threshold reason.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				thresholdVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "threshold"},
+				atx)
+		}},
 		{"fixtures/expired.json", func() Fixture {
 			atx := newBaselineATX()
 			atx.IssuedAt = mustParseTime("2024-12-25T00:00:00Z")
@@ -584,6 +849,26 @@ func main() {
 			atx.Signatures = []ATCSignature{signWithKey(primary, atx)}
 			return wrap("atx-v1/expired",
 				"An otherwise-valid ATX whose ExpiresAt is earlier than the verifier's pinned clock. Verifier MUST REJECT with an expiry reason.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "EXPIRED", ReasonContains: "expired"},
+				atx)
+		}},
+		{"fixtures/expired-beyond-skew.json", func() Fixture {
+			// The expiry check one second past the family clock-skew bound.
+			// core.md §1.3 step 2 evaluates expiresAt within the bound of
+			// ATP-SPEC §10.2, so a verifier may tolerate any skew from 0 to
+			// 60 seconds. expired.json expired 508 days before the clock, so
+			// a verifier rejects it at any tolerance short of 508 days, inside
+			// the bound or far outside it. This credential, signed over an
+			// expiresAt 61 seconds before the clock, is expired at every
+			// tolerance the bound allows; one that expired less than 60
+			// seconds before the clock would pin no verdict.
+			atx := newBaselineATX()
+			atx.ExpiresAt = expiredBeyondSkewAt
+			atx.Signatures = []ATCSignature{signWithKey(primary, atx)}
+			return wrap("atx-v1/expired-beyond-skew",
+				"The baseline-valid.json credential, ATX v1.0, with expiresAt 2026-05-23T23:58:59Z, 61 seconds earlier than the verifier's pinned clock, 2026-05-24T00:00:00Z, and its one Ed25519 signature made over that expiresAt. core.md §1.3 step 2 evaluates expiry within the family clock-skew bound of ATP §10.2: a verifier tolerates at most 60 seconds of clock skew, and the tolerance extends no TTL or cache window. At every tolerance from 0 to 60 seconds the credential is expired, so a verifier MUST REJECT with an expiry reason. A verifier that tolerates more than 61 seconds of skew, outside the bound, wrongly ACCEPTs; expired.json, whose expiresAt is 508 days earlier than the clock, is rejected at any tolerance short of 508 days, so it does not tell such a verifier from one inside the bound. An expiresAt less than 60 seconds before the clock pins no verdict: a verifier with no tolerance rejects it and one with 60 seconds accepts it. 61 seconds is one second past the bound, so the verdict does not turn on whether a verifier holds a credential expired at the instant its expiresAt plus its tolerance equals its clock.",
 				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
 				defaultVerifierState,
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "EXPIRED", ReasonContains: "expired"},
@@ -731,6 +1016,187 @@ func main() {
 			atx.Capabilities = []string{"db:read", "db:write", "system:exec"}
 			return wrap("atx-v1_1/tampered-capabilities",
 				"An ATX v1.1 credential whose capabilities were escalated to include system:exec AFTER signing. Because v1.1 signs JCS(TBS), capabilities are covered by the signature; the verifier recomputes the canonical bytes, finds they no longer match, and MUST REJECT with a signature-validation reason. This is the integrity property v1.0 lacked.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
+		{"fixtures/v1_1-scan-summary-member-outside-type.json", func() Fixture {
+			// A SCANSUMMARY MEMBER OUTSIDE ITS TYPE. Sign the baseline, whose
+			// scanSummary.criticalFindings is 0, then write that member as the
+			// JSON string "3" AFTER signing (postWrite, below: ATCScanSummary
+			// holds the count as an int, so the string is written at the byte
+			// level). The TBS holds criticalFindings as an integer (§1.3a.2
+			// rule 2), so no signature covers the string. A verifier that
+			// leaves a member it cannot decode at its zero value projects the
+			// signed 0 and wrongly ACCEPTs a credential carrying a count its
+			// signature does not cover.
+			atx := newBaselineV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/scan-summary-member-outside-type",
+				"An ATX v1.1 credential signed with scanSummary.criticalFindings 0, carrying the JSON string \"3\" in that member, written AFTER signing. v1.1 signs JCS(TBS), which holds each scanSummary member with its type, criticalFindings as an integer (atx-spec §1.3a.2 rule 2), so no signature covers a string there. The verifier MUST REJECT with a signature-validation reason. A verifier that leaves a member it cannot decode at its zero value projects the signed 0 and wrongly ACCEPTs a credential carrying a count its signature does not cover.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
+		{"fixtures/v1_1-integer-outside-exact-range.json", func() Fixture {
+			// A TBS INTEGER OUTSIDE THE I-JSON EXACT RANGE. The baseline with
+			// scanSummary.criticalFindings 2^53+1, signed over its JCS(TBS)
+			// as canonicalPayloadV11 writes it. The JCS library reads each
+			// number as an IEEE 754 double, which does not hold 2^53+1, and
+			// writes the count as 9007199254740992 (2^53), the bytes it
+			// writes for a credential carrying 2^53 too. A verifier that
+			// canonicalizes the count the same way verifies the signature
+			// and wrongly ACCEPTs a count its signature does not cover.
+			atx := newBaselineV11ATX()
+			atx.ScanSummary.CriticalFindings = 1<<53 + 1
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/integer-outside-exact-range",
+				"An ATX v1.1 credential carrying scanSummary.criticalFindings 9007199254740993, which is 2^53+1 and outside the I-JSON exact range, -(2^53-1) to 2^53-1 (RFC 7493 §2.2). Its Ed25519 signature covers JCS(TBS) as an RFC 8785 serializer that reads each number as an IEEE 754 double writes it, with criticalFindings 9007199254740992: the bytes that serializer writes for a credential carrying 9007199254740992 too. The signature does not tell the two counts apart, so it does not cover the count this credential carries (atx-spec §1.3a.2 rule 3 keeps RFC 8785 number serialization out of cross-language scope). The verifier MUST REJECT with a signature-validation reason. A verifier that canonicalizes the count as that serializer does verifies the signature and wrongly ACCEPTs a count its signature does not cover.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
+		// ---- behavioralProfile form (§1.1 schema, §1.3a.2 rule 1, atx-conformance#277) ----
+		{"fixtures/v1_1-behavioral-profile-extra-member.json", func() Fixture {
+			// A MEMBER OUTSIDE THE THREE. Sign the baseline, whose
+			// behavioralProfile holds checksum, generatedAt and
+			// observationDays, then add a fourth member, riskLevel "low",
+			// AFTER signing (postWrite, below: ATCBehavioralProfile has no
+			// field for it, so it is written at the byte level). The
+			// credential schema gives behavioralProfile those three members
+			// and no other, so the TBS has no value for this profile and no
+			// signature covers it. A verifier that decodes the profile into
+			// its three fields drops the fourth, projects the signed profile
+			// and wrongly ACCEPTs.
+			atx := newBaselineV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/behavioral-profile-extra-member",
+				"An ATX v1.1 credential signed with the baseline behavioralProfile (checksum, generatedAt, observationDays), carrying a fourth member in it, riskLevel \"low\", written AFTER signing. The credential schema of atx-spec §1.1 gives behavioralProfile exactly those three members (additionalProperties false), and JCS(TBS) holds the profile as those three members (§1.3a.2), so no signature covers a profile with a fourth. The verifier MUST REJECT with a signature-validation reason. A verifier that decodes the profile into its three fields drops the fourth member, projects the signed profile and wrongly ACCEPTs a credential carrying a member its signature does not cover.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
+		{"fixtures/v1_1-behavioral-profile-case-variant-member.json", func() Fixture {
+			// A NAME IN ANOTHER CASE. Sign the baseline, then rename its
+			// behavioralProfile.observationDays to OBSERVATIONDAYS AFTER
+			// signing, the value 14 unchanged (postWrite, below). Member
+			// names are compared exactly, so the profile lacks
+			// observationDays and carries a member outside the three. Go's
+			// encoding/json matches the name to the observationDays field
+			// case-insensitively, so a verifier that decodes the profile
+			// into a struct projects the signed profile and wrongly ACCEPTs.
+			// The renamed member stands alone, so the fold-aware duplicate
+			// check does not reject it.
+			atx := newBaselineV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/behavioral-profile-case-variant-member",
+				"An ATX v1.1 credential signed with the baseline behavioralProfile, carrying its observationDays member under the name OBSERVATIONDAYS, value unchanged (14), renamed AFTER signing. Member names are compared exactly, and the credential schema of atx-spec §1.1 gives behavioralProfile exactly checksum, generatedAt and observationDays (additionalProperties false), so this profile lacks observationDays and carries a member outside the three: JCS(TBS) has no value for it (§1.3a.2) and no signature covers it. The verifier MUST REJECT with a signature-validation reason. Go's encoding/json matches a member name to a struct field case-insensitively, so a verifier that decodes the profile into a struct reads OBSERVATIONDAYS as observationDays, projects the signed profile and wrongly ACCEPTs, while a case-sensitive reader of the same bytes finds no observationDays. The renamed member is the only one of its name, so a duplicate-member check does not reject it.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
+		{"fixtures/v1_1-behavioral-profile-not-object.json", func() Fixture {
+			// A PROFILE THAT IS NOT AN OBJECT, on a credential signed with
+			// none. Sign the baseline with no behavioralProfile, whose TBS
+			// holds null there (§1.3a.2 rule 1), then add the JSON string
+			// "sha256:ghi789" as its behavioralProfile AFTER signing
+			// (postWrite, below). A verifier that projects a profile it
+			// cannot decode as null, the absent form, reaches the bytes the
+			// signature covers and wrongly ACCEPTs.
+			atx := newBaselineV11ATX()
+			atx.BehavioralProfile = nil
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/behavioral-profile-not-object",
+				"An ATX v1.1 credential signed with no behavioralProfile, carrying the JSON string \"sha256:ghi789\" as its behavioralProfile, added AFTER signing. JCS(TBS) holds null for a credential with no profile (atx-spec §1.3a.2 rule 1) and otherwise an object of the profile's three members (the credential schema of §1.1), so no signature covers a profile that is not an object. The verifier MUST REJECT with a signature-validation reason. A verifier that projects a profile it cannot decode as null, the absent form, reaches the bytes the signature covers and wrongly ACCEPTs a credential carrying a profile its signature does not cover.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
+		{"fixtures/v1_1-behavioral-profile-member-outside-type.json", func() Fixture {
+			// A PROFILE MEMBER OUTSIDE ITS TYPE, on a credential signed with
+			// no profile. Sign the baseline with no behavioralProfile, then
+			// carry the baseline's profile with observationDays written as
+			// the JSON string "14" (postWrite, below: ATCBehavioralProfile
+			// holds the count as an int). The TBS holds null for a
+			// credential with no profile and otherwise observationDays as an
+			// integer, so no signature covers this profile. A verifier that
+			// projects a profile it cannot decode as null reaches the bytes
+			// the signature covers and wrongly ACCEPTs.
+			atx := newBaselineV11ATX()
+			unsigned := atx
+			unsigned.BehavioralProfile = nil
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, unsigned)}
+			return wrap("atx-v1_1/behavioral-profile-member-outside-type",
+				"An ATX v1.1 credential signed with no behavioralProfile, carrying one added AFTER signing whose observationDays is the JSON string \"14\", not an integer; its checksum and generatedAt are the baseline's. JCS(TBS) holds null for a credential with no profile (atx-spec §1.3a.2 rule 1) and otherwise the profile's three members with their types (the credential schema of §1.1: observationDays an integer), so no signature covers a profile with a string there. The verifier MUST REJECT with a signature-validation reason. A verifier that projects a profile it cannot decode as null, the absent form, reaches the bytes the signature covers and wrongly ACCEPTs a credential carrying a profile its signature does not cover.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
+		// ---- scanSummary members (§1.1 schema, §1.3a.2 rule 2, atx-conformance#277) ----
+		{"fixtures/v1_1-scan-summary-extra-member.json", func() Fixture {
+			// A MEMBER OUTSIDE THE SIX. Sign the baseline, whose scanSummary
+			// holds hma, criticalFindings, highFindings, secretless,
+			// cryptoServe and oasbLevel, then add a seventh member, extra
+			// "x", AFTER signing (scanSummaryWrites, below: ATCScanSummary
+			// has no field for it, so it is written at the byte level). The
+			// credential schema gives scanSummary those six members and no
+			// other, so the TBS has no value for this scanSummary and no
+			// signature covers it. A verifier that decodes scanSummary into
+			// its six fields drops the seventh, projects the signed
+			// scanSummary and wrongly ACCEPTs.
+			atx := newBaselineV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/scan-summary-extra-member",
+				"An ATX v1.1 credential signed with the baseline scanSummary (hma, criticalFindings, highFindings, secretless, cryptoServe, oasbLevel), carrying a seventh member in it, extra \"x\", written AFTER signing. The credential schema of atx-spec §1.1 gives scanSummary exactly those six members (additionalProperties false), and JCS(TBS) holds scanSummary as those six members (§1.3a.2 rule 2), so no signature covers a scanSummary with a seventh. The verifier MUST REJECT with a signature-validation reason. A verifier that decodes scanSummary into its six fields drops the seventh member, projects the signed scanSummary and wrongly ACCEPTs a credential carrying a member its signature does not cover.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
+		{"fixtures/v1_1-scan-summary-extra-member-signed.json", func() Fixture {
+			// A MEMBER OUTSIDE THE SIX, SIGNED. The scanSummary of
+			// v1_1-scan-summary-extra-member.json, extra "x" included,
+			// signed over JCS(TBS) with that member in scanSummary as
+			// written (canonicalPayloadV11WithScanSummaryMember) and carried
+			// as signed (scanSummaryWrites, below). The TBS holds
+			// scanSummary as its six members, so it has no value for this
+			// one and no signature covers the credential, its own included.
+			// A verifier that writes every scanSummary member it reads into
+			// the TBS reaches the bytes the signature covers and wrongly
+			// ACCEPTs.
+			atx := newBaselineV11ATX()
+			sig := signEd25519(primary.SeedHex, canonicalPayloadV11WithScanSummaryMember(&atx, "extra", json.RawMessage(`"x"`)))
+			sig.KeyID = primary.KeyID
+			atx.Signatures = []ATCSignature{sig}
+			return wrap("atx-v1_1/scan-summary-extra-member-signed",
+				"An ATX v1.1 credential carrying the baseline scanSummary with a seventh member, extra \"x\", whose Ed25519 signature covers JCS(TBS) with that member in scanSummary as written. The credential schema of atx-spec §1.1 gives scanSummary exactly hma, criticalFindings, highFindings, secretless, cryptoServe and oasbLevel (additionalProperties false), and JCS(TBS) holds scanSummary as those six members (§1.3a.2 rule 2), so the TBS has no value for this scanSummary and no signature covers the credential, its own included. The verifier MUST REJECT with a signature-validation reason. A verifier that writes every scanSummary member it reads into the TBS reaches the bytes the signature covers and wrongly ACCEPTs a credential carrying a member the specification does not define.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
+				atx)
+		}},
+		{"fixtures/v1_1-scan-summary-case-variant-member.json", func() Fixture {
+			// A NAME IN ANOTHER CASE. Sign the baseline, then rename its
+			// scanSummary.criticalFindings to CriticalFindings AFTER
+			// signing, the value 0 unchanged (scanSummaryWrites, below).
+			// Member names are compared exactly, so the scanSummary lacks
+			// criticalFindings and carries a member outside the six. Go's
+			// encoding/json matches the name to the criticalFindings field
+			// case-insensitively, so a verifier that decodes scanSummary
+			// into a struct projects the signed scanSummary and wrongly
+			// ACCEPTs. The renamed member stands alone, so the fold-aware
+			// duplicate check does not reject it.
+			atx := newBaselineV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/scan-summary-case-variant-member",
+				"An ATX v1.1 credential signed with the baseline scanSummary, carrying its criticalFindings member under the name CriticalFindings, value unchanged (0), renamed AFTER signing. Member names are compared exactly, and the credential schema of atx-spec §1.1 gives scanSummary exactly hma, criticalFindings, highFindings, secretless, cryptoServe and oasbLevel (additionalProperties false), so this scanSummary lacks criticalFindings and carries a member outside the six: JCS(TBS) has no value for it (§1.3a.2 rule 2) and no signature covers it. The verifier MUST REJECT with a signature-validation reason. Go's encoding/json matches a member name to a struct field case-insensitively, so a verifier that decodes scanSummary into a struct reads CriticalFindings as criticalFindings, projects the signed scanSummary and wrongly ACCEPTs. The renamed member is the only one of its name, so a duplicate-member check does not reject it.",
 				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
 				defaultVerifierState,
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
@@ -906,6 +1372,74 @@ func main() {
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "signature"},
 				atx)
 		}},
+		// ---- declaredPurpose number form (§1.3a.2 rule 3, atx-conformance#283) ----
+		// declaredPurpose enters the TBS as written (§1.3a.2 rule 5), so a
+		// number in it does too. The JCS library reads each number as an
+		// IEEE 754 double and writes 1000.0, 1e3 and 1E3 as 1000, so a
+		// signature over {"n": 1000} verifies over the bytes it writes for
+		// each spelling, and it writes 9007199254740993 as 9007199254740992.
+		// The verifier decides the form and the exact range of the number
+		// as the credential writes it, so each of these credentials but the
+		// first is a signature failure that a verifier canonicalizing the
+		// number as the library does accepts.
+		{"fixtures/v1_1-declared-purpose-integer-signed.json", func() Fixture {
+			atx := newBaselineV11ATX()
+			atx.DeclaredPurpose = json.RawMessage(`{"n": 1000}`)
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/declared-purpose-integer-signed",
+				"An ATX v1.1 credential signed over declaredPurpose {\"n\": 1000}, which it carries as signed. declaredPurpose enters the TBS as written (atx-spec §1.3a.2 rule 5), and so does the number 1000: an integer written with no fraction part and no exponent part, inside the I-JSON exact range, -(2^53-1) to 2^53-1, which RFC 8785 writes as its decimal digits, so the signature covers it. Verifier MUST ACCEPT. A verifier that refuses every number in declaredPurpose, where it should decide each number's form from the credential's JSON text, wrongly REJECTs.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "ACCEPT"},
+				atx)
+		}},
+		{"fixtures/v1_1-declared-purpose-integer-respelled-fraction.json", func() Fixture {
+			atx := newBaselineV11ATX()
+			atx.DeclaredPurpose = json.RawMessage(`{"n": 1000}`)
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			atx.DeclaredPurpose = json.RawMessage(`{"n": 1000.0}`)
+			return wrap("atx-v1_1/declared-purpose-integer-respelled-fraction",
+				"An ATX v1.1 credential signed over declaredPurpose {\"n\": 1000}, carrying {\"n\": 1000.0}: the same value written with a fraction part. declaredPurpose enters the TBS as written (atx-spec §1.3a.2 rule 5), and §1.3a.2 rule 3 keeps RFC 8785 number serialization out of cross-language scope, so no signature covers a number there written with a fraction part or an exponent part. Its form is decided from the credential's JSON text, not from the value a JSON parser returns for it. The verifier MUST REJECT as SIGNATURE_INVALID with a reason that names declaredPurpose. An RFC 8785 serializer that reads each number as an IEEE 754 double writes 1000.0 as 1000, the bytes the signature covers, so a verifier that canonicalizes the number that way verifies the signature and wrongly ACCEPTs.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "declaredPurpose"},
+				atx)
+		}},
+		{"fixtures/v1_1-declared-purpose-integer-respelled-exponent.json", func() Fixture {
+			atx := newBaselineV11ATX()
+			atx.DeclaredPurpose = json.RawMessage(`{"n": 1000}`)
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			atx.DeclaredPurpose = json.RawMessage(`{"n": 1e3}`)
+			return wrap("atx-v1_1/declared-purpose-integer-respelled-exponent",
+				"An ATX v1.1 credential signed over declaredPurpose {\"n\": 1000}, carrying {\"n\": 1e3}: the same value written with an exponent part. declaredPurpose enters the TBS as written (atx-spec §1.3a.2 rule 5), and §1.3a.2 rule 3 keeps RFC 8785 number serialization out of cross-language scope, so no signature covers a number there written with a fraction part or an exponent part. Its form is decided from the credential's JSON text, not from the value a JSON parser returns for it. The verifier MUST REJECT as SIGNATURE_INVALID with a reason that names declaredPurpose. An RFC 8785 serializer that reads each number as an IEEE 754 double writes 1e3 as 1000, the bytes the signature covers, so a verifier that canonicalizes the number that way verifies the signature and wrongly ACCEPTs.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "declaredPurpose"},
+				atx)
+		}},
+		{"fixtures/v1_1-declared-purpose-integer-respelled-upper-exponent.json", func() Fixture {
+			atx := newBaselineV11ATX()
+			atx.DeclaredPurpose = json.RawMessage(`{"n": 1000}`)
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			atx.DeclaredPurpose = json.RawMessage(`{"n": 1E3}`)
+			return wrap("atx-v1_1/declared-purpose-integer-respelled-upper-exponent",
+				"An ATX v1.1 credential signed over declaredPurpose {\"n\": 1000}, carrying {\"n\": 1E3}: the same value written with an exponent part that opens with an upper-case E. declaredPurpose enters the TBS as written (atx-spec §1.3a.2 rule 5), and §1.3a.2 rule 3 keeps RFC 8785 number serialization out of cross-language scope, so no signature covers a number there written with a fraction part or an exponent part. Its form is decided from the credential's JSON text, not from the value a JSON parser returns for it. The verifier MUST REJECT as SIGNATURE_INVALID with a reason that names declaredPurpose. An RFC 8785 serializer that reads each number as an IEEE 754 double writes 1E3 as 1000, the bytes the signature covers, so a verifier that canonicalizes the number that way, or that finds an exponent part by a lower-case e alone, verifies the signature and wrongly ACCEPTs.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "declaredPurpose"},
+				atx)
+		}},
+		{"fixtures/v1_1-declared-purpose-integer-outside-range.json", func() Fixture {
+			atx := newBaselineV11ATX()
+			atx.DeclaredPurpose = json.RawMessage(`{"n": 9007199254740993}`)
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/declared-purpose-integer-outside-range",
+				"An ATX v1.1 credential carrying declaredPurpose {\"n\": 9007199254740993}: the integer 2^53+1, written as its digits, outside the I-JSON exact range, -(2^53-1) to 2^53-1 (RFC 7493 §2.2). Its Ed25519 signature covers JCS(TBS) as an RFC 8785 serializer that reads each number as an IEEE 754 double writes it, with n 9007199254740992: the bytes that serializer writes for a credential carrying 9007199254740992 too. declaredPurpose enters the TBS as written (atx-spec §1.3a.2 rule 5), and §1.3a.2 rule 3 keeps RFC 8785 number serialization out of cross-language scope, so the signature does not cover the number this credential carries. The verifier MUST REJECT as SIGNATURE_INVALID with a reason that names declaredPurpose. A verifier that canonicalizes the number as that serializer does verifies the signature and wrongly ACCEPTs.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "SIGNATURE_INVALID", ReasonContains: "declaredPurpose"},
+				atx)
+		}},
 		// ---- duplicate-member strict parse (issue opena2a-registry#305) ----
 		{"fixtures/v1_1-duplicate-purpose-member.json", func() Fixture {
 			// DUPLICATE-MEMBER SMUGGLING. Sign the honest purpose (category
@@ -961,6 +1495,176 @@ func main() {
 				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "PARSE_ERROR", ReasonContains: "duplicate"},
 				atx)
 		}},
+		// ---- member name outside printable ASCII (atx-conformance#284) ----
+		// Each signs the v1.1 baseline, then carries one member its issuer did
+		// not write, added after signing directly after the signed member its
+		// name spells (memberAddedAfter, below): ATX has no field for it.
+		// JCS(TBS) holds no member the credential does not specify, so the
+		// signature verifies, and a verifier that folds names by ASCII case,
+		// or by a table that keeps the dotted capital I and the dotless i
+		// apart from i, accepts.
+		{"fixtures/v1_1-dotted-capital-i-member.json", func() Fixture {
+			atx := newBaselineV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/dotted-capital-i-member",
+				"An ATX v1.1 credential whose Ed25519 signature verifies, carrying one member its issuer did not write: a member named U+0130 (LATIN CAPITAL LETTER I WITH DOT ABOVE) followed by d, holding x, written directly after its id member once the credential is signed. JCS(TBS) holds no member the credential does not specify, so the signature does not cover it. Java 25's String.equalsIgnoreCase compares that name equal to id, so a relying party that binds the credential's JSON again by such a comparison, keeping the last of the members it joins, reads x as the credential's id, where the verifier read the id the issuer wrote. Verifiers MUST reject a member name outside printable ASCII (U+0020 to U+007E) in an object they decode (the credential, a signature entry, scanSummary or behavioralProfile) as PARSE_ERROR before interpreting any field, a rule that needs no case table. A verifier that folds names by ASCII case, or by a table that keeps U+0130 apart from i, wrongly ACCEPTs.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "PARSE_ERROR", ReasonContains: "printable ASCII"},
+				atx)
+		}},
+		{"fixtures/v1_1-dotless-i-member.json", func() Fixture {
+			atx := newBaselineV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/dotless-i-member",
+				"An ATX v1.1 credential whose Ed25519 signature verifies, carrying one member its issuer did not write: a member named U+0131 (LATIN SMALL LETTER DOTLESS I) followed by ssuedAt, holding 2099-01-01T00:00:00Z, written directly after its signed issuedAt member once the credential is signed. JCS(TBS) holds no member the credential does not specify, so the signature does not cover it. Java 25's String.equalsIgnoreCase compares that name equal to issuedAt, so a relying party that binds the credential's JSON again by such a comparison, keeping the last of the members it joins, reads an issuedAt of 2099-01-01T00:00:00Z, where the signature covers 2026-05-23T00:00:00Z. Verifiers MUST reject a member name outside printable ASCII (U+0020 to U+007E) in an object they decode (the credential, a signature entry, scanSummary or behavioralProfile) as PARSE_ERROR before interpreting any field, a rule that needs no case table. A verifier that folds names by ASCII case, or by a table that keeps U+0131 apart from i, wrongly ACCEPTs.",
+				[]KeypairRef{keypairRefFor(primary, "vectors/issuer-primary.json")},
+				defaultVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "PARSE_ERROR", ReasonContains: "printable ASCII"},
+				atx)
+		}},
+		// ---- distinct signer-authority count (atx-spec core.md §1.3 step 7) ----
+		// One credential (newTwoAuthorityV11ATX), five signature sets, all at a
+		// required trust level of 3. Only the first carries signatures from two
+		// distinct authorities; the other four are ways a count that is not over
+		// distinct verified signer authorities goes wrong.
+		{"fixtures/v1_1-two-authority-cosignature.json", func() Fixture {
+			// The MUST-ACCEPT control: the primary authority and the partner
+			// authority each sign JCS(TBS) with their own key.
+			atx := newTwoAuthorityV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx), signV11WithKey(secondary, atx)}
+			return wrap("atx-v1_1/two-authority-cosignature",
+				"An ATX v1.1 credential issued by the primary authority (did:opena2a:authority:opena2a.org) at trustLevel 3, whose signed root-first issuerChain names the partner authority (did:opena2a:authority:partner.example) and the primary authority, carrying two Ed25519 signatures over the same JCS(TBS) bytes: one by the primary authority's key (#key-1) and one by the partner authority's key (#key-1). The verifier trusts both authorities, publishes each key under its own DID, and requires trust level 3 (verifierState.requiredTrustLevel). Two distinct authorities have each produced a signature the verifier verifies itself, so the distinct signer-authority count of atx-spec core.md §1.3 step 7 is 2. Verifier MUST ACCEPT. This is the control for the four fixtures that carry the same credential with a different signature set and MUST REJECT: v1_1-cosigner-named-not-signed, v1_1-one-authority-threshold-keys, v1_1-one-key-under-two-dids and v1_1-own-key-labelled-as-cosigner.",
+				[]KeypairRef{
+					keypairRefFor(primary, "vectors/issuer-primary.json"),
+					keypairRefFor(secondary, "vectors/issuer-secondary.json"),
+				},
+				requiredLevel3VerifierState,
+				ExpectedOutcome{VerifyResult: "ACCEPT"},
+				atx)
+		}},
+		{"fixtures/v1_1-cosigner-named-not-signed.json", func() Fixture {
+			// MUST-REJECT: the chain names the partner authority, which is
+			// trusted and whose key the verifier holds, but only the primary
+			// authority signed. Presence in issuerChain is not a signature.
+			atx := newTwoAuthorityV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx)}
+			return wrap("atx-v1_1/cosigner-named-not-signed",
+				"The credential of v1_1-two-authority-cosignature (ATX v1.1, trustLevel 3, a signed two-element issuerChain naming the partner authority did:opena2a:authority:partner.example and the primary authority did:opena2a:authority:opena2a.org) carrying only the primary authority's Ed25519 signature. The verifier trusts both authorities, holds the partner authority's key, and requires trust level 3. The chain names a second authority, but presence in issuerChain is not a signature and its length is not counted: one authority has produced a signature the verifier verifies, so the distinct signer-authority count of atx-spec core.md §1.3 step 7 is 1 and the verifier MUST REJECT. A verifier that omits step 7, or counts the issuerChain or the trusted authorities it names, wrongly ACCEPTs.",
+				[]KeypairRef{
+					keypairRefFor(primary, "vectors/issuer-primary.json"),
+					keypairRefFor(secondary, "vectors/issuer-secondary.json"),
+				},
+				requiredLevel3VerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "INSUFFICIENT_SIGNER_AUTHORITIES", ReasonContains: "distinct signer authorities"},
+				atx)
+		}},
+		{"fixtures/v1_1-one-authority-threshold-keys.json", func() Fixture {
+			// MUST-REJECT, distinctness over names: three keys of ONE
+			// authority, the key set of threshold-2of3-cosignature.json.
+			atx := newTwoAuthorityV11ATX()
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx), signV11WithKey(cos1, atx), signV11WithKey(cos2, atx)}
+			return wrap("atx-v1_1/one-authority-threshold-keys",
+				"The credential of v1_1-two-authority-cosignature (ATX v1.1, trustLevel 3, a signed issuerChain naming the partner authority and the primary authority) signed by the three keys of one authority's threshold key set: did:opena2a:authority:opena2a.org#key-1, #key-2 and #key-3, the keys of threshold-2of3-cosignature. All three Ed25519 signatures verify over JCS(TBS), and the verifier requires trust level 3. Each authority counts once however many of its keys signed, and a threshold key set held by one authority is one authority (atx-spec core.md §1.3 step 7), so the distinct signer-authority count is 1 and the verifier MUST REJECT. A verifier that counts verified signatures or distinct keys instead of distinct authorities wrongly ACCEPTs.",
+				[]KeypairRef{
+					keypairRefFor(primary, "vectors/issuer-primary.json"),
+					keypairRefFor(cos1, "vectors/issuer-cosigner-1.json"),
+					keypairRefFor(cos2, "vectors/issuer-cosigner-2.json"),
+				},
+				requiredLevel3VerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "INSUFFICIENT_SIGNER_AUTHORITIES", ReasonContains: "distinct signer authorities"},
+				atx)
+		}},
+		{"fixtures/v1_1-one-key-under-two-dids.json", func() Fixture {
+			// MUST-REJECT, distinctness over keys: Ed25519 is deterministic, so
+			// the primary key's signature over these bytes is one value; it is
+			// carried twice, once under each DID that publishes that key.
+			atx := newTwoAuthorityV11ATX()
+			primarySig := signV11WithKey(primary, atx)
+			republished := primarySig
+			republished.KeyID = primaryKeyUnderPartnerDID.KeyID
+			atx.Signatures = []ATCSignature{primarySig, republished}
+			return wrap("atx-v1_1/one-key-under-two-dids",
+				"The credential of v1_1-two-authority-cosignature (ATX v1.1, trustLevel 3, a signed issuerChain naming the partner authority and the primary authority) carrying two signature entries with the same Ed25519 value, made by the primary authority's key: one with keyId did:opena2a:authority:opena2a.org#key-1 and one with keyId did:opena2a:authority:partner.example#key-2. The verifier trusts both authorities and publishes the primary authority's public key under both DIDs, so each entry verifies under a key published by the DID its keyId names, and the verifier requires trust level 3. Distinctness is over keys as well as names: two signatures that verify under the same public key count once whatever keyId values they carry (atx-spec core.md §1.3 step 7), so the distinct signer-authority count is 1 and the verifier MUST REJECT. A verifier that counts distinct keyId DIDs wrongly ACCEPTs.",
+				[]KeypairRef{
+					keypairRefFor(primary, "vectors/issuer-primary.json"),
+					primaryKeyUnderPartnerDID,
+				},
+				oneKeyTwoDIDsVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "INSUFFICIENT_SIGNER_AUTHORITIES", ReasonContains: "distinct signer authorities"},
+				atx)
+		}},
+		{"fixtures/v1_1-own-key-labelled-as-cosigner.json", func() Fixture {
+			// MUST-REJECT, the published-key check: a second key of the primary
+			// authority (#key-2) signs, and its entry carries the partner
+			// authority's keyId. A different key from the first signature, so
+			// counting distinct keys does not catch it; only checking that the
+			// verifying key is published under the DID the keyId names does.
+			atx := newTwoAuthorityV11ATX()
+			relabelled := signV11WithKey(cos1, atx)
+			relabelled.KeyID = secondary.KeyID
+			atx.Signatures = []ATCSignature{signV11WithKey(primary, atx), relabelled}
+			return wrap("atx-v1_1/own-key-labelled-as-cosigner",
+				"The credential of v1_1-two-authority-cosignature (ATX v1.1, trustLevel 3, a signed issuerChain naming the partner authority and the primary authority) carrying two Ed25519 signatures made by two keys of the primary authority: one by did:opena2a:authority:opena2a.org#key-1 under that keyId, and one by #key-2 whose entry carries the partner authority's keyId, did:opena2a:authority:partner.example#key-1. Both verify over JCS(TBS) under keys of an authority the verifier trusts for this credential, and the verifier requires trust level 3. A signature counts for the authority its keyId names only when it verifies under a key published by that authority (atx-spec core.md §1.3 step 7): the partner authority publishes one key, and it does not verify the second signature. One authority is counted, so the verifier MUST REJECT. A verifier that attributes a signature to the DID its keyId names without checking that the verifying key is published under that DID wrongly ACCEPTs, even if it counts each public key once.",
+				[]KeypairRef{
+					keypairRefFor(primary, "vectors/issuer-primary.json"),
+					keypairRefFor(cos1, "vectors/issuer-cosigner-1.json"),
+					keypairRefFor(secondary, "vectors/issuer-secondary.json"),
+				},
+				requiredLevel3VerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "INSUFFICIENT_SIGNER_AUTHORITIES", ReasonContains: "distinct signer authorities"},
+				atx)
+		}},
+		// ---- revocation list freshness (core.md §1.3 step 6) ----
+		// The v1_1-baseline-valid-hybrid credential, byte for byte, under a
+		// verifier state that holds a revocation list, or is required to hold
+		// one and holds none. The order the verifier reads them in: the
+		// credential's revoked flag, then the agent's entry on a held list,
+		// which revokes whatever the list's dates, then the list's freshness
+		// within atpMaxSkew, then a list required and not held. No fixture
+		// sits at exactly 60 seconds: ATP §10.2 bounds the skew a verifier
+		// tolerates at 60 seconds, and a verifier that tolerates none is
+		// conformant.
+		{"fixtures/v1_1-crl-fresh-agent-absent-hybrid.json", func() Fixture {
+			return wrap("atx-v1_1/crl-fresh-agent-absent-hybrid",
+				"The v1_1-baseline-valid-hybrid credential, byte for byte, under a verifier state that holds a CRL issued 2026-05-23T12:00:00Z whose nextUpdate is 2026-05-30T12:00:00Z, so the list is current at the verifier clock, and whose one entry names another agent, agent_conformance_test_other. A current list that does not name the agent is evidence that the agent is not revoked (atx-spec core.md §1.3 step 6), and every other step passes. Verifier MUST ACCEPT. A verifier that rejects whenever it holds a revocation list, or that reads a current list as saying nothing, wrongly REJECTs.",
+				hybridKeypairRefs,
+				hybridStateHoldingCRL(freshCRLIssuedAt, freshCRLNextUpdate, testOtherAgentID),
+				ExpectedOutcome{VerifyResult: "ACCEPT"},
+				newBaselineV11HybridATX())
+		}},
+		{"fixtures/v1_1-crl-past-nextupdate-beyond-skew-hybrid.json", func() Fixture {
+			return wrap("atx-v1_1/crl-past-nextupdate-beyond-skew-hybrid",
+				"The v1_1-baseline-valid-hybrid credential, byte for byte, under a verifier state that holds a CRL issued 2026-05-23T22:58:59Z whose nextUpdate, 2026-05-23T23:58:59Z, is 61 seconds before the verifier clock: one second past the family clock-skew bound of ATP §10.2, at most 60 seconds. Its one entry names another agent, agent_conformance_test_other. A list past its nextUpdate beyond the skew bound is no evidence that an agent it does not name is not revoked, so revocation is unknown (atx-spec core.md §1.3 step 6). Verifier MUST REJECT with a reason that names nextUpdate. A verifier that reads a held list's entries and never its nextUpdate, or that tolerates more than 60 seconds of skew, wrongly ACCEPTs.",
+				hybridKeypairRefs,
+				hybridStateHoldingCRL(staleCRLIssuedAt, staleCRLNextUpdate, testOtherAgentID),
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "REVOCATION_UNKNOWN", ReasonContains: "nextUpdate"},
+				newBaselineV11HybridATX())
+		}},
+		{"fixtures/v1_1-crl-issued-after-clock-beyond-skew-hybrid.json", func() Fixture {
+			return wrap("atx-v1_1/crl-issued-after-clock-beyond-skew-hybrid",
+				"The v1_1-baseline-valid-hybrid credential, byte for byte, under a verifier state that holds a CRL whose issuedAt, 2026-05-24T00:01:01Z, is 61 seconds after the verifier clock, one second past the family clock-skew bound of ATP §10.2, and whose nextUpdate is 2026-05-31T00:01:01Z. Its one entry names another agent, agent_conformance_test_other. A list issued after the clock beyond the skew bound is one its producer cannot have issued at that clock: it is no evidence about the agent, not a revocation of it, so revocation is unknown (atx-spec core.md §1.3 step 6). Verifier MUST REJECT with a reason that names issuedAt. A verifier that never reads a held list's issuedAt wrongly ACCEPTs.",
+				hybridKeypairRefs,
+				hybridStateHoldingCRL(futureCRLIssuedAt, futureCRLNextUpdate, testOtherAgentID),
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "REVOCATION_UNKNOWN", ReasonContains: "issuedAt"},
+				newBaselineV11HybridATX())
+		}},
+		{"fixtures/v1_1-crl-past-nextupdate-lists-agent-hybrid.json", func() Fixture {
+			return wrap("atx-v1_1/crl-past-nextupdate-lists-agent-hybrid",
+				"The v1_1-baseline-valid-hybrid credential, byte for byte, under a verifier state that holds the CRL of v1_1-crl-past-nextupdate-beyond-skew-hybrid, issued 2026-05-23T22:58:59Z with its nextUpdate 61 seconds before the verifier clock, except that its one entry names this credential's agentId. An entry stays true after its list ages: only the silence of a list past its nextUpdate stops being evidence. A verifier reads a held list's entries before its freshness (atx-spec core.md §1.3 step 6), so the agent is revoked and the verdict is REVOKED, not unknown. Verifier MUST REJECT with a revocation reason that names the CRL. A verifier that sets a list past its nextUpdate aside before reading its entries, or that reports such a list as unknown before reading them, reports the wrong category.",
+				hybridKeypairRefs,
+				hybridStateHoldingCRL(staleCRLIssuedAt, staleCRLNextUpdate, testAgentID),
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "REVOKED", ReasonContains: "CRL"},
+				newBaselineV11HybridATX())
+		}},
+		{"fixtures/v1_1-crl-required-none-held-hybrid.json", func() Fixture {
+			return wrap("atx-v1_1/crl-required-none-held-hybrid",
+				"The v1_1-baseline-valid-hybrid credential, byte for byte, under a verifier state that holds no CRL and sets revocationListRequired: the verifier under test is required to hold a revocation list. With none held, nothing says the agent is not revoked, so revocation is unknown (atx-spec core.md §1.3 step 6). Verifier MUST REJECT with a reason that names the missing revocation list. A verifier that reads no list as no revocation, or that sets aside a list it cannot use and then proceeds as if none were required, wrongly ACCEPTs.",
+				hybridKeypairRefs,
+				listRequiredNoneHeldVerifierState,
+				ExpectedOutcome{VerifyResult: "REJECT", RejectCategory: "REVOCATION_UNKNOWN", ReasonContains: "no revocation list"},
+				newBaselineV11HybridATX())
+		}},
 	}
 
 	type manifestEntry struct {
@@ -1002,6 +1706,56 @@ func main() {
 			//nolint:gosec // G703: build-time tool rewriting the fixture it just wrote under outDir
 			must(os.WriteFile(path, replaced, 0o644))
 		}
+		if fs.writePath == "fixtures/v1_1-scan-summary-member-outside-type.json" {
+			// Write the signed criticalFindings 0 as the JSON string "3".
+			// ATCScanSummary holds the count as an int, so the string is
+			// written at the byte level after signing; every other byte is
+			// the credential the signature covers.
+			b, err := os.ReadFile(path) //nolint:gosec // G304: file just written above
+			must(err)
+			target := []byte(`"criticalFindings": 0,`)
+			if n := bytes.Count(b, target); n != 1 {
+				panic(fmt.Sprintf("scan-summary-member-outside-type fixture: %d criticalFindings substitution targets, want 1", n))
+			}
+			replaced := bytes.Replace(b, target, []byte(`"criticalFindings": "3",`), 1)
+			//nolint:gosec // G703: build-time tool rewriting the fixture it just wrote under outDir
+			must(os.WriteFile(path, replaced, 0o644))
+		}
+		if added, ok := memberAddedAfter[fs.writePath]; ok {
+			// Write the member directly after the line it follows. ATX has no
+			// field for it, so it is added at the byte level after signing;
+			// every other byte is the credential the signature covers.
+			b, err := os.ReadFile(path) //nolint:gosec // G304: file just written above
+			must(err)
+			if n := bytes.Count(b, []byte(added.after)); n != 1 {
+				panic(fmt.Sprintf("%s: %d substitution targets for %q, want 1", fs.writePath, n, added.after))
+			}
+			replaced := bytes.Replace(b, []byte(added.after), []byte(added.after+"\n"+added.member), 1)
+			//nolint:gosec // G703: build-time tool rewriting the fixture it just wrote under outDir
+			must(os.WriteFile(path, replaced, 0o644))
+		}
+		write, ok := behavioralProfileWrites[fs.writePath]
+		written, member := behavioralProfileWritten, "behavioralProfile"
+		if !ok {
+			write, ok = scanSummaryWrites[fs.writePath]
+			written, member = scanSummaryWritten, "scanSummary"
+		}
+		if ok {
+			// ATCBehavioralProfile and ATCScanSummary cannot hold the
+			// member these fixtures carry, so it is written at the byte
+			// level after signing. Every other byte is the credential the
+			// signature covers; in v1_1-scan-summary-extra-member-signed.json
+			// it covers the written member too.
+			b, err := os.ReadFile(path) //nolint:gosec // G304: file just written above
+			must(err)
+			if n := bytes.Count(b, []byte(write.from)); n != 1 {
+				panic(fmt.Sprintf("%s: %d %s substitution targets, want 1", fs.writePath, n, member))
+			}
+			replaced := bytes.Replace(b, []byte(write.from), []byte(write.to), 1)
+			//nolint:gosec // G703: build-time tool rewriting the fixture it just wrote under outDir
+			must(os.WriteFile(path, replaced, 0o644))
+			written[fs.writePath] = true
+		}
 		sha := sha256FileHex(path)
 		manifest = append(manifest, manifestEntry{path: fs.writePath, sha: sha})
 		fmt.Printf("wrote %s (sha256=%s)\n", fs.writePath, sha)
@@ -1016,6 +1770,30 @@ func main() {
 			panic("fixtureRequirements names no fixture: " + name)
 		}
 	}
+	for name := range fixtureOtherRefs {
+		if !fixtureOtherRefsUsed[name] {
+			panic("fixtureOtherRefs names no fixture: " + name)
+		}
+	}
+	for path := range memberAddedAfter {
+		written := false
+		for _, e := range manifest {
+			written = written || e.path == path
+		}
+		if !written {
+			panic("memberAddedAfter names no fixture: " + path)
+		}
+	}
+	for path := range behavioralProfileWrites {
+		if !behavioralProfileWritten[path] {
+			panic("behavioralProfileWrites names no fixture: " + path)
+		}
+	}
+	for path := range scanSummaryWrites {
+		if !scanSummaryWritten[path] {
+			panic("scanSummaryWrites names no fixture: " + path)
+		}
+	}
 
 	// MANIFEST.sha256: one line per fixture, in path-sorted order.
 	sort.Slice(manifest, func(i, j int) bool { return manifest[i].path < manifest[j].path })
@@ -1027,6 +1805,73 @@ func main() {
 	must(os.WriteFile(manifestPath, manifestLines, 0o644))
 	fmt.Printf("wrote MANIFEST.sha256 (%d fixtures)\n", len(manifest))
 }
+
+// memberAddedAfter holds, for each fixture whose credential carries a member
+// its issuer did not write under a name ATX has no field for, the line of the
+// written fixture the member follows and the line that writes it. main writes
+// the member after signing. Each name holds one character outside printable
+// ASCII, written as its UTF-8 bytes: U+0130, LATIN CAPITAL LETTER I WITH DOT
+// ABOVE, and U+0131, LATIN SMALL LETTER DOTLESS I (atx-conformance#284).
+var memberAddedAfter = map[string]struct{ after, member string }{
+	"fixtures/v1_1-dotted-capital-i-member.json": {
+		after:  `    "id": "00000000-0000-0000-0000-000000000001",`,
+		member: `    "` + string(rune(0x0130)) + `d": "x",`,
+	},
+	"fixtures/v1_1-dotless-i-member.json": {
+		after:  `    "issuedAt": "2026-05-23T00:00:00Z",`,
+		member: `    "` + string(rune(0x0131)) + `ssuedAt": "2099-01-01T00:00:00Z",`,
+	},
+}
+
+// behavioralProfileWrites is the byte-level write main makes after signing
+// in each behavioralProfile fixture (atx-conformance#277): the text it
+// replaces, which the fixture must hold exactly once, and the text it writes
+// in its place.
+var behavioralProfileWrites = map[string]struct{ from, to string }{
+	"fixtures/v1_1-behavioral-profile-extra-member.json": {
+		"      \"observationDays\": 14\n    },",
+		"      \"observationDays\": 14,\n      \"riskLevel\": \"low\"\n    },",
+	},
+	"fixtures/v1_1-behavioral-profile-case-variant-member.json": {
+		"      \"observationDays\": 14\n",
+		"      \"OBSERVATIONDAYS\": 14\n",
+	},
+	"fixtures/v1_1-behavioral-profile-not-object.json": {
+		"    \"scanSummary\": {",
+		"    \"behavioralProfile\": \"sha256:ghi789\",\n    \"scanSummary\": {",
+	},
+	"fixtures/v1_1-behavioral-profile-member-outside-type.json": {
+		"      \"observationDays\": 14\n",
+		"      \"observationDays\": \"14\"\n",
+	},
+}
+
+// behavioralProfileWritten records which behavioralProfileWrites entries main
+// applied; main fails on an entry that names no fixture.
+var behavioralProfileWritten = map[string]bool{}
+
+// scanSummaryWrites is the byte-level write main makes after signing in each
+// scanSummary member fixture (atx-conformance#277): the text it replaces,
+// which the fixture must hold exactly once, and the text it writes in its
+// place. The baseline's scanSummary ends with oasbLevel "L1".
+var scanSummaryWrites = map[string]struct{ from, to string }{
+	"fixtures/v1_1-scan-summary-extra-member.json": {
+		"      \"oasbLevel\": \"L1\"\n    },",
+		"      \"oasbLevel\": \"L1\",\n      \"extra\": \"x\"\n    },",
+	},
+	"fixtures/v1_1-scan-summary-extra-member-signed.json": {
+		"      \"oasbLevel\": \"L1\"\n    },",
+		"      \"oasbLevel\": \"L1\",\n      \"extra\": \"x\"\n    },",
+	},
+	"fixtures/v1_1-scan-summary-case-variant-member.json": {
+		"      \"criticalFindings\": 0,\n",
+		"      \"CriticalFindings\": 0,\n",
+	},
+}
+
+// scanSummaryWritten records which scanSummaryWrites entries main applied;
+// main fails on an entry that names no fixture.
+var scanSummaryWritten = map[string]bool{}
 
 // logIndex returns a pointer to the log-assigned issuance index, so a fixture
 // can omit transparencyLogIndex entirely by leaving the field nil. The field is
@@ -1100,6 +1945,12 @@ const atxCoreRef = "https://github.com/opena2a-standards/atx-spec/blob/e89bed94c
 // 1.2.0-draft text it names after AIP-SPEC.md changes on main.
 const aipSpecRef = "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md"
 
+// atpSpecRef is ATP-SPEC.md at the commit docs/version-pinning.md pins, whose
+// §10.2 states the family clock-skew bound (atpMaxSkew) that core.md §1.3
+// step 2 names, so the ATP citation opens that text after ATP-SPEC.md
+// changes on main.
+const atpSpecRef = "https://github.com/opena2a-standards/agent-trust-protocol/blob/e6b4e29f037469133683482bc9ab923f5704aa85/ATP-SPEC.md"
+
 // AIP-SPEC citations: §3.1 scoped to the signature algorithms a credential
 // carries (aipSigningSection), and §6.1 for the trustScore member every
 // credential carries. scripts/conformance_profile.py --check holds each
@@ -1141,6 +1992,7 @@ const (
 	secJCSForm         = "1.3a.2 JCS form (`atcVersion` = \"1.1\")"
 	secSignedFields    = "1.3a.4 Authorization on signed fields requires v1.1"
 	secDeclaredPurpose = "1.5 Declared purpose (optional)"
+	secIssuance        = "3.1 Issuance flow"
 	secRevocation      = "3.3 Revocation flow"
 	secSecurity        = "13. Security considerations"
 )
@@ -1151,9 +2003,13 @@ const (
 var fixtureSections = map[string][]string{
 	"atx-v1/revoked":                             {secRevocation},
 	"atx-v1/revoked-crl-only":                    {secRevocation},
+	"atx-v1/threshold-1of3-cosignature":          {secIssuance},
 	"atx-v1/wrong-issuer":                        {secSecurity},
+	"atx-v1/hybrid-pq-only":                      {secSecurity},
 	"atx-v1_1/hybrid-pq-only":                    {secSecurity},
 	"atx-v1_1/tampered-capabilities":             {secSignedFields},
+	"atx-v1_1/scan-summary-member-outside-type":  {secSignedFields},
+	"atx-v1_1/integer-outside-exact-range":       {secSignedFields},
 	"atx-v1_1/declared-purpose-valid":            {secDeclaredPurpose},
 	"atx-v1_1/tampered-declared-purpose":         {secDeclaredPurpose},
 	"atx-v1_1/declared-purpose-empty-whitespace": {secDeclaredPurpose},
@@ -1161,6 +2017,13 @@ var fixtureSections = map[string][]string{
 	"atx-v1_1/declared-purpose-string-injected":  {secDeclaredPurpose},
 	"atx-v1_1/declared-purpose-number-injected":  {secDeclaredPurpose},
 	"atx-v1_1/duplicate-purpose-member":          {secDeclaredPurpose},
+
+	// declaredPurpose number form (atx-conformance#283).
+	"atx-v1_1/declared-purpose-integer-signed":                   {secDeclaredPurpose},
+	"atx-v1_1/declared-purpose-integer-respelled-fraction":       {secDeclaredPurpose},
+	"atx-v1_1/declared-purpose-integer-respelled-exponent":       {secDeclaredPurpose},
+	"atx-v1_1/declared-purpose-integer-respelled-upper-exponent": {secDeclaredPurpose},
+	"atx-v1_1/declared-purpose-integer-outside-range":            {secDeclaredPurpose},
 }
 
 // fixtureSectionsUsed records which fixtureSections entries wrap consumed.
@@ -1175,9 +2038,11 @@ var fixtureSectionsUsed = map[string]bool{}
 var fixtureRequirements = map[string]string{
 	"atx-v1/baseline-valid":                      "§1.3 step 8: a v1.0 credential whose one Ed25519 signature, made with its issuer's key, verifies over the legacy canonical bytes passes every step and is accepted",
 	"atx-v1/baseline-valid-hybrid":               "§1.3 step 5: every declared signature verifies, the ML-DSA-65 signature included, so a v1.0 hybrid credential is accepted",
+	"atx-v1/hybrid-pq-only":                      "§13, Cryptographic agility: under atcVersion 1.0 too, a credential that declares an ML-DSA-65 signature must also carry a verifying Ed25519 signature, so an ML-DSA-65 signature alone over the legacy canonical bytes is a signature failure",
 	"atx-v1/revoked":                             "§3.3 step 7: a credential its issuing node marked revoked is rejected; its revoked flag is set and its agentId is also on the verifier's CRL",
 	"atx-v1/revoked-crl-only":                    "§1.3 step 6: an agentId listed on the verifier's CRL is rejected although the credential's own revoked flag is false",
 	"atx-v1/threshold-2of3-cosignature":          "§1.3 step 5: every declared signature verifies, here three Ed25519 signatures by three keys, so the credential is accepted; the 2-of-3 threshold of §3.1 step 8 is not tested",
+	"atx-v1/threshold-1of3-cosignature":          "§3.1 step 8: under a verifier state that requires the signatures of 2 of the issuer's 3 Ed25519 keys, a credential whose one signature verifies is a signature failure",
 	"atx-v1/expired":                             "§1.3 step 2: a credential whose expiresAt is earlier than the verifier's clock is rejected",
 	"atx-v1/wrong-issuer":                        "§13, Key substitution at resolution: an issuer the verifier does not trust is rejected even when its own signature verifies",
 	"atx-v1/tampered-signature":                  "§1.3 step 4: an Ed25519 signature that does not verify over the legacy canonical bytes is a signature failure",
@@ -1189,6 +2054,8 @@ var fixtureRequirements = map[string]string{
 	"atx-v1_1/hybrid-mldsa-tampered":             "§1.3 step 5: a declared ML-DSA-65 signature that does not verify is a signature failure, although the Ed25519 signature verifies",
 	"atx-v1_1/hybrid-pq-only":                    "§13, Cryptographic agility: a credential that declares an ML-DSA-65 signature must also carry a verifying Ed25519 signature, so an ML-DSA-65 signature alone is a signature failure",
 	"atx-v1_1/tampered-capabilities":             "§1.3a.4: capabilities are under the v1.1 signature, so capabilities changed after signing are a signature failure",
+	"atx-v1_1/scan-summary-member-outside-type":  "§1.3a.2 rule 2: each scanSummary member enters the TBS with its type, so a member written outside that type after signing, criticalFindings as the string \"3\", has no value the signature covers and is a signature failure",
+	"atx-v1_1/integer-outside-exact-range":       "§1.3a.2 rule 3: RFC 8785 number serialization is kept out of cross-language scope, and outside the I-JSON exact range it does not write every integer as its digits, so criticalFindings 9007199254740993, which it writes as 9007199254740992, has no value the signature covers and is a signature failure",
 	"atx-v1_1/declared-purpose-valid":            "§1.5: a present declaredPurpose object is signed as part of JCS(TBS) (§1.3a.2 rule 5), and a credential carrying one is accepted",
 	"atx-v1_1/tampered-declared-purpose":         "§1.5: declaredPurpose is under the v1.1 signature, so a declaredPurpose changed after signing is a signature failure",
 	"atx-v1_1/declared-purpose-empty-whitespace": "§1.3a.2 rule 5: an empty declaredPurpose object, whatever whitespace it is written with, is treated as absent and left out of the TBS",
@@ -1197,12 +2064,82 @@ var fixtureRequirements = map[string]string{
 	"atx-v1_1/declared-purpose-number-injected":  "§1.3a.2 rule 5: a present non-object declaredPurpose value enters the TBS verbatim, so a number that is not an integer, added after signing, is a signature failure",
 	"atx-v1_1/duplicate-purpose-member":          "§1.3 step 1: parsing the credential rejects an object member repeated at any depth (RFC 8259 §4) as PARSE_ERROR before any field is read (§12)",
 	"atx-v1_1/case-variant-member":               "§1.3 step 1: parsing the credential rejects two member names that fold to one field (TRUSTLEVEL and trustLevel) as PARSE_ERROR before any field is read (§12)",
+	"atx-v1_1/dotted-capital-i-member":           "§1.3 step 1: parsing the credential rejects a member name outside printable ASCII in an object the verifier decodes (U+0130 followed by d, beside id) as PARSE_ERROR before any field is read (§12)",
+	"atx-v1_1/dotless-i-member":                  "§1.3 step 1: parsing the credential rejects a member name outside printable ASCII in an object the verifier decodes (U+0131 followed by ssuedAt, beside issuedAt) as PARSE_ERROR before any field is read (§12)",
 	"atx-v1_1/cross-issuer-key":                  "§1.3 step 4, key eligibility: under atcVersion 1.1 a key is eligible only for the issuerDid or a trusted issuer the signed issuerChain names, so a signature made with a trusted authority's key outside both is a signature failure",
 	"atx-v1_1/untrusted-chain-authority":         "§1.3 step 4, key eligibility: a DID the signed issuerChain names that is not a trusted issuer contributes no eligible key, so a signature made with its key is a signature failure",
+
+	// behavioralProfile form (atx-conformance#277).
+	"atx-v1_1/behavioral-profile-extra-member":        "§1.1: the credential schema gives behavioralProfile exactly checksum, generatedAt and observationDays, so a fourth member added after signing leaves a profile the TBS has no value for, a signature failure",
+	"atx-v1_1/behavioral-profile-case-variant-member": "§1.1: behavioralProfile member names are compared exactly, so observationDays renamed OBSERVATIONDAYS after signing leaves a profile the TBS has no value for, a signature failure",
+	"atx-v1_1/behavioral-profile-not-object":          "§1.3a.2 rule 1: the TBS holds null for a credential with no behavioralProfile and otherwise an object of its three members, so a string added as the profile after signing is a signature failure",
+	"atx-v1_1/behavioral-profile-member-outside-type": "§1.3a.2 rule 1: a behavioralProfile added after signing whose observationDays is a string has no value in the TBS, where a credential with no profile holds null, so it is a signature failure",
+
+	// scanSummary members (atx-conformance#277).
+	"atx-v1_1/scan-summary-extra-member":        "§1.1: the credential schema gives scanSummary exactly hma, criticalFindings, highFindings, secretless, cryptoServe and oasbLevel, so a seventh member added after signing leaves a scanSummary the TBS has no value for, a signature failure",
+	"atx-v1_1/scan-summary-extra-member-signed": "§1.3a.2 rule 2: the TBS holds scanSummary as its six members, so a seventh member leaves a scanSummary the TBS has no value for, a signature failure although the credential's signature covers that member as written",
+	"atx-v1_1/scan-summary-case-variant-member": "§1.1: scanSummary member names are compared exactly, so criticalFindings renamed CriticalFindings after signing leaves a scanSummary the TBS has no value for, a signature failure",
+
+	// declaredPurpose number form (atx-conformance#283).
+	"atx-v1_1/declared-purpose-integer-signed":                   "§1.3a.2 rule 5: declaredPurpose enters the TBS as written, and so does an integer in it written as its digits inside the I-JSON exact range, so a credential signed over {\"n\": 1000} that carries it as signed is accepted",
+	"atx-v1_1/declared-purpose-integer-respelled-fraction":       "§1.3a.2 rule 3: RFC 8785 number serialization is kept out of cross-language scope, so a declaredPurpose number written with a fraction part, 1000.0 where the signature covers 1000, has no bytes the signature covers and is a signature failure",
+	"atx-v1_1/declared-purpose-integer-respelled-exponent":       "§1.3a.2 rule 3: RFC 8785 number serialization is kept out of cross-language scope, so a declaredPurpose number written with an exponent part, 1e3 where the signature covers 1000, has no bytes the signature covers and is a signature failure",
+	"atx-v1_1/declared-purpose-integer-respelled-upper-exponent": "§1.3a.2 rule 3: RFC 8785 number serialization is kept out of cross-language scope, so a declaredPurpose number written with an exponent part that opens with an upper-case E, 1E3 where the signature covers 1000, has no bytes the signature covers and is a signature failure",
+	"atx-v1_1/declared-purpose-integer-outside-range":            "§1.3a.2 rule 3: RFC 8785 number serialization is kept out of cross-language scope, and outside the I-JSON exact range it does not write every integer as its digits, so declaredPurpose n 9007199254740993, which it writes as 9007199254740992, has no value the signature covers and is a signature failure",
+
+	// Subject named under a foreign DID method.
+	"atx-v1/foreign-did-method-valid":                 "§1.3 step 3: the verifier resolves the issuerDid, not the subject's DIDs, and no step reads the DID method of agentDid or publisherDid, so a v1.0 hybrid credential whose agentDid and publisherDid are did:web identifiers, signed by its trusted did:opena2a issuer, is accepted",
+	"atx-v1/foreign-did-method-altered-after-signing": "§1.3 step 4: the legacy canonical form signs agentDid as written (§1.3a.1), so a did:web agentDid changed after signing is a signature failure",
+
+	// Expiry one second past the family clock-skew bound.
+	"atx-v1/expired-beyond-skew": "§1.3 step 2: expiry is evaluated within the family clock-skew bound of ATP §10.2, at most 60 seconds, so a credential whose expiresAt is 61 seconds earlier than the verifier's clock is rejected at every tolerance the bound allows",
+
+	// Distinct signer-authority count at a required trust level of 3.
+	"atx-v1_1/two-authority-cosignature":    "§1.3 step 7: at a required trust level of 3, a credential carrying signatures by two distinct trusted authorities, each verifying under a key its own DID publishes, is accepted",
+	"atx-v1_1/cosigner-named-not-signed":    "§1.3 step 7: presence in the signed issuerChain is not a signature, so at a required trust level of 3 a credential only its issuer signed is rejected although the chain names a second trusted authority",
+	"atx-v1_1/one-authority-threshold-keys": "§1.3 step 7: each authority counts once however many of its keys signed, so at a required trust level of 3 a credential signed by three keys of one authority is rejected",
+	"atx-v1_1/one-key-under-two-dids":       "§1.3 step 7: two signatures that verify under the same public key count once whatever keyId values they carry, so at a required trust level of 3 one key's signature carried under two trusted DIDs is rejected",
+	"atx-v1_1/own-key-labelled-as-cosigner": "§1.3 step 7: a signature counts for the authority its keyId names only when it verifies under a key that authority publishes, so at a required trust level of 3 a signature by a second key of the issuer carrying the partner authority's keyId is rejected",
+
+	// Revocation list freshness, and a revocation list required and not held.
+	"atx-v1_1/crl-fresh-agent-absent-hybrid":             "§1.3 step 6: a CRL the verifier holds that is current at its clock and does not list the agentId is evidence that the agent is not revoked, so a credential that passes every other step is accepted",
+	"atx-v1_1/crl-past-nextupdate-beyond-skew-hybrid":    "§1.3 step 6: a held CRL whose nextUpdate is more than the family clock-skew bound of ATP §10.2, at most 60 seconds, before the verifier's clock is no evidence for an agentId it does not list, so revocation is unknown and the credential is rejected",
+	"atx-v1_1/crl-issued-after-clock-beyond-skew-hybrid": "§1.3 step 6: a held CRL whose issuedAt is more than the family clock-skew bound of ATP §10.2, at most 60 seconds, after the verifier's clock is no evidence for an agentId it does not list, so revocation is unknown and the credential is rejected",
+	"atx-v1_1/crl-past-nextupdate-lists-agent-hybrid":    "§1.3 step 6: an agentId listed on a held CRL is revoked whatever the list's dates, so a list past its nextUpdate that lists the agent rejects the credential as revoked, not as revocation unknown",
+	"atx-v1_1/crl-required-none-held-hybrid":             "§1.3 step 6: a verifier required to hold a revocation list that holds none has nothing that says the agent is not revoked, so revocation is unknown and the credential is rejected",
 }
 
 // fixtureRequirementsUsed records which fixtureRequirements entries wrap consumed.
 var fixtureRequirementsUsed = map[string]bool{}
+
+// fixtureOtherRefs names the documents a fixture cites beyond core.md,
+// AIP-SPEC, RFC 8032 and FIPS 204, which wrap cites by rule. main fails on an
+// entry that names no fixture.
+var fixtureOtherRefs = map[string][]SpecRef{
+	"atx-v1_1/integer-outside-exact-range": {
+		{ID: "RFC 7493", Ref: "https://datatracker.ietf.org/doc/html/rfc7493", Section: "§2.2 Numbers (the I-JSON exact integer range, -(2^53-1) to 2^53-1)"},
+		{ID: "RFC 8785", Ref: "https://datatracker.ietf.org/doc/html/rfc8785", Section: "§3.2.2.3 Serialization of Numbers"},
+	},
+	"atx-v1_1/declared-purpose-integer-respelled-fraction": {
+		{ID: "RFC 8785", Ref: "https://datatracker.ietf.org/doc/html/rfc8785", Section: "§3.2.2.3 Serialization of Numbers"},
+	},
+	"atx-v1_1/declared-purpose-integer-respelled-exponent": {
+		{ID: "RFC 8785", Ref: "https://datatracker.ietf.org/doc/html/rfc8785", Section: "§3.2.2.3 Serialization of Numbers"},
+	},
+	"atx-v1_1/declared-purpose-integer-respelled-upper-exponent": {
+		{ID: "RFC 8785", Ref: "https://datatracker.ietf.org/doc/html/rfc8785", Section: "§3.2.2.3 Serialization of Numbers"},
+	},
+	"atx-v1_1/declared-purpose-integer-outside-range": {
+		{ID: "RFC 7493", Ref: "https://datatracker.ietf.org/doc/html/rfc7493", Section: "§2.2 Numbers (the I-JSON exact integer range, -(2^53-1) to 2^53-1)"},
+		{ID: "RFC 8785", Ref: "https://datatracker.ietf.org/doc/html/rfc8785", Section: "§3.2.2.3 Serialization of Numbers"},
+	},
+	"atx-v1/expired-beyond-skew": {
+		{ID: "ATP", Ref: atpSpecRef, Section: "§10.2 Trust Proof Validity (clock skew: at most 60 seconds, symmetrically, for issuedAt and expiresAt in ATX credentials)"},
+	},
+}
+
+// fixtureOtherRefsUsed records which fixtureOtherRefs entries wrap consumed.
+var fixtureOtherRefsUsed = map[string]bool{}
 
 // atxSections lists the core.md sections a fixture cites: the schema and the
 // verification algorithm, the canonical signing form its atcVersion selects
@@ -1235,6 +2172,10 @@ func wrap(name, description string, refs []KeypairRef, vs VerifierState, expecte
 		SpecRef{ID: "AIP", Ref: aipSpecRef, Section: aipTrustScoring},
 		SpecRef{ID: "RFC 8032", Ref: "https://datatracker.ietf.org/doc/html/rfc8032", Section: "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"},
 	)
+	if other, ok := fixtureOtherRefs[name]; ok {
+		fixtureOtherRefsUsed[name] = true
+		spec = append(spec, other...)
+	}
 	// FIPS 204 is cited only by a credential that carries an ML-DSA-65
 	// signature (scripts/conformance_profile.py --check).
 	for _, sig := range atx.Signatures {
@@ -1289,6 +2230,23 @@ func mustLoadKeyVector(relPath string) keyVector {
 		if string(pub) != string(want) {
 			panic(fmt.Sprintf("keypair vector mismatch in %s: seed-derived pubkey does not match", relPath))
 		}
+	}
+	return v
+}
+
+// mustLoadPublishedKey loads a vector that holds a public key only: the key
+// of signer as another DID, publisherDID, publishes it under a keyId of its
+// own. It panics unless the vector carries no seed, has signer's algorithm and
+// public key, and names publisherDID as its issuerDid and in its keyId, so a
+// fixture that cites it names a key whose signatures signer's seed makes.
+func mustLoadPublishedKey(relPath string, signer keyVector, publisherDID string) keyVector {
+	b, err := os.ReadFile(filepath.Join(outDir, relPath)) //nolint:gosec // G304: build-time tool; outDir + constant relPath, no untrusted input
+	must(err)
+	var v keyVector
+	must(json.Unmarshal(b, &v))
+	if v.SeedHex != "" || v.Algorithm != signer.Algorithm || v.PublicKeyHex != signer.PublicKeyHex ||
+		v.IssuerDID != publisherDID || !strings.HasPrefix(v.KeyID, publisherDID+"#") {
+		panic(fmt.Sprintf("published-key vector %s is not the %s key under %s", relPath, signer.Role, publisherDID))
 	}
 	return v
 }

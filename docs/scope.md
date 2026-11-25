@@ -21,34 +21,51 @@ What this suite verifies:
 |---|---|
 | ATX v1.0 schema-version gate | `fixtures/malformed-schema.json` |
 | Expiry gate against a pinned verifier clock | `fixtures/expired.json` |
+| Expiry evaluated within the family clock-skew bound (§1.3 step 2; ATP §10.2, under which a verifier tolerates at most 60 seconds of skew): a credential whose `expiresAt` is 61 seconds before the pinned clock rejects at every tolerance from 0 to 60 seconds | `fixtures/expired-beyond-skew.json` |
 | Revocation via the credential `revoked` flag | `fixtures/revoked.json` |
 | Revocation via CRL membership alone, the credential's own flag being false (§1.3 step 6, which both reference verifiers perform at their step 3, before any signature) | `fixtures/revoked-crl-only.json` |
+| Revocation-list freshness (§1.3 step 6; ATP §10.2, under which a verifier tolerates at most 60 seconds of skew): a held CRL whose `nextUpdate` is 61 seconds before the pinned clock, or whose `issuedAt` is 61 seconds after it, is no evidence for an agent it does not list, so revocation is unknown (`REVOCATION_UNKNOWN`); an entry for the agent on such a list still revokes (`REVOKED`), entries being read before dates; a current list that does not list the agent accepts | `fixtures/v1_1-crl-past-nextupdate-beyond-skew-hybrid.json`, `fixtures/v1_1-crl-issued-after-clock-beyond-skew-hybrid.json`, `fixtures/v1_1-crl-past-nextupdate-lists-agent-hybrid.json`, `fixtures/v1_1-crl-fresh-agent-absent-hybrid.json`; see [Revocation lists](fixtures.md#revocation-lists-freshness-and-a-list-required) |
+| A revocation list required and not held (§1.3 step 6): with `verifierState.revocationListRequired` true and no `crl`, revocation is unknown (`REVOCATION_UNKNOWN`). A fixture that holds no `crl` and does not set the member exercises nothing of step 6; a deployed verifier has no such mode | `fixtures/v1_1-crl-required-none-held-hybrid.json` |
 | Trusted-issuer DID set | `fixtures/wrong-issuer.json` |
-| Ed25519 signature verification over the canonical payload | every fixture that passes steps 0 to 4 of the reference verifiers (strict parse, schema version, expiry, revocation by the flag or the CRL, trusted issuer): 19 of 26. The others reject before step 5; `go test` in `verifiers/go` checks that their signatures verify once that gate is lifted. The count follows the reference verifiers' order, which checks the CRL (§1.3 step 6) before the signatures (§1.3 steps 4 and 5), so `fixtures/revoked-crl-only.json` is among the others. Both fixtures whose CRL lists their agent carry valid signatures, so in the spec's order they reject as `REVOKED` too |
+| Ed25519 signature verification over the canonical payload | every fixture that passes steps 0 to 4 of the reference verifiers (strict parse, schema version, expiry, revocation by the flag, the CRL or a CRL required and not held, trusted issuer): 43 of 57. The others reject before step 5; `go test` in `verifiers/go` checks that their signatures verify once that gate is lifted. The count follows the reference verifiers' order, which checks the CRL (§1.3 step 6) before the signatures (§1.3 steps 4 and 5), so `fixtures/revoked-crl-only.json` and the four `v1_1-crl-*` fixtures that reject are among the others. Every fixture that rejects at the reference verifiers' step 3 carries valid signatures, so in the spec's order it rejects in the same category, `REVOKED` or `REVOCATION_UNKNOWN` |
 | Hybrid Ed25519 + ML-DSA-65 signature verification (FIPS 204) | `fixtures/baseline-valid-hybrid.json` |
-| Multi-signature: every declared signature must verify (three Ed25519 signatures from three distinct keys) | `fixtures/threshold-2of3-cosignature.json` |
+| Multi-signature: every declared signature must verify (three Ed25519 signatures from three keys of one authority, which §1.3 step 7 counts as one authority) | `fixtures/threshold-2of3-cosignature.json` |
+| k-of-n signature threshold, such as 2-of-3 (§3.1 step 8): with `requiredSignatures` set in the verifier state, a credential whose declared Ed25519 signatures verify under fewer distinct keys than it sets rejects | `fixtures/threshold-1of3-cosignature.json`; no fixture sets a threshold its credential meets, see conformance.json notCovered |
 | Tampered-signature rejection | `fixtures/tampered-signature.json` |
 | Key-to-issuer binding (a trusted authority cannot sign for another; a chain DID that is not a trusted issuer contributes no eligible key) | `fixtures/cross-issuer-key.json`, `fixtures/v1_1-cross-issuer-key.json`, `fixtures/v1_1-untrusted-chain-authority.json` |
 | ATX v1.1 JCS(TBS) signing, signed-field integrity | `fixtures/v1_1-baseline-valid.json`, `fixtures/v1_1-tampered-capabilities.json` |
+| A v1.1 scanSummary member outside its type (§1.3a.2 rule 2) is a signature failure: no signature covers it, and a verifier that reads it as its zero value accepts it under a signature over that zero value | `fixtures/v1_1-scan-summary-member-outside-type.json` |
+| A v1.1 scanSummary count outside the I-JSON exact range, -(2^53-1) to 2^53-1 (RFC 7493 §2.2), is a signature failure: an RFC 8785 serializer that reads each number as an IEEE 754 double writes `criticalFindings` 9007199254740993 as 9007199254740992, so a verifier that canonicalizes it that way accepts it under a signature over 9007199254740992 | `fixtures/v1_1-integer-outside-exact-range.json` |
+| A present v1.1 behavioralProfile that is not an object of exactly `checksum`, `generatedAt` and `observationDays`, names compared exactly, each in its type (the credential schema of §1.1, §1.3a.2 rule 1), is a signature failure: no signature covers it, and a verifier that projects it to null, the absent form, or drops or folds a member accepts it under a signature that does not cover it | `fixtures/v1_1-behavioral-profile-extra-member.json`, `fixtures/v1_1-behavioral-profile-case-variant-member.json`, `fixtures/v1_1-behavioral-profile-not-object.json`, `fixtures/v1_1-behavioral-profile-member-outside-type.json` |
 | ATX v1.1 declaredPurpose carried under the signature (§1.5) | `fixtures/v1_1-declared-purpose-valid.json`, `fixtures/v1_1-tampered-declared-purpose.json` |
 | Degenerate declaredPurpose (§1.3a.2 rule 5, issue #11): parse-level emptiness, verbatim non-object inclusion | `fixtures/v1_1-declared-purpose-empty-whitespace.json`, `fixtures/v1_1-declared-purpose-array-injected.json`, `fixtures/v1_1-declared-purpose-string-injected.json`, `fixtures/v1_1-declared-purpose-number-injected.json` |
+| A v1.1 `declaredPurpose` number written with a fraction part or an exponent part, or an integer there outside the I-JSON exact range, is a signature failure, decided from the number as the credential writes it (§1.3a.2 rule 3): `1000.0`, `1e3` and `1E3` where the signature covers `1000`, which an RFC 8785 serializer that reads each number as an IEEE 754 double writes as `1000`, and 9007199254740993, which it writes as 9007199254740992. A number outside the float64 range is one of these: `1e400` is written with an exponent part, and an integer of 401 digits is outside the exact range. The unit tests of both reference verifiers hold them to this, and no fixture carries such a number. An integer written as its digits inside the range is accepted | `fixtures/v1_1-declared-purpose-integer-signed.json`, `fixtures/v1_1-declared-purpose-integer-respelled-fraction.json`, `fixtures/v1_1-declared-purpose-integer-respelled-exponent.json`, `fixtures/v1_1-declared-purpose-integer-respelled-upper-exponent.json`, `fixtures/v1_1-declared-purpose-integer-outside-range.json` |
 | Strict credential parse: duplicate object members reject at any depth (RFC 8259 §4 parser-divergence smuggling) | `fixtures/v1_1-duplicate-purpose-member.json` |
 | Fold-aware strict parse: case-variant members that `encoding/json` collapses last-wins (e.g. `TRUSTLEVEL`/`trustLevel`) reject as PARSE_ERROR | `fixtures/v1_1-case-variant-member.json` |
-| Distinct signer-authority count for trust level 3 and above (§1.3 step 7) | not covered; see conformance.json notCovered |
-| k-of-n threshold issuance, such as 2-of-3 (§3.1 step 8): a credential with fewer valid signatures than the threshold rejects | not covered; see conformance.json notCovered |
+| Member-name strict parse: a member name outside printable ASCII (U+0020 to U+007E) in an object the verifier decodes (the credential, a signature entry, `scanSummary`, `behavioralProfile`) rejects as PARSE_ERROR, a rule that needs no case table: U+0130 followed by `d` beside `id`, and U+0131 followed by `ssuedAt` beside `issuedAt`, names Java 25's `String.equalsIgnoreCase` compares equal to the member beside them | `fixtures/v1_1-dotted-capital-i-member.json`, `fixtures/v1_1-dotless-i-member.json` |
+| Distinct signer-authority count at a required trust level of 3 (§1.3 step 7): two authorities' verified signatures accept; one authority's signature with a second authority only named in `issuerChain`, three keys of one authority, one key signing under two DIDs, and an issuer key's signature carrying the partner's `keyId` each count as one authority and reject | `fixtures/v1_1-two-authority-cosignature.json`, `fixtures/v1_1-cosigner-named-not-signed.json`, `fixtures/v1_1-one-authority-threshold-keys.json`, `fixtures/v1_1-one-key-under-two-dids.json`, `fixtures/v1_1-own-key-labelled-as-cosigner.json`; see [Required trust level](fixtures.md#required-trust-level-the-distinct-signer-authority-count) |
 
 What this suite does NOT verify:
 
 - Content hash matching the agent binary. The `contentHash` field is in every
-  fixture for byte-stability, but no agent binary is shipped; verifiers stop
-  at step 5 (signature) without consulting content.
+  fixture for byte-stability, but no agent binary is shipped; after step 5
+  (signature) the verifiers skip the content-hash check without consulting
+  content.
 - Transparency log inclusion proofs. The `transparencyLogIndex` is populated
   for byte-stability; the conformance verifiers do not consult a log.
 - Build attestation predicate verification. `buildAttestation` is a string
   field in ATX v1.0 (not a structured SLSA v1 predicate inline); verifiers
   do not parse it.
 - Behavioral profile validation. The `behavioralProfile` field is carried and
-  signed in the v1.1 fixtures, but not validated.
+  signed in the v1.1 fixtures, except two signed with no profile that carry
+  one added after signing, and a present profile outside its form is a
+  signature failure (the table above), but what its members state about the
+  agent is not validated.
+- The CRL's `signature` member. Not verified by the reference verifiers: the
+  suite's own fixture format has no normative signing form, and the fixtures
+  carry `TEST_ONLY_UNSIGNED_CRL`. The signed revocation list is ATP 1.1 work
+  (ATX core.md §2 item 5); when the suite carries it, the signature is
+  verified before any entry is read.
 
 The full requirement-to-fixture mapping is machine-readable in
 [`conformance.json`](../conformance.json), regenerated from the fixtures by
@@ -79,6 +96,14 @@ trustLevel | trustScore (%.6f) | issuedAt (RFC 3339) | expiresAt (RFC 3339) |
 atcVersion (hardcoded "1.0")
 ```
 
+`trustScore` enters the v1.0 string, and the v1.1 TBS as a string, in the
+`%.6f` form of the float64 nearest the value the credential writes (ties to
+even), decided on every digit written: both reference
+verifiers read `875` followed by 900 zeros and `e-901` as 87.5. A
+`trustScore` whose value rounds past the largest float64, such as `1e400`
+or `1` followed by 1000 zeros and `e-650`, is a `PARSE_ERROR` in both
+(atx-conformance#308).
+
 Fields NOT covered by the v1.0 signature include `capabilities`, `scanSummary`,
 `behavioralProfile`, `publisher`, `publisherDid`, `transparencyLogIndex`,
 `signatures`, `revoked`, `revokedAt`, `revocationReason`, `createdAt`, `id`,
@@ -104,11 +129,16 @@ which is REJECTED precisely because capabilities are now signed.
 
 The ATX spec has every credential carry an Ed25519 and an ML-DSA-65
 signature (core.md §1.1). This suite does not require both: it accepts
-single-suite Ed25519 credentials, and 6 of its 8 ACCEPT fixtures
+single-suite Ed25519 credentials, and 8 of its 12 ACCEPT fixtures
 (`baseline-valid.json` among them) carry Ed25519 signatures only. What it
 requires is that every declared signature verifies, and that a credential
 which declares an ML-DSA-65 entry also carries a verifying Ed25519 entry
-(core.md §13, Cryptographic agility).
+(core.md §13, Cryptographic agility). Where a fixture's verifier state sets
+`requiredSignatures`, the declared Ed25519 signatures must also verify under
+at least that many distinct keys, each key counted once however many
+signatures verify under it. An ML-DSA-65 signature does not count toward
+it: core.md §1.3a.2 names the Ed25519 signatures the threshold signatures
+and the ML-DSA-65 one the hybrid signature.
 `baseline-valid-hybrid.json` and `v1_1-baseline-valid-hybrid.json` each
 carry an Ed25519 signature and an ML-DSA-65 signature over the same signed
 payload. In both, the ML-DSA-65 `value` is the base64 of a raw FIPS 204
@@ -124,10 +154,12 @@ canonical payload the Ed25519 signature signs. The MUST-REJECT control
 `fixtures/v1_1-hybrid-mldsa-tampered.json`, the hybrid baseline with the
 Ed25519 entry intact and the ML-DSA-65 value flipped by one bit, pins that
 a forged post-quantum signature cannot ride an intact classical one. The
-MUST-REJECT control `fixtures/v1_1-hybrid-pq-only.json`, the hybrid
-baseline with the Ed25519 entry removed and one ML-DSA-65 signature left
-that verifies, pins that a post-quantum signature cannot verify a
-credential without its Ed25519 companion.
+MUST-REJECT controls `fixtures/hybrid-pq-only.json` and
+`fixtures/v1_1-hybrid-pq-only.json`, the v1.0 and v1.1 hybrid baselines
+with the Ed25519 entry removed and one ML-DSA-65 signature left that
+verifies, pin that a post-quantum signature cannot verify a credential
+without its Ed25519 companion under either `atcVersion`: the core.md §13
+rule names no version.
 
 ### Trusted-issuer DID method used by this suite
 

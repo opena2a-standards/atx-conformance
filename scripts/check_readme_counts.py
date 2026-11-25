@@ -167,7 +167,72 @@ gate while no workflow step ran it. A script the workflow runs neither by
 name nor through a script it runs that imports it must have its own layout
 line, and that line must not call it a CI gate. Only a name in the command of
 a `run:` step, outside a shell comment, counts as run: a name anywhere in the
-workflow file counted, so a YAML comment naming a script made it pass.
+workflow file counted, so a YAML comment naming a script made it pass. A
+`python3 -m unittest discover` run over scripts/ in such a command counts as
+running each scripts/*.py its pattern matches: the layout called
+scripts/test_script_options.py run by hand while the workflow's Python unit
+tests step discovered and ran it. The arguments after `discover` are read as
+unittest reads them, by argparse with unittest's discover options. The check
+had read the value of -k or --durations as a positional argument, so as the
+start directory or the pattern, ignored -s or -p joined to its value with no
+`=` (`-sscripts`), and kept a start directory or pattern given by position
+over a later -s or -p, where unittest keeps the last value given. With
+`--durations 5` added to the workflow's discover line it reported
+scripts/test_script_options.py as not run, and with that line changed to
+`discover -v scripts -s verifiers/python`, which discovers in
+verifiers/python, it counted the script as run. A line of such a command
+that ends in a backslash continues on the next, and a run after another on
+the same line is read as well. A run's arguments were read to the end of its
+line, so a run whose arguments a trailing backslash put on the next line
+counted no script, and a second run on a line, after `&&` or `;`, was not
+read: the Python unit tests step, with its discover run continued that way
+or placed second after `&&`, failed the check on test_script_options.py.
+An empty argument, written `''` or `""`, is read as an argument, as
+unittest reads it. The check had read it as a shell operator and stopped
+with an IndexError traceback, printing no verdict: with the workflow's
+discover line given `-p ''`, on which unittest runs no test, it raised
+IndexError where it now reports scripts/test_script_options.py as not run.
+`discover` is read in either case of each of its letters, as unittest reads
+it. The check had matched the lowercase word alone: with the workflow's
+discover line written `DISCOVER`, which runs the same tests, it reported
+scripts/test_script_options.py as not run.
+
+A command written as a block scalar (`run: |` or `run: >`) is read as YAML
+reads it, with the block's indentation removed and a folded block's lines
+folded, and then as bash reads it: a line that ends in a backslash is
+joined to the next, so a `#` the join puts inside a word stays part of it,
+and a `#` that starts a word after a blank, a line break or one of
+`;&|()<>` begins a comment. The check kept the block's indentation and
+removed comments line by line before it joined the lines.
+With the Python unit tests step's discover line split inside its -s
+value, `-s "scr\\` on one line and `ipts"` on the next at the block's
+indentation, bash passes `-s scripts`, while the check read
+`-s "scr          ipts"`, the block's ten spaces inside the word, and
+reported test_script_options.py as not run. With `-s scripts\\` followed by
+a line `#x`, the check dropped `#x` as a comment and counted the script as
+run, while bash passes `-s scripts#x`, a directory that does not exist,
+and unittest stops with an ImportError. The check had also read a folded
+block's line breaks where YAML folds them into spaces, and a `#` right
+after `;` as part of a word.
+
+A test module's imports are not read as run. test_check_wall.py, a test
+module the Python unit tests step discovers, imports check_wall.py, which no
+step runs, so the check counted check_wall.py as run and passed a layout
+whose scripts/*.py line labels the scripts CI gates and which gave
+check_wall.py no line of its own. Imports are followed from the scripts a
+step names alone.
+
+It also holds the repository layout to the tree. The layout gave no line to
+wall/, its schemas/*.schema.json line named fixture-v1 and
+conformance-profile-v1 but not wall-v1, and it gave no line to
+scripts/test_check_wall.py while each other test module the workflow runs had
+one, and the check exited 0 (#415). Each top-level directory holding a file
+git tracks, other than one whose name opens with a dot, must open a line of
+the layout, alone or as the start of a longer path; the schemas/*.schema.json
+line must name the format of each file that glob matches, the file's name less
+`.schema.json`; and each test module the workflow's unittest discovery imports
+must open a line of its own. Where git cannot list the tracked files, the
+directories are not checked, and the closing line says so.
 
 The criterion (c) claim is matched in more wordings than the one the README
 used ("fulfils criterion (c)", "closes criterion c"), and a failure is
@@ -217,7 +282,12 @@ the module go.mod declares, and a span with another placeholder (`go run
 sections below the top one record past commits and are not held to it. The
 check read the section headed `## Unreleased` alone, so it read no sentence
 once that section was retitled `## v0.1.0`; a CHANGELOG.md with no `## `
-heading fails it.
+heading fails it. A sentence of the top section does not end at the `.` that
+closes `e.g.`, `i.e.`, `incl.`, `approx.`, `ca.`, `cf.` or `viz.`: the check
+split it there, so with a list item opening with `go run
+<module>/verifiers/go@latest` and going on `runs the Go verifier, i.e. with
+nothing cloned, and is README.md's first command`, the span fell outside the
+sentence naming README.md's first command, and it exited 0.
 
 It also holds what the README and CHANGELOG.md's opening paragraph, the text
 above its first `## ` heading, say about this repository's tags to the tags
@@ -228,9 +298,134 @@ repository carried no tag and `go list -m <module>@latest` answered a
 pseudo-version of a commit on main. A sentence naming a tag as this
 repository's (`v0.1.0` is this repository's first tag) must name a version
 tag the repository carries; while it carries none, a sentence saying what
-`@latest` resolves to must name the pseudo-version; once it carries one, no
-sentence may say the repository has no tag. A shallow clone, or a tree with
-no repository, is not held to it, and the closing line says so.
+`@latest` resolves to must name the pseudo-version; once it carries one, a
+sentence saying the repository has or carries no tag, with up to two words
+before `tag` (no release tag, no Go version tag), fails. Once the
+repository carried `kit-2026-11-14`, a tag that names no version,
+docs/running-the-verifiers.md still said it has no release tag and no tags
+and that `go run` resolves a commit to a pseudo-version when the commit has
+no tag, and CHANGELOG.md said it carries no tag yet, while `go list -m`
+answered a pseudo-version for the commit that tag names. So the check reads
+every tag: while the repository carries one, such a sentence fails, unless
+it says no version tag or no Go version tag and none of the tags names a
+version; and while it carries one that names no version, a sentence naming
+a pseudo-version that says a commit has or carries no tag or no release tag
+fails. A shallow clone, or a tree with no repository, is not held to it,
+and the closing line says so. There, a sentence of that text that a
+release-tag case of the self-test adds and expects the check to fail, and
+that the check fails held to that case's tags, is reported as a failure
+opening with the file that holds it (#385).
+
+It also holds what the comments of the files that say what version `go run`
+resolves say about an untagged commit. The comment above versionLine in
+verifiers/go/verifier/verify.go said the version is the commit's release tag
+"or a pseudo-version naming the commit when it has no tag", and the comment
+above version_line() in scripts/kit/assemble.sh called the commit Go stamps
+that way "an untagged commit", while commit a38e000, whose only tag is
+kit-2026-11-14, resolves to a pseudo-version. So a sentence of a whole-line
+comment in one of those files that names a pseudo-version, by that word or by
+the version form Go builds, names a commit, and says a commit has no tag,
+carries no tag or is untagged, fails. This rule reads none of the
+repository's tags, so a shallow clone is held to it too.
+
+It also holds what CHANGELOG.md's top section says the Go release still
+changes to the Go verifier's tests. Its #259 entry said that outside the RFC
+3339 layout the Go verifier's error can still differ by release, built with
+Go 1.22.12 naming the extra text in an issuedAt of
+2099-12-31T23:59:59+25:00x, while its #266 entry said the verifier gives the
+offset's error there under Go 1.22 too. A sentence of the top section that
+says a result can still differ by release, or still differs between Go
+releases, may quote as a code span no timestamp that
+verifiers/go/verifier/verify_test.go writes as a string literal outside its
+comments: what those tests expect of a timestamp does not depend on the Go
+release that runs them. A sentence saying the result differed until a later
+change is not held, and a missing verify_test.go fails the check. A sentence
+does not end at the `.` closing `e.g.`, `i.e.`, `incl.`, `approx.`, `ca.`,
+`cf.` or `viz.` here either, so a timestamp quoted after one is read with the
+claim.
+
+It also holds what README.md states above its first command to the toolchain
+minimums. README.md opened with `go run <module>/cmd/atx-verify@latest` and
+said nothing above it about the toolchain the command needs, so on a machine
+without Go the first thing a reader saw was the shell reporting that `go` was
+not found; the minimums stood two links away, in the dependency lists of
+docs/running-the-verifiers.md. README.md, read alone, must state above its
+first fenced block each minimum a list item of the README text states (`- Go
+1.22 or later`), in the item's words; a minimum in two parts is not a
+version VERSION_OR_DATE matches.
+
+It also holds each `pip install` command in a fenced block of the README text
+and of COSIGNERS.md to --disable-pip-version-check. In a new virtual
+environment whose pip was older than the newest release, the install line
+README.md gave wrote a notice to standard error that a new release of pip was
+available, the only text on its first-time path a reader did not ask for.
+
+It also holds each `Agent Trust <word>` name in the README text to the names
+the vendored specification text, schemas/vendor/atx-spec/core.md, uses.
+README.md said each fixture bundles "an Agent Trust Credential", a name
+core.md does not use: it calls the credential the Agent Trust eXtension
+(ATX), the name conformance.json gives the specification. A name whose words
+are joined by hyphens, as in the Agent-Trust-Credential header, is not held.
+
+It also holds CHANGELOG.md's top section to stating no running total. Its #325
+entry said the Python unit tests step runs the 2 tests of
+docs/demo/test_record_atx_verify.py, and its #327 entry said 319 altered count
+sites, where the commit that carried them held 8 tests in that file and printed
+324 sites: a total in a sentence goes stale when another change of the release
+adds to it. A sentence may say what its change adds (`adds 3 cases`) or what a
+run held before it (`held 3 tests`). It may not state how many tests a file or
+a run holds (`the 8 tests`, `holds 8 tests`, `runs 8 tests`, `Ran 8 tests`) or a
+self-test's total (`324 altered count sites`, `293 cases green`, `68 cases, from
+67`). A run of no test or of one test says what that run did and is not held,
+a set of tests named by what they did (`the three tests that held the old
+reading`) is not held, `the` being the one form `that` exempts (`holds 8 tests
+that check the script` still counts the file and is held), and the sections
+below the top one record past commits and are not held.
+
+It also holds that section to stating no fixture total. Its entry for the two
+did:web fixtures said the capture's summary line counts 43, docs/scope.md
+counts 34 of 43 fixtures and the kit's self-tests count 43 fixtures, and the
+entry for fixtures/expired-beyond-skew.json took each of those to 44 while
+that entry stayed as it was. A sentence may say how a count went (`go from 41
+to 43`), what it was before the change (`counted 41`) or what a change adds
+(`adds two fixtures`), and may name the fixtures there were before the change
+or that it adds (`the 41 existing fixtures`, `the two new fixtures`, `the 43
+fixtures before this one`, `the two fixtures that it adds`). It may not state
+a count in the present tense (`counts 43`, `count 43 fixtures`) or how many
+fixtures there are (`34 of 44 fixtures`, `the 44 embedded fixtures`, `holds 44
+fixtures`, `embeds 44 fixtures`, `runs 44 fixtures`).
+
+It also holds the two sentences of README.md's interop kit section, `## Try
+your verifier in two minutes`, on what the kit sends and on when it exits 0.
+They said the kit sends each of the 41 fixtures and exits 0 only when all 41
+agree, and the check passed them with fixtures/ holding 44. A number either
+sentence states in digits must be the number of fixtures/*.json. The words
+each sentence is found by (`the kit sends`, `exits 0 only when`) and link
+targets are not read, and the section's other sentences are not held. A
+sentence does not end at the `.` that closes `e.g.`, `i.e.`, `incl.`,
+`approx.`, `ca.`, `cf.` or `viz.`: the check split it there, so with the
+sentence on what the kit sends stating 41 after one of them (`each fixture
+built into it (e.g. all 41)`, `(incl. 41 that must fail)`), the count fell
+outside the sentence it holds, and it exited 0.
+
+It also holds the fixture counts that section states under its install line.
+It said "This commit carries 41 of the 52 fixtures on main; the Hackathon kit
+release carries 47", and the check held none of them: with the 52 taken to
+51, or the 41 to 40, it exited 0 (#377). A count stated as `N fixtures on
+main` must be the number of fixtures/*.json, so it goes stale as soon as a
+fixture is added. The N of `This commit carries N` must be the number of
+fixtures/*.json in the tree of the commit the last `go install
+<path>@<commit>` above it names, the set fixtures.go embeds in the kit built
+from that commit. That count is held where the checkout holds the commit; a
+copy of the tree outside the repository, or a shallow clone that does not
+hold the commit, is not held to it, and the closing line says so. The kit
+release's count names no tag and is not held.
+
+It also holds the paragraphs of README.md, read alone, to their length: none
+may be over 69 words, and at most one over 60. With its reference sections
+moved to the pages it links, its longest paragraph was 47 words at d8887e6;
+at 5f260e1 four were over 60 words, the longest 83, and no check read their
+length.
 
 Exit 0 when the self-test passes, every stated count matches the tree, the
 byte check is named, the Scope table claims no threshold that no fixture
@@ -249,9 +444,11 @@ package under no directory that held a go.mod in HEAD's history (where the
 history can be read), each `go run` command the top `## ` section of
 CHANGELOG.md names as README.md's first command is the one README.md opens
 with, each README and CHANGELOG.md opening-paragraph sentence on this
-repository's tags matches the version tags it carries (where they can be
-read), no Python dependency site calls the Python verifier
-zero-dependency while requirements.txt names a package, each jcs-vectors
+repository's tags matches the tags it carries (where they can be read), no
+sentence of CHANGELOG.md's top section saying a result can still
+differ by release quotes a timestamp verify_test.go writes, no sentence of that
+section states a running total of tests, of a self-test or of fixtures, no
+Python dependency site calls the Python verifier zero-dependency while requirements.txt names a package, each jcs-vectors
 file describing canonicalize cites RFC 8785 Appendix G, none calls an RFC
 8785 library a reference implementation or port, neither description of what
 the byte-agreement gate runs says it runs no code from another repository,
@@ -260,16 +457,29 @@ pinning link names a commit, the reproduction steps match the generator, no
 coordination link points at a closed issue, every statement of the TBS
 numbers matches the vectors, the jcs-vectors README scopes signing to the
 TBS projection, the Ed25519-only ACCEPT count matches the fixtures, the
-workflow runs every script the layout calls a CI gate and README.md states no
-version or date, 1 otherwise, 2 on an
-unknown argument.
+workflow runs every script the layout calls a CI gate, the layout opens a
+line with each top-level directory holding tracked files (where git can list
+them) and with each test module the workflow runs, and names the format of
+each schemas/*.schema.json file, README.md states no
+version or date, holds no paragraph over 69 words and at most one over 60,
+and states each toolchain minimum above its first command,
+every fenced `pip install` command passes --disable-pip-version-check, each
+`Agent Trust <word>` name in the README text is one core.md uses, each
+fixture count the kit section's sentences on what the kit sends and when it
+exits 0 state is the number of fixtures, and that section's count for main
+is the number of fixtures and its count for the commit its install line pins
+is the number in that commit's tree (where the history can be read), 1
+otherwise, 2 on an unknown argument.
 """
 
+import argparse
 import collections
+import fnmatch
 import json
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -332,9 +542,13 @@ EARLY_REJECT_STEP = {
     "UNSUPPORTED_VERSION": 1,
     "EXPIRED": 2,
     "REVOKED": 3,
+    "REVOCATION_UNKNOWN": 3,
     "UNTRUSTED_ISSUER": 4,
 }
-SIGNATURE_STEP_REJECTS = {"SIGNATURE_INVALID"}
+# SIGNATURE_INVALID rejects at step 5, and INSUFFICIENT_SIGNER_AUTHORITIES at
+# step 7, which counts signer authorities once every declared signature has
+# verified: a fixture with either category reaches step 5.
+SIGNATURE_STEP_REJECTS = {"SIGNATURE_INVALID", "INSUFFICIENT_SIGNER_AUTHORITIES"}
 SIGNATURE_ROW = re.compile(r"signature verification", re.IGNORECASE)
 EVERY_FIXTURE = re.compile(r"\b(?:every|all|each)\s+fixtures?\b", re.IGNORECASE)
 N_OF_M = re.compile(r"\b(\d+) of (\d+)\b")
@@ -890,9 +1104,29 @@ CODE_SPAN = re.compile(r"`([^`]*)`")
 GO_RUN_COMMAND = re.compile(r"(?:cd [^\s&;|]+ && )?go run \S.*")
 CD_PREFIX = re.compile(r"cd [^\s&;|]+ && (.+)")
 PLACEHOLDER = re.compile(r"<(?!module>)[^<>\s][^<>]*>")
+# A lookbehind that fails just after the `.` that closes `e.g.` or `i.e.`, in
+# either letter case (#352), or one of MID_SENTENCE_ABBREVIATIONS, in lower
+# case or capitalized (#354), so a sentence break read there ends no
+# sentence; statements() and top_section() both split with it. Each of these
+# abbreviations introduces what follows it. `etc.`, which can close a
+# sentence, and a `.` after another word still end one. One of
+# MID_SENTENCE_ABBREVIATIONS is read only as a word of its own, not after a
+# letter, a digit, `_` or a `.`: `replica.` and the dotted name
+# `example.ca.` end a sentence.
+MID_SENTENCE_ABBREVIATIONS = ("incl.", "approx.", "ca.", "cf.", "viz.")
+NOT_AN_ABBREVIATION = r"(?<!\b[Ee]\.[Gg]\.)(?<!\b[Ii]\.[Ee]\.)" + "".join(
+    rf"(?<!(?<![\w.])[{word[0].upper()}{word[0]}]{re.escape(word[1:])})"
+    for word in MID_SENTENCE_ABBREVIATIONS)
 # A sentence ends at `.`, `!` or `?` and a blank outside a code span: a span
 # is matched whole and passed over, so `go run . ../../fixtures` is not split.
-SENTENCE_BREAK = re.compile(r"`[^`]*`|(?<=[.!?])\s+")
+# It does not end where NOT_AN_ABBREVIATION fails, at the `.` closing `e.g.`,
+# `i.e.` or one of MID_SENTENCE_ABBREVIATIONS (#355). Split at the one closing
+# `i.e.`, the list item opening with the span `go run
+# <module>/verifiers/go@latest` and going on `runs the Go verifier, i.e. with
+# nothing cloned, and is README.md's first command` was read as two
+# sentences, the first holding the span and the second the words that name
+# README.md's first command, and the check passed it.
+SENTENCE_BREAK = re.compile(rf"`[^`]*`|(?<=[.!?]){NOT_AN_ABBREVIATION}\s+")
 # A paragraph ends at a blank line, and a list item where the next one opens.
 ITEM_BREAK = re.compile(r"\n[ \t]*\n|\n(?=[ \t]*[-*+][ \t])")
 FIRST_COMMAND_SITE = f"{CHANGELOG_NAME} top-section sentence"
@@ -923,7 +1157,9 @@ def top_section(changelog):
     whatever the heading says, and each sentence of that section, up to the
     next heading of level 1 or 2, on one line; None when it has no `## `
     heading. A paragraph or list item never shares a sentence with the next,
-    and a code span is never split."""
+    a code span is never split, and a sentence ends where SENTENCE_BREAK
+    matches, so not after `e.g.`, `i.e.` or one of
+    MID_SENTENCE_ABBREVIATIONS."""
     lines = changelog.split("\n")
     at = top_heading_at(lines)
     if at is None:
@@ -993,9 +1229,24 @@ def changelog_first_command_failures(changelog, front_page, go_mod):
 # of CHANGELOG.md's opening paragraph (the text above its first `## ` heading)
 # is held to them: one naming a tag as this repository's must name one the
 # repository carries; while it carries no version tag, one saying what
-# `@latest` resolves to must name the pseudo-version; once it carries one, none
-# may say the repository has no tag. The sections below the opening paragraph
-# record past changes and are not held to it.
+# `@latest` resolves to must name the pseudo-version; once it carries one, a
+# sentence saying the repository has or carries no tag, with up to two words
+# before `tag` (no release tag, no Go version tag: UNTAGGED_CLAIM), fails.
+# The sections below the opening paragraph record past changes and are not
+# held to it.
+#
+# Once the repository carried `kit-2026-11-14`, a tag that names no version,
+# docs/running-the-verifiers.md still said the repository has no release tag
+# and no tags and that `go run` resolves a commit to a pseudo-version when the
+# commit has no tag, and CHANGELOG.md's opening said the repository carries no
+# tag yet, while `go list -m <module>@<commit>` answered a pseudo-version for
+# the commit that tag names. So the check reads every tag: while the
+# repository carries one, a sentence matching UNTAGGED_CLAIM fails, unless it
+# says the repository has or carries no version tag or no Go version tag
+# (NO_VERSION_TAG_CLAIM) and none of the tags names a version; and while it
+# carries one that names no version, a sentence naming a pseudo-version that
+# says a commit has or carries no tag or no release tag (UNTAGGED_COMMIT_CLAIM)
+# fails.
 VERSION_TAG = re.compile(r"v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?")
 TAG_CLAIM = re.compile(
     r"`(v\d+\.\d+\.\d+[0-9A-Za-z.+-]*)`\s+is\s+(?:this|the)\s+repository['’]s\s+"
@@ -1003,7 +1254,12 @@ TAG_CLAIM = re.compile(
 LATEST_RESOLVES = re.compile(r"`@latest`\s+resolves\s+to\b")
 PSEUDO_VERSION = "pseudo-version"
 UNTAGGED_CLAIM = re.compile(
-    r"\brepository\s+(?:has|carries)\s+no\s+(?:release\s+|version\s+)?tags?\b")
+    r"\brepository\s+(?:has|carries)\s+no\s+(?:[\w-]+\s+){0,2}tags?\b")
+NO_VERSION_TAG_CLAIM = re.compile(
+    r"\brepository\s+(?:has|carries)\s+no\s+(?:Go\s+)?version\s+tags?\b")
+UNTAGGED_COMMIT_CLAIM = re.compile(
+    r"\bcommits?\s+(?:that\s+|which\s+)?(?:has|have|carries|carry)\s+no\s+"
+    r"(?:release\s+)?tags?\b", re.IGNORECASE)
 TAG_SITE = f"README or {CHANGELOG_NAME} opening-paragraph sentence on this repository's tags"
 # The two sentences the check was written for, as they were wrapped.
 RETRACTED_LATEST = (
@@ -1015,11 +1271,11 @@ RETRACTED_FIRST_TAG = (
     "the fixtures that commit changed.")
 
 
-def version_tags(root):
-    """The tags of the repository at `root` that name a version (`v1.2.3`,
-    `v1.2.3-rc.1`), sorted, or None when they cannot be read: git cannot run,
-    `root` is not a repository's top level, or the clone is shallow (cut at
-    one commit, a clone's tags are not a reading of the repository's)."""
+def repository_tags(root):
+    """Every tag of the repository at `root`, sorted, or None when they cannot
+    be read: git cannot run, `root` is not a repository's top level, or the
+    clone is shallow (cut at one commit, a clone's tags are not a reading of
+    the repository's)."""
     git = _history_git(root)
     try:
         shallow = git("rev-parse", "--is-shallow-repository")
@@ -1030,8 +1286,35 @@ def version_tags(root):
             return None
     except OSError:
         return None
-    names = (ref[len("refs/tags/"):] for ref in listed.stdout.split())
-    return sorted(name for name in names if VERSION_TAG.fullmatch(name))
+    return sorted(ref[len("refs/tags/"):] for ref in listed.stdout.split())
+
+
+def version_names(tags):
+    """The names in `tags` that name a version (`v1.2.3`, `v1.2.3-rc.1`), in
+    the order `tags` lists them."""
+    return [tag for tag in tags if VERSION_TAG.fullmatch(tag)]
+
+
+def version_tags(root):
+    """The tags of the repository at `root` that name a version, sorted, or
+    None when repository_tags() cannot read the repository's tags."""
+    tags = repository_tags(root)
+    return None if tags is None else version_names(tags)
+
+
+def carried_tags(tags):
+    """How a failure and the closing line name `tags` (repository_tags()):
+    each tag, and which of them name a version."""
+    if not tags:
+        return "no tag"
+    version = version_names(tags)
+    plural = "s" if len(tags) > 1 else ""
+    if len(version) == len(tags):
+        return f"the version tag{plural} {', '.join(tags)}"
+    if not version:
+        return f"the tag{plural} {', '.join(tags)} and no version tag"
+    return (f"the tags {', '.join(tags)}, of which {', '.join(version)} "
+            f"name{'s' if len(version) == 1 else ''} a version")
 
 
 def changelog_opening(changelog):
@@ -1044,32 +1327,227 @@ def changelog_opening(changelog):
 
 def release_tag_failures(readme, changelog, tags):
     """Each sentence of the README and of CHANGELOG.md's opening paragraph
-    (changelog_opening()) held to `tags` (version_tags()): one naming a tag as
-    this repository's must name one of `tags`; while `tags` is empty, one
-    saying what `@latest` resolves to must name the pseudo-version; while it
-    is not, none may say the repository has no tag. With `tags` None nothing
-    is checked."""
+    (changelog_opening()) held to `tags`, every tag the repository carries
+    (repository_tags()): one naming a tag as this repository's must name one
+    of `tags` that names a version; while none of `tags` names a version, one
+    saying what `@latest` resolves to must name the pseudo-version. While
+    `tags` holds a tag, one matching UNTAGGED_CLAIM fails, unless each claim
+    it matches also matches NO_VERSION_TAG_CLAIM and none of `tags` names a
+    version; and while it holds one that names no version, one that names a
+    pseudo-version and matches UNTAGGED_COMMIT_CLAIM fails. With `tags` None
+    nothing is checked."""
     if tags is None:
         return []
-    carried = f"the version tags {', '.join(tags)}" if tags else "no version tag"
+    version = version_names(tags)
+    unversioned = [tag for tag in tags if tag not in version]
+    carried = carried_tags(tags)
+    say_go_version = "" if version else "; say it has no Go version tag"
     failures = []
     sentences = [*statements(readme), *statements(changelog_opening(changelog))]
     for sentence in dict.fromkeys(sentences):
         for tag in TAG_CLAIM.findall(sentence):
-            if tag not in tags:
+            if tag not in version:
                 failures.append(
                     f"{TAG_SITE} names `{tag}` as a tag of this repository, but "
                     f"the repository carries {carried}: {sentence!r}")
-        if not tags and LATEST_RESOLVES.search(sentence) and PSEUDO_VERSION not in sentence:
+        if not version and LATEST_RESOLVES.search(sentence) and PSEUDO_VERSION not in sentence:
             failures.append(
                 f"{TAG_SITE} says what `@latest` resolves to and names no "
                 f"{PSEUDO_VERSION}, but the repository carries no version tag, so "
                 f"`@latest` resolves to a {PSEUDO_VERSION} of a commit on the "
                 f"default branch: {sentence!r}")
-        if tags and UNTAGGED_CLAIM.search(sentence):
+        if tags and any(version or not NO_VERSION_TAG_CLAIM.fullmatch(claim.group(0))
+                        for claim in UNTAGGED_CLAIM.finditer(sentence)):
             failures.append(
                 f"{TAG_SITE} says the repository has no tag, but it carries "
-                f"{carried}: {sentence!r}")
+                f"{carried}{say_go_version}: {sentence!r}")
+        if (unversioned and PSEUDO_VERSION in sentence.lower()
+                and UNTAGGED_COMMIT_CLAIM.search(sentence)):
+            failures.append(
+                f"{TAG_SITE} gives a {PSEUDO_VERSION} to a commit with no tag, but "
+                f"the repository carries {carried}, and `go list -m` resolves a "
+                f"commit whose only tag names no version to a {PSEUDO_VERSION} "
+                f"too; say the commit has no Go version tag: {sentence!r}")
+    return failures
+
+
+# The comment above versionLine in verifiers/go/verifier/verify.go said the
+# version `go run <module>/cmd/atx-verify@<version>` resolves is the commit's
+# release tag "or a pseudo-version naming the commit when it has no tag", and
+# the comment above version_line() in scripts/kit/assemble.sh called the commit
+# Go stamps that way "an untagged commit" (#386). Go resolves a commit to a
+# pseudo-version unless the commit carries a Go version tag, so commit
+# `a38e000`, whose only tag is `kit-2026-11-14`, resolves to the pseudo-version
+# v0.0.0-20261112212443-a38e00017076. release_tag_failures() holds the README,
+# its pages and CHANGELOG.md's opening to that wording (#375) and reads no
+# comment. So each sentence of a whole-line comment in SOURCE_TAG_SITES that
+# names a pseudo-version, by that word or by the version form Go builds, names
+# a commit, and says a commit has no tag, carries no tag or is untagged, fails.
+# This rule reads none of the repository's tags: these comments state Go's
+# resolution rule, which does not depend on the tags this repository carries,
+# so a shallow clone is held to it too.
+#
+# PSEUDO_VERSION_FORM, NAMES_A_COMMIT, the two claim patterns below and
+# UNTAGGED_COMMIT_CLAIM matched their words in lower case only, and
+# release_tag_failures() looked for the pseudo-version the same way. So the
+# comments `// Untagged commits resolve to a pseudo-version.`, `// Commits that
+# carry no tag resolve to a pseudo-version.`, `// Pseudo-versions name untagged
+# commits.` and `// It has no tag, so Go resolves the commit to a
+# pseudo-version.` passed, and so did the README sentences `Commits that carry
+# no tag resolve to a pseudo-version.` and `Pseudo-versions name commits that
+# have no tag.` (#389). Each pattern matches in either letter case, and
+# release_tag_failures() looks for the pseudo-version in the lower-cased
+# sentence.
+GO_TAG_SITE = "verifiers/go/verifier/verify.go"
+ASSEMBLE_TAG_SITE = "scripts/kit/assemble.sh"
+SOURCE_TAG_SITES = (
+    GO_TAG_SITE,
+    "interop/suite.go",
+    ASSEMBLE_TAG_SITE,
+    "docs/demo/record-atx-verify.sh",
+)
+# A whole-line comment, Go's `//` or a shell or Python `#`, with the marker and
+# one blank after it removed. A `//` or `#` inside a string literal does not
+# open its line, so a line holding one is not read as a comment; neither is a
+# line of a `/* ... */` block, which these files do not use for prose.
+COMMENT_LINE = re.compile(r"[ \t]*(?://|#)[ \t]?(.*)")
+# A pseudo-version named by that word, or written as Go builds it.
+PSEUDO_VERSION_FORM = re.compile(rf"{PSEUDO_VERSION}|\bv0\.0\.0-", re.IGNORECASE)
+NAMES_A_COMMIT = re.compile(r"\bcommits?\b", re.IGNORECASE)
+# The two shapes of the claim that UNTAGGED_COMMIT_CLAIM does not match: a
+# pronoun standing for the commit, and the word untagged.
+UNTAGGED_PRONOUN_CLAIM = re.compile(
+    r"\bit\s+(?:has|carries)\s+no\s+(?:release\s+)?tags?\b", re.IGNORECASE)
+UNTAGGED_WORD_CLAIM = re.compile(r"\buntagged\b", re.IGNORECASE)
+SOURCE_TAG_SITE = "comment on the version `go run` resolves in"
+
+
+def comment_prose(source):
+    """Each run of adjacent whole-line comments in `source` as one block, the
+    markers removed, so statements() reads a sentence a comment wrapped over
+    several lines whole. A line that is not a whole-line comment ends the run,
+    so two runs are never read as one sentence."""
+    runs, run = [], []
+    for line in source.split("\n"):
+        body = COMMENT_LINE.fullmatch(line)
+        if body is None:
+            if run:
+                runs.append(" ".join(run))
+                run = []
+            continue
+        run.append(body.group(1).strip())
+    if run:
+        runs.append(" ".join(run))
+    return runs
+
+
+def source_tag_failures(comments):
+    """Each sentence of a whole-line comment of a file in SOURCE_TAG_SITES
+    (comment_prose()) that names a pseudo-version and a commit and says a
+    commit has no tag, carries no tag or is untagged. `comments` maps each site
+    to its text, None when the file is missing."""
+    failures = []
+    for site in SOURCE_TAG_SITES:
+        text = comments.get(site)
+        if text is None:
+            failures.append(
+                f"{site} is missing; what its comments say about the version "
+                f"`go run` resolves cannot be checked")
+            continue
+        for run in comment_prose(text):
+            for sentence in statements(run):
+                if not (PSEUDO_VERSION_FORM.search(sentence)
+                        and NAMES_A_COMMIT.search(sentence)):
+                    continue
+                if not (UNTAGGED_COMMIT_CLAIM.search(sentence)
+                        or UNTAGGED_PRONOUN_CLAIM.search(sentence)
+                        or UNTAGGED_WORD_CLAIM.search(sentence)):
+                    continue
+                failures.append(
+                    f"{SOURCE_TAG_SITE} {site} gives a {PSEUDO_VERSION} to a commit "
+                    f"with no tag, but Go resolves a commit to a {PSEUDO_VERSION} "
+                    f"unless the commit carries a Go version tag, a tag named for a "
+                    f"semantic version; say the commit has no Go version tag: "
+                    f"{sentence!r}")
+    return failures
+
+
+# CHANGELOG.md's #259 entry said that outside the RFC 3339 layout the Go
+# verifier's error "can still differ by release", built with Go 1.22.12 naming
+# the extra text in an issuedAt of 2099-12-31T23:59:59+25:00x, while its #266
+# entry said the verifier gives the offset's error there under Go 1.22 too and
+# verify_test.go expected that error of the timestamp. A sentence of the top
+# section that says a result can still differ by release, or still differs
+# between Go releases (RELEASE_DIFFERENCE_CLAIM), may quote, as a code span, no
+# timestamp verify_test.go writes as a string literal: what those tests expect
+# of a timestamp does not depend on the Go release that runs them, so a release
+# under which the result on one differs fails `go test`. A sentence saying the
+# result differed until a later change is not such a sentence.
+VERIFY_GO_TEST = ROOT / "verifiers" / "go" / "verifier" / "verify_test.go"
+VERIFY_GO_TEST_NAME = "verifiers/go/verifier/verify_test.go"
+RELEASE_DIFFERENCE_CLAIM = re.compile(
+    r"\b(?:(?:can|may)\s+(?:still\s+)?differ|still\s+differs?)\s+(?:by|between|across)\s+"
+    r"(?:the\s+)?(?:Go\s+)?releases?\b", re.IGNORECASE)
+# One Go token that can hold a quote: an interpreted string literal, a raw one,
+# a rune literal, or a comment. Matched in one pass, so a quote inside a
+# comment or a `//` inside a string is read as part of that token.
+GO_QUOTED = re.compile(
+    r'"(?P<interpreted>(?:[^"\\\n]|\\.)*)"|`(?P<raw>[^`]*)`'
+    r"|'(?:[^'\\\n]|\\.)+'|//[^\n]*|/\*.*?\*/", re.S)
+# A string literal that is a timestamp whole: a date, a T and no blank.
+TIMESTAMP_LITERAL = re.compile(r"[+-]?\d{4,}-\d{2}-\d{2}[Tt]\S*")
+RELEASE_DIFFERENCE_SITE = f"{CHANGELOG_NAME} top-section sentence on the Go release"
+# The sentence the check was written for, as it was wrapped, and the timestamp
+# it quotes.
+RETRACTED_RELEASE_DIFFERENCE = (
+    "Outside the RFC 3339 layout the\n"
+    "  error can still differ by release: built with Go 1.22.12 the verifier\n"
+    "  names the extra text in an `issuedAt` of `2099-12-31T23:59:59+25:00x`,\n"
+    "  and built with Go 1.23.0 or Go 1.26.3 the offset.")
+RETRACTED_DIFFERENCE_TIMESTAMP = "2099-12-31T23:59:59+25:00x"
+
+
+def go_test_timestamps(source):
+    """The timestamps `source`, Go source text, writes as a whole string
+    literal, interpreted or raw, outside comments; an empty set when it is
+    None."""
+    found = set()
+    for token in GO_QUOTED.finditer(source or ""):
+        text = token.group("interpreted")
+        if text is None:
+            text = token.group("raw")
+        if text is not None and TIMESTAMP_LITERAL.fullmatch(text):
+            found.add(text)
+    return found
+
+
+def release_difference_failures(changelog, verify_go_test):
+    """Each sentence of CHANGELOG.md's top section (top_section()) that says
+    a result can still differ by release (RELEASE_DIFFERENCE_CLAIM) must
+    quote, as a code span, no timestamp go_test_timestamps() reads from
+    verify_test.go. `verify_go_test` is None when that file is missing, which
+    is a failure. A CHANGELOG.md that is missing or has no `## ` heading has
+    no top section to hold here; the first-command check reports it."""
+    if verify_go_test is None:
+        return [f"{VERIFY_GO_TEST_NAME} is missing; a {CHANGELOG_NAME} top-section "
+                f"sentence saying a result can still differ by release cannot be held "
+                f"to the timestamps its tests write"]
+    top = top_section(changelog) if changelog is not None else None
+    if top is None:
+        return []
+    held = go_test_timestamps(verify_go_test)
+    failures = []
+    for sentence in top[1]:
+        if not RELEASE_DIFFERENCE_CLAIM.search(sentence):
+            continue
+        for span in dict.fromkeys(CODE_SPAN.findall(sentence)):
+            if span in held:
+                failures.append(
+                    f"{RELEASE_DIFFERENCE_SITE} says the result on `{span}` can still "
+                    f"differ by release, but {VERIFY_GO_TEST_NAME} writes that "
+                    f"timestamp, and what its tests expect of it does not depend on "
+                    f"the Go release; say which change made the result the same: "
+                    f"{sentence!r}")
     return failures
 
 
@@ -1098,13 +1576,27 @@ def python_requirements(requirements):
     return PY_REQUIREMENT.findall(requirements)
 
 
+# A sentence of statements() ends at `.`, `!` or `?` and a blank, but not at
+# the `.` that closes `e.g.` or `i.e.`, in either letter case (#352), or one
+# of MID_SENTENCE_ABBREVIATIONS, in lower case or capitalized (#354), where
+# NOT_AN_ABBREVIATION fails. Split there, `The kit sends each fixture built
+# into it (e.g. all 41) to your verifier` was read as two sentences, the
+# first holding the words the kit section's sentence is found by and the
+# second the count, and the check on that sentence passed it with fixtures/
+# holding 44; so was `The kit sends each fixture built into it (incl. 41 that
+# must fail) to your verifier`.
+STATEMENT_BREAK = re.compile(rf"(?<=[.!?]){NOT_AN_ABBREVIATION}\s+")
+
+
 def statements(text):
-    """Each sentence of `text` on one line, and each table row as one."""
+    """Each sentence of `text` on one line, and each table row as one. A
+    sentence ends where STATEMENT_BREAK matches, so not after `e.g.`, `i.e.`
+    or one of MID_SENTENCE_ABBREVIATIONS."""
     for block in re.split(r"\n\s*\n", text):
         if block.lstrip().startswith("|"):
             yield from (line.strip() for line in block.splitlines())
         else:
-            yield from re.split(r"(?<=[.!?])\s+", " ".join(block.split()))
+            yield from STATEMENT_BREAK.split(" ".join(block.split()))
 
 
 def python_dependency_failures(requirements, texts):
@@ -1768,11 +2260,14 @@ def ed25519_only_failures(readme, suites):
 
 
 # The repository layout labels the scripts/*.py glob "CI gates". A script the
-# workflow does not run, either by name in the command of a `run:` step or
-# through a script it runs that imports it, must have its own layout line, and
-# that line must not call it a CI gate. The layout called
+# workflow does not run, either by name in the command of a `run:` step, by a
+# `python3 -m unittest discover` run over scripts/ in such a command, or
+# through a script so named that imports it, must have its own layout line,
+# and that line must not call it a CI gate. The layout called
 # check_fixture_immutability.py a CI gate while no workflow step ran it, and a
-# name the workflow held only in a comment counted as run.
+# name the workflow held only in a comment counted as run. A test module's
+# imports counted as run too, so check_wall.py, which only test_check_wall.py
+# imports, passed with no layout line of its own.
 SCRIPTS = ROOT / "scripts"
 CI_GATE_GLOB = re.compile(r"^scripts/\*\.py[ \t]+CI gates\b", re.M)
 # A layout line naming one script, with the indented lines that continue it.
@@ -1795,7 +2290,10 @@ YAML_ESCAPES = {
 }
 WORKFLOW_ITEM = re.compile(r"^( *)-(?:[ ]+|$)")
 BLOCK_SCALAR = re.compile(r"^[|>][-+0-9]*[ \t]*(?:#.*)?$")
-SHELL_COMMENT = re.compile(r"(?:^|(?<=\s))#.*$", re.M)
+# The characters after which bash, outside quotes, starts a new word: a
+# blank, a line break and the characters of its operators. A `#` that
+# starts a word begins a comment.
+SHELL_WORD_BREAK = " \t\n;&|()<>"
 # Flow-style YAML: the spaces, line breaks and comments between tokens, and a
 # single-quoted, double-quoted or plain scalar. A plain scalar ends at a flow
 # indicator, at a `:` before a space or a flow indicator, and before a comment.
@@ -1805,6 +2303,13 @@ FLOW_SCALAR = re.compile(
     r"|(?:[^\s,\[\]{}:'\"]|:(?=[^\s,\[\]{}]))"
     r"(?:[^\s,\[\]{}:]|:(?=[^\s,\[\]{}])|\s+(?=[^\s#,\[\]{}:]|:[^\s,\[\]{}]))*",
     re.S)
+
+
+def yaml_unescape(match):
+    """The character a YAML_ESCAPE match names. Raises KeyError or
+    ValueError for an escape YAML does not define."""
+    code = match.group(1) or match.group(2) or match.group(3)
+    return chr(int(code, 16)) if code else YAML_ESCAPES[match.group(4)]
 
 
 def yaml_key(scalar):
@@ -1817,13 +2322,8 @@ def yaml_key(scalar):
         return scalar[1:-1].replace("''", "'")
     if scalar[:1] != '"':
         return scalar
-
-    def unescape(match):
-        code = match.group(1) or match.group(2) or match.group(3)
-        return chr(int(code, 16)) if code else YAML_ESCAPES[match.group(4)]
-
     try:
-        return YAML_ESCAPE.sub(unescape, scalar[1:-1])
+        return YAML_ESCAPE.sub(yaml_unescape, scalar[1:-1])
     except (KeyError, ValueError):
         return scalar
 
@@ -1893,11 +2393,28 @@ def flow_node_lines(lines, i, text):
 
 def workflow_run_commands(workflow):
     """The command text of each `run:` key of an item in a `steps:` sequence
-    of the workflow text, read as block-style YAML, with the text from a `#`
-    that starts a word to the end of its line removed, as the shell drops a
-    comment. The command may start on the key's line or on a later line
-    indented past it, and a step may be a flow mapping on one line or more
-    (`- {name: a, run: python3 scripts/a.py}`). A key may be quoted
+    of the workflow text, read as block-style YAML and then as bash reads
+    it (bash_text()), with its lines that end in a backslash joined to the
+    next and its comments removed. The command may start on the key's line
+    or on a later line indented past it, and a step may be a flow mapping
+    on one line or more (`- {name: a, run: python3 scripts/a.py}`). A
+    command written as a block scalar (`run: |` or `run: >`) is read as
+    YAML reads it, its indentation removed (block_scalar()), and one
+    written as a plain scalar on more than one line, in a block-style step
+    or a flow mapping, is folded as YAML folds it before bash reads it
+    (plain_scalar()): each line break into one space and each empty line
+    into a line break, so arguments on the line after
+    `run: python3 -m unittest discover`, indented past the key, follow it
+    on one line. A command written as a single- or double-quoted scalar, on
+    one line or more, in a block-style step or a flow mapping, is read as
+    YAML reads it before bash reads it (quoted_scalar()): its quotes
+    removed, `''` in single quotes read as `'`, the escapes of double
+    quotes undone and its line breaks folded. The spaces and tabs that end
+    its first line reach quoted_scalar() with it, so a backslash before
+    them is read as an escaped space or tab, as YAML reads it, and not as
+    one that ends the line. One that does not close, holds an escape YAML
+    does not define, or has text other than a comment after its closing
+    quote is kept as it is written, quotes included. A key may be quoted
     (`- "run": python3 scripts/a.py`) and is read by yaml_key(), and spaces
     may stand between a block-style key and its `:`
     (`- run : python3 scripts/a.py`). A script named in a YAML comment, a
@@ -1931,12 +2448,22 @@ def workflow_run_commands(workflow):
             # it takes to close.
             step, i = flow_node_lines(lines, i, line[item.end():])
             if is_step and isinstance(step, dict) and isinstance(step.get("run"), str):
-                commands.append(SHELL_COMMENT.sub("", step["run"]))
+                command = step["run"]
+                if command[:1] in ("'", '"'):
+                    read = quoted_scalar(command)
+                    command = command if read is None else read
+                else:
+                    command = plain_scalar(command.splitlines())
+                commands.append(bash_text(command))
             continue
         if not key:
             continue
         column = key.start(3)
-        name, value = yaml_key(key.group(3)), (key.group(4) or "").strip()
+        # `first` is the value's first line with the white space that ends
+        # it kept: in a double-quoted scalar a backslash before that white
+        # space escapes a space or tab and does not end the line.
+        first = key.group(4) or ""
+        name, value = yaml_key(key.group(3)), first.strip()
         # A step's command may start on a later line than its `run:` key,
         # indented past it, after any YAML comment lines.
         if not value and name == "run" and is_step:
@@ -1945,28 +2472,334 @@ def workflow_run_commands(workflow):
                                       or lines[j].lstrip().startswith("#")):
                 j += 1
             if j < len(lines) and len(lines[j]) - len(lines[j].lstrip(" ")) > column:
-                value, i = lines[j].strip(), j + 1
+                first, i = lines[j], j + 1
+                value = first.strip()
         # Lines indented past the key carry its value: a block scalar's body,
         # or the continuation of a value begun on the key's line.
-        body = []
+        body, header = [], None
         if value:
             while i < len(lines) and (not lines[i].strip()
                                       or len(lines[i]) - len(lines[i].lstrip(" ")) > column):
                 body.append(lines[i])
                 i += 1
             if BLOCK_SCALAR.match(value):
-                value = ""
+                header, value = value, ""
         stack.append((column, name))
         if name == "run" and is_step:
-            commands.append(SHELL_COMMENT.sub("", "\n".join([value] + body)))
+            if header:
+                command = block_scalar(header, body, column)
+            elif value[:1] in ("'", '"'):
+                command = "\n".join([first.lstrip()] + body)
+                read = quoted_scalar(command)
+                command = command if read is None else read
+            else:
+                command = plain_scalar([value] + body)
+            commands.append(bash_text(command))
     return commands
+
+
+def block_scalar(header, body, column):
+    """The value YAML reads from a block scalar. `header` is the `|` or `>`
+    that opens it, with its indicators, `column` the column of its key, and
+    `body` the lines after the header's line that are blank or indented
+    past that column. The block's indentation is removed from each line. It
+    is the key's column plus the indentation indicator where the header
+    gives one (`|2`). Otherwise it is the indentation of the block's first
+    line that holds a character other than a space, or the length of a
+    line of spaces before that line where one is longer, as PyYAML and
+    LibYAML find it. A line that holds a character other than a space and
+    begins with fewer spaces than the block's indentation ends the block.
+    A folded block (`>`) joins with a space two lines that each start with
+    a character other than a space or tab, or, where empty lines stand
+    between them, with those lines' line breaks alone, and keeps its other
+    line breaks. The value ends with one line break after its last line that
+    holds text, none where the header strips it (`-`), and, where the header
+    keeps them (`+`), one more for each empty line after that line."""
+    indicator = re.search(r"[1-9]", header)
+    if indicator:
+        indent = column + int(indicator.group())
+    else:
+        indent = column + 1
+        for line in body:
+            indent = max(indent, len(line) - len(line.lstrip(" ")))
+            if line.strip(" "):
+                break
+    parts, last, empty = [], None, 0
+    for line in body:
+        if line.strip(" ") and len(line) - len(line.lstrip(" ")) < indent:
+            break
+        text = line[indent:]
+        if not text:
+            empty += 1
+            continue
+        if last is not None:
+            folds = (header[0] == ">" and last[0] not in " \t"
+                     and text[0] not in " \t")
+            parts.append(("" if empty else " ") if folds else "\n")
+        parts.append("\n" * empty + text)
+        last, empty = text, 0
+    if last is not None and "-" not in header:
+        parts.append("\n")
+    if "+" in header:
+        parts.append("\n" * empty)
+    return "".join(parts)
+
+
+def plain_scalar(lines):
+    """The value YAML reads from a plain scalar written on `lines`: the line
+    it starts on, from its first character, and each line indented past its
+    key that goes on with it. The spaces that indent a line and those that
+    end it are no part of the value. Two lines that hold text are joined by
+    one space, or, where empty lines stand between them, by one line break
+    for each of those lines; a line of spaces alone is empty. Empty lines
+    after the last line that holds text add nothing, so the value ends in
+    no line break. A backslash that ends a line is kept, as YAML gives it
+    no meaning in a plain scalar: bash_text() reads the folded text after
+    this, where that backslash stands before a space and joins no line."""
+    parts, empty = [], 0
+    for line in lines:
+        text = line.strip(" \t")
+        if not text:
+            empty += 1
+            continue
+        if parts:
+            parts.append("\n" * empty if empty else " ")
+        parts.append(text)
+        empty = 0
+    return "".join(parts)
+
+
+def quoted_scalar(text):
+    """The value YAML reads from the single- or double-quoted scalar that
+    opens `text`, whose lines are joined by line breaks with their
+    indentation kept; None where the scalar does not close, holds an escape
+    YAML does not define, or is followed by anything but spaces, tabs, line
+    breaks and comments. The quotes are no part of the value. In a
+    single-quoted scalar `''` is read as `'` and a backslash is a backslash;
+    in a double-quoted one each escape YAML_ESCAPE matches is undone
+    (yaml_unescape()). A line break, with the spaces and tabs that end the
+    line before it and start the line after it, is folded into one space,
+    or, where empty lines follow it, into one line break for each of them.
+    In a double-quoted scalar a backslash that ends a line removes that
+    line break and the next line's indentation, and each empty line after
+    it adds a line break."""
+    quote = text[:1]
+    if quote not in ("'", '"'):
+        return None
+    double = quote == '"'
+    parts, i = [], 1
+
+    def empty_lines(i):
+        # From text[i], the start of a line: the number of empty lines there
+        # and the index of the first character past them and the
+        # indentation of the line after them.
+        count = 0
+        while True:
+            while i < len(text) and text[i] in " \t":
+                i += 1
+            if not text.startswith("\n", i):
+                return count, i
+            count, i = count + 1, i + 1
+
+    while i < len(text):
+        char = text[i]
+        if char == quote and (double or not text.startswith("''", i)):
+            for line in text[i + 1:].split("\n"):
+                if line.strip(" \t") and not line.lstrip(" \t").startswith("#"):
+                    return None
+            return "".join(parts)
+        if char == quote:
+            parts.append("'")
+            i += 2
+        elif double and char == "\\" and text.startswith("\n", i + 1):
+            count, i = empty_lines(i + 2)
+            parts.append("\n" * count)
+        elif double and char == "\\":
+            escape = YAML_ESCAPE.match(text, i)
+            if not escape:
+                return None
+            try:
+                parts.append(yaml_unescape(escape))
+            except (KeyError, ValueError):
+                return None
+            i = escape.end()
+        elif char in " \t\n":
+            end = i
+            while end < len(text) and text[end] in " \t":
+                end += 1
+            if text.startswith("\n", end):
+                count, end = empty_lines(end + 1)
+                parts.append("\n" * count if count else " ")
+            else:
+                parts.append(text[i:end])
+            i = end
+        else:
+            parts.append(char)
+            i += 1
+    return None
+
+
+# `python3 -m unittest discover`; its arguments follow it. The match ends
+# there, so a second run later on the same line is matched as well.
+# unittest compares `argv[1].lower()` to `discover`, so the word is read here
+# with `(?i)` too. The `a` flag holds that to its ASCII letters: `(?i)` alone
+# also reads the word written with U+0130, U+0131 or U+017F, and given
+# `-s scripts -p 'test_*.py'` after such a word unittest exits 2 and runs no
+# test.
+UNITTEST_DISCOVER = re.compile(
+    r"\bpython[\d.]*[ \t]+-m[ \t]+unittest[ \t]+(?ai:discover)\b")
+# The file name unittest's discovery imports as a test module.
+TEST_MODULE_NAME = re.compile(r"[_a-z]\w*\.py$", re.I)
+
+
+class UnittestUsageError(Exception):
+    """Arguments unittest's discover parser refuses: unittest prints its
+    usage, exits 2 and runs no test."""
+
+
+class UnittestDiscoverParser(argparse.ArgumentParser):
+    """Reads the arguments of `python3 -m unittest discover` as unittest does
+    in Python 3.12, the version the workflow sets up. unittest builds its
+    discover parser with argparse from these option strings, each taking a
+    value or not as here, and also takes the start directory, the pattern
+    and the top-level directory by position, in that order. So a later -s,
+    -p or -t value replaces an earlier one given by option or by position,
+    an option that takes a value consumes the argument after it, `-sDIR`
+    reads as `-s DIR`, and a long option may be shortened to a prefix only
+    it has. Where unittest stops with a usage error, this parser raises
+    UnittestUsageError. -h and --help, on which unittest prints its usage
+    and runs no test, are read here as a flag."""
+
+    def __init__(self):
+        super().__init__(prog="python3 -m unittest discover", add_help=False)
+        for flags in (("-h", "--help"), ("-v", "--verbose"), ("-q", "--quiet"),
+                      ("--locals",), ("-f", "--failfast"), ("-c", "--catch"),
+                      ("-b", "--buffer")):
+            self.add_argument(*flags, action="store_true")
+        self.add_argument("--durations", type=int)
+        self.add_argument("-k", action="append")
+        self.add_argument("-s", "--start-directory", dest="start")
+        self.add_argument("-p", "--pattern", dest="pattern")
+        self.add_argument("-t", "--top-level-directory", dest="top")
+        for dest in ("start", "pattern", "top"):
+            self.add_argument(dest, nargs="?", default=argparse.SUPPRESS)
+
+    def error(self, message):
+        raise UnittestUsageError(message)
+
+
+def bash_text(command):
+    """The command text as bash reads it, in one pass from its start, before
+    it splits the text into words. A line that ends in a backslash is
+    joined to the line after it: the backslash and the newline are dropped,
+    outside quotes and inside double quotes. Inside single quotes both are
+    kept, and a line ending in an escaped backslash (`\\\\`) is not
+    continued. A `#` that starts a word outside quotes, at the start of the
+    text or after a blank, a newline or one of `;&|()<>`, begins a comment,
+    which is removed up to the end of its line. Bash joins a line to the
+    next as it reaches the backslash, before it reads the `#` after it, so
+    a `#` a joined line puts inside a word is part of that word
+    (`-s scripts\\` then a line `#x` reads as `-s scripts#x`), and a
+    backslash that ends a comment joins no line."""
+    text, quote, word_start, i = [], None, True, 0
+    while i < len(command):
+        char = command[i]
+        if char == "#" and quote is None and word_start:
+            end = command.find("\n", i)
+            i = len(command) if end < 0 else end
+            continue
+        if char == "\\" and quote != "'":
+            if command.startswith("\n", i + 1):
+                i += 2
+                continue
+            text.append(command[i:i + 2])
+            i += 2
+            word_start = False
+            continue
+        if char in "'\"" and quote in (None, char):
+            quote = None if quote else char
+        text.append(char)
+        word_start = quote is None and char in SHELL_WORD_BREAK
+        i += 1
+    return "".join(text)
+
+
+def unittest_discover_scripts(command, scripts):
+    """The scripts/*.py names a `python3 -m unittest discover` run in the
+    command text imports: the start directory, given by -s or
+    --start-directory or as the first positional argument, must be scripts/,
+    and each name must match the pattern, given by -p or --pattern or as the
+    second positional argument (unittest's default `test*.py`), and be a name
+    unittest imports as a module. UnittestDiscoverParser reads the arguments
+    as unittest reads them: a later -s or -p value replaces a start
+    directory or pattern given before it, by option or by position, and a
+    run with arguments unittest refuses, or with -h or --help, counts no
+    script. The arguments end at the first shell operator or at the newline
+    that ends the command; an empty argument, written `''` or `""`, is not
+    an operator, and a run after another on the same line, past `&&` or
+    `;`, is read as well. A file-descriptor number before a redirection
+    (`2>&1`) is not an argument. A discovery run from another directory
+    counts no script. The command text comes from workflow_run_commands()
+    as bash reads it (bash_text()): each line that ends in a backslash is
+    already joined to the next and the comments are removed, so a `#` the
+    arguments still hold is part of a word. `discover` is read in either
+    case of each of its letters, as unittest reads it (UNITTEST_DISCOVER)."""
+    found = set()
+    for match in UNITTEST_DISCOVER.finditer(command):
+        # A newline outside quotes ends the command, as an operator does.
+        lexer = shlex.shlex(command[match.end():], posix=True,
+                            punctuation_chars="();<>|&\n")
+        lexer.whitespace = lexer.whitespace.replace("\n", "")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        args = []
+        try:
+            for token in lexer:
+                # all() holds for an empty token, written '' or "", with no
+                # character to test; it is an argument, not an operator.
+                if token and all(c in lexer.punctuation_chars for c in token):
+                    if token[0] in "<>" and args and args[-1].isdigit():
+                        args.pop()
+                    break
+                args.append(token)
+        except ValueError:
+            continue
+        # unittest sets these before its parser reads the arguments.
+        read = argparse.Namespace(start=".", pattern="test*.py", top=None)
+        try:
+            UnittestDiscoverParser().parse_args(args, read)
+        except UnittestUsageError:
+            continue
+        if read.help or os.path.normpath(read.start) != "scripts":
+            continue
+        found.update(name for name in scripts
+                     if TEST_MODULE_NAME.match(name)
+                     and fnmatch.fnmatchcase(name, read.pattern))
+    return found
+
+
+def ci_test_modules(workflow, scripts):
+    """The scripts/*.py names a `python3 -m unittest discover` run over
+    scripts/ in the command of a `run:` step imports as test modules
+    (unittest_discover_scripts()). `scripts` maps each name to its source
+    text."""
+    found = set()
+    for command in workflow_run_commands(workflow):
+        found |= unittest_discover_scripts(command, scripts)
+    return found
 
 
 def ci_run_scripts(workflow, scripts):
     """The scripts/*.py names the workflow runs: those named in the command of
-    a `run:` step, and those a script it runs imports. `scripts` maps each
-    name to its source text."""
-    named = "\n".join(workflow_run_commands(workflow))
+    a `run:` step, those a script so named imports, directly or through
+    another, and the test modules a `python3 -m unittest discover` run over
+    scripts/ in such a command imports (ci_test_modules()). A test module's
+    own imports are not followed: test_check_wall.py imports check_wall.py
+    and runs its check on git repositories it builds in a temporary
+    directory, while no step runs check_wall.py on this tree. `scripts` maps
+    each name to its source text."""
+    commands = workflow_run_commands(workflow)
+    named = "\n".join(commands)
     run = {name for name in re.findall(r"\bscripts/([\w-]+\.py)\b", named)
            if name in scripts}
     todo = list(run)
@@ -1977,7 +2810,7 @@ def ci_run_scripts(workflow, scripts):
             if name in scripts and name not in run:
                 run.add(name)
                 todo.append(name)
-    return run
+    return run | ci_test_modules(workflow, scripts)
 
 
 def ci_gate_label_failures(readme, workflow, scripts):
@@ -1998,6 +2831,95 @@ def ci_gate_label_failures(readme, workflow, scripts):
             failures.append(
                 f"README layout calls scripts/{name} a CI gate, but "
                 f"{WORKFLOW_NAME} does not run it")
+    return failures
+
+
+# The repository layout gave no line to wall/, its schemas/*.schema.json line
+# named fixture-v1 and conformance-profile-v1 but not wall-v1, and it gave no
+# line to scripts/test_check_wall.py, while each other test module the
+# workflow runs had one (#415). The layout is the first fenced block of the
+# `## Repository layout` section. Each top-level directory holding a file git
+# tracks, other than one whose name opens with a dot, must open a line of it,
+# alone or as the start of a longer path (cmd/atx-verify/ opens one for
+# cmd/); its schemas/*.schema.json line must name the format of each schema
+# that glob matches, the file's name less `.schema.json`; and each test module
+# a `python3 -m unittest discover` run of the workflow imports must open a
+# line of its own.
+LAYOUT_HEADING = re.compile(r"^## Repository layout[ \t]*$", re.M)
+ANY_HEADING = re.compile(r"^#{1,6}[ \t]", re.M)
+# A path opening a line of the layout, with the indented lines that continue it.
+LAYOUT_ENTRY = re.compile(r"^(\S+)(.*(?:\n[ \t]+\S.*)*)", re.M)
+FORMAT_ENTRY = "schemas/*.schema.json"
+FORMAT_SUFFIX = ".schema.json"
+
+
+def tracked_top_directories(root):
+    """Each top-level directory of `root` holding a file git tracks, other
+    than one whose name opens with a dot, sorted, or None when they cannot be
+    read: git cannot run, or `root` is not a repository's top level. git runs
+    as _history_git() runs it, so for a copy of the tree outside the
+    repository they cannot be read."""
+    git = _history_git(root)
+    try:
+        listed = git("ls-files", "-z")
+    except OSError:
+        return None
+    if listed.returncode != 0:
+        return None
+    return sorted({path.split("/", 1)[0] for path in listed.stdout.split("\0")
+                   if "/" in path and not path.startswith(".")})
+
+
+def format_names(root):
+    """The format each schemas/*.schema.json file of `root` defines, named as
+    the file is less `.schema.json` (`fixture-v1`), sorted."""
+    return sorted(path.name[:-len(FORMAT_SUFFIX)]
+                  for path in (root / "schemas").glob("*" + FORMAT_SUFFIX))
+
+
+def layout_entries(readme):
+    """The repository layout, the first fenced block of the `## Repository
+    layout` section of README.md or its pages, as each path opening a line of
+    it mapped to the rest of that line and the indented lines that continue
+    it. None when the section is missing or holds no fenced block before the
+    next heading."""
+    heading = LAYOUT_HEADING.search(readme)
+    if heading is None:
+        return None
+    block = FENCED.search(readme, heading.end())
+    if block is None or ANY_HEADING.search(readme[heading.end():block.start()]):
+        return None
+    return {m.group(1): m.group(2) for m in LAYOUT_ENTRY.finditer(block.group(1))}
+
+
+def layout_failures(readme, directories, formats, test_modules):
+    """What the repository layout leaves out: a line opening with each of
+    `directories` (tracked_top_directories(); None when they could not be
+    read, which leaves them unchecked), the name of each of `formats`
+    (format_names()) on its schemas/*.schema.json line, and a line of its own
+    for each of `test_modules` (ci_test_modules())."""
+    entries = layout_entries(readme)
+    if entries is None:
+        return ["no `## Repository layout` section with a fenced block found in "
+                "README.md or its pages"]
+    failures = []
+    for name in directories or ():
+        if not any(path.startswith(name + "/") for path in entries):
+            failures.append(
+                f"README layout has no line for {name}/, a top-level directory "
+                f"holding tracked files; give it one saying what it holds")
+    held = entries.get(FORMAT_ENTRY)
+    for name in formats:
+        if held is None or not re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", held):
+            failures.append(
+                f"README layout's `{FORMAT_ENTRY}` line does not name {name}, the "
+                f"format of schemas/{name}{FORMAT_SUFFIX}"
+                + ("" if held is not None else "; the layout has no such line"))
+    for name in sorted(test_modules):
+        if f"scripts/{name}" not in entries:
+            failures.append(
+                f"README layout has no line of its own for scripts/{name}, a test "
+                f"module {WORKFLOW_NAME} runs; give it one saying what it tests")
     return failures
 
 
@@ -2497,6 +3419,509 @@ def front_page_failures(front_page):
     return failures
 
 
+# With its reference sections moved to the pages it links, README.md's
+# longest paragraph was 47 words at d8887e6, and none was over 60. No check
+# read that length: passages added since took one paragraph to 168 words at
+# 579e811, and at 5f260e1 four paragraphs were over 60 words, the longest
+# RETRACTED_PARAGRAPH at 83. README.md, read alone, may hold one paragraph of
+# more than PARAGRAPH_WORDS words and none of more than PARAGRAPH_MAX_WORDS.
+# A paragraph is a run of lines between blank lines outside fenced blocks (a
+# block opened by ``` closes at the next ```, and one opened by ~~~ at the
+# next ~~~): a heading (one to six `#`, then whitespace), a table row, an
+# HTML line or a line of three or more `-` or `=` ends one and is not part of
+# it, and a list item (`-`, `*`, `+` or `N.`, then whitespace) starts one. Its
+# words are what whitespace separates, list markers and link targets included.
+PARAGRAPH_WORDS = 60
+PARAGRAPH_MAX_WORDS = 69
+PARAGRAPHS_OVER = 1
+PARAGRAPH_FENCE = re.compile(r"\s*(```|~~~)")
+PARAGRAPH_BREAK = re.compile(r"\s*(?:#{1,6}\s|[|<]|(?:-{3,}|={3,})\s*$)")
+PARAGRAPH_ITEM = re.compile(r"\s*(?:[-*+]|\d+\.)\s")
+# The README.md paragraph the gate was written for, as it was wrapped.
+RETRACTED_PARAGRAPH = (
+    "The commands expect a virtual environment: the second and third lines\n"
+    "create one in `verifiers/python/.venv` and activate it, and\n"
+    "`python3 -m pip install` downloads the packages `requirements.txt` names,\n"
+    "and their dependencies, into it. `--disable-pip-version-check` stops pip\n"
+    "from looking up whether a newer release of pip exists; without it, pip\n"
+    "writes a notice to standard error suggesting an upgrade of pip when there is\n"
+    "one. Outside a virtual environment a system may provide `python3` and\n"
+    "`pip3` only, with no `python` or `pip` on `PATH`.\n")
+RETRACTED_PARAGRAPH_WORDS = 83
+
+
+def paragraph_words(text):
+    """(first line, words) for each paragraph of `text`, in order."""
+    paragraphs = []
+    start, words, fence = None, 0, None
+    for number, line in enumerate((text or "").splitlines(), 1):
+        marker = PARAGRAPH_FENCE.match(line)
+        fenced = fence is not None or marker is not None
+        if marker and fence in (None, marker.group(1)):
+            fence = None if fence else marker.group(1)
+        prose = not (fenced or not line.strip() or PARAGRAPH_BREAK.match(line))
+        if start is not None and (not prose or PARAGRAPH_ITEM.match(line)):
+            paragraphs.append((start, words))
+            start, words = None, 0
+        if prose:
+            start = number if start is None else start
+            words += len(line.split())
+    if start is not None:
+        paragraphs.append((start, words))
+    return paragraphs
+
+
+def paragraph_failures(front_page):
+    """One failure per paragraph of README.md, read alone, of more than
+    PARAGRAPH_MAX_WORDS words, and one naming each paragraph of more than
+    PARAGRAPH_WORDS when there are more than PARAGRAPHS_OVER of them."""
+    failures = []
+    read = paragraph_words(RETRACTED_PARAGRAPH)
+    if read != [(1, RETRACTED_PARAGRAPH_WORDS)]:
+        failures.append(
+            f"the paragraph reader reads the README.md paragraph it was written "
+            f"for as {read}, not as one paragraph of {RETRACTED_PARAGRAPH_WORDS} "
+            f"words; the gate cannot fire")
+    paragraphs = paragraph_words(front_page)
+    for line, words in paragraphs:
+        if words > PARAGRAPH_MAX_WORDS:
+            failures.append(
+                f"README.md:{line} opens a paragraph of {words} words, more than "
+                f"{PARAGRAPH_MAX_WORDS}; move the sentences a first run does not "
+                f"need to the page README.md links for them and keep the link, or "
+                f"split the paragraph where its subject changes")
+    over = [(line, words) for line, words in paragraphs if words > PARAGRAPH_WORDS]
+    if len(over) > PARAGRAPHS_OVER:
+        failures.append(
+            f"README.md holds {len(over)} paragraphs of more than {PARAGRAPH_WORDS} "
+            f"words, more than {PARAGRAPHS_OVER}: "
+            + ", ".join(f"README.md:{line} ({words} words)" for line, words in over))
+    return failures
+
+
+# README.md opened with `go run <module>/cmd/atx-verify@latest` and said
+# nothing above it about the toolchain the command needs, so on a machine
+# without Go the first thing a reader saw was the shell reporting that `go`
+# was not found; the minimums, Go 1.22 or later and Python 3.11 or later,
+# stood two links away, in the dependency lists of
+# docs/running-the-verifiers.md. README.md, read alone, must state above its
+# first fenced block each minimum a list item of the README text states
+# (`- Go 1.22 or later`), in the words of the item (`Go 1.22 or later`). A
+# minimum written in two parts is not a version VERSION_OR_DATE matches.
+TOOLCHAIN_MINIMUM = re.compile(r"^- ((?:Go|Python) \d+\.\d+ or later)\b", re.M)
+PREREQUISITE_SITE = "README.md text above its first command"
+
+
+def toolchain_minimums(readme):
+    """Each toolchain minimum a list item of the README text states
+    (`- Go 1.22 or later`), as `Go 1.22 or later`, once each and in order."""
+    return list(dict.fromkeys(TOOLCHAIN_MINIMUM.findall(readme or "")))
+
+
+def _phrase_at(phrase, text):
+    """The first match in `text` of `phrase` whole, any run of whitespace
+    standing for each blank in it so a phrase wrapped across lines is found,
+    or None."""
+    words = r"\s+".join(map(re.escape, phrase.split()))
+    return re.search(rf"(?<!\w){words}(?!\w)", text)
+
+
+def prerequisite_failures(readme, front_page):
+    """README.md read alone (`front_page`) must state above its first fenced
+    block each minimum toolchain_minimums() reads from the README text. With
+    no minimum listed, or no fenced block in README.md, the check fails
+    rather than pass having compared nothing."""
+    minimums = toolchain_minimums(readme)
+    if not minimums:
+        return [f"no toolchain minimum (`- Go 1.22 or later`) found in a list "
+                f"item of the README or its pages; the {PREREQUISITE_SITE} "
+                f"cannot be held to one"]
+    block = FENCED.search(front_page or "")
+    if block is None:
+        return [f"README.md has no fenced block, so no first command; the "
+                f"{PREREQUISITE_SITE} cannot be held to the toolchain minimums"]
+    above = front_page[:block.start()]
+    return [f"{PREREQUISITE_SITE} does not state `{minimum}`, a toolchain "
+            f"minimum the README text lists; a reader without that toolchain "
+            f"meets the command first"
+            for minimum in minimums if _phrase_at(minimum, above) is None]
+
+
+# README.md, docs/running-the-verifiers.md and COSIGNERS.md installed the
+# Python verifier's packages with `python3 -m pip install -r
+# requirements.txt`. In a new virtual environment whose pip was older than
+# the newest release, that command also wrote two `[notice]` lines to
+# standard error, that a new release of pip was available and how to upgrade
+# it: the only text on README.md's first-time path a reader did not ask for,
+# and one a reader may take for a missed step. Each line of a fenced block in
+# the README text or COSIGNERS.md that runs `pip install` must pass
+# --disable-pip-version-check, which skips that lookup; a line ending in a
+# backslash is read with the line it continues onto.
+PIP_INSTALL = re.compile(r"\bpip3?\s+install\b")
+PIP_VERSION_CHECK = "--disable-pip-version-check"
+PIP_SITE = "fenced `pip install` command"
+# The install line the check was written for, as README.md published it.
+RETRACTED_PIP_INSTALL = "python3 -m pip install -r requirements.txt"
+
+
+def pip_install_lines(text):
+    """Each line of a fenced block of `text` that runs `pip install`, stripped,
+    a line ending in a backslash joined to the line it continues onto."""
+    return [line.strip() for block in FENCED.findall(text or "")
+            for line in re.sub(r"\\\n", " ", block).splitlines()
+            if PIP_INSTALL.search(line)]
+
+
+def pip_notice_failures(readme, cosigners):
+    """Each line pip_install_lines() reads from the README text and from
+    COSIGNERS.md (None when the file is missing) must pass
+    --disable-pip-version-check. With no such line in the README text the
+    check fails rather than pass having read none."""
+    readme_lines = pip_install_lines(readme)
+    failures = []
+    if not readme_lines:
+        failures.append(f"no {PIP_SITE} found in a fenced block of the README or "
+                        f"its pages; the Python verifier's install line cannot be "
+                        f"held to {PIP_VERSION_CHECK}")
+    for name, lines in (("README", readme_lines),
+                        ("COSIGNERS.md", pip_install_lines(cosigners))):
+        for line in dict.fromkeys(lines):
+            if PIP_VERSION_CHECK not in line.split():
+                failures.append(
+                    f"{name} {PIP_SITE} `{line}` does not pass {PIP_VERSION_CHECK}; "
+                    f"in a new virtual environment whose pip is older than the "
+                    f"newest release, pip writes a notice to standard error "
+                    f"suggesting an upgrade of pip")
+    return failures
+
+
+# README.md said each fixture bundles "an Agent Trust Credential", a name the
+# specification does not give the credential: conformance.json names the
+# specification the Agent Trust eXtension, and the vendored copy of its
+# core.md calls the credential the Agent Trust eXtension (ATX) and the
+# protocol the Agent Trust Protocol. The words of a name are separated by
+# whitespace, a line break included, so the HTTP header core.md names,
+# Agent-Trust-Credential, written with hyphens, is not a name here.
+SPEC_TEXT_NAME = "schemas/vendor/atx-spec/core.md"
+SPEC_TEXT = ROOT / SPEC_TEXT_NAME
+AGENT_TRUST_NAME = re.compile(r"\bAgent\s+Trust\s+[A-Za-z]+")
+RETRACTED_CREDENTIAL_NAME = "Agent Trust Credential"
+
+
+def agent_trust_names(text):
+    """Each `Agent Trust <word>` name in `text`, its whitespace collapsed."""
+    return {" ".join(m.group(0).split()) for m in AGENT_TRUST_NAME.finditer(text or "")}
+
+
+def spec_name_failures(readme, spec_text):
+    """Each `Agent Trust <word>` name in the README text must be one the
+    vendored specification text (None when the file is missing) uses. With
+    no such name in that text the check fails rather than pass having read
+    none."""
+    if spec_text is None:
+        return [f"{SPEC_TEXT_NAME} not found; the names the README text gives "
+                f"the credential cannot be checked"]
+    names = agent_trust_names(spec_text)
+    if not names:
+        return [f"{SPEC_TEXT_NAME} uses no `Agent Trust <word>` name; refusing "
+                f"to pass the names in the README text vacuously"]
+    return [f"README names `{name}`, a name {SPEC_TEXT_NAME} does not use; it "
+            f"calls the credential the ATX and uses {' and '.join(sorted(names))}"
+            for name in sorted(agent_trust_names(readme) - names)]
+
+
+# README.md's interop kit section said "The kit sends each of the 41 fixtures
+# to your verifier" and "It exits 0 only when all 41 agree" (#345). Both came
+# in when the suite held 41 fixtures, and the check passed them with
+# fixtures/ holding 44. The kit sends each fixture built into it: the kit its
+# install line pins, built from commit 4f70281, sends 41, and one built from
+# a tree holding 44 sends 44. So the two sentences state no count, and a
+# number either states in digits must be the number of fixtures/*.json. The
+# words each sentence is found by, the exit status 0 among them, and link
+# targets are not read. The section's other counts (`9 agree`) are what the
+# pinned kit reports for `true` and are not held here. A count written after
+# `e.g.` or `i.e.` in either sentence is read with it (#352): statements()
+# split a sentence at the `.` closing either, and the check passed `The kit
+# sends each fixture, i.e. 41 of them, to your verifier`. So is one written
+# after `incl.`, `approx.`, `ca.`, `cf.` or `viz.` (#354), where the check
+# passed `It exits 0 only when every fixture agrees (approx. 41).`
+KIT_SECTION = "## Try your verifier in two minutes"
+# (what the sentence says, the words it is found by)
+KIT_SENTENCES = (
+    ("what the kit sends", re.compile(r"\bthe\s+kit\s+sends\b", re.I)),
+    ("when the kit exits 0", re.compile(r"\bexits\s+0\s+only\s+when\b", re.I)),
+)
+# A whole number in digits: not joined to a letter, a digit or `_`, as the
+# digits of the commit id 9740950b are, and not part of a dotted version such
+# as Go 1.23 or ATX v1.1.
+WHOLE_NUMBER = re.compile(r"(?<![\w.])\d+(?!\w|\.\d)")
+# The target of a Markdown link: `(conformance.json)` in `[text](conformance.json)`.
+LINK_TARGET = re.compile(r"(?<=\])\([^()\s]*\)")
+
+
+def kit_count_failures(readme, fixtures):
+    """Each number stated in digits in the README kit section's sentences on
+    what the kit sends and on when it exits 0 must be the number of
+    fixtures/*.json (`fixtures` is the map load_fixtures returns). A missing
+    section, or either sentence missing from it, fails the check rather than
+    pass having read none."""
+    body = section(readme, KIT_SECTION)
+    if body is None:
+        return [f"no `{KIT_SECTION}` section found in the README; what it says "
+                f"the kit sends cannot be held to fixtures/"]
+    sentences = list(statements(body))
+    failures, held = [], {}
+    for site, words in KIT_SENTENCES:
+        found = [s for s in sentences if words.search(s)]
+        if not found:
+            failures.append(f"no sentence on {site} found in the README "
+                            f"`{KIT_SECTION}` section; the count it states cannot "
+                            f"be held to fixtures/")
+        held.update(dict.fromkeys(found))
+    actual = len(fixtures)
+    for sentence in held:
+        prose = sentence
+        for _, words in KIT_SENTENCES:
+            prose = words.sub(" ", prose)
+        for stated in dict.fromkeys(WHOLE_NUMBER.findall(LINK_TARGET.sub("", prose))):
+            if int(stated) != actual:
+                failures.append(
+                    f"README `{KIT_SECTION}` sentence states {stated}, but fixtures/ "
+                    f"holds {actual}; a number there reads as the count of fixtures "
+                    f"the kit sends, so state {actual} or no number: {sentence!r}")
+    return failures
+
+
+# README.md's kit section said, under its install line, "This commit carries
+# 41 of the 52 fixtures on main; the Hackathon kit release carries 47" (#374),
+# and the check held none of the three counts: with the 52 taken to 51, or
+# the 41 to 40, it exited 0 (#377). The count for main goes stale as soon as
+# a fixture is added, so each `N fixtures on main` the section states must be
+# the number of fixtures/*.json. The N of each `This commit carries N` must be
+# the number of fixtures/*.json in the tree of the commit named by the last
+# `go install <path>@<commit>` above it in the section: fixtures.go embeds
+# fixtures/*.json, so that is the set the kit built from that commit sends.
+# pinned_fixture_counts() reads that tree; where the checkout does not hold
+# the commit, the count is not held, and the closing line says so. A count in
+# a code span, or wrapped onto the next line, is read. The kit release's count
+# names no tag, so it is not held. No count for main, no `This commit carries
+# N`, or one with no install line above it fails the check rather than pass
+# having read none.
+INSTALL_PIN = re.compile(r"\bgo\s+install\s+\S+?@([0-9a-f]{7,40})(?![0-9A-Za-z_])")
+PINNED_CLAIM = re.compile(r"\bthis\s+commit\s+carries\s+`?(\d+)(?!\w)", re.I)
+MAIN_CLAIM = re.compile(r"(?<![\w.`])`?(\d+)`?\s+fixtures\s+on\s+`?main(?!\w)", re.I)
+PINNED_SITE = f"README `{KIT_SECTION}` sentence"
+# A fixture of a commit's tree: a file directly under fixtures/ named *.json,
+# as `ls-tree` prints its path.
+TREE_FIXTURE = re.compile(r"fixtures/[^/]+\.json")
+
+
+def install_line_claims(body):
+    """Each `This commit carries N` in `body`, the README kit section, as
+    (the commit id the last `go install <path>@<commit>` above it names, or
+    None, N, the sentence on one line), in the order the section states them."""
+    claims, commit = [], None
+    for sentence in statements(body):
+        found = sorted([(m.start(), True, m.group(1)) for m in INSTALL_PIN.finditer(sentence)]
+                       + [(m.start(), False, m.group(1))
+                          for m in PINNED_CLAIM.finditer(sentence)])
+        for _, pin, value in found:
+            if pin:
+                commit = value
+            else:
+                claims.append((commit, value, sentence))
+    return claims
+
+
+def install_pins(readme):
+    """Each commit id a `go install <path>@<commit>` of the README kit section
+    names, in order, or [] when the README has no such section."""
+    body = section(readme, KIT_SECTION)
+    return [] if body is None else [m.group(1) for sentence in statements(body)
+                                    for m in INSTALL_PIN.finditer(sentence)]
+
+
+def pinned_fixture_counts(root, commits):
+    """The number of fixtures/*.json in the tree of each commit of `commits`
+    the repository at `root` holds, by the id as given. A commit git cannot
+    read there is left out: git cannot run, `root` is not a repository's top
+    level, or the clone does not hold the commit (a shallow clone cut after
+    it). git runs as _history_git() runs it, so a copy of the tree outside
+    the repository reads as holding no commit."""
+    git = _history_git(root)
+    counts = {}
+    for commit in dict.fromkeys(commits):
+        try:
+            listed = git("ls-tree", "-z", f"{commit}^{{commit}}", "--", "fixtures/")
+        except OSError:
+            return {}
+        if listed.returncode != 0:
+            continue
+        entries = (entry.partition("\t") for entry in listed.stdout.split("\0") if entry)
+        counts[commit] = sum(1 for meta, _, path in entries
+                             if meta.split()[1:2] == ["blob"] and TREE_FIXTURE.fullmatch(path))
+    return counts
+
+
+def pinned_count_failures(readme, fixtures, pinned):
+    """The counts the README kit section states under its install line: each
+    `N fixtures on main` must be the number of fixtures/*.json (`fixtures`
+    is the map load_fixtures returns), and the N of each `This commit
+    carries N` the count `pinned` (pinned_fixture_counts()) gives the commit
+    of the last `go install <path>@<commit>` above it, where it gives one. A
+    missing section, no count for main, no `This commit carries N`, or one
+    with no install line above it, fails the check rather than pass having
+    read none."""
+    body = section(readme, KIT_SECTION)
+    if body is None:
+        return [f"no `{KIT_SECTION}` section found in the README; the fixture "
+                f"counts stated under its install line cannot be held"]
+    failures, actual = [], len(fixtures)
+    mains = [(m.group(1), sentence) for sentence in statements(body)
+             for m in MAIN_CLAIM.finditer(sentence)]
+    if not mains:
+        failures.append(f"no `N fixtures on main` count found in the README "
+                        f"`{KIT_SECTION}` section; the count of fixtures on main "
+                        f"stated under its install line cannot be held to fixtures/")
+    for stated, sentence in mains:
+        if int(stated) != actual:
+            failures.append(
+                f"{PINNED_SITE} states {stated} fixtures on main, but fixtures/ "
+                f"holds {actual}; state {actual}: {sentence!r}")
+    claims = install_line_claims(body)
+    if not claims:
+        failures.append(f"no `This commit carries N` sentence found in the README "
+                        f"`{KIT_SECTION}` section; the count of fixtures stated for "
+                        f"the commit its install line pins cannot be held to that commit")
+    for commit, stated, sentence in claims:
+        if commit is None:
+            failures.append(
+                f"{PINNED_SITE} says what this commit carries, but no `go install "
+                f"<path>@<commit>` above it in the section names a commit: {sentence!r}")
+        elif commit in pinned and int(stated) != pinned[commit]:
+            failures.append(
+                f"{PINNED_SITE} says {commit[:7]}, the commit the install line above "
+                f"it pins, carries {stated} fixtures, but that commit's tree holds "
+                f"{pinned[commit]} fixtures/*.json; state {pinned[commit]}: {sentence!r}")
+    return failures
+
+
+def pinned_count_line(readme, fixtures, pinned):
+    """How the closing line names what the README kit section's counts under
+    its install line were held to."""
+    body = section(readme, KIT_SECTION) or ""
+    held = []
+    for commit in dict.fromkeys(c for c, _, _ in install_line_claims(body)):
+        if commit in pinned:
+            held.append(f"{pinned[commit]} for {commit[:7]}, the commit its install line "
+                        f"pins, as that commit's tree holds")
+        else:
+            held.append(f"a count for {commit[:7]}, the commit its install line pins, "
+                        f"not held to the history: that commit could not be read in "
+                        f"this checkout")
+    return (f"the README kit section states {len(fixtures)} fixtures on main, and "
+            f"{', '.join(held)}")
+
+
+# CHANGELOG.md's #325 entry said the Python unit tests step runs the 2 tests of
+# docs/demo/test_record_atx_verify.py, and its #327 entry said 319 altered count
+# sites, where a3ead8a, the commit that carried both, held 8 tests in that file
+# and printed 324 sites; its parent held 2 and printed 321. So a sentence of the
+# top section states no total another change of the release can add to. Saying
+# what a change adds (`adds 3 cases`) or what a run held before it (`held 3
+# tests`) stays true, a run of no test or of one (`Ran 0 tests`, `Ran 1 test`)
+# says what that run did, and `the three tests that held the old reading`, as
+# the `v0.1.0` section says, names a set of tests rather than counting a file.
+# That exemption is the `the` form's alone: `holds 8 tests that check the
+# script`, `runs 8 tests that ...` and `Ran 14 tests that ...` still count the
+# file or the run, so a `that` after those verbs exempts nothing. `all 8
+# tests`, and `has`, `contains` or `includes` before `8 tests`, count them as
+# `holds 8 tests` does, and a `that` after them exempts nothing either.
+# top_section() puts a sentence on one line, so each blank here is one space.
+# `Ran` is the capital unittest prints.
+COUNTED_TESTS = rf"(?:[1-9]\d*|{'|'.join(COUNT_WORDS[2:])}) tests\b"
+RUNNING_TOTAL = re.compile(
+    rf"\b(?:[Tt]he {COUNTED_TESTS}(?! that\b)"
+    rf"|(?:[Aa]ll|has|have|contains?|includes?|holds?|runs?|Ran) {COUNTED_TESTS})"
+    r"|\b\d+ (?:altered count sites\b|cases green\b|cases, from \d+)")
+# The entry for the two did:web fixtures said the capture's summary line
+# `counts 43`, that docs/scope.md `counts 34 of 43 fixtures` reaching
+# signature verification and that the kit's self-tests `count 43 fixtures`,
+# and the kit entry above it sent `each of the 44 embedded fixtures`; the
+# entry for fixtures/expired-beyond-skew.json took each of those totals to 44
+# while the did:web sentences stayed as they were. So a sentence of the top
+# section states no fixture total either. Saying how a count went (`go from
+# 41 to 43`), what it was before the change (`where they counted 41`) or what
+# a change adds (`adds two fixtures`) stays true, and so does naming the
+# fixtures there were before it or that it adds (`the 41 existing fixtures`,
+# `the two new fixtures`, `the 43 fixtures before this one`, `the two
+# fixtures that it adds`), `the` again being the one form `that` exempts. A
+# count reached in a sentence on how it went (`from 32 of 41 to 34 of 43
+# fixtures`) is not held either. `counts? N` holds a present-tense count of
+# anything, as `its summary line counts 43` gave one with no noun after it.
+# `all 44 fixtures` is held as `the 44 fixtures` is, `existing` or `new` after
+# the count and `before` after `fixtures` exempting it too, but a `that` after
+# it does not: `all 44 fixtures that the kit embeds` counts them. `has`,
+# `contains` and `includes` count fixtures as `holds` does, and `(N fixtures)`
+# is how the summary line that ends docs/captures/go-verifier.txt gives the
+# total.
+COUNTED = rf"(?:[1-9]\d*|{'|'.join(COUNT_WORDS[2:])})\b"
+FIXTURE_TOTAL = re.compile(
+    rf"\bcounts? {COUNTED}(?: of {COUNTED})?(?: [A-Za-z]+)? fixtures\b"
+    rf"|\bcounts? {COUNTED}"
+    rf"|(?<!\bto )\b{COUNTED} of {COUNTED}(?: [A-Za-z]+)? fixtures\b"
+    rf"|\b[Tt]he {COUNTED}(?! (?:existing|new)\b)(?: [A-Za-z]+)? fixtures\b"
+    rf"(?! (?:before|that)\b)"
+    rf"|\b[Aa]ll {COUNTED}(?! (?:existing|new)\b)(?: [A-Za-z]+)? fixtures\b"
+    rf"(?! before\b)"
+    rf"|\b(?:has|have|contains?|includes?|holds?|embeds?|runs?) {COUNTED}"
+    rf"(?: [A-Za-z]+)? fixtures\b"
+    rf"|\({COUNTED} fixtures\)")
+# The forms of total RUNNING_TOTAL and FIXTURE_TOTAL hold, as the success
+# line names them. The self-test reads each with its N as 44 and its M as 45
+# and fails when the check passes one, so the line names no form the check
+# passes. A total in a form not named here passes the check, a count opening
+# a sentence (`44 fixtures pass in both verifiers.`) and `keeps 41 fixtures`
+# among them.
+TOTAL_FORMS = (
+    "the N tests", "all N tests", "has N tests", "contains N tests",
+    "includes N tests", "holds N tests", "runs N tests", "Ran N tests",
+    "N altered count sites", "N cases green", "N cases, from M", "counts N",
+    "N of M fixtures", "the N fixtures", "all N fixtures", "has N fixtures",
+    "contains N fixtures", "includes N fixtures", "holds N fixtures",
+    "embeds N fixtures", "runs N fixtures", "(N fixtures)")
+TOTAL_SITE = f"{CHANGELOG_NAME} top-section sentence"
+# The sentences the check was written for, as they were wrapped.
+RETRACTED_TEST_TOTAL = (
+    "- The Python unit tests step of `conformance.yml` runs the 2 tests of\n"
+    "  `docs/demo/test_record_atx_verify.py`, which hold\n"
+    "  `docs/demo/record-atx-verify.sh` to refusing a Dockerfile that references an\n"
+    "  image it does not read (#325).")
+RETRACTED_SITE_TOTAL = (
+    "The self-test adds three discover steps (319\n"
+    "  altered count sites, from 316): an empty argument before `-s` and `-p`,\n"
+    "  which `-s` replaces as the start directory; the empty pattern `-p ''`;\n"
+    "  and an empty argument after `-s` and `-p`, which unittest reads as the\n"
+    "  start directory, the directory it is run from.")
+
+
+def changelog_total_failures(changelog):
+    """Each sentence of CHANGELOG.md's top section (top_section()) must state no
+    total RUNNING_TOTAL or FIXTURE_TOTAL reads. A CHANGELOG.md that is missing
+    or has no `## ` heading has no top section to hold here; the first-command
+    check reports it."""
+    top = top_section(changelog) if changelog is not None else None
+    if top is None:
+        return []
+    return [f"{TOTAL_SITE} states `{total}`, a total another change of the release "
+            f"can add to while this sentence stays as it is; say what the change adds "
+            f"or how the count went, as `adds 3 cases` and `go from 41 to 43` do: "
+            f"{sentence!r}"
+            for sentence in top[1]
+            for total in dict.fromkeys(RUNNING_TOTAL.findall(sentence)
+                                       + FIXTURE_TOTAL.findall(sentence))]
+
+
 def count_vectors(root):
     return len(sorted((root / "jcs-vectors" / "vectors").glob("*.json")))
 
@@ -2668,7 +4093,9 @@ Tree = collections.namedtuple("Tree", (
     "key_vectors used_key_ids versions go_mod verify_go py_requirements "
     "py_dependency_texts jcs_sites tbs_sites tbs_canonical jcs_readme "
     "gate_sites gate_libraries profile outcomes suites scripts front_page "
-    "module_start nested_modules changelog release_tags"))
+    "readme_pages module_start nested_modules changelog release_tags "
+    "verify_go_test spec_text pinned_fixtures source_comments top_directories "
+    "format_names"))
 
 # One check tree_failures() runs: its name, the call (`run(tree)` returns
 # failures) and the alteration the self-test makes to prove the call is still
@@ -3127,6 +4554,19 @@ def _failing_latest_run_cases(tree):
 
 # A command no README.md here opens with.
 INVENTED_FIRST_COMMAND = "go run example.invalid/not-the-first-command@latest"
+# The retracted sentence with a clause between its span and the words that
+# name README.md's first command, the clause opening with an abbreviation
+# whose `.` top_section() read as a sentence end (#355): the clause after an
+# abbreviation left to fill in, restated with each of KIT_ABBREVIATIONS, and
+# the clause `e.g. the Go one`.
+ABBREVIATED_FIRST_COMMAND = (
+    "- `go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest`\n"
+    "  runs the Go verifier, {abbreviation} with nothing cloned, and is README.md's first\n"
+    "  command.")
+EXAMPLE_FIRST_COMMAND = (
+    "- `go run github.com/opena2a-standards/atx-conformance/verifiers/go@latest`\n"
+    "  runs a verifier, e.g. the Go one, with nothing cloned, and is README.md's first\n"
+    "  command.")
 
 
 def _top_section_with(changelog, text):
@@ -3149,8 +4589,13 @@ def _changelog_first_command_cases(tree):
     whose one section is `## v0.1.0`; one naming README.md's first command
     adds none, nor does it in the list item after one naming another command
     with no closing period, and it adds a failure once README.md opens with
-    another command. The retracted sentence in a section below the top one
-    adds none, nor does a form of command (`go run <import path>@<version>`).
+    another command. The retracted sentence restated with a clause between
+    its span and the words naming README.md's first command adds a failure
+    naming the command, with the clause after each of KIT_ABBREVIATIONS, on
+    the line after `i.e.` and as `e.g. the Go one`; restated with the clause
+    after `i.e.` and README.md's first command as its span, it adds none.
+    The retracted sentence in a section below the top one adds none, nor
+    does a form of command (`go run <import path>@<version>`).
     Against a README.md opening with `cd verifiers/go && go run .
     ../../fixtures`, that command with or without its `cd` prefix adds none,
     and the command with another path adds a failure naming the span whole;
@@ -3188,6 +4633,16 @@ def _changelog_first_command_cases(tree):
     retracted = CODE_SPAN.search(RETRACTED_FIRST_COMMAND).group(1)
     case(f"CHANGELOG.md restoring the retracted sentence on `{retracted}`",
          opening(RETRACTED_FIRST_COMMAND), retracted)
+    restated = f"CHANGELOG.md restating the retracted sentence on `{retracted}`"
+    for abbreviation in KIT_ABBREVIATIONS:
+        case(f"{restated} with a clause after `{abbreviation}`",
+             opening(ABBREVIATED_FIRST_COMMAND.format(abbreviation=abbreviation)),
+             retracted)
+    case(f"{restated} with a clause on the line after `i.e.`",
+         opening(ABBREVIATED_FIRST_COMMAND.format(abbreviation="i.e.")
+                 .replace("i.e. ", "i.e.\n  ")), retracted)
+    case(f"{restated} with the clause `e.g. the Go one`", opening(EXAMPLE_FIRST_COMMAND),
+         retracted)
     invented = f"`{INVENTED_FIRST_COMMAND}` is README's first command."
     case(f"CHANGELOG.md naming `{INVENTED_FIRST_COMMAND}` as README's first command",
          opening(invented), INVENTED_FIRST_COMMAND)
@@ -3205,6 +4660,10 @@ def _changelog_first_command_cases(tree):
     holds = f"README.md's first command is `{first}`."
     case(f"CHANGELOG.md naming `{first}` as README.md's first command",
          opening(holds), None)
+    case(f"CHANGELOG.md naming `{first}` as README.md's first command in a sentence "
+         f"with a clause after `i.e.`",
+         opening(ABBREVIATED_FIRST_COMMAND.format(abbreviation="i.e.")
+                 .replace(retracted, first)), None)
     case("CHANGELOG.md naming README.md's first command in the list item after "
          "one naming another command with no closing period",
          opening(f"- `{INVENTED_FIRST_COMMAND}` exits 1\n- {holds}"), None)
@@ -3330,9 +4789,50 @@ def _opening_with(changelog, text):
 
 
 TAGGED = ["v0.1.0"]
+# The tag the repository carried while docs/running-the-verifiers.md and
+# CHANGELOG.md's opening still said it has no tag. It names no version.
+KIT_TAGGED = ["kit-2026-11-14"]
+# The clauses that said so, each cut to the sentence a case needs: the first
+# three stood in docs/running-the-verifiers.md, the last in CHANGELOG.md's
+# opening.
+RETRACTED_NO_RELEASE_TAG = (
+    "This repository has no release tag, so `@latest` resolves to a\n"
+    "pseudo-version of a commit on `main`, the one the Go module proxy reports\n"
+    "as latest.")
+RETRACTED_UNTAGGED_COMMIT = (
+    "`go run` resolves the commit to its release tag, or to a pseudo-version when\n"
+    "the commit has no tag.")
+RETRACTED_NO_TAGS = (
+    "Run through the module proxy, it names the version `go run` resolved, a\n"
+    "pseudo-version naming the commit while the repository has no tags.")
+RETRACTED_NO_TAG_YET = (
+    "This repository carries no tag yet: the section `v0.1.0` lists the changes\n"
+    "its first tag, `v0.1.0`, is to carry.")
+# Two README sentences release_tag_failures() fails while the repository
+# carries a tag that names no version: one opening with the word
+# UNTAGGED_COMMIT_CLAIM opens with, one with the pseudo-version that function
+# looks for, each capitalized and the other in lower case (#389). The first is
+# the sentence #389 names.
+OPENING_WORD_SENTENCES = (
+    ("`Commits`, the word UNTAGGED_COMMIT_CLAIM opens with",
+     "Commits that carry no tag resolve to a pseudo-version."),
+    (f"`Pseudo-versions`, holding the {PSEUDO_VERSION} the rule looks for",
+     "Pseudo-versions name commits that have no tag."),
+)
 
 
-def _release_tag_cases(tree):
+def _sentence_files(tree, sentence):
+    """The files of `tree` whose text holds `sentence`, a sentence as
+    statements() reads it, among README.md, its pages and CHANGELOG.md's
+    opening, joined with ` and `; "README.md or one of its pages" when none
+    of them holds it."""
+    texts = {"README.md": tree.front_page, **(tree.readme_pages or {}),
+             CHANGELOG_NAME: changelog_opening(tree.changelog)}
+    files = [name for name, text in texts.items() if sentence in statements(text or "")]
+    return " and ".join(files) or "README.md or one of its pages"
+
+
+def _release_tag_cases(tree, published=None):
     """Held to no version tag, the retracted README sentence appended to the
     README adds a failure naming the pseudo-version, as does the README's own
     `@latest` sentence with its pseudo-version made a version, and the
@@ -3340,24 +4840,67 @@ def _release_tag_cases(tree):
     adds one naming `v0.1.0`. Held to a `v0.1.0` tag, that sentence adds none
     and one naming `v9.9.9` adds a failure, the retracted README sentence
     adds none, and a README sentence saying the repository has no release tag
-    adds a failure, one saying a commit has no tag none. With the tags unread
+    adds a failure, as does one saying it has no Go version tag, one saying a
+    commit has no tag none. With the tags unread
     both retracted sentences add none, and the retracted CHANGELOG.md
-    sentence in the top section, below the opening, adds none. Each case
-    counts only the failures its text adds over the published text held to
-    the same tags. Then version_tags() is read off temporary repositories."""
+    sentence in the top section, below the opening, adds none.
+
+    Held to the tag `kit-2026-11-14`, which names no version, each of the four
+    retracted clauses adds a failure, as do a sentence giving a pseudo-version
+    to a commit that carries no tag and the retracted README sentence, while
+    the same sentences saying no Go version tag add none, and one sentence
+    saying the repository has no Go version tag and has no release tag adds
+    one. Held to that tag, the sentences of OPENING_WORD_SENTENCES, each
+    opening with a word the rule reads, capitalized, add a failure each, and
+    one opening with `Commits` that says the commits carry no Go version tag
+    adds none. Held to `v0.1.0` and that tag, the commit clause adds a failure;
+    with no tag, the no-release-tag clause adds none. carried_tags() names no
+    tag, one tag that names no version, one version tag, and a mix. Then
+    version_tags() and repository_tags() are read off temporary
+    repositories.
+
+    A case counts the failures that name a sentence its text adds, the
+    sentences of the README and of CHANGELOG.md counted with repeats. It
+    counted the failures absent from those of the published text held to
+    the same tags, so a sentence the published text already held added
+    none, and the case was reported as not caught by the check, which fails
+    that sentence (#385). Where this checkout's tags cannot be read and
+    `published` is a list, each failure a case expects that the published
+    text held to the case's tags yields too is appended to it once, opening
+    with the file that holds the sentence: main() reports it with the
+    check's failures, which hold no sentence to the tags there."""
     readme, changelog = tree.readme, tree.changelog or ""
     cases = []
+    reported = set()
+
+    def sentences(text, log):
+        return collections.Counter(statements(text)) + collections.Counter(statements(log))
+
+    held = sentences(readme, changelog)
 
     def case(label, needle, text=readme, log=changelog, tags=()):
         tags = None if tags is None else list(tags)
-        baseline = set(release_tag_failures(readme, changelog, tags))
-        new = [f for f in release_tag_failures(text, log, tags) if f not in baseline]
+        added = sentences(text, log) - held
+        # Each failure ends with the sentence it is for, quoted.
+        named = {f: s for f in release_tag_failures(text, log, tags)
+                 for s in added if f.endswith(f": {s!r}")}
         if needle is None:
-            cases.append((not new, label, f"expected no new failure, got {new}"))
-        else:
-            cases.append((any(f.startswith(TAG_SITE) and needle in f for f in new),
-                          label, f"expected a {TAG_SITE} failure naming {needle!r}, "
-                                 f"got {new}"))
+            cases.append((not named, label,
+                          f"expected no failure naming a sentence it adds, got {list(named)}"))
+            return
+        caught = [f for f in named if f.startswith(TAG_SITE) and needle in f]
+        cases.append((bool(caught), label, f"expected a {TAG_SITE} failure naming "
+                                           f"{needle!r}, got {list(named)}"))
+        if published is None or tree.release_tags is not None:
+            return
+        already = set(release_tag_failures(readme, changelog, tags))
+        for f in caught:
+            if f in already and f not in reported:
+                reported.add(f)
+                published.append(
+                    f"{_sentence_files(tree, named[f])}: held to the tags of the self-test "
+                    f"case {label!r}, which adds the same sentence, as this checkout's "
+                    f"tags cannot be read: {f}")
 
     with_latest = readme + "\n\n" + RETRACTED_LATEST + "\n"
     with_first_tag = _opening_with(changelog, RETRACTED_FIRST_TAG)
@@ -3387,6 +4930,9 @@ def _release_tag_cases(tree):
     case("README saying the repository has no release tag held to a `v0.1.0` tag",
          "says the repository has no tag",
          text=readme + "\n\nThis repository has no release tag.\n", tags=TAGGED)
+    case("README saying the repository has no Go version tag held to a `v0.1.0` tag",
+         "says the repository has no tag",
+         text=readme + "\n\nThis repository has no Go version tag.\n", tags=TAGGED)
     case("README saying a commit has no tag held to a `v0.1.0` tag", None,
          text=readme + "\n\n`go run` resolves the commit to a version, or to a "
                        "pseudo-version when the commit has no tag.\n", tags=TAGGED)
@@ -3395,7 +4941,131 @@ def _release_tag_cases(tree):
     case(f"the retracted `v0.1.0` sentence in the {CHANGELOG_NAME} top section, "
          f"below its opening, with no version tag", None,
          log=_top_section_with(changelog, RETRACTED_FIRST_TAG))
+    untagged = "says the repository has no tag"
+    untagged_commit = f"gives a {PSEUDO_VERSION} to a commit with no tag"
+    for label, clause in (("no-release-tag", RETRACTED_NO_RELEASE_TAG),
+                          ("no-tags", RETRACTED_NO_TAGS)):
+        case(f"README restating the {label} clause held to the tag `kit-2026-11-14`",
+             untagged, text=readme + "\n\n" + clause + "\n", tags=KIT_TAGGED)
+    case(f"{CHANGELOG_NAME} opening restating the no-tag-yet clause held to the tag "
+         f"`kit-2026-11-14`", untagged,
+         log=_opening_with(changelog, RETRACTED_NO_TAG_YET), tags=KIT_TAGGED)
+    case("README restating the clause giving a pseudo-version to a commit with no "
+         "tag, held to the tag `kit-2026-11-14`", untagged_commit,
+         text=readme + "\n\n" + RETRACTED_UNTAGGED_COMMIT + "\n", tags=KIT_TAGGED)
+    case("README giving a pseudo-version to a commit that carries no tag, held to "
+         "the tag `kit-2026-11-14`", untagged_commit,
+         text=readme + "\n\nA pseudo-version is the version Go gives a commit that "
+                       "carries no tag.\n", tags=KIT_TAGGED)
+    for reads, sentence in OPENING_WORD_SENTENCES:
+        case(f"README sentence opening with {reads}, held to the tag "
+             f"`kit-2026-11-14`: {sentence!r}", untagged_commit,
+             text=readme + "\n\n" + sentence + "\n", tags=KIT_TAGGED)
+    case("README restating the clause giving a pseudo-version to a commit with no "
+         "tag, held to `v0.1.0` and `kit-2026-11-14`", untagged_commit,
+         text=readme + "\n\n" + RETRACTED_UNTAGGED_COMMIT + "\n",
+         tags=TAGGED + KIT_TAGGED)
+    case("README restating the retracted `@latest` sentence held to the tag "
+         "`kit-2026-11-14`, which names no version", f"names no {PSEUDO_VERSION}",
+         text=with_latest, tags=KIT_TAGGED)
+    for clause in (
+            "This repository has no Go version tag, so `@latest` resolves to a "
+            "pseudo-version of a commit on `main`.",
+            "A pseudo-version naming the commit while the repository has no Go "
+            "version tag.",
+            "`go run` resolves the commit to its Go version tag, or to a "
+            "pseudo-version when the commit has no Go version tag.",
+            "A pseudo-version is the version Go gives a commit that carries no Go "
+            "version tag.",
+            "Commits that carry no Go version tag resolve to a pseudo-version."):
+        case(f"README clause {clause!r} held to the tag `kit-2026-11-14`", None,
+             text=readme + "\n\n" + clause + "\n", tags=KIT_TAGGED)
+    case(f"{CHANGELOG_NAME} opening saying the repository carries no Go version tag "
+         f"yet, held to the tag `kit-2026-11-14`", None,
+         log=_opening_with(changelog, "This repository carries no Go version tag yet."),
+         tags=KIT_TAGGED)
+    case("README sentence saying the repository has no Go version tag and has no "
+         "release tag, held to the tag `kit-2026-11-14`", untagged,
+         text=readme + "\n\nThis repository has no Go version tag, and the "
+                       "repository has no release tag.\n", tags=KIT_TAGGED)
+    case("README restating the no-release-tag clause with no tag", None,
+         text=readme + "\n\n" + RETRACTED_NO_RELEASE_TAG + "\n")
+    for tags, want in (
+            ([], "no tag"),
+            (KIT_TAGGED, "the tag kit-2026-11-14 and no version tag"),
+            (TAGGED, "the version tag v0.1.0"),
+            (["kit-2026-11-14", "v0.1.0", "v0.2.0"],
+             "the tags kit-2026-11-14, v0.1.0, v0.2.0, of which v0.1.0, v0.2.0 "
+             "name a version")):
+        cases.append((carried_tags(tags) == want, f"carried_tags({tags})",
+                      f"expected {want!r}, got {carried_tags(tags)!r}"))
     cases.extend(_version_tags_cases())
+    return cases
+
+
+# Clauses #375 retracted, each with the file _held_sentence_cases() places it
+# in, so that the published text holds the sentence a release-tag case adds;
+# the failure reported for it opens with that file.
+HELD_CLAUSES = (
+    ("docs/running-the-verifiers.md", RETRACTED_NO_RELEASE_TAG),
+    ("README.md", RETRACTED_NO_TAGS),
+    (CHANGELOG_NAME, RETRACTED_NO_TAG_YET),
+)
+# A sentence a case adds that the check passes held to the tag `kit-2026-11-14`.
+HELD_PASSING = ("This repository has no Go version tag, so `@latest` resolves to a "
+                "pseudo-version of a commit on `main`.")
+
+
+def _held_sentence_cases(tree):
+    """With docs/running-the-verifiers.md saying the repository has no
+    release tag in the words the no-release-tag case adds, the self-test
+    reported that case as not caught by the check, which fails the sentence;
+    with the tags unread, as in a shallow clone, no line named the page or
+    the sentence (#385). Over the published text with the clauses of HELD_CLAUSES
+    placed in their files (appended to the page and to README.md, made the
+    last paragraph of CHANGELOG.md's opening) and HELD_PASSING appended to
+    the page: with the tags unread, each release-tag case is green and one
+    failure is reported for each clause, naming its file and its sentence,
+    and none for HELD_PASSING; with the tag `kit-2026-11-14` read, each case
+    is green, none is reported, and the check names each clause."""
+    label = "release-tag cases over a published text holding the sentences three of them add"
+    pages = dict(tree.readme_pages or {})
+    page = HELD_CLAUSES[0][0]
+    if page not in pages:
+        return [(False, label, f"{page} is missing")]
+    if tree.readme != "\n".join([tree.front_page, *pages.values()]):
+        return [(False, label, "the README text is not README.md and its pages, joined")]
+    pages[page] += f"\n{HELD_CLAUSES[0][1]}\n\n{HELD_PASSING}\n"
+    front = f"{tree.front_page}\n{HELD_CLAUSES[1][1]}\n"
+    held = tree._replace(readme="\n".join([front, *pages.values()]), front_page=front,
+                         readme_pages=pages,
+                         changelog=_opening_with(tree.changelog or "", HELD_CLAUSES[2][1]))
+    unread = []
+    red = [name for ok, name, _ in
+           _release_tag_cases(held._replace(release_tags=None), unread) if not ok]
+    cases = [(not red, f"{label}, with the tags unread", f"red: {red}")]
+    for where, clause in HELD_CLAUSES:
+        sentence = " ".join(clause.split())
+        cases.append((
+            sum(line.startswith(f"{where}: held to the tags of the self-test case ")
+                and "says the repository has no tag" in line
+                and line.endswith(f": {sentence!r}") for line in unread) == 1,
+            f"one failure reported for {where} holding the sentence a case adds, with "
+            f"the tags unread", f"got {unread}"))
+    cases.append((len(unread) == len(HELD_CLAUSES),
+                  "no other failure reported, none for a held sentence the check "
+                  "passes, with the tags unread", f"got {unread}"))
+    read = []
+    red = [name for ok, name, _ in
+           _release_tag_cases(held._replace(release_tags=list(KIT_TAGGED)), read) if not ok]
+    cases.append((not red and not read, f"{label}, with the tag `kit-2026-11-14` read",
+                  f"red: {red}; reported: {read}"))
+    failures = release_tag_failures(held.readme, held.changelog, list(KIT_TAGGED))
+    unnamed = [where for where, clause in HELD_CLAUSES
+               if not any(f.endswith(f": {' '.join(clause.split())!r}") for f in failures)]
+    cases.append((not unnamed, "the check over that text held to the tag "
+                               "`kit-2026-11-14` naming each held clause",
+                  f"names none in {unnamed}: {failures}"))
     return cases
 
 
@@ -3403,7 +5073,9 @@ def _version_tags_cases():
     """version_tags() over a repository with one commit: [] untagged; once the
     commit carries `v0.1.0`, `v0.2.0-rc.1` and `not-a-version`, the two
     version tags; None for a shallow clone of it and a directory that is no
-    repository. A git command that fails is a red case."""
+    repository. repository_tags() over the same three: [] untagged, then all
+    three tags, and None for each of the other two. A git command that fails
+    is a red case."""
     label = "version_tags() over a temporary repository"
     env = {name: value for name, value in os.environ.items()
            if not name.startswith("GIT_")}
@@ -3424,6 +5096,7 @@ def _version_tags_cases():
             git(repo, "add", "--", "README.md")
             git(repo, "commit", "-q", "-m", "one commit")
             untagged = version_tags(repo)
+            untagged_all = repository_tags(repo)
             git(repo, "tag", "v0.1.0")
             git(repo, "tag", "-a", "-m", "rc", "v0.2.0-rc.1")
             git(repo, "tag", "not-a-version")
@@ -3444,7 +5117,452 @@ def _version_tags_cases():
              f"expected None, got {version_tags(shallow)}"),
             (version_tags(plain) is None, f"{label}: a directory that is no repository",
              f"expected None, got {version_tags(plain)}"),
+            (untagged_all == [], "repository_tags() over the same repository: a "
+                                 "commit with no tag",
+             f"expected [], got {untagged_all}"),
+            (repository_tags(repo) == ["not-a-version", "v0.1.0", "v0.2.0-rc.1"],
+             "repository_tags() over the same repository: `v0.1.0`, `v0.2.0-rc.1` "
+             "(annotated) and `not-a-version`, which names no version",
+             f"expected ['not-a-version', 'v0.1.0', 'v0.2.0-rc.1'], got "
+             f"{repository_tags(repo)}"),
+            (repository_tags(shallow) is None,
+             "repository_tags() over a shallow clone of it",
+             f"expected None, got {repository_tags(shallow)}"),
+            (repository_tags(plain) is None,
+             "repository_tags() over a directory that is no repository",
+             f"expected None, got {repository_tags(plain)}"),
         ]
+
+
+# The two comments source_tag_failures() was written for (#386), each cut to
+# the sentence a case needs and wrapped as it stood: the first above versionLine
+# in verifiers/go/verifier/verify.go, the second above version_line() in
+# scripts/kit/assemble.sh.
+RETRACTED_GO_VERSION_COMMENT = (
+    "// the highest release tag for @latest, and for @<commit> the commit's release\n"
+    "// tag, or a pseudo-version naming the commit when it has no tag.")
+RETRACTED_ASSEMBLE_COMMENT = (
+    "  # Go stamps a build from a clean clone of an untagged commit with the version\n"
+    "  # v0.0.0-<committer time, UTC, %Y%m%d%H%M%S>-<first 12 hex of the commit>.")
+# One comment sentence for each pattern source_tag_failures() reads, opening
+# with that pattern's word capitalized, each other word a pattern needs in
+# lower case (#389). The first four are the comments #389 names. The second
+# opens with the word of two patterns, so the last two hold each of those
+# alone: the fifth says untagged in lower case, and the sixth names the commit
+# again in lower case.
+OPENING_WORD_COMMENTS = (
+    ("UNTAGGED_WORD_CLAIM", "Untagged commits resolve to a pseudo-version."),
+    ("NAMES_A_COMMIT and UNTAGGED_COMMIT_CLAIM",
+     "Commits that carry no tag resolve to a pseudo-version."),
+    ("PSEUDO_VERSION_FORM", "Pseudo-versions name untagged commits."),
+    ("UNTAGGED_PRONOUN_CLAIM",
+     "It has no tag, so Go resolves the commit to a pseudo-version."),
+    ("NAMES_A_COMMIT", "Commits resolve to a pseudo-version while untagged."),
+    ("UNTAGGED_COMMIT_CLAIM",
+     "Commits that carry no tag resolve to a pseudo-version naming the commit."),
+)
+
+
+def _source_tag_cases(tree):
+    """Each retracted comment appended to the file it stood in adds a failure
+    naming that file; the sentence each was corrected to adds none, and so does
+    one saying a commit has no tag that names no pseudo-version, and the
+    retracted sentence written as a Go string literal rather than a comment. A
+    claim wrapped so the pseudo-version and the untagged words fall on
+    different comment lines of one run adds a failure; the same two lines with
+    a line of code between them add none. Each comment of OPENING_WORD_COMMENTS
+    adds a failure, and one opening with `Commits` that says the commits carry
+    no Go version tag adds none. A site that is missing is reported. Each case
+    counts only the failures its text adds over the published text."""
+    comments = tree.source_comments
+    cases = []
+
+    def case(label, needle, site, text):
+        baseline = set(source_tag_failures(comments))
+        new = [f for f in source_tag_failures({**comments, site: text})
+               if f not in baseline]
+        if needle is None:
+            cases.append((not new, label, f"expected no new failure, got {new}"))
+        else:
+            cases.append((any(needle in f for f in new), label,
+                          f"expected a failure naming {needle!r}, got {new}"))
+
+    def gives_pseudo(site):
+        return f"{site} gives a {PSEUDO_VERSION} to a commit with no tag"
+
+    for site, retracted in ((GO_TAG_SITE, RETRACTED_GO_VERSION_COMMENT),
+                            (ASSEMBLE_TAG_SITE, RETRACTED_ASSEMBLE_COMMENT)):
+        case(f"{site} restating the comment it was corrected from",
+             gives_pseudo(site), site, (comments[site] or "") + "\n" + retracted + "\n")
+    case(f"{GO_TAG_SITE} saying the commit carries no Go version tag", None,
+         GO_TAG_SITE, (comments[GO_TAG_SITE] or "")
+         + "\n// or a pseudo-version naming the commit when the commit carries\n"
+           "// no Go version tag.\n")
+    case(f"{ASSEMBLE_TAG_SITE} saying the commit carries no Go version tag", None,
+         ASSEMBLE_TAG_SITE, (comments[ASSEMBLE_TAG_SITE] or "")
+         + "\n  # Go stamps a build from a clean clone of the commit with the version\n"
+           "  # v0.0.0-<date>-<sha12> while the commit carries no Go version tag.\n")
+    case(f"{GO_TAG_SITE} saying a commit has no tag and naming no "
+         f"{PSEUDO_VERSION}", None, GO_TAG_SITE, (comments[GO_TAG_SITE] or "")
+         + "\n// A commit that has no tag is named by its hash.\n")
+    case(f"{GO_TAG_SITE} holding the retracted sentence as a string literal, not "
+         f"a comment", None, GO_TAG_SITE, (comments[GO_TAG_SITE] or "")
+         + "\nvar retracted = \"a pseudo-version naming the commit when it has no "
+           "tag\"\n")
+    case(f"{GO_TAG_SITE} wrapping the claim over two lines of one comment run",
+         gives_pseudo(GO_TAG_SITE), GO_TAG_SITE, (comments[GO_TAG_SITE] or "")
+         + "\n// Go gives the commit a pseudo-version\n// when it has no tag.\n")
+    case(f"{GO_TAG_SITE} wrapping the same claim over two comment runs with a "
+         f"line of code between them", None, GO_TAG_SITE,
+         (comments[GO_TAG_SITE] or "")
+         + "\n// Go gives the commit a pseudo-version\nvar between = 1\n"
+           "// when it has no tag.\n")
+    for patterns, comment in OPENING_WORD_COMMENTS:
+        case(f"{GO_TAG_SITE} comment opening with the word of {patterns}, "
+             f"capitalized: {comment!r}", gives_pseudo(GO_TAG_SITE), GO_TAG_SITE,
+             (comments[GO_TAG_SITE] or "") + f"\n// {comment}\n")
+    case(f"{GO_TAG_SITE} comment opening with `Commits` that says the commits carry "
+         f"no Go version tag", None, GO_TAG_SITE, (comments[GO_TAG_SITE] or "")
+         + "\n// Commits that carry no Go version tag resolve to a pseudo-version.\n")
+    case(f"{GO_TAG_SITE} missing", f"{GO_TAG_SITE} is missing", GO_TAG_SITE, None)
+    return cases
+
+
+# A timestamp the published verify_test.go does not write. The wiring case
+# writes it there and quotes it, so the failure it adds is new over a
+# CHANGELOG.md that still carries the retracted sentence.
+INVENTED_DIFFERENCE_TIMESTAMP = "1999-01-01T00:00:00+25:00x"
+# The retracted sentence as it was amended: the difference is one a later
+# change closed.
+AMENDED_RELEASE_DIFFERENCE = (
+    "Outside the RFC 3339 layout the\n"
+    "  error still differed by release: built with Go 1.22.12 the verifier\n"
+    "  named the extra text in an `issuedAt` of `2099-12-31T23:59:59+25:00x`,\n"
+    "  and built with Go 1.23.0 or Go 1.26.3 the offset; the #266 entry above\n"
+    "  makes it name the offset built with Go 1.22.12 too.")
+
+
+def _release_difference_cases(tree):
+    """Sentences added to the top section of the published CHANGELOG.md, its
+    first `## ` section, held to the published verify_test.go. The retracted
+    sentence adds a failure naming `2099-12-31T23:59:59+25:00x`, as does one
+    saying the verdict on it still differs between Go releases, and one
+    saying the error can still differ by release with the timestamp quoted
+    after `e.g.` or after `i.e.`; the sentence as amended, saying the error
+    still differed until a later change, adds none, nor does one saying the
+    error on it cannot differ by release, nor the retracted sentence in a
+    section below the top one. With each string
+    literal of verify_test.go that is the timestamp emptied, the retracted
+    sentence adds none, nor with the timestamp then written there in a
+    comment; written there as a raw string literal, it adds a failure. A
+    missing verify_test.go is reported. Each case counts only the failures
+    the text it adds brings over the published CHANGELOG.md held to the same
+    verify_test.go."""
+    changelog, go_test = tree.changelog or "", tree.verify_go_test
+    if top_heading_at(changelog.split("\n")) is None:
+        # As in the first-command cases: with a top section added, a sentence
+        # placed below that section stays below.
+        changelog = f"{SECTION_HEADING}Unreleased\n\n{changelog}"
+    stamp = RETRACTED_DIFFERENCE_TIMESTAMP
+    if stamp not in go_test_timestamps(go_test):
+        return [(False, f"{RELEASE_DIFFERENCE_SITE} cases",
+                 f"{VERIFY_GO_TEST_NAME} writes no `{stamp}` as a string literal")]
+    cases = []
+
+    def case(label, text, want, source=go_test):
+        before = collections.Counter(release_difference_failures(changelog, source))
+        after = collections.Counter(release_difference_failures(text, source))
+        new = list((after - before).elements())
+        if want is None:
+            cases.append((not new, label, f"it adds {new}"))
+        else:
+            want = f"result on `{want}` can still differ by release"
+            cases.append((any(f.startswith(RELEASE_DIFFERENCE_SITE) and want in f
+                              for f in new),
+                          label, f"expected a {RELEASE_DIFFERENCE_SITE} failure saying the "
+                                 f"{want}, got {new}"))
+
+    def opening(sentence):
+        return _top_section_with(changelog, sentence)
+
+    retracted = opening(RETRACTED_RELEASE_DIFFERENCE)
+    case(f"CHANGELOG.md restoring the retracted sentence on `{stamp}`", retracted, stamp)
+    case(f"CHANGELOG.md saying the verdict on `{stamp}` still differs between Go releases",
+         opening(f"The verdict on `{stamp}` still differs between Go releases."), stamp)
+    # top_section() ended a sentence at the `.` closing `e.g.` or `i.e.`, so a
+    # timestamp quoted after either fell outside the claim's sentence (#355).
+    for abbreviation in ("e.g.", "i.e."):
+        case(f"CHANGELOG.md saying the error can still differ by release, with "
+             f"`{stamp}` after `{abbreviation}`",
+             opening(f"The error can still differ by release ({abbreviation} on "
+                     f"`{stamp}`)."), stamp)
+    case("CHANGELOG.md stating the retracted sentence as amended, a difference a later "
+         "change closed", opening(AMENDED_RELEASE_DIFFERENCE), None)
+    case(f"CHANGELOG.md saying the error on `{stamp}` cannot differ by release",
+         opening(f"The error on `{stamp}` cannot differ by release."), None)
+    case("the retracted sentence in a CHANGELOG.md section below the top one",
+         f"{changelog}\n## 0000000: a past commit\n\n{RETRACTED_RELEASE_DIFFERENCE}\n", None)
+    emptied = go_test.replace(f'"{stamp}"', '""').replace(f"`{stamp}`", "``")
+    case(f"the retracted sentence with each string literal `{stamp}` of "
+         f"{VERIFY_GO_TEST_NAME} emptied", retracted, None, source=emptied)
+    case(f"the retracted sentence with `{stamp}` then written in a comment of "
+         f"{VERIFY_GO_TEST_NAME}", retracted, None,
+         source=f'{emptied}\n// "{stamp}" and `{stamp}`\n')
+    case(f"the retracted sentence with `{stamp}` then written as a raw string literal "
+         f"of {VERIFY_GO_TEST_NAME}", retracted, stamp,
+         source=f"{emptied}\nvar _ = `{stamp}`\n")
+    missing = release_difference_failures(changelog, None)
+    cases.append((any(f"{VERIFY_GO_TEST_NAME} is missing" in f for f in missing),
+                  f"{VERIFY_GO_TEST_NAME} missing", f"got {missing}"))
+    return cases
+
+
+# A total no CHANGELOG.md here states.
+INVENTED_TOTAL = "9999 altered count sites"
+# The sentences the check was written for, as CHANGELOG.md came to state them.
+AMENDED_TEST_TOTAL = (
+    "- The Python unit tests step of `conformance.yml` runs the tests of\n"
+    "  `docs/demo/test_record_atx_verify.py`, among them the ones that hold\n"
+    "  `docs/demo/record-atx-verify.sh` to refusing a Dockerfile that references an\n"
+    "  image it does not read (#325).")
+AMENDED_SITE_TOTAL = (
+    "The self-test adds three discover steps: an\n"
+    "  empty argument before `-s` and `-p`, which `-s` replaces as the start\n"
+    "  directory; the empty pattern `-p ''`; and an empty argument after `-s`\n"
+    "  and `-p`, which unittest reads as the start directory, the directory it\n"
+    "  is run from.")
+# The fixture totals the check was extended for, as they were wrapped: the
+# close of the entry for the two did:web fixtures, and the kit entry's opening
+# as the entry for fixtures/expired-beyond-skew.json left it.
+RETRACTED_FIXTURE_TOTAL = (
+    "The 41 existing fixtures and their `MANIFEST.sha256` lines are\n"
+    "  byte-identical; the manifest gains two lines. `conformance.json` and the\n"
+    "  capture under `docs/captures/` are regenerated; the capture gains the\n"
+    "  fixtures' eight lines, and its summary line counts 43. The fixture counts\n"
+    "  in README.md (the first command's summary line, the expected output and\n"
+    "  the implementation table), COSIGNERS.md, CONTRIBUTING.md,\n"
+    "  `docs/continuous-verification.md` and `docs/sibling-repositories.md` go\n"
+    "  from 41 to 43 (the sibling row's v1.0 count from 12 to 14),\n"
+    "  `docs/scope.md` counts 34 of 43 fixtures reaching signature verification\n"
+    "  and 10 ACCEPT fixtures, and `docs/fixtures.md` gains a row for each. The\n"
+    "  kit's self-tests in `interop/run_test.go` count 43 fixtures, 10 to accept\n"
+    "  and 33 to reject, where they counted 41, 9 and 32, and the kit entry above\n"
+    "  counts 43 embedded fixtures.")
+RETRACTED_KIT_TOTAL = (
+    "- `atx-verify --verifier \"<command>\"` and `atx-verify --verifier-url <url>`\n"
+    "  send each of the 44 embedded fixtures to an outside verifier and compare its\n"
+    "  verdicts with the answer key in `conformance.json`.")
+# The same sentences as CHANGELOG.md came to state them.
+AMENDED_FIXTURE_TOTAL = (
+    "The 41 existing fixtures and their `MANIFEST.sha256` lines are\n"
+    "  byte-identical; the manifest gains two lines. `conformance.json` and the\n"
+    "  capture under `docs/captures/` are regenerated; the capture gains the\n"
+    "  fixtures' eight lines, and its summary line's pass and fixture counts go\n"
+    "  from 41 to 43. The fixture counts in README.md (the first command's\n"
+    "  summary line, the expected output and the implementation table),\n"
+    "  COSIGNERS.md, CONTRIBUTING.md, `docs/continuous-verification.md` and\n"
+    "  `docs/sibling-repositories.md` go from 41 to 43 (the sibling row's v1.0\n"
+    "  count from 12 to 14), the count of fixtures reaching signature\n"
+    "  verification in `docs/scope.md` goes from 32 of 41 to 34 of 43 and its\n"
+    "  count of ACCEPT fixtures from 9 to 10, and `docs/fixtures.md` gains a row\n"
+    "  for each. The fixture, accept and reject counts of the kit's self-tests\n"
+    "  in `interop/run_test.go` go from 41, 9 and 32 to 43, 10 and 33.")
+AMENDED_KIT_TOTAL = (
+    "- `atx-verify --verifier \"<command>\"` and `atx-verify --verifier-url <url>`\n"
+    "  send each embedded fixture to an outside verifier and compare its\n"
+    "  verdicts with the answer key in `conformance.json`.")
+
+
+def _unheld_total_forms(changelog, forms):
+    """Each of `forms`, its N read as 44 and its M as 45, that adds no failure
+    naming it when it is a sentence opening the top section of `changelog`."""
+    before = collections.Counter(changelog_total_failures(changelog))
+    unheld = []
+    for form in forms:
+        total = re.sub(r"\bM\b", "45", re.sub(r"\bN\b", "44", form))
+        after = collections.Counter(
+            changelog_total_failures(_top_section_with(changelog, f"{total}.")))
+        if not any(f.startswith(TOTAL_SITE) and f"states `{total}`" in f
+                   for f in (after - before).elements()):
+            unheld.append(total)
+    return unheld
+
+
+def _changelog_total_cases(tree):
+    """Sentences added to the top section of the published CHANGELOG.md, its
+    first `## ` section. The #325 and #327 sentences as they were wrapped each
+    add a failure naming the total they state, the second also once the top
+    section is retitled `## v9.9.9`, and so does each other form of total,
+    `holds 8 tests that ...`, `runs 8 tests that ...` and `Ran 14 tests that
+    ...` among them. The two sentences as amended, `adds 21 cases`, `adds 2
+    tests`, what a run held before a change, a run of no test or of one and a
+    set of tests named by what they did (`the three tests that ...`) add none,
+    nor do the retracted sentences in a section below the top one. A missing
+    CHANGELOG.md and one with no `## ` heading add none here; the
+    first-command check reports them. Each form TOTAL_FORMS names, which the
+    success line prints, adds a failure naming it, and `adds N fixtures`, a
+    form the check passes, is reported as one. Each case counts only the
+    failures the text it adds brings, so over a published CHANGELOG.md the
+    check fails each case stays green."""
+    changelog = tree.changelog or ""
+    if top_heading_at(changelog.split("\n")) is None:
+        # As in the first-command cases: with a top section added, a sentence
+        # placed below that section stays below.
+        changelog = f"{SECTION_HEADING}Unreleased\n\n{changelog}"
+    cases = []
+
+    def case(label, text, want):
+        before = collections.Counter(changelog_total_failures(changelog))
+        after = collections.Counter(changelog_total_failures(text))
+        new = list((after - before).elements())
+        if want is None:
+            cases.append((not new, label, f"it adds {new}"))
+        else:
+            want = f"states `{want}`"
+            cases.append((any(f.startswith(TOTAL_SITE) and want in f for f in new),
+                          label, f"expected a {TOTAL_SITE} failure that {want}, got {new}"))
+
+    def opening(sentence):
+        return _top_section_with(changelog, sentence)
+
+    case("CHANGELOG.md restoring the #325 sentence on the tests of a file",
+         opening(RETRACTED_TEST_TOTAL), "the 2 tests")
+    case("CHANGELOG.md restoring the #327 sentence on the self-test's total",
+         opening(RETRACTED_SITE_TOTAL), "319 altered count sites")
+    lines = changelog.split("\n")
+    lines[top_heading_at(lines)] = f"{SECTION_HEADING}v9.9.9"
+    case("CHANGELOG.md whose top section is retitled `## v9.9.9`, restoring the #327 "
+         "sentence", _top_section_with("\n".join(lines), RETRACTED_SITE_TOTAL),
+         "319 altered count sites")
+    for total, sentence in (
+            ("the 2 tests", "`x.py`, which that run matches, adds the 2 tests."),
+            ("The 8 tests", "The 8 tests of `x.py` hold the script to it."),
+            ("the eight tests", "It reads the eight tests of `x.py`."),
+            ("holds 8 tests", "`x.py` holds 8 tests."),
+            ("hold 8 tests", "The two files hold 8 tests."),
+            ("runs 8 tests", "The step runs 8 tests."),
+            ("run 8 tests", "The two steps run 8 tests."),
+            ("Ran 14 tests", "The step prints `Ran 14 tests`."),
+            ("293 cases green", "Its self-test adds 21 cases (293 cases green, from 272)."),
+            ("68 cases, from 67", "It reads the module (self-test 68 cases, from 67).")):
+        case(f"CHANGELOG.md stating `{total}`", opening(sentence), total)
+    for total, sentence in (
+            ("holds 8 tests", "`x.py` holds 8 tests that check the script."),
+            ("runs 8 tests", "The step runs 8 tests that check the script."),
+            ("Ran 14 tests", "The step printed Ran 14 tests that morning.")):
+        case(f"CHANGELOG.md stating `{total}` with `that` after it, which exempts "
+             f"the `the` form alone", opening(sentence), total)
+    for label, sentence in (
+            ("the #325 sentence as amended", AMENDED_TEST_TOTAL),
+            ("the #327 sentence as amended", AMENDED_SITE_TOTAL),
+            ("`adds 21 cases`", "Its self-test adds 21 cases."),
+            ("`adds 2 tests`", "`x.py` adds 2 tests to that run."),
+            ("what a run held before the change, `held 3 tests`",
+             "The run held 3 tests, none from `docs/demo`."),
+            ("`Ran 0 tests`", "An empty pattern prints `Ran 0 tests`."),
+            ("`runs zero tests`", "An empty pattern runs zero tests."),
+            ("`Ran 1 test`", "A run narrowed by `-k` prints `Ran 1 test`."),
+            ("a set of tests, `the three tests that held the old reading`",
+             "The three tests that held the old reading hold the new one.")):
+        case(f"CHANGELOG.md stating {label}", opening(sentence), None)
+    for total in ("counts 43", "counts 34 of 43 fixtures", "count 43 fixtures",
+                  "counts 43 embedded fixtures"):
+        case(f"CHANGELOG.md restoring the did:web fixtures' sentences, which state "
+             f"`{total}`", opening(RETRACTED_FIXTURE_TOTAL), total)
+    case("CHANGELOG.md restoring the kit entry's fixture total",
+         opening(RETRACTED_KIT_TOTAL), "the 44 embedded fixtures")
+    for total, sentence in (
+            ("count 44", "The kit's self-tests count 44, 10 to accept and 34 to reject."),
+            ("count two fixtures", "The two files count two fixtures."),
+            ("34 of 44 fixtures", "`docs/scope.md` says 34 of 44 fixtures reach step 5."),
+            ("The 44 fixtures", "The 44 fixtures pass in both verifiers."),
+            ("the ten ACCEPT fixtures", "It reads the ten ACCEPT fixtures."),
+            ("holds 44 fixtures", "`fixtures/` holds 44 fixtures."),
+            ("hold 44 fixtures", "The two directories hold 44 fixtures."),
+            ("embeds 44 fixtures", "The kit embeds 44 fixtures."),
+            ("runs 44 fixtures", "The tour runs 44 fixtures."),
+            ("holds 44 fixtures", "`fixtures/` holds 44 fixtures that the kit embeds.")):
+        case(f"CHANGELOG.md stating `{total}` in {sentence!r}", opening(sentence), total)
+    for label, sentence in (
+            ("the did:web fixtures' sentences as amended", AMENDED_FIXTURE_TOTAL),
+            ("the kit entry as amended", AMENDED_KIT_TOTAL),
+            ("how a count went, `go from 41 to 43`",
+             "The fixture counts in README.md go from 41 to 43."),
+            ("what a count was before the change, `counted 41`",
+             "The self-tests counted 41 fixtures, 9 to accept and 32 to reject."),
+            ("`adds two fixtures`", "The change adds two fixtures."),
+            ("a count opening the sentence on what the change adds",
+             "Two fixtures built by the generator name the subject under `did:web`."),
+            ("the fixtures before the change, `the 41 existing fixtures`",
+             "The 41 existing fixtures are byte-identical."),
+            ("the fixtures the change adds, `the two new fixtures`",
+             "`docs/fixtures.md` gains a row for each of the two new fixtures."),
+            ("`the 43 fixtures before this one`",
+             "The 43 fixtures before this one passed in both verifiers."),
+            ("a set of fixtures, `the two fixtures that it adds`",
+             "The two fixtures that it adds expect `ACCEPT`."),
+            ("the count a change reaches, `to 34 of 43 fixtures`",
+             "Its count goes from 32 of 41 to 34 of 43 fixtures."),
+            ("`counts as a pass`", "Each copy now counts as a pass.")):
+        case(f"CHANGELOG.md stating {label}", opening(sentence), None)
+    # The first five are the sentences, as they were reported, that the check
+    # was extended for: `all` and `has` before a count, and a summary line's
+    # `(N fixtures)`.
+    for total, sentence in (
+            ("All 44 fixtures", "All 44 fixtures pass in both verifiers."),
+            ("all 44 embedded fixtures",
+             "`atx-verify --verifier` sends all 44 embedded fixtures to an outside "
+             "verifier."),
+            ("has 44 fixtures", "`fixtures/` has 44 fixtures."),
+            ("(44 fixtures)", "The capture ends `summary: 44 pass, 0 fail (44 fixtures)`."),
+            ("All 8 tests", "All 8 tests pass."),
+            ("all ten ACCEPT fixtures", "It reads all ten ACCEPT fixtures."),
+            ("have 44 fixtures", "The two directories have 44 fixtures."),
+            ("contain 44 fixtures", "The two directories contain 44 fixtures."),
+            ("include 44 fixtures", "The two suites include 44 fixtures."),
+            ("all eight tests", "The step runs all eight tests."),
+            ("have 8 tests", "The two files have 8 tests."),
+            ("contain 8 tests", "The two files contain 8 tests."),
+            ("include 8 tests", "The two steps include 8 tests.")):
+        case(f"CHANGELOG.md stating `{total}` in {sentence!r}", opening(sentence), total)
+    for total, sentence in (
+            ("All 44 fixtures", "All 44 fixtures that the kit embeds pass."),
+            ("All 8 tests", "All 8 tests that check the script pass.")):
+        case(f"CHANGELOG.md stating `{total}` with `that` after it, which exempts "
+             f"the `the` form alone", opening(sentence), total)
+    for label, sentence in (
+            ("the fixtures before the change, `all 41 existing fixtures`",
+             "All 41 existing fixtures are byte-identical."),
+            ("the fixtures the change adds, `all three new fixtures`",
+             "All three new fixtures expect `REJECT`."),
+            ("`all 43 fixtures before this one`",
+             "All 43 fixtures before this one passed in both verifiers."),
+            ("what the change adds in parentheses, `(two new fixtures)`",
+             "The manifest gains two lines (two new fixtures).")):
+        case(f"CHANGELOG.md stating {label}", opening(sentence), None)
+    unheld = _unheld_total_forms(changelog, TOTAL_FORMS)
+    cases.append((not unheld, "CHANGELOG.md stating a total in each form the success "
+                              "line names, its N read as 44 and its M as 45",
+                  f"the check passes {unheld}, which the success line names"))
+    # A form the check passes is reported, so the case above is not green
+    # having held no form.
+    passed = _unheld_total_forms(changelog, ("adds N fixtures",))
+    cases.append((passed == ["adds 44 fixtures"],
+                  "`adds N fixtures`, a form the check passes, reported by the "
+                  "success-line form case", f"got {passed}"))
+    case("the #325 and #327 sentences and the did:web fixtures' sentences in a "
+         "CHANGELOG.md section below the top one",
+         f"{changelog}\n## 0000000: a past commit\n\n{RETRACTED_TEST_TOTAL}\n\n"
+         f"{RETRACTED_SITE_TOTAL}\n\n{RETRACTED_FIXTURE_TOTAL}\n\n"
+         f"{RETRACTED_KIT_TOTAL}\n", None)
+    missing = changelog_total_failures(None)
+    cases.append((not missing, "CHANGELOG.md missing, which the first-command check "
+                               "reports", f"got {missing}"))
+    demoted = re.sub(r"^## ", "### ", opening(RETRACTED_SITE_TOTAL), flags=re.M)
+    headless = changelog_total_failures(demoted)
+    cases.append((not headless, "CHANGELOG.md with each `## ` heading made `### `, which "
+                                "the first-command check reports", f"got {headless}"))
+    return cases
 
 
 # The two forms the zero-dependency claim was published in, with their
@@ -3829,14 +5947,18 @@ def _ed25519_only_cases(readme, suites):
 
 
 INVENTED_SCRIPT = "check_invented.py"
+INVENTED_DIRECTORY = "invented-directory"
+INVENTED_FORMAT = "invented-v1"
+INVENTED_TEST_MODULE = "test_invented_case.py"
 
 
 def _ci_gate_label_cases(readme, workflow, scripts):
     """Add a script no workflow step runs, stop the workflow naming this
     script, then name it again only in a YAML comment, only in shell comments
-    of a `run:` step, only in a step name and an action input, only in the
-    name of a step written as a flow mapping, and only in a YAML comment
-    between a step's `run:` key and the command on the lines after it, run an
+    of a `run:` step, only in a shell comment that starts right after a `;`,
+    only in a step name and an action input, only in the name of a step
+    written as a flow mapping, and only in a YAML comment between a step's
+    `run:` key and the command on the lines after it, run an
     invented helper only through an import and then cut the import, and give
     a script that is not run its own layout line, once calling it a CI gate
     and once not. Each but the last must add a failure. Then run this script
@@ -3844,11 +5966,63 @@ def _ci_gate_label_cases(readme, workflow, scripts):
     written as a flow mapping on one line, from one whose command is on its
     second line, from steps whose `run:` key is double-quoted, single-quoted
     or double-quoted with a `\\x` escape, from a flow-mapping step whose
-    keys are double-quoted, and from steps whose `run` key, plain or
-    double-quoted, has a space before its `:`: none of the nine may add a
+    keys are double-quoted, from steps whose `run` key, plain or
+    double-quoted, has a space before its `:`, and from a `run: |` step
+    whose path a trailing backslash splits: none of the ten may add a
     failure. Last, name
     it under the single-quoted key `'ru''n'`, which reads as `ru'n`: that
-    must add a failure."""
+    must add a failure. Then give an invented script a layout line calling
+    it a CI gate and run `python3 -m unittest discover` from an added step.
+    Over scripts/ with -s and -p; over scripts/ with the directory and
+    pattern given by position; with -s and -p after -k NAME, and after
+    --durations N; with -s and -p written with their values attached; with
+    -s scripts after another directory given by position; with
+    --start=scripts and --pat, two shortened long options; and with an
+    empty argument, written `""`, before -s and -p, so that -s replaces it
+    as the start directory: none may add a failure. Over another
+    directory; over scripts/ with a pattern that does not match the script;
+    with scripts/ and the pattern given by position, then -s naming another
+    directory; with them given by position, then -p naming a pattern that
+    does not match; with an option unittest refuses; with -h; with the
+    empty pattern `-p ''`, which matches no file; and with -s and -p
+    followed by an empty argument, written `''`, which unittest reads as
+    the start directory, the directory it is run from: each must. With
+    `discover` written DISCOVER and Discover, which unittest reads as that
+    word, neither may. With it written with U+0130, U+0131 or U+017F, which
+    `(?i)` alone reads as that word and unittest does not, and with the
+    module named UNITTEST, each must. Then run it from added `run: |`
+    steps: a run whose arguments a trailing backslash puts on the next
+    line, a run continued by a backslash before `discover`, and a run over
+    scripts/ after another on the same line, past `&&` and past `;`, may
+    add no failure; a run whose arguments stand on the next line with no
+    backslash before them must. A run whose -s value a trailing backslash
+    splits, both lines at the block's indentation, may add no failure with
+    the value in double quotes or outside quotes, and neither may a run in
+    a folded `run: >` block whose arguments stand on its next line. A run
+    whose -s value a trailing backslash joins to a next line `#x`, and a
+    run whose split -s value a `run: |1` block leaves a space in, must.
+    Last, run it from steps whose plain `run:` scalar goes on to a second
+    line indented past the key: with the arguments on the line after
+    `run: python3 -m unittest discover`, with the command starting on the
+    line under `run:` and its arguments on the line after that, and from a
+    flow-mapping step written so, none may add a failure; with an empty
+    line between the run and its arguments, which YAML reads as a line
+    break, and with a backslash ending the first line, which YAML keeps
+    before the space it folds the line break into, each must. Then run it
+    from steps whose `run:` scalar is quoted: double-quoted, single-quoted
+    with its `'` written `''`, double-quoted with the arguments on a second
+    line indented past the key, in a block-style step and in a flow
+    mapping, double-quoted with a backslash ending its first line,
+    double-quoted with a `\\t` escape between the run and its arguments,
+    and double-quoted with a comment after its closing quote: none may add
+    a failure. Double-quoted with an empty line between the run and its
+    arguments, which YAML reads as a line break, and double-quoted with
+    the escape `\\q`, which YAML does not define, each must. A
+    double-quoted run whose first line ends in a backslash and a space,
+    which YAML reads as an escaped space before the space it folds the line
+    break into, on the key's line or on the line under `run:`, and one
+    whose first line ends in a backslash and a tab, which YAML reads as an
+    escaped tab, may add no failure."""
     labels = (
         "scripts/*.py script that no workflow step runs",
         "script the workflow stops naming",
@@ -3870,6 +6044,57 @@ def _ci_gate_label_cases(readme, workflow, scripts):
         "script named only under a quoted key that reads as ru'n",
         "script run by a step with a space between its run key and the colon",
         "script run by a step with a space after its double-quoted run key",
+        "script run by a unittest discover step over scripts/ by -s and -p",
+        "script run by a unittest discover step over scripts/ by position",
+        "script matched by a unittest discover step over another directory",
+        "script a unittest discover step over scripts/ does not match",
+        "script run by a unittest discover step with -k NAME before -s and -p",
+        "script run by a unittest discover step with --durations N before -s and -p",
+        "script run by a unittest discover step with -s and -p values attached",
+        "script run by a unittest discover step whose -s follows another directory",
+        "script matched by position in a unittest discover step, then -s elsewhere",
+        "script matched by position in a unittest discover step, then not by -p",
+        "script run by a unittest discover step with abbreviated long options",
+        "script a unittest discover step with an option unittest refuses does not run",
+        "script a unittest discover step with -h does not run",
+        "script run by a unittest discover step continued by a trailing backslash",
+        "script run by a unittest discover step continued before discover",
+        "script run by a second unittest discover run on its line, after &&",
+        "script run by a second unittest discover run on its line, after ;",
+        "script named on the line after a unittest discover run, with no backslash",
+        "script run by a unittest discover step with an empty argument before -s and -p",
+        "script a unittest discover step with the empty pattern -p '' does not run",
+        "script a unittest discover step ending in an empty start directory does not run",
+        "script run by a unittest discover step written DISCOVER",
+        "script run by a unittest discover step written Discover",
+        "script a unittest step writing discover with U+0130 does not run",
+        "script a unittest step writing discover with U+0131 does not run",
+        "script a unittest step writing discover with U+017F does not run",
+        "script a step naming the unittest module UNITTEST does not run",
+        "script run by a run: | step whose path a trailing backslash splits",
+        "script named only in a shell comment that starts right after a ;",
+        "script run by a unittest discover step whose quoted -s value a backslash splits",
+        "script run by a unittest discover step whose -s value a backslash splits",
+        "script a unittest discover step does not run when a backslash joins #x to -s",
+        "script run by a unittest discover step in a folded run: > block on two lines",
+        "script a unittest discover step does not run when a |1 block keeps a space in -s",
+        "script run by a unittest discover step whose plain run: scalar spans two lines",
+        "script run by a unittest discover step under run: whose plain scalar spans two lines",
+        "script a unittest discover step whose arguments an empty line sets apart does not run",
+        "script run by a flow-mapping unittest discover step whose plain run: scalar spans two lines",
+        "script a unittest discover step does not run when its plain run: scalar ends a line in a backslash",
+        "script run by a unittest discover step whose run: scalar is double-quoted",
+        "script run by a unittest discover step whose run: scalar is single-quoted",
+        "script run by a unittest discover step whose double-quoted run: scalar spans two lines",
+        "script run by a flow-mapping unittest discover step whose double-quoted run: scalar spans two lines",
+        "script run by a unittest discover step whose double-quoted run: scalar a backslash continues",
+        "script run by a unittest discover step whose double-quoted run: scalar holds a \\t escape",
+        "script run by a unittest discover step whose double-quoted run: scalar a comment follows",
+        "script a unittest discover step does not run when an empty line splits its double-quoted run: scalar",
+        "script a unittest discover step does not run when its double-quoted run: scalar holds an undefined escape",
+        "script run by a unittest discover step whose double-quoted run: scalar ends a line in an escaped space",
+        "script run by a unittest discover step under run: whose double-quoted scalar ends a line in an escaped space",
+        "script run by a unittest discover step whose double-quoted run: scalar ends a line in an escaped tab",
     )
     if not CI_GATE_GLOB.search(readme):
         why = ("no `scripts/*.py  CI gates` layout line found in README.md or its "
@@ -3907,6 +6132,7 @@ def _ci_gate_label_cases(readme, workflow, scripts):
             (labels[9], f"\n      - run:\n          # python3 scripts/{this}\n"
                         f"          echo done\n"),
             (labels[17], f"\n      - 'ru''n': python3 scripts/{this}\n"),
+            (labels[48], f"\n      - run: echo done;# python3 scripts/{this}\n"),
         )
         for label, text in named_not_run:
             got = new(readme, renamed + text, scripts)
@@ -3923,6 +6149,8 @@ def _ci_gate_label_cases(readme, workflow, scripts):
             (labels[16], f"\n      - {{\"name\": a, \"run\": \"python3 scripts/{this}\"}}\n"),
             (labels[18], f"\n      - run : python3 scripts/{this}\n"),
             (labels[19], f"\n      - \"run\" : python3 scripts/{this}\n"),
+            (labels[47], f"\n      - run: |\n          python3 scripts/{this[:6]}\\\n"
+                         f"          {this[6:]}\n"),
         )
         for label, text in run:
             got = new(readme, renamed + text, scripts)
@@ -3947,6 +6175,237 @@ def _ci_gate_label_cases(readme, workflow, scripts):
     line = f"\nscripts/{INVENTED_SCRIPT}\n                       an invented check (run by hand)\n"
     got = new(readme + line, workflow, {**scripts, INVENTED_SCRIPT: ""})
     cases.append((not got, labels[7], f"the line still fails: {got}"))
+
+    # A script the workflow runs only through a unittest discovery run, named
+    # so that no pattern the workflow already discovers matches it.
+    name = "invented_discovered_case.py"
+    line = f"\nscripts/{name}       CI gate: an invented discovered test\n"
+    files = {**scripts, name: ""}
+    want = f"calls scripts/{name} a CI gate"
+
+    def discover_case(label, command, reported):
+        flow = (workflow or "") + f"\n      - run: {command}\n"
+        got = new(readme + line, flow, files)
+        cases.append((any(want in f for f in got) == reported, label,
+                      f"expected {'a' if reported else 'no'} failure containing "
+                      f"{want!r}, got {got}"))
+
+    for label, step, reported in (
+            (labels[20], "-v -s scripts -t scripts -p 'invented_*.py' 2>&1 | tee x.log",
+             False),
+            (labels[21], "scripts invented_*.py", False),
+            (labels[22], "-s verifiers/python -p 'invented_*.py'", True),
+            (labels[23], "-s scripts -p 'test_*.py'", True),
+            (labels[24], "-k invented -s scripts -p 'invented_*.py'", False),
+            (labels[25], "-v --durations 5 -s scripts -p 'invented_*.py'", False),
+            (labels[26], "-sscripts '-pinvented_*.py'", False),
+            (labels[27], "verifiers/python -s scripts -p 'invented_*.py'", False),
+            (labels[28], "scripts 'invented_*.py' -s verifiers/python", True),
+            (labels[29], "scripts 'invented_*.py' -p 'test_*.py'", True),
+            (labels[30], "--start=scripts --pat 'invented_*.py'", False),
+            (labels[31], "-s scripts -p 'invented_*.py' --bogus", True),
+            (labels[32], "-h -s scripts -p 'invented_*.py'", True),
+            (labels[38], "\"\" -s scripts -p 'invented_*.py'", False),
+            (labels[39], "-s scripts -p ''", True),
+            (labels[40], "-s scripts -p 'invented_*.py' ''", True)):
+        discover_case(label, f"python3 -m unittest discover {step}", reported)
+    for label, words, reported in (
+            (labels[41], "unittest DISCOVER", False),
+            (labels[42], "unittest Discover", False),
+            (labels[43], f"unittest D{chr(0x130)}SCOVER", True),
+            (labels[44], f"unittest d{chr(0x131)}scover", True),
+            (labels[45], f"unittest di{chr(0x17f)}cover", True),
+            (labels[46], "UNITTEST DISCOVER", True)):
+        discover_case(label, f"python3 -m {words} -s scripts -p 'invented_*.py'",
+                      reported)
+
+    # The same script, run from a block scalar step (`run: |` unless the
+    # header says otherwise) whose command goes on past the end of a line or
+    # holds a second discovery run on a line. YAML removes the block's
+    # indentation before bash joins a line that ends in a backslash.
+    discover = "python3 -m unittest discover"
+    rest = "-t scripts -p 'invented_*.py' 2>&1 | tee x.log"
+    over_scripts = f"-s scripts {rest}"
+    for label, header, command, reported in (
+            (labels[33], "|", (f"{discover} -v \\", f"  {over_scripts}"), False),
+            (labels[34], "|", ("python3 -m unittest \\", f"  discover -v {over_scripts}"),
+             False),
+            (labels[35], "|",
+             (f"{discover} -s verifiers/python && {discover} -v {over_scripts}",), False),
+            (labels[36], "|",
+             (f"{discover} -s verifiers/python; {discover} scripts invented_*.py",), False),
+            (labels[37], "|", (f"{discover} -v", f"  {over_scripts}"), True),
+            (labels[49], "|", (f'{discover} -v -s "scr\\', f'ipts" {rest}'), False),
+            (labels[50], "|", (f"{discover} -v -s scr\\", f"ipts {rest}"), False),
+            (labels[51], "|", (f"{discover} -v -p 'invented_*.py' -s scripts\\", "#x"),
+             True),
+            (labels[52], ">", (f"{discover} -v", over_scripts), False),
+            (labels[53], "|1", (f"{discover} -v -s scr\\", f"ipts {rest}"), True)):
+        flow = (workflow or "") + f"\n      - run: {header}\n" + "".join(
+            f"          {part}\n" for part in command)
+        got = new(readme + line, flow, files)
+        cases.append((any(want in f for f in got) == reported, label,
+                      f"expected {'a' if reported else 'no'} failure containing "
+                      f"{want!r}, got {got}"))
+
+    # The same script, run from a step whose plain `run:` scalar goes on to
+    # a second line, indented past the key. YAML folds the line break into
+    # a space, and an empty line between the two into a line break, before
+    # bash reads the command (plain_scalar()), so a backslash that ends the
+    # first line stays a backslash before a space and joins no line.
+    # A quoted `run:` scalar is read as YAML reads it (quoted_scalar()): its
+    # quotes removed, `''` read as `'`, its escapes undone and its line breaks
+    # folded, before bash reads the command. Its arguments end the scalar, so
+    # a closing quote read as part of the command would follow them.
+    quoted = "-s scripts -t scripts -p 'invented_*.py'"
+    # Inside a single-quoted YAML scalar each `'` is written `''`.
+    single_quoted = quoted.replace("'", "''")
+    for label, step, reported in (
+            (labels[54], f"- run: {discover}\n          {over_scripts}", False),
+            (labels[55], f"- run:\n          {discover}\n          {over_scripts}", False),
+            (labels[56], f"- run: {discover} -v\n\n          {over_scripts}", True),
+            (labels[57], f"- {{name: a, run: {discover}\n          {over_scripts}}}", False),
+            (labels[58], f"- run: {discover} \\\n          {over_scripts}", True),
+            (labels[59], f'- run: "{discover} {quoted}"', False),
+            (labels[60], f"- run: '{discover} {single_quoted}'", False),
+            (labels[61], f'- run: "{discover}\n          {quoted}"', False),
+            (labels[62], f'- {{name: a, run: "{discover}\n          {quoted}"}}', False),
+            (labels[63], f'- run: "{discover} -v \\\n          {quoted}"', False),
+            (labels[64], f'- run: "{discover}\\t{quoted}"', False),
+            (labels[65], f'- run: "{discover} {quoted}" # a comment', False),
+            (labels[66], f'- run: "{discover} -v\n\n          {quoted}"', True),
+            # YAML defines no `\q`, so the scalar is kept with its quotes and
+            # the closing one stands unbalanced after the run's arguments; read
+            # as `q`, it would be a start directory -s replaces.
+            (labels[67], f'- run: "{discover} \\q {quoted}"', True),
+            # A backslash before the white space that ends a line escapes a
+            # space or tab; the line break after it is still folded into a
+            # space, so `-v` stands apart from the pattern.
+            (labels[68], f'- run: "{discover} {quoted}\\ \n          -v"', False),
+            (labels[69], f'- run:\n          "{discover} {quoted}\\ \n          -v"', False),
+            (labels[70], f'- run: "{discover} {quoted}\\\t\n          -v"', False)):
+        flow = (workflow or "") + f"\n      {step}\n"
+        got = new(readme + line, flow, files)
+        cases.append((any(want in f for f in got) == reported, label,
+                      f"expected {'a' if reported else 'no'} failure containing "
+                      f"{want!r}, got {got}"))
+    return cases
+
+
+def _test_import_cases(readme, workflow, scripts):
+    """Add a step running `python3 -m unittest discover` over scripts/ with a
+    pattern that matches one invented test module, the module importing an
+    invented helper no step names: the helper must be reported as not run.
+    Then add a step naming an invented runner that imports the same helper:
+    that must add no failure naming the helper."""
+    labels = ("script only a test module imports",
+              "script a test module and a script a step names both import")
+    if not CI_GATE_GLOB.search(readme):
+        why = ("no `scripts/*.py  CI gates` layout line found in README.md or its "
+               "pages: the label is not covered by this self-test")
+        return [(False, label, why) for label in labels]
+    baseline = set(ci_gate_label_failures(readme, workflow, scripts))
+
+    def new(flow, files):
+        return [f for f in ci_gate_label_failures(readme, flow, files) if f not in baseline]
+
+    flow = ((workflow or "")
+            + "\n      - run: python3 -m unittest discover -s scripts -p 'invented_case.py'\n")
+    files = {**scripts, "invented_case.py": "import helper_invented  # noqa\n",
+             "helper_invented.py": ""}
+    want = "does not run scripts/helper_invented.py"
+    got = new(flow, files)
+    cases = [(any(want in f for f in got), labels[0],
+              f"expected a failure containing {want!r}, got {got}")]
+    flow += "\n      - run: python3 scripts/runner_invented.py\n"
+    got = new(flow, {**files, "runner_invented.py": "import helper_invented  # noqa\n"})
+    cases.append((not any(want in f for f in got), labels[1],
+                  f"the helper is not read as run: {got}"))
+    return cases
+
+
+def _layout_cases(readme, directories, formats, test_modules):
+    """Give the tree a top-level directory the layout has no line for, a
+    format schema its schemas/*.schema.json line does not name, and a test
+    module with no line of its own: each must add a failure naming it. Then
+    give the directory a line opening with a path under it, name the format
+    on that line and give the test module a line of its own: none may add a
+    failure. A line for the directory in a fenced block of a section after
+    the layout's, the format written only as the start of a longer name, and
+    the test module named only in another line's text must each add the
+    failure still. Last, rename the layout's section heading: that must add
+    a failure saying the layout was not found."""
+    labels = (
+        "top-level directory the layout has no line for",
+        "top-level directory a layout line opens with a path under it",
+        "top-level directory with a line only in a later section's block",
+        "format the schemas/*.schema.json line does not name",
+        "format the schemas/*.schema.json line names",
+        "format written on that line only as the start of a longer name",
+        "test module with no layout line of its own",
+        "test module with a layout line of its own",
+        "test module named only in another layout line's text",
+        "layout section heading renamed",
+    )
+    heading = LAYOUT_HEADING.search(readme)
+    block = FENCED.search(readme, heading.end()) if heading else None
+    entry = (re.compile(rf"^{re.escape(FORMAT_ENTRY)}[^\n]*", re.M)
+             .search(readme, block.start(1), block.end(1)) if block else None)
+    if layout_entries(readme) is None or entry is None:
+        why = (f"no `## Repository layout` block with a `{FORMAT_ENTRY}` line found "
+               f"in README.md or its pages")
+        return [(False, label, why) for label in labels]
+    directories = list(directories or ())
+    test_modules = set(test_modules)
+    baseline = set(layout_failures(readme, directories, formats, test_modules))
+
+    def new(text=readme, dirs=directories, names=formats, tests=test_modules):
+        return [f for f in layout_failures(text, dirs, names, tests) if f not in baseline]
+
+    def in_block(line):
+        return readme[:block.start(1)] + line + "\n" + readme[block.start(1):]
+
+    def on_format_line(text):
+        return readme[:entry.end()] + text + readme[entry.end():]
+
+    cases = []
+    dirs = directories + [INVENTED_DIRECTORY]
+    want = f"has no line for {INVENTED_DIRECTORY}/"
+    for label, text, reported in (
+            (labels[0], readme, True),
+            (labels[1], in_block(f"{INVENTED_DIRECTORY}/sub/     an invented path"), False),
+            (labels[2], readme + (f"\n\n## Another section\n\n```\n{INVENTED_DIRECTORY}/"
+                                  f"     an invented directory\n```\n"), True)):
+        got = new(text, dirs=dirs)
+        cases.append((any(want in f for f in got) == reported, label,
+                      f"expected {'a' if reported else 'no'} failure containing "
+                      f"{want!r}, got {got}"))
+    names = [*formats, INVENTED_FORMAT]
+    want = f"does not name {INVENTED_FORMAT},"
+    for label, text, reported in (
+            (labels[3], readme, True),
+            (labels[4], on_format_line(f" and {INVENTED_FORMAT}"), False),
+            (labels[5], on_format_line(f" and {INVENTED_FORMAT}0"), True)):
+        got = new(text, names=names)
+        cases.append((any(want in f for f in got) == reported, label,
+                      f"expected {'a' if reported else 'no'} failure containing "
+                      f"{want!r}, got {got}"))
+    tests = test_modules | {INVENTED_TEST_MODULE}
+    want = f"has no line of its own for scripts/{INVENTED_TEST_MODULE}"
+    for label, text, reported in (
+            (labels[6], readme, True),
+            (labels[7], in_block(f"scripts/{INVENTED_TEST_MODULE}   CI gate: an invented "
+                                 f"test"), False),
+            (labels[8], on_format_line(f" (see scripts/{INVENTED_TEST_MODULE})"), True)):
+        got = new(text, tests=tests)
+        cases.append((any(want in f for f in got) == reported, label,
+                      f"expected {'a' if reported else 'no'} failure containing "
+                      f"{want!r}, got {got}"))
+    renamed = readme[:heading.start()] + "## Layout" + readme[heading.end():]
+    want = "no `## Repository layout` section"
+    got = new(renamed)
+    cases.append((any(want in f for f in got), labels[9],
+                  f"expected a failure containing {want!r}, got {got}"))
     return cases
 
 
@@ -3975,6 +6434,544 @@ def _front_page_cases(front_page):
         cases.append((any(f.startswith(want) for f in new), label,
                        f"expected a failure starting {want!r}, got {new}"))
     return cases
+
+
+def _paragraph_cases(front_page):
+    """Append text to README.md alone, after a blank line. The paragraph the
+    gate was written for, one of PARAGRAPH_MAX_WORDS + 1 words, and as many
+    words on two lines with no blank line between them must each fail it on
+    their first line; one of PARAGRAPH_MAX_WORDS words must not.
+    PARAGRAPHS_OVER + 1 paragraphs of PARAGRAPH_WORDS + 1 words must fail it
+    naming each. A paragraph of PARAGRAPH_WORDS words, and words a fenced
+    block or a table row holds, or that list items or a heading separate,
+    must not fail it."""
+    baseline = set(paragraph_failures(front_page))
+    page = front_page.rstrip("\n") + "\n\n"
+    first = len(page.splitlines()) + 1
+
+    def words(count):
+        return " ".join(["word"] * count)
+
+    longest = PARAGRAPH_MAX_WORDS + 1
+    half = longest // 2
+    opens = f"README.md:{first} opens a paragraph of"
+    over = [words(PARAGRAPH_WORDS + 1)] * (PARAGRAPHS_OVER + 1)
+    cases = []
+    for label, added, want, reported in (
+            ("README.md restoring the virtual-environment paragraph the gate was "
+             "written for", RETRACTED_PARAGRAPH,
+             f"{opens} {RETRACTED_PARAGRAPH_WORDS} words", True),
+            (f"README.md with a paragraph of {longest} words", words(longest),
+             f"{opens} {longest} words", True),
+            (f"README.md with {longest} words on two lines and no blank line "
+             f"between them", words(half) + "\n" + words(longest - half),
+             f"{opens} {longest} words", True),
+            (f"README.md with {len(over)} more paragraphs of {PARAGRAPH_WORDS + 1} "
+             f"words", "\n\n".join(over),
+             ", ".join(f"README.md:{first + 2 * i} ({PARAGRAPH_WORDS + 1} words)"
+                       for i in range(len(over))), True),
+            (f"README.md with a paragraph of {PARAGRAPH_MAX_WORDS} words",
+             words(PARAGRAPH_MAX_WORDS), opens, False),
+            (f"README.md with a paragraph of {PARAGRAPH_WORDS} words",
+             words(PARAGRAPH_WORDS), "", False),
+            (f"README.md with {longest} words in a fenced block",
+             f"```text\n{words(longest)}\n```", "", False),
+            (f"README.md with {longest} words in a table row",
+             f"| {words(longest)} |", "", False),
+            (f"README.md with two list items of {PARAGRAPH_WORDS} words and no "
+             f"blank line between them",
+             f"- {words(PARAGRAPH_WORDS - 1)}\n- {words(PARAGRAPH_WORDS - 1)}", "",
+             False),
+            (f"README.md with a heading between two lines of {half} words",
+             f"{words(half)}\n## Heading\n{words(half)}", "", False)):
+        new = [f for f in paragraph_failures(page + added + "\n") if f not in baseline]
+        cases.append((any(want in f for f in new) == reported, label,
+                      f"expected {'a' if reported else 'no'} failure containing "
+                      f"{want!r}, got {new}"))
+    return cases
+
+
+def _prerequisite_cases(tree):
+    """README.md with each paragraph above its first command that states a
+    toolchain minimum removed, the opening it published, adds a failure
+    naming each minimum; so does each minimum stated there with the next
+    minor version, or stated below the first command alone. A minimum a list
+    item of the pages adds is held too, list items that state no minimum add
+    the failure saying so, and so does a README.md with no fenced block."""
+    readme, front_page = tree.readme, tree.front_page or ""
+    baseline = set(prerequisite_failures(readme, front_page))
+    cases = [(not baseline, f"{PREREQUISITE_SITE} stating each toolchain minimum",
+              f"the published text fails: {sorted(baseline)}")]
+
+    def case(label, needle, text=readme, page=front_page):
+        new = [f for f in prerequisite_failures(text, page) if f not in baseline]
+        cases.append((any(needle in f for f in new), label,
+                      f"expected a failure naming {needle!r}, got {new}"))
+
+    minimums = toolchain_minimums(readme)
+    block = FENCED.search(front_page)
+    if not minimums or block is None:
+        cases.append((False, f"{PREREQUISITE_SITE} held to the toolchain minimums",
+                      "no toolchain minimum in a list item of the README text, or "
+                      "no fenced block in README.md"))
+        return cases
+    above, rest = front_page[:block.start()], front_page[block.start():]
+    published = "".join(part for part in re.split(r"(?<=\n\n)", above)
+                        if not any(_phrase_at(m, part) for m in minimums))
+    for minimum in minimums:
+        case(f"{PREREQUISITE_SITE} with no paragraph stating a toolchain minimum, "
+             f"as published: `{minimum}`", f"does not state `{minimum}`",
+             page=published + rest)
+        site = _phrase_at(minimum, above)
+        if site is None:
+            continue
+        major, minor = re.search(r"(\d+)\.(\d+)", minimum).groups()
+        other = minimum.replace(f"{major}.{minor}", f"{major}.{int(minor) + 1}", 1)
+        case(f"{PREREQUISITE_SITE} stating `{other}` where a list item states "
+             f"`{minimum}`", f"does not state `{minimum}`",
+             page=above[:site.start()] + other + above[site.end():] + rest)
+        case(f"{PREREQUISITE_SITE} with `{minimum}` stated below the first "
+             f"command alone", f"does not state `{minimum}`",
+             page=(above[:site.start()] + "a toolchain" + above[site.end():] + rest
+                   + f"\nThe command needs {minimum}.\n"))
+    case("a list item of the README text adding a toolchain minimum",
+         "does not state `Python 9.9 or later`",
+         text=readme + "\n- Python 9.9 or later\n")
+    case("list items of the README text stating no toolchain minimum",
+         "no toolchain minimum",
+         text=TOOLCHAIN_MINIMUM.sub(
+             lambda m: m.group(0).replace(" or later", " or newer"), readme))
+    case("README.md with no fenced block", "README.md has no fenced block",
+         page=above)
+    return cases
+
+
+def _pip_notice_cases(tree):
+    """README.md's install line as it published it, with no
+    --disable-pip-version-check, adds a failure naming it, as does
+    COSIGNERS.md's install line with the flag removed and an install line
+    continued with a backslash onto a line that does not pass it. The flag
+    on the line an install line continues onto adds none, nor does a `pip
+    install` named in prose outside a fenced block; a README text with no
+    fenced `pip install` adds the failure saying so."""
+    readme, cosigners = tree.readme, tree.cosigners
+    baseline = set(pip_notice_failures(readme, cosigners))
+    cases = [(not baseline, f"each {PIP_SITE} passing {PIP_VERSION_CHECK}",
+              f"the published text fails: {sorted(baseline)}")]
+
+    def case(label, needle, text=readme, cos=cosigners):
+        new = [f for f in pip_notice_failures(text, cos) if f not in baseline]
+        if needle is None:
+            cases.append((not new, label, f"expected no new failure, got {new}"))
+        else:
+            cases.append((any(needle in f for f in new), label,
+                          f"expected a failure naming {needle!r}, got {new}"))
+
+    flagged = f"pip install {PIP_VERSION_CHECK} "
+    for name, text in (("README", readme), ("COSIGNERS.md", cosigners or "")):
+        label = f"{name} install line with {PIP_VERSION_CHECK} removed"
+        if flagged not in text:
+            cases.append((False, label, f"no `{flagged.strip()}` found in {name}"))
+        elif name == "README":
+            case(f"{label}, as README.md published it",
+                 f"`{RETRACTED_PIP_INSTALL}` does not pass",
+                 text=text.replace(flagged, "pip install ", 1))
+        else:
+            case(label, f"COSIGNERS.md {PIP_SITE}",
+                 cos=text.replace(flagged, "pip install ", 1))
+    case(f"an install line continued onto a line passing {PIP_VERSION_CHECK}", None,
+         text=(readme + "\n```bash\npython3 -m pip install \\\n    "
+               + PIP_VERSION_CHECK + " -r requirements.txt\n```\n"))
+    case(f"an install line continued onto a line that does not pass "
+         f"{PIP_VERSION_CHECK}", f"does not pass {PIP_VERSION_CHECK}",
+         text=readme + "\n```bash\npython3 -m pip install \\\n    -r requirements.txt\n```\n")
+    case("a `pip install` named in prose outside a fenced block", None,
+         text=readme + f"\nRun `{RETRACTED_PIP_INSTALL}` first.\n")
+    case(f"a README text with no {PIP_SITE}", f"no {PIP_SITE} found",
+         text=FENCED.sub(lambda m: PIP_INSTALL.sub("pip download", m.group(0)), readme))
+    return cases
+
+
+def _spec_name_cases(tree):
+    """The README text with the credential name README.md published added,
+    on one line and wrapped across two, adds a failure naming it; the header
+    name Agent-Trust-Credential and a name the specification text uses add
+    none. A missing specification text, or one using no `Agent Trust <word>`
+    name, adds the failure saying so."""
+    readme, spec_text = tree.readme, tree.spec_text
+    baseline = set(spec_name_failures(readme, spec_text))
+    cases = [(not baseline, f"the README text using only names {SPEC_TEXT_NAME} uses",
+              f"the published text fails: {sorted(baseline)}")]
+
+    def case(label, needle, text=readme, spec=spec_text):
+        new = [f for f in spec_name_failures(text, spec) if f not in baseline]
+        if needle is None:
+            cases.append((not new, label, f"expected no new failure, got {new}"))
+        else:
+            cases.append((any(needle in f for f in new), label,
+                          f"expected a failure naming {needle!r}, got {new}"))
+
+    named = f"README names `{RETRACTED_CREDENTIAL_NAME}`"
+    case(f"the README text calling the credential an {RETRACTED_CREDENTIAL_NAME}, "
+         f"as README.md published it", named,
+         text=readme + f"\nEach fixture bundles an {RETRACTED_CREDENTIAL_NAME}.\n")
+    case(f"the README text with `{RETRACTED_CREDENTIAL_NAME}` wrapped across a "
+         f"line break", named,
+         text=readme + "\nEach fixture bundles an Agent Trust\nCredential.\n")
+    case("the README text naming the Agent-Trust-Credential header", None,
+         text=readme + "\nThe ATX travels in the Agent-Trust-Credential header.\n")
+    used = sorted(agent_trust_names(spec_text))
+    if not used:
+        cases.append((False, f"a name {SPEC_TEXT_NAME} uses, added to the README text",
+                      f"{SPEC_TEXT_NAME} is missing or uses no `Agent Trust <word>` name"))
+    else:
+        case(f"the README text naming the {used[0]}, a name {SPEC_TEXT_NAME} uses",
+             None, text=readme + f"\nThe {used[0]} is named here.\n")
+    case(f"a missing {SPEC_TEXT_NAME}", f"{SPEC_TEXT_NAME} not found", spec=None)
+    case(f"a {SPEC_TEXT_NAME} using no `Agent Trust <word>` name",
+         "refusing to pass", spec=AGENT_TRUST_NAME.sub("ATX", spec_text or ""))
+    return cases
+
+
+# Counts no fixture set here holds, and not ones the other cases write.
+KIT_BAD_SENDS = "9301"
+KIT_BAD_EXIT = "9302"
+KIT_BAD_SPAN = "9303"
+KIT_BAD_LINK = "9304"
+KIT_BAD_OTHER = "9305"
+# The kit section's two sentences on the whole fixture set as README.md
+# published them, as they were wrapped, and the opening words a reader finds
+# each by.
+RETRACTED_KIT_SENDS = (
+    "The kit sends each of the 41 fixtures to your verifier and compares its\n"
+    "verdicts with the answer key in [`conformance.json`](conformance.json).")
+RETRACTED_KIT_EXIT = "It exits 0 only when all 41 agree."
+KIT_OPENINGS = ("The kit sends", "It exits 0 only when")
+# Each of the two sentences with its count after an abbreviation whose `.`
+# statements() read as a sentence end (#352, #354), in the order of
+# KIT_OPENINGS, and the abbreviations each is restated with.
+KIT_ABBREVIATED = (
+    "The kit sends each fixture built into it ({abbreviation} all {count}) to "
+    "your verifier and compares its\nverdicts with the answer key in "
+    "[`conformance.json`](conformance.json).",
+    "It exits 0 only when every fixture agrees ({abbreviation} all {count}).")
+KIT_ABBREVIATIONS = ("e.g.", "i.e.", "E.g.", "I.e.",
+                     "incl.", "approx.", "ca.", "cf.", "viz.",
+                     "Incl.", "Approx.", "Ca.", "Cf.", "Viz.")
+# Endings of the sentence on when the kit exits 0 whose `.` still ends it: a
+# word ending in the letters of an abbreviation, and a dotted name whose last
+# part is one.
+KIT_NOT_ABBREVIATED = ("its replica.", "example.ca.")
+
+
+def _kit_sentence(readme, opening):
+    """(start, end) of the sentence `opening` starts in the README kit
+    section, up to the first `.`, `!` or `?` that ends a sentence, as
+    statements() reads one, or None."""
+    heading = re.search(rf"^{re.escape(KIT_SECTION)}$", readme, re.M)
+    if heading is None:
+        return None
+    end = readme.find("\n## ", heading.end())
+    end = len(readme) if end < 0 else end
+    at = readme.find(opening, heading.end(), end)
+    if at < 0:
+        return None
+    stop = re.compile(rf"[.!?]{NOT_AN_ABBREVIATION}(?=\s|$)").search(readme, at, end)
+    return at, (stop.end() if stop else end)
+
+
+def _kit_count_cases(tree):
+    """Each of the README kit section's sentences on what the kit sends and
+    on when it exits 0, put back as README.md published it, stating 41, adds
+    a failure naming 41; so does that sentence stating a count no fixture set
+    holds, inline, on the line after its opening words and after each of
+    KIT_ABBREVIATIONS, while stating the number of fixtures/*.json adds none.
+    A count is read with the opening words wrapped across a line break, in a
+    code span and on the line after `e.g.`; the exit status alone, a number
+    in a link target, a count in another sentence of the section, after
+    `e.g.` or not, and a count in the sentence after the one on when the kit
+    exits 0, with that one ending in each of KIT_NOT_ABBREVIATED, add none.
+    Either sentence removed, or the section heading renamed, adds the
+    failure saying so."""
+    readme, fixtures = tree.readme, tree.fixtures
+    actual = str(len(fixtures))
+    baseline = set(kit_count_failures(readme, fixtures))
+    cases = [(not baseline, f"the README `{KIT_SECTION}` sentences on the fixture "
+                            f"set stating no count but the fixture count",
+              f"the published text fails: {sorted(baseline)}")]
+
+    def case(label, needle, text):
+        new = [f for f in kit_count_failures(text, fixtures) if f not in baseline]
+        if needle is None:
+            cases.append((not new, label, f"expected no new failure, got {new}"))
+        else:
+            cases.append((any(needle in f for f in new), label,
+                          f"expected a failure naming {needle!r}, got {new}"))
+
+    spans = {}
+    for (site, _), opening, published, bad, abbreviated in zip(
+            KIT_SENTENCES, KIT_OPENINGS,
+            (RETRACTED_KIT_SENDS, RETRACTED_KIT_EXIT), (KIT_BAD_SENDS, KIT_BAD_EXIT),
+            KIT_ABBREVIATED):
+        span = spans[opening] = _kit_sentence(readme, opening)
+        label = f"the kit section sentence on {site}"
+        if span is None:
+            cases.append((False, label,
+                          f"no sentence opening `{opening}` found in the README "
+                          f"`{KIT_SECTION}` section: a count stated there is not "
+                          f"covered by this self-test"))
+            continue
+
+        def put(sentence, span=span):
+            return readme[:span[0]] + sentence + readme[span[1]:]
+
+        case(f"{label} as README.md published it, stating 41",
+             None if actual == "41" else "sentence states 41,", put(published))
+        case(f"{label} stating {bad}", f"sentence states {bad},",
+             put(published.replace(" 41 ", f" {bad} ")))
+        case(f"{label} stating {bad} on the line after its opening words",
+             f"sentence states {bad},", put(published.replace(" 41 ", f"\n{bad} ")))
+        for abbreviation in KIT_ABBREVIATIONS:
+            case(f"{label} stating {bad} after `{abbreviation}`", f"sentence states {bad},",
+                 put(abbreviated.format(abbreviation=abbreviation, count=bad)))
+        case(f"{label} stating {actual}, the number of fixtures/*.json", None,
+             put(published.replace(" 41 ", f" {actual} ")))
+        case(f"{label} removed", f"no sentence on {site} found", put(""))
+
+    sends, exits = (spans[opening] for opening in KIT_OPENINGS)
+    if sends is not None:
+        def put_sends(sentence):
+            return readme[:sends[0]] + sentence + readme[sends[1]:]
+
+        case("the kit section sentence on what the kit sends with its opening "
+             "words wrapped across a line break", f"sentence states {KIT_BAD_SENDS},",
+             put_sends(RETRACTED_KIT_SENDS.replace("The kit sends", "The kit\nsends")
+                       .replace(" 41 ", f" {KIT_BAD_SENDS} ")))
+        case("the kit section sentence on what the kit sends stating a count in a "
+             "code span", f"sentence states {KIT_BAD_SPAN},",
+             put_sends(RETRACTED_KIT_SENDS.replace(" 41 ", f" `{KIT_BAD_SPAN}` ")))
+        case("the kit section sentence on what the kit sends stating a count on the "
+             "line after `e.g.`", f"sentence states {KIT_BAD_SENDS},",
+             put_sends(KIT_ABBREVIATED[0].format(abbreviation="e.g.", count=KIT_BAD_SENDS)
+                       .replace("e.g. ", "e.g.\n")))
+        case("the kit section sentence on what the kit sends with a number in a "
+             "link target", None,
+             put_sends("The kit sends each fixture built into it to your verifier and "
+                       "compares its verdicts with the answer key in [`conformance.json`]"
+                       f"(https://example.invalid/{KIT_BAD_LINK}/conformance.json)."))
+    if exits is not None:
+        def put_exits(sentence):
+            return readme[:exits[0]] + sentence + readme[exits[1]:]
+
+        case("the kit section sentence on when the kit exits 0 stating its exit "
+             "status alone", None, put_exits("It exits 0 only when every fixture agrees."))
+        case("a count in another sentence of the kit section, as `9 agree` is", None,
+             readme[:exits[1]] + f" Of the fixtures, {KIT_BAD_OTHER} must fail."
+             + readme[exits[1]:])
+        case("a count after `e.g.` in another sentence of the kit section", None,
+             readme[:exits[1]] + f" Of the fixtures, e.g. {KIT_BAD_OTHER} must fail."
+             + readme[exits[1]:])
+        for ending in KIT_NOT_ABBREVIATED:
+            case(f"a count in the sentence after the kit section sentence on when the "
+                 f"kit exits 0, that sentence ending in `{ending}`", None,
+                 readme[:exits[0]] + f"It exits 0 only when every fixture agrees with "
+                 f"{ending} Of the fixtures, {KIT_BAD_OTHER} must fail."
+                 + readme[exits[1]:])
+    case(f"the README with its `{KIT_SECTION}` heading renamed",
+         f"no `{KIT_SECTION}` section found",
+         re.sub(rf"^{re.escape(KIT_SECTION)}$", "## Try a verifier", readme, flags=re.M))
+    return cases
+
+
+# Counts no fixture set or commit here holds, and not ones the other cases write.
+PINNED_BAD_MAIN = "9306"
+PINNED_BAD_COMMIT = "9307"
+PINNED_BAD_RELEASE = "9308"
+# A commit id no install line here names.
+PINNED_OTHER_COMMIT = "1" * 40
+# The sentence under the kit section's install line as README.md published it
+# (#374), as it was wrapped, with its three counts as fields; the counts it
+# published; and the opening words a reader finds it by.
+PINNED_SENTENCE = ("This commit carries {pinned} of the {main} fixtures on main; the "
+                   "Hackathon kit release\ncarries {release}.")
+PUBLISHED_PINNED = PINNED_SENTENCE.format(pinned=41, main=52, release=47)
+PINNED_OPENING = "This commit carries"
+
+
+def _install_pin(readme):
+    """(start, end) of what the first `go install ` line of the README kit
+    section names after its `@`, up to the end of that line, or None."""
+    heading = re.search(rf"^{re.escape(KIT_SECTION)}$", readme, re.M)
+    if heading is None:
+        return None
+    end = readme.find("\n## ", heading.end())
+    end = len(readme) if end < 0 else end
+    at = readme.find("go install ", heading.end(), end)
+    if at < 0:
+        return None
+    eol = readme.find("\n", at, end)
+    eol = end if eol < 0 else eol
+    pin = readme.find("@", at, eol)
+    return None if pin < 0 else (pin + 1, eol)
+
+
+def _pinned_count_cases(tree):
+    """The README kit section's sentence under its install line, put back as
+    README.md published it, adds no failure while fixtures/ holds 52 and the
+    tree of the commit the install line pins is read as holding 41. Stating
+    for main a count no fixture set holds, inline, on the line after `of
+    the`, wrapped before `fixtures on main`, in a code span or in another
+    sentence of the section, adds a failure naming it; stating the number of
+    fixtures/*.json adds none. Stating for the commit a count no tree holds,
+    inline, on the line after its opening words or in a code span, adds a
+    failure naming it, and adds none while the commit cannot be read; the
+    install line naming another commit, read as holding 40, adds a failure
+    naming that commit. The kit release's count stated as another adds none.
+    The install line pinning no commit, the sentence moved above it, the
+    sentence removed, its count for main removed and the section heading
+    renamed each add the failure saying so."""
+    readme, fixtures = tree.readme, tree.fixtures
+    actual = str(len(fixtures))
+    baseline = set(pinned_count_failures(readme, fixtures, tree.pinned_fixtures))
+    cases = [(not baseline, f"the README `{KIT_SECTION}` counts under its install line, "
+                            f"as this checkout reads them",
+              f"the published text fails: {sorted(baseline)}")]
+    cases.extend(_pinned_fixture_counts_cases())
+    label = "the kit section sentence on what the pinned commit carries"
+    span, pin = _kit_sentence(readme, PINNED_OPENING), _install_pin(readme)
+    if span is None or pin is None or pin[1] > span[0]:
+        missing = (f"no sentence opening `{PINNED_OPENING}`" if span is None
+                   else "no `go install ` line naming an `@` version" if pin is None
+                   else f"no `go install ` line above the sentence opening `{PINNED_OPENING}`")
+        cases.append((False, label, f"{missing} found in the README `{KIT_SECTION}` "
+                                    f"section: a count stated there is not covered by "
+                                    f"this self-test"))
+        return cases
+    commit = readme[pin[0]:pin[1]]
+    reading = {commit: 41}
+
+    def case(label, needle, text, pinned=reading):
+        base = set(pinned_count_failures(readme, fixtures, pinned))
+        new = [f for f in pinned_count_failures(text, fixtures, pinned) if f not in base]
+        if needle is None:
+            cases.append((not new, label, f"expected no new failure, got {new}"))
+        else:
+            cases.append((any(needle in f for f in new), label,
+                          f"expected a failure naming {needle!r}, got {new}"))
+
+    def put(sentence):
+        return readme[:span[0]] + sentence + readme[span[1]:]
+
+    def pinned_to(text, version):
+        # The install line stands above the sentence, so put() leaves its offsets.
+        return text[:pin[0]] + version + text[pin[1]:]
+
+    held = PINNED_SENTENCE.format(pinned=41, main=actual, release=47)
+    bad_main = PINNED_SENTENCE.format(pinned=41, main=PINNED_BAD_MAIN, release=47)
+    bad_commit = PINNED_SENTENCE.format(pinned=PINNED_BAD_COMMIT, main=actual, release=47)
+    on_main = f"states {PINNED_BAD_MAIN} fixtures on main"
+    on_commit = f"carries {PINNED_BAD_COMMIT} fixtures, but"
+    no_commit = "above it in the section names a commit"
+    case(f"{label} as README.md published it, stating 41 for {commit[:7]} and 52 for main",
+         None if actual == "52" else "states 52 fixtures on main", put(PUBLISHED_PINNED))
+    case(f"{label} stating {PINNED_BAD_MAIN} for main", on_main, put(bad_main))
+    case(f"{label} stating {PINNED_BAD_MAIN} for main on the line after `of the`", on_main,
+         put(bad_main.replace(f" {PINNED_BAD_MAIN} ", f"\n{PINNED_BAD_MAIN} ")))
+    case(f"{label} stating {PINNED_BAD_MAIN} for main wrapped before `fixtures on main`",
+         on_main,
+         put(bad_main.replace(f"{PINNED_BAD_MAIN} fixtures", f"{PINNED_BAD_MAIN}\nfixtures")))
+    case(f"{label} stating {PINNED_BAD_MAIN} for main in a code span", on_main,
+         put(bad_main.replace(f" {PINNED_BAD_MAIN} ", f" `{PINNED_BAD_MAIN}` ")))
+    case(f"another sentence of the kit section stating {PINNED_BAD_MAIN} fixtures on main",
+         on_main, readme[:span[1]] + f" Main holds {PINNED_BAD_MAIN} fixtures on main."
+         + readme[span[1]:])
+    case(f"{label} stating {actual} for main, the number of fixtures/*.json", None, put(held))
+    case(f"{label} stating {PINNED_BAD_COMMIT} for {commit[:7]}", on_commit, put(bad_commit))
+    case(f"{label} stating {PINNED_BAD_COMMIT} for {commit[:7]} on the line after its "
+         f"opening words", on_commit,
+         put(bad_commit.replace(f"carries {PINNED_BAD_COMMIT} ",
+                                f"carries\n{PINNED_BAD_COMMIT} ")))
+    case(f"{label} stating {PINNED_BAD_COMMIT} for {commit[:7]} in a code span", on_commit,
+         put(bad_commit.replace(f" {PINNED_BAD_COMMIT} ", f" `{PINNED_BAD_COMMIT}` ")))
+    case(f"{label} stating {PINNED_BAD_COMMIT} for {commit[:7]}, a commit this checkout "
+         f"cannot read", None, put(bad_commit), pinned={})
+    case(f"{label}, with the install line above it naming {PINNED_OTHER_COMMIT[:7]}, read "
+         f"as holding 40",
+         f"says {PINNED_OTHER_COMMIT[:7]}, the commit the install line above it pins, "
+         f"carries 41 fixtures, but that commit's tree holds 40",
+         pinned_to(put(held), PINNED_OTHER_COMMIT), pinned={**reading, PINNED_OTHER_COMMIT: 40})
+    case(f"{label} stating {PINNED_BAD_RELEASE} for the kit release, which names no tag",
+         None, put(PINNED_SENTENCE.format(pinned=41, main=actual, release=PINNED_BAD_RELEASE)))
+    case(f"{label}, with the install line above it pinning `@latest`", no_commit,
+         pinned_to(put(held), "latest"))
+    heading = re.search(rf"^{re.escape(KIT_SECTION)}$", readme, re.M)
+    moved = put("")
+    case(f"{label} moved above the install line", no_commit,
+         moved[:heading.end()] + "\n\n" + held + moved[heading.end():])
+    case(f"{label} removed", "no `This commit carries N` sentence found", put(""))
+    case(f"{label} with its count for main removed", "no `N fixtures on main` count found",
+         put("This commit carries 41 fixtures; the Hackathon kit release\ncarries 47."))
+    case(f"the README with its `{KIT_SECTION}` heading renamed",
+         f"no `{KIT_SECTION}` section found",
+         re.sub(rf"^{re.escape(KIT_SECTION)}$", "## Try a verifier", readme, flags=re.M))
+    return cases
+
+
+def _pinned_fixture_counts_cases():
+    """pinned_fixture_counts() over a repository whose first commit holds
+    fixtures/a.json and fixtures/b.json beside fixtures/README.md,
+    fixtures/sub/c.json and a directory fixtures/d.json, and whose second
+    adds fixtures/f.json: 2 for the first, by its id and by its first 7
+    characters, 3 for the second, and a commit the repository does not hold
+    left out; a shallow clone of it holds the second alone, and a directory
+    that is no repository holds none. A git command that fails is a red case."""
+    label = "pinned_fixture_counts() over a temporary repository"
+    env = {name: value for name, value in os.environ.items()
+           if not name.startswith("GIT_")}
+    config = ("-c", "user.name=self-test", "-c", "user.email=self-test@example.invalid",
+              "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null")
+
+    def git(cwd, *args):
+        return subprocess.run(["git", *config, *args], cwd=cwd, env=env, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    def commit(repo, files, message):
+        for rel, text in files.items():
+            (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+            (repo / rel).write_text(text, encoding="utf-8")
+        git(repo, "add", "--", *files)
+        git(repo, "commit", "-q", "-m", message)
+        return git(repo, "rev-parse", "HEAD")
+
+    with tempfile.TemporaryDirectory(prefix="readme-counts-pinned-") as tmp:
+        repo = pathlib.Path(tmp) / "repo"
+        repo.mkdir()
+        try:
+            git(repo, "-c", "init.defaultBranch=main", "init", "-q")
+            first = commit(repo, {"fixtures/a.json": "{}\n", "fixtures/b.json": "{}\n",
+                                  "fixtures/README.md": "x\n", "fixtures/sub/c.json": "{}\n",
+                                  "fixtures/d.json/e.json": "{}\n"}, "two fixtures")
+            second = commit(repo, {"fixtures/f.json": "{}\n"}, "a third fixture")
+            shallow = pathlib.Path(tmp) / "shallow"
+            git(tmp, "clone", "-q", "--depth", "1", repo.resolve().as_uri(), str(shallow))
+            plain = pathlib.Path(tmp) / "plain"
+            plain.mkdir()
+        except (OSError, subprocess.CalledProcessError) as exc:
+            detail = getattr(exc, "stderr", None) or exc
+            return [(False, label, f"git failed building the repository: {detail}")]
+        want = {first: 2, first[:7]: 2, second: 3}
+        got = pinned_fixture_counts(repo, [first, first[:7], second, "0" * 40])
+        shallow_got = pinned_fixture_counts(shallow, [first, second])
+        plain_got = pinned_fixture_counts(plain, [first])
+        return [
+            (got == want, f"{label}: two commits, the first also by 7 characters, and "
+                          f"one it does not hold",
+             f"expected {want}, got {got}"),
+            (shallow_got == {second: 3}, f"{label}: a shallow clone of it",
+             f"expected {{{second!r}: 3}}, got {shallow_got}"),
+            (plain_got == {}, f"{label}: a directory that is no repository",
+             f"expected {{}}, got {plain_got}"),
+        ]
 
 
 def _wire_count(tree):
@@ -4078,6 +7075,28 @@ def _wire_release_tag(tree):
             {"readme": tree.readme + "\n\n" + RETRACTED_LATEST + "\n", "release_tags": []})
 
 
+def _wire_source_tag(tree):
+    return (f"{GO_TAG_SITE} gives a {PSEUDO_VERSION} to a commit with no tag",
+            {"source_comments": {
+                **tree.source_comments,
+                GO_TAG_SITE: ((tree.source_comments[GO_TAG_SITE] or "")
+                              + "\n" + RETRACTED_GO_VERSION_COMMENT + "\n")}})
+
+
+def _wire_release_difference(tree):
+    stamp = INVENTED_DIFFERENCE_TIMESTAMP
+    return (f"result on `{stamp}` can still differ by release",
+            {"changelog": _top_section_with(
+                tree.changelog or "", f"The error on `{stamp}` can still differ by release."),
+             "verify_go_test": (tree.verify_go_test or "") + f'\nvar _ = "{stamp}"\n'})
+
+
+def _wire_changelog_total(tree):
+    return (f"states `{INVENTED_TOTAL}`",
+            {"changelog": _top_section_with(
+                tree.changelog or "", f"The self-test stands at {INVENTED_TOTAL}.")})
+
+
 def _wire_python_dependency(tree):
     site = PY_DEPENDENCY_SITES[0]
     if tree.py_dependency_texts.get(site) is None:
@@ -4141,9 +7160,56 @@ def _wire_ci_gate_label(tree):
             {"scripts": {**tree.scripts, INVENTED_SCRIPT: ""}})
 
 
+def _wire_layout(tree):
+    return (f"does not name {INVENTED_FORMAT},",
+            {"format_names": [*tree.format_names, INVENTED_FORMAT]})
+
+
 def _wire_front_page(tree):
     return ("README.md:1 states '9.9.9'",
             {"front_page": "Requires Go 9.9.9 or later.\n" + tree.front_page})
+
+
+def _wire_paragraph(tree):
+    return (f"opens a paragraph of {RETRACTED_PARAGRAPH_WORDS} words",
+            {"front_page": tree.front_page.rstrip("\n") + "\n\n" + RETRACTED_PARAGRAPH})
+
+
+def _wire_prerequisite(tree):
+    return ("does not state `Go 9.9 or later`",
+            {"readme": (tree.readme or "") + "\n- Go 9.9 or later\n"})
+
+
+def _wire_pip_notice(tree):
+    return (f"`{RETRACTED_PIP_INSTALL}` does not pass",
+            {"readme": (tree.readme or "") + f"\n```bash\n{RETRACTED_PIP_INSTALL}\n```\n"})
+
+
+def _wire_spec_name(tree):
+    return (f"README names `{RETRACTED_CREDENTIAL_NAME}`",
+            {"readme": (tree.readme or "") + f"\n{RETRACTED_CREDENTIAL_NAME}\n"})
+
+
+def _wire_kit_count(tree):
+    span = _kit_sentence(tree.readme, KIT_OPENINGS[0])
+    if span is None:
+        return (f"no sentence opening `{KIT_OPENINGS[0]}` found in the README "
+                f"`{KIT_SECTION}` section")
+    return (f"sentence states {KIT_BAD_SENDS},",
+            {"readme": (tree.readme[:span[0]]
+                        + RETRACTED_KIT_SENDS.replace(" 41 ", f" {KIT_BAD_SENDS} ")
+                        + tree.readme[span[1]:])})
+
+
+def _wire_pinned_count(tree):
+    span = _kit_sentence(tree.readme, PINNED_OPENING)
+    if span is None:
+        return (f"no sentence opening `{PINNED_OPENING}` found in the README "
+                f"`{KIT_SECTION}` section")
+    return (f"states {PINNED_BAD_MAIN} fixtures on main",
+            {"readme": (tree.readme[:span[0]]
+                        + PINNED_SENTENCE.format(pinned=41, main=PINNED_BAD_MAIN, release=47)
+                        + tree.readme[span[1]:])})
 
 
 CHECKS = (
@@ -4180,6 +7246,14 @@ CHECKS = (
     Check("release tag",
           lambda t: release_tag_failures(t.readme, t.changelog, t.release_tags),
           _wire_release_tag),
+    Check("source comment on the version `go run` resolves",
+          lambda t: source_tag_failures(t.source_comments),
+          _wire_source_tag),
+    Check("Go release difference",
+          lambda t: release_difference_failures(t.changelog, t.verify_go_test),
+          _wire_release_difference),
+    Check("CHANGELOG.md running total", lambda t: changelog_total_failures(t.changelog),
+          _wire_changelog_total),
     Check("Python dependency",
           lambda t: python_dependency_failures(t.py_requirements, t.py_dependency_texts),
           _wire_python_dependency),
@@ -4201,8 +7275,26 @@ CHECKS = (
     Check("CI gate label",
           lambda t: ci_gate_label_failures(t.readme, t.workflow, t.scripts),
           _wire_ci_gate_label),
+    Check("repository layout",
+          lambda t: layout_failures(t.readme, t.top_directories, t.format_names,
+                                    ci_test_modules(t.workflow, t.scripts)),
+          _wire_layout),
+    Check("README.md toolchain minimum",
+          lambda t: prerequisite_failures(t.readme, t.front_page),
+          _wire_prerequisite),
+    Check("pip version check", lambda t: pip_notice_failures(t.readme, t.cosigners),
+          _wire_pip_notice),
+    Check("specification name", lambda t: spec_name_failures(t.readme, t.spec_text),
+          _wire_spec_name),
+    Check("kit fixture count", lambda t: kit_count_failures(t.readme, t.fixtures),
+          _wire_kit_count),
+    Check("kit install-line fixture counts",
+          lambda t: pinned_count_failures(t.readme, t.fixtures, t.pinned_fixtures),
+          _wire_pinned_count),
     Check("README.md version or date", lambda t: front_page_failures(t.front_page),
           _wire_front_page),
+    Check("README.md paragraph length", lambda t: paragraph_failures(t.front_page),
+          _wire_paragraph),
 )
 
 
@@ -4326,6 +7418,21 @@ def _whole_script_case(tree):
             f"exit {child.returncode} and {child.stderr.strip()[-300:]!r}")
 
 
+def _cpu_time_cases(scans):
+    """One case per (label, scan, bound, why) in `scans`: green when scan()
+    takes under `bound` seconds of this process's CPU time, read from
+    time.process_time(). Wall-clock time also counts the time the process
+    waits for a CPU, so on a loaded machine a scan went over its bound with
+    no change to the README, the tree or the patterns."""
+    cases = []
+    for label, scan, bound, why in scans:
+        started = time.process_time()
+        scan()
+        took = time.process_time() - started
+        cases.append((took < bound, label, f"took {took:.1f} s of CPU time; {why}"))
+    return cases
+
+
 def self_test(tree, verbose):
     readme, cosigners, fixtures, vectors, signing = (
         tree.readme, tree.cosigners, tree.fixtures, tree.vectors, tree.signing)
@@ -4414,6 +7521,9 @@ def self_test(tree, verbose):
     cases.extend(_signature_coverage_cases(readme, tree.outcomes))
     cases.extend(_ed25519_only_cases(readme, tree.suites))
     cases.extend(_ci_gate_label_cases(readme, tree.workflow, tree.scripts))
+    cases.extend(_test_import_cases(readme, tree.workflow, tree.scripts))
+    cases.extend(_layout_cases(readme, tree.top_directories, tree.format_names,
+                               ci_test_modules(tree.workflow, tree.scripts)))
     cases.extend(_trigger_cases(readme, tree.workflow))
     cases.extend(_key_source_cases(readme, tree.key_vectors, tree.used_key_ids))
     cases.extend(_version_cases(readme, tree.versions))
@@ -4422,7 +7532,16 @@ def self_test(tree, verbose):
     cases.extend(_latest_run_cases(readme, tree.go_mod, tree.nested_modules))
     cases.extend(_failing_latest_run_cases(tree))
     cases.extend(_changelog_first_command_cases(tree))
-    cases.extend(_release_tag_cases(tree))
+    # Where this checkout's tags cannot be read, each sentence the published
+    # text holds that a release-tag case adds and expects the check to fail,
+    # and that the check fails held to the case's tags, is named here; main()
+    # reports it with the check's failures.
+    published = []
+    cases.extend(_release_tag_cases(tree, published))
+    cases.extend(_held_sentence_cases(tree))
+    cases.extend(_source_tag_cases(tree))
+    cases.extend(_release_difference_cases(tree))
+    cases.extend(_changelog_total_cases(tree))
     cases.extend(_python_dependency_cases(tree.py_requirements, tree.py_dependency_texts))
     cases.extend(_jcs_library_cases(tree.jcs_sites))
     cases.extend(_outside_code_cases(tree.gate_sites, tree.gate_libraries))
@@ -4523,34 +7642,41 @@ def self_test(tree, verbose):
                       f"{name} citing closed A2A#1885 with no `(closed` note",
                       f"appending the citation to {name} still passes: {new}"))
 
-    # Linear in the run: about 0.2 s. Unbounded link text took 3.5 s or more.
-    started = time.perf_counter()
-    closed_tracker_mentions("README.md", "[" * 40000)
-    took = time.perf_counter() - started
-    cases.append((took < 1.5, "closed-tracker scan over a 40,000-character run of `[`",
-                  f"took {took:.1f} s; the link-text match backtracks over the run"))
-    # Each of these took 1.5 s or more while its pattern rescanned the run from
-    # every position in it; bounded, each takes under 0.05 s.
+    # Unbounded link text took 3.5 s or more, and each of the other five took
+    # 1.5 s or more while its pattern rescanned the run from every position in
+    # it. Bounded, in ten runs on a 16-CPU machine at load averages of 20 to
+    # 23, each took 0.08 s of CPU time or less.
     blank = "\n" * 20000
-    for label, scan in (
-            ("line-leading comment markers stripped from 20,000 blank lines (_flat_prose)",
-             lambda: _flat_prose(blank)),
-            ("line-leading comment markers stripped from 20,000 blank lines (_prose)",
-             lambda: _prose(blank)),
-            ("requirements.txt package names read from 20,000 blank lines",
-             lambda: python_requirements(blank)),
-            ("only-number claim scan over one 16,000-character word",
-             lambda: list(ONLY_NUMBER_CLAIM.finditer("a" * 16000))),
-            ("only-number claim scan over 40,000 unclosed parentheses",
-             lambda: list(ONLY_NUMBER_CLAIM.finditer("a (" * 40000)))):
-        started = time.perf_counter()
-        scan()
-        took = time.perf_counter() - started
-        cases.append((took < 0.5, label,
-                      f"took {took:.1f} s; the pattern rescans the run from every "
-                      f"position in it"))
+    rescans = "the pattern rescans the run from every position in it"
+    cases.extend(_cpu_time_cases((
+        ("closed-tracker scan over a 40,000-character run of `[`",
+         lambda: closed_tracker_mentions("README.md", "[" * 40000), 1.5,
+         "the link-text match backtracks over the run"),
+        ("line-leading comment markers stripped from 20,000 blank lines (_flat_prose)",
+         lambda: _flat_prose(blank), 0.5, rescans),
+        ("line-leading comment markers stripped from 20,000 blank lines (_prose)",
+         lambda: _prose(blank), 0.5, rescans),
+        ("requirements.txt package names read from 20,000 blank lines",
+         lambda: python_requirements(blank), 0.5, rescans),
+        ("only-number claim scan over one 16,000-character word",
+         lambda: list(ONLY_NUMBER_CLAIM.finditer("a" * 16000)), 0.5, rescans),
+        ("only-number claim scan over 40,000 unclosed parentheses",
+         lambda: list(ONLY_NUMBER_CLAIM.finditer("a (" * 40000)), 0.5, rescans))))
+    # A loaded machine holds this process off the CPU while a scan runs. A
+    # sleep stands for that wait: 0.6 s, more than the 0.5 s bound, in which
+    # the process does not run, so the case it is timed in must be green.
+    cases.extend(_cpu_time_cases((
+        ("a scan held off the CPU for 0.6 s, under a 0.5 s bound",
+         lambda: time.sleep(0.6), 0.5,
+         "the bound counts the time the process waits for a CPU"),)))
     cases.extend(_tbs_number_cases(tree.tbs_sites, tree.tbs_canonical))
     cases.extend(_front_page_cases(tree.front_page))
+    cases.extend(_paragraph_cases(tree.front_page))
+    cases.extend(_prerequisite_cases(tree))
+    cases.extend(_pip_notice_cases(tree))
+    cases.extend(_spec_name_cases(tree))
+    cases.extend(_kit_count_cases(tree))
+    cases.extend(_pinned_count_cases(tree))
 
     jcs_readme = tree.jcs_readme
     jcs_text = jcs_readme or ""
@@ -4580,7 +7706,7 @@ def self_test(tree, verbose):
         if not ok:
             print(f"          {detail}")
             failed += 1
-    return failed, len(cases)
+    return failed, len(cases), published
 
 
 def main():
@@ -4601,8 +7727,9 @@ def main():
     failures += vector_failures
     fixture_paths = sorted(FIXTURES.glob("*.json"))
     go_mod = GO_MOD.read_text(encoding="utf-8") if GO_MOD.exists() else None
+    readme = read_readme(ROOT)
     tree = Tree(
-        readme=read_readme(ROOT),
+        readme=readme,
         cosigners=COSIGNERS.read_text(encoding="utf-8") if COSIGNERS.exists() else None,
         fixtures=fixtures,
         vectors=count_vectors(ROOT),
@@ -4638,13 +7765,24 @@ def main():
         scripts={path.name: path.read_text(encoding="utf-8")
                  for path in sorted(SCRIPTS.glob("*.py"))},
         front_page=README.read_text(encoding="utf-8"),
+        readme_pages={rel.as_posix(): (ROOT / rel).read_text(encoding="utf-8")
+                      for rel in README_PAGES if (ROOT / rel).exists()},
         module_start=first_module_commit(ROOT, go_mod),
         nested_modules=nested_module_dirs(ROOT),
         changelog=CHANGELOG.read_text(encoding="utf-8") if CHANGELOG.exists() else None,
-        release_tags=version_tags(ROOT),
+        release_tags=repository_tags(ROOT),
+        verify_go_test=(VERIFY_GO_TEST.read_text(encoding="utf-8")
+                        if VERIFY_GO_TEST.exists() else None),
+        spec_text=SPEC_TEXT.read_text(encoding="utf-8") if SPEC_TEXT.exists() else None,
+        pinned_fixtures=pinned_fixture_counts(ROOT, install_pins(readme)),
+        source_comments={site: (ROOT / site).read_text(encoding="utf-8")
+                         if (ROOT / site).exists() else None
+                         for site in SOURCE_TAG_SITES},
+        top_directories=tracked_top_directories(ROOT),
+        format_names=format_names(ROOT),
     )
 
-    failed, total = self_test(tree, only_self_test)
+    failed, total, published = self_test(tree, only_self_test)
     if failed:
         print(f"self-test FAILED: {failed} of {total} case(s) not caught by the check",
               file=sys.stderr)
@@ -4655,7 +7793,9 @@ def main():
 
     # The check runs even when the self-test failed: a site the self-test
     # cannot find is often a count the README dropped, and the check names it.
-    failures += tree_failures(tree)
+    # A sentence the self-test found the published text holding, where the
+    # tags cannot be read, follows the check's own failures.
+    failures += tree_failures(tree) + published
 
     if failures:
         sys.stdout.flush()
@@ -4669,6 +7809,7 @@ def main():
     first = first_command(tree.front_page)
     # The CHANGELOG.md check passed, so the file has a top section.
     heading = top_section(tree.changelog)[0]
+    totals = ", ".join(f"`{form}`" for form in TOTAL_FORMS[:-1])
     print(f"README and COSIGNERS counts match the tree: {len(fixtures)} fixtures "
           f"(each with one fixture-table row), {tree.vectors} JCS vectors, all stated "
           f"as passing; README names the MANIFEST.sha256 byte check; "
@@ -4697,14 +7838,19 @@ def main():
              if first is not None else
              f"the {CHANGELOG_NAME} top section, `{heading}`, names no `go run` "
              f"command as README.md's first command; ")
-          + ((f"each README and {CHANGELOG_NAME} opening-paragraph sentence on this "
-              f"repository's tags matches "
-              + (f"its version tags, {', '.join(tree.release_tags)}; "
-                 if tree.release_tags else "its carrying no version tag; "))
+          + (f"each README and {CHANGELOG_NAME} opening-paragraph sentence on this "
+             f"repository's tags matches its carrying {carried_tags(tree.release_tags)}; "
              if tree.release_tags is not None else
              f"sentences on this repository's tags not held to them: none could be "
              f"read in this checkout; ")
-          + f"no jcs-vectors README or RFC 8785 serializer docstring calls the "
+          + f"no whole-line comment of the {len(SOURCE_TAG_SITES)} files that say "
+          f"what version `go run` resolves gives a {PSEUDO_VERSION} to a commit "
+          f"with no tag; "
+          f"no {CHANGELOG_NAME} top-section sentence saying a result can still "
+          f"differ by release quotes a timestamp {VERIFY_GO_TEST_NAME} writes; "
+          f"no {CHANGELOG_NAME} top-section sentence states a total of tests, of a "
+          f"self-test or of fixtures as {totals} or `{TOTAL_FORMS[-1]}`; "
+          f"no jcs-vectors README or RFC 8785 serializer docstring calls the "
           f"Python verifier zero-dependency; "
           f"each jcs-vectors file describing canonicalize cites "
           f"{JCS_APPENDIX_G} and none calls an RFC 8785 library a reference "
@@ -4721,7 +7867,25 @@ def main():
           f"{JCS_README_NAME} scopes v1.1 signing to the TBS projection; "
           f"the Ed25519-only ACCEPT count matches the fixtures; "
           f"{WORKFLOW_NAME} runs each scripts/*.py the layout calls a CI gate; "
-          f"README.md states no version or date")
+          + (f"the repository layout opens a line with each of the "
+             f"{len(tree.top_directories)} top-level directories holding tracked "
+             f"files; "
+             if tree.top_directories is not None else
+             "the repository layout not held to the top-level directories: git "
+             "could not list the tracked files in this checkout; ")
+          + f"its `{FORMAT_ENTRY}` line names each of the {len(tree.format_names)} "
+          f"formats that glob matches, and each test module {WORKFLOW_NAME} runs "
+          f"has a layout line of its own; "
+          f"README.md states no version or date; "
+          f"README.md holds no paragraph over {PARAGRAPH_MAX_WORDS} words and at "
+          f"most {PARAGRAPHS_OVER} over {PARAGRAPH_WORDS}; "
+          f"README.md states {' and '.join(toolchain_minimums(tree.readme))} above "
+          f"its first command; each {PIP_SITE} in the README and COSIGNERS.md "
+          f"passes {PIP_VERSION_CHECK}; each `Agent Trust <word>` name in the "
+          f"README is one {SPEC_TEXT_NAME} uses; the README kit section's sentences "
+          f"on what the kit sends and when it exits 0 state no fixture count but "
+          f"{len(fixtures)}; "
+          + pinned_count_line(tree.readme, fixtures, tree.pinned_fixtures))
     return 0
 
 

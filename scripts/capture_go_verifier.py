@@ -927,11 +927,11 @@ def _cases(start: Start) -> list[Case]:
         ("START reads `cd <dir> && <command>` as <command> in <dir>",
          lambda: START.fullmatch("cd verifiers/go && go run . ../../fixtures")
          .group("dir", "cmd") == ("verifiers/go", "go run . ../../fixtures")),
-        ("inputs() lists the package, the package of this module it imports, go.mod, go.sum, "
-         "the module root's Go file and the directory it embeds",
+        ("inputs() lists the package, the packages of this module it imports, go.mod, go.sum, "
+         "the module root's Go files and what they embed",
          lambda: inputs(REPO_ROOT, start)
-         == ["cmd/atx-verify", "verifiers/go/verifier", "go.mod", "go.sum", "fixtures.go",
-             "fixtures"]),
+         == ["cmd/atx-verify", "interop", "verifiers/go/verifier", "go.mod", "go.sum",
+             "answerkey.go", "conformance.json", "MANIFEST.sha256", "fixtures.go", "fixtures"]),
         ("module_imports() follows single-line, named and block imports of this module from "
          "one package to the next, and skips test files and other modules",
          _module_imports_follows_imports),

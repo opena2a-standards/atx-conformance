@@ -7,31 +7,39 @@
   "platform": "darwin/arm64",
   "inputs": [
     "cmd/atx-verify",
+    "interop",
     "verifiers/go/verifier",
     "go.mod",
     "go.sum",
+    "answerkey.go",
+    "conformance.json",
+    "MANIFEST.sha256",
     "fixtures.go",
     "fixtures"
   ],
   "inputTrees": {
-    "cmd/atx-verify": "8b2f9f0ff195e77490a4a892d4e6054a1c8f5a72",
-    "verifiers/go/verifier": "33970e4bdf254c86751fd737fe4eb6b833f703a8",
+    "cmd/atx-verify": "c8ffff9df3b35bfd6e34a7e29987da1020d44269",
+    "interop": "a85f0e8cbc88e33395881f364c47bfc1e790c847",
+    "verifiers/go/verifier": "4a10bf0097b0ab9495d505926bc12f9dd3a86638",
     "go.mod": "667011a74ec65d88b16a2c7093b6e62bb4b97690",
     "go.sum": "436e141fa3870ee84f73fe087c3929df8948c07c",
+    "answerkey.go": "f4f0311bb0e2a6ec5d350ce6ff8cec730245eed8",
+    "conformance.json": "ebff1bbc33e5e41646a98a7f8eef074d45d9c995",
+    "MANIFEST.sha256": "da1d8d2e077750b59027747401b4dc7e572c89c4",
     "fixtures.go": "6b2be479eaa48b5d81d87df1840e6bd0de4238c9",
-    "fixtures": "7b47403c01573e5f3a0485e4d0f19d5ebd9629f3"
+    "fixtures": "df47d7c1a6bc206f7cc1ab7bbfbb2a0695a4ff95"
   },
   "inputsUncommitted": [],
-  "ranAtUtc": "2026-10-21T13:44:34Z",
+  "ranAtUtc": "2026-11-20T05:07:59Z",
   "exitCode": 0,
   "stderrLines": 0,
-  "summary": "summary: 26 pass, 0 fail (26 fixtures)",
+  "summary": "summary: 57 pass, 0 fail (57 fixtures)",
   "outputs": {
     "capture": {
       "path": "docs/captures/go-verifier.txt",
-      "sha256": "a1592169c01a968e90393c81d6ca4b5e67ad93fe57e4b113ce82e9c2d29f906e",
-      "bytes": 6146,
-      "lines": 96
+      "sha256": "2cc48eea2d7b81a28f5521f2b7f32d84b55b1d0f87962969a640749936b98819",
+      "bytes": 14533,
+      "lines": 205
     }
   }
 }

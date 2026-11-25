@@ -8,14 +8,19 @@ ATX v1.1 TBS objects exercise:
   * array element order preserved (never sorted)
   * minimal JSON string escaping (only ", \\, and the control range escape;
     every other code point, including all non-ASCII, emits as raw UTF-8)
-  * integer numbers serialized as their shortest decimal form
+  * integer numbers in the I-JSON exact range, -(2**53 - 1) to 2**53 - 1
+    (RFC 7493 section 2.2), serialized as their shortest decimal form
   * arrays and objects at any nesting depth (serialized without recursion)
 
 ATX v1.1 deliberately carries NO JSON floating-point numbers in the TBS:
 trustScore is string-encoded (%.6f) precisely so the ECMAScript/Ryu number
 formatting of RFC 8785 section 3.2.2.3 never has to run cross-language. This
 module therefore refuses non-integer floats loudly rather than risk a silent
-divergence from the Go and TypeScript legs. The byte-agreement gate
+divergence from the Go and TypeScript legs. It refuses an integer outside the
+I-JSON exact range for the same reason: those legs read each number as an
+IEEE 754 double, which does not hold every such integer, and write
+9007199254740993 as 9007199254740992 and 10**21 as 1e+21, not as their
+decimal digits. The byte-agreement gate
 (../run-agreement.sh) is what guarantees this module stays in lockstep with
 github.com/gowebpki/jcs and erdtman/canonicalize.
 
@@ -53,12 +58,30 @@ def _escape_string(s: str) -> str:
     return '"' + "".join(out) + '"'
 
 
+# 2**53 - 1, the largest magnitude of an integer in the I-JSON exact range
+# (RFC 7493 section 2.2).
+_MAX_EXACT_INTEGER = 2**53 - 1
+
+
 def _serialize_number(n: Any) -> str:
     # bool is a subclass of int; reject it (JSON booleans are handled by _serialize).
     if isinstance(n, bool):
         raise TypeError("booleans are not numbers")
     if isinstance(n, int):
-        return str(n)
+        if -_MAX_EXACT_INTEGER <= n <= _MAX_EXACT_INTEGER:
+            return str(n)
+        try:
+            # An integer of more digits than int-to-str conversion allows
+            # (sys.get_int_max_str_digits()) is named by its size.
+            got = "integer %d" % n
+        except ValueError:
+            got = "an integer of %d bits" % n.bit_length()
+        raise NotImplementedError(
+            "ATX v1.1 TBS integers must lie in the I-JSON exact range, -(2**53 - 1) "
+            "to 2**53 - 1 (RFC 7493 section 2.2). Got %s. The Go and TypeScript "
+            "RFC 8785 legs read each number as an IEEE 754 double, which does not "
+            "hold every integer outside that range." % got
+        )
     raise NotImplementedError(
         "ATX v1.1 TBS must not contain JSON floating-point numbers "
         "(trustScore is string-encoded as %%.6f). Got float %r. RFC 8785 ES6 "

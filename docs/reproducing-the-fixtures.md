@@ -18,6 +18,10 @@ The generator:
 
 1. Loads each Ed25519 keypair vector. Verifies that the seed-derived public
    key matches the vector's `publicKeyHex`. Panics on drift.
+   `vectors/issuer-primary-under-partner-did.json` holds a public key and no
+   seed: the primary's key as `partner.example` publishes it under its own
+   DID. The generator panics unless it is the primary vector's key and
+   names `partner.example` (`mustLoadPublishedKey`).
 2. Resolves the ML-DSA-65 public key from the seed (using CIRCL's
    `mldsa65.NewKeyFromSeed`). Pins the resolved public key into
    `vectors/mldsa65-seed.json` on first run; on subsequent runs, verifies
@@ -48,11 +52,21 @@ The generator:
      `capabilities`, `behavioralProfile`, `scanSummary`, `issuerChain` and,
      when present, `declaredPurpose` to the signed fields, and canonicalizes
      it per RFC 8785 with `github.com/gowebpki/jcs`.
+     `v1_1-scan-summary-extra-member-signed.json` is signed over those bytes
+     with a seventh `scanSummary` member, `extra`, written into the
+     to-be-signed object (`canonicalPayloadV11WithScanSummaryMember`), a
+     payload `core.md` §1.3a.2 rule 2, which holds `scanSummary` as its six
+     members, does not produce.
 6. Ed25519-signs and ML-DSA-65-signs that payload, as each fixture carries
-   those signatures (`v1_1-hybrid-pq-only.json` carries the ML-DSA-65
-   signature alone). A fixture that tests tampering changes the field or
-   signature it tampers with after this step, so its signature covers the
-   original bytes.
+   those signatures (`hybrid-pq-only.json` and `v1_1-hybrid-pq-only.json`
+   carry the ML-DSA-65 signature alone). A fixture that tests tampering
+   changes the field or signature it tampers with after this step, so its
+   signature covers the original bytes. Two fixtures relabel a signature
+   entry after this step, which the signed payload does not cover:
+   `v1_1-one-key-under-two-dids.json` carries the primary key's signature a
+   second time under the `keyId` `partner.example#key-2`, and
+   `v1_1-own-key-labelled-as-cosigner.json` carries the signature of the
+   primary authority's `#key-2` under the `keyId` `partner.example#key-1`.
 7. Marshals each fixture to byte-stable JSON (`encoding/json` with 2-space
    indent, fields in struct-declaration order).
 8. Writes the fixture file. Recomputes its SHA-256. Updates

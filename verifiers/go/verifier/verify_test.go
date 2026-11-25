@@ -2,10 +2,15 @@ package verifier
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"math/big"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -331,7 +336,11 @@ func TestUnknownOptionIsNamed(t *testing.T) {
 // the module path and version the binary records and the Go release that
 // built it, and exits 0 without reading a fixture. Neither verifier had a
 // --version, and no line of the report named the commit a `go run
-// <module>/verifiers/go@latest` binary was built from.
+// <module>/verifiers/go@latest` binary was built from. When the version is
+// (devel), the line names the commit the binary's vcs.revision records, and
+// whether vcs.modified records uncommitted changes, or says that it records
+// no commit: `go run` from a checkout without -buildvcs=true wrote (devel)
+// alone, which named no commit and did not say that it recorded none.
 func TestVersionNamesTheModuleVersion(t *testing.T) {
 	info, ok := debug.ReadBuildInfo()
 	want := versionLine(info, ok)
@@ -354,10 +363,20 @@ func TestVersionNamesTheModuleVersion(t *testing.T) {
 		ok   bool
 		want string
 	}{
-		{&debug.BuildInfo{GoVersion: "go1.22.12", Main: debug.Module{Path: module, Version: "v0.0.0-20261018005751-ea4b48544534"}}, true,
+		{&debug.BuildInfo{GoVersion: "go1.22.12", Main: debug.Module{Path: module, Version: "v0.0.0-20261018005751-ea4b48544534"},
+			Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: "ea4b48544534961828675b4651422c5bec2ba3cd"}, {Key: "vcs.modified", Value: "true"}}}, true,
 			"atx-verify: " + module + " v0.0.0-20261018005751-ea4b48544534, built with go1.22.12\n"},
 		{&debug.BuildInfo{GoVersion: "go1.26.3", Main: debug.Module{Path: module, Version: "(devel)"}}, true,
-			"atx-verify: " + module + " (devel), built with go1.26.3\n"},
+			"atx-verify: " + module + " (devel), no commit recorded, built with go1.26.3\n"},
+		{&debug.BuildInfo{GoVersion: "go1.22.12", Main: debug.Module{Path: module, Version: "(devel)"},
+			Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: "579e811083513dfcdb4d4db3d3fb75f9a3c5fe56"}, {Key: "vcs.modified", Value: "false"}}}, true,
+			"atx-verify: " + module + " (devel), commit 579e811083513dfcdb4d4db3d3fb75f9a3c5fe56, built with go1.22.12\n"},
+		{&debug.BuildInfo{GoVersion: "go1.22.12", Main: debug.Module{Path: module, Version: "(devel)"},
+			Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: "579e811083513dfcdb4d4db3d3fb75f9a3c5fe56"}, {Key: "vcs.modified", Value: "true"}}}, true,
+			"atx-verify: " + module + " (devel), commit 579e811083513dfcdb4d4db3d3fb75f9a3c5fe56, with uncommitted changes, built with go1.22.12\n"},
+		{&debug.BuildInfo{GoVersion: "go1.26.3", Main: debug.Module{Path: module, Version: "(devel)"},
+			Settings: []debug.BuildSetting{{Key: "vcs.modified", Value: "false"}}}, true,
+			"atx-verify: " + module + " (devel), no commit recorded, built with go1.26.3\n"},
 		{&debug.BuildInfo{GoVersion: "go1.26.3"}, true, "atx-verify: this binary records no module version\n"},
 		{nil, false, "atx-verify: this binary records no module version\n"},
 	}
@@ -587,7 +606,7 @@ func TestDoubleDashEndsOptions(t *testing.T) {
 
 	code, stdout, stderr := run("--", "-h.json")
 	if code != 0 || stderr != "" || !strings.HasPrefix(stdout, "PASS  -h.json\n") ||
-		!strings.HasSuffix(stdout, "\nsummary: 1 pass, 0 fail (1 fixtures)\n") {
+		!strings.HasSuffix(stdout, "\nsummary: 1 pass, 0 fail (1 fixture)\n") {
 		t.Errorf("Run(-- -h.json) exits %d with stdout %q and stderr %q; want -h.json verified, exit 0",
 			code, stdout, stderr)
 	}
@@ -683,6 +702,131 @@ func TestNonFixtureIsALoadError(t *testing.T) {
 	}
 }
 
+// TestRepeatedFixtureMemberIsALoadError pins that a fixture file that writes
+// a member more than once outside its atx member's subtree, under one name or
+// under two names that fold together (foldKey), fails to load: one FAIL line
+// naming the member's second spelling, with no expected or observed line,
+// counted as a fail. encoding/json decodes each repeat into the one field, so
+// a member a later expected object omits kept the earlier object's value,
+// while the Python verifier read the later object alone: for
+// fixtures/wrong-issuer.json with an expected of REJECT [SIGNATURE_INVALID]
+// and a second expected of REJECT, Run wrote FAIL and the Python verifier
+// PASS. A second verifierState holding only clockRfc3339 split them the other
+// way. A member written twice inside the one verifierState, which holds the
+// CRL and requiredSignatures, fails to load as well: both verifiers accepted
+// clockRfc3339 written there twice with one value. A repeat inside the
+// credential is still a verdict, REJECT[PARSE_ERROR] (rawDuplicateMember), as
+// the two shipped fixtures that carry one pin.
+func TestRepeatedFixtureMemberIsALoadError(t *testing.T) {
+	read := func(name string) []byte {
+		t.Helper()
+		b, err := fs.ReadFile(atxconformance.Fixtures, "fixtures/"+name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	// raw is the text of b's member name as b writes it.
+	raw := func(b []byte, name string) []byte {
+		t.Helper()
+		var members map[string]json.RawMessage
+		if err := json.Unmarshal(b, &members); err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Count(b, members[name]) != 1 {
+			t.Fatalf("the text of the %s member is not written once", name)
+		}
+		return members[name]
+	}
+	// with is b with the value of its member name written as value.
+	with := func(b []byte, name, value string) []byte {
+		t.Helper()
+		return bytes.Replace(b, raw(b, name), []byte(value), 1)
+	}
+	// appended is b with the member text written after its last member.
+	appended := func(b []byte, member string) []byte {
+		head := bytes.TrimRight(b[:bytes.LastIndexByte(b, '}')], " \t\r\n")
+		return []byte(string(head) + ",\n  " + member + "\n}\n")
+	}
+	issuer, v11 := read("wrong-issuer.json"), read("v1_1-baseline-valid.json")
+	category := with(issuer, "expected", `{"verifyResult": "REJECT", "rejectCategory": "SIGNATURE_INVALID"}`)
+	reason := with(issuer, "expected", `{"verifyResult": "REJECT", "reasonContains": "zz-not-in-reason"}`)
+	var state struct {
+		VerifierState struct {
+			ClockRFC3339 string `json:"clockRfc3339"`
+		} `json:"verifierState"`
+	}
+	if err := json.Unmarshal(v11, &state); err != nil || state.VerifierState.ClockRFC3339 == "" {
+		t.Fatalf("v1_1-baseline-valid.json holds no clockRfc3339 (%v)", err)
+	}
+	clock := `"verifierState": {"clockRfc3339": "` + state.VerifierState.ClockRFC3339 + `"}`
+	// v1_1-baseline-valid.json with clockRfc3339 written again, with the same
+	// value, after the last member of its one verifierState.
+	nested := with(v11, "verifierState", string(appended(raw(v11, "verifierState"),
+		`"clockRfc3339": "`+state.VerifierState.ClockRFC3339+`"`)))
+
+	cases := []struct {
+		file    string
+		content []byte
+		member  string
+	}{
+		{"a-expected-twice.json", appended(category, `"expected": {"verifyResult": "REJECT"}`), "expected"},
+		{"b-expected-case-variant.json", appended(category, `"EXPECTED": {"verifyResult": "REJECT"}`), "EXPECTED"},
+		{"c-expected-omits-a-member.json", appended(reason, `"EXPECTED": {"verifyResult": "REJECT"}`), "EXPECTED"},
+		{"d-verifier-state-twice.json", appended(v11, clock), "verifierState"},
+		{"e-verify-result-twice.json", with(v11, "expected", `{"verifyResult": "ACCEPT", "verifyResult": "ACCEPT"}`), "verifyResult"},
+		{"f-atx-twice.json", appended(v11, `"ATX": `+string(raw(v11, "atx"))), "ATX"},
+		{"g-undeclared-member.json", appended(v11, `"notes": {"by": "a", "BY": "b"}`), "BY"},
+		{"h-clock-twice.json", nested, "clockRfc3339"},
+	}
+	dir := t.TempDir()
+	var want strings.Builder
+	for _, c := range cases {
+		path := filepath.Join(dir, c.file)
+		if err := os.WriteFile(path, c.content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		want.WriteString("FAIL  " + relPath(path) + "  (load error: the fixture repeats the member \"" + c.member + "\")\n")
+	}
+	want.WriteString(fmt.Sprintf("\nsummary: 0 pass, %d fail (%d fixtures)\n", len(cases), len(cases)))
+
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{dir}, &stdout, &stderr); code != 1 {
+		t.Errorf("Run over fixtures that repeat a member exits %d, want 1 (stderr %q)", code, stderr.String())
+	}
+	if got := stdout.String(); got != want.String() {
+		t.Errorf("Run writes:\n%s\nwant one load error line per file and no expected or observed line:\n%s", got, want.String())
+	}
+
+	// A member repeated inside the credential: a verdict, not a load error.
+	credential := filepath.Join(t.TempDir(), "credential-twice.json")
+	atx := raw(v11, "atx")
+	twice := append([]byte(`{"revoked": false, "revoked": false, `), atx[bytes.IndexByte(atx, '{')+1:]...)
+	if err := os.WriteFile(credential, with(v11, "atx", string(twice)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	shipped := []string{
+		repoRoot + "/fixtures/v1_1-case-variant-member.json",
+		repoRoot + "/fixtures/v1_1-duplicate-purpose-member.json",
+	}
+	stdout.Reset()
+	stderr.Reset()
+	// Run verifies its paths in sorted order, the relative ones first.
+	code := Run(append([]string{credential}, shipped...), &stdout, &stderr)
+	wantLines := []string{
+		"PASS  " + shipped[0], "observed: REJECT[PARSE_ERROR]",
+		"PASS  " + shipped[1], "observed: REJECT[PARSE_ERROR]",
+		"FAIL  " + relPath(credential), "observed: REJECT[PARSE_ERROR]",
+	}
+	if got := verdictLines(stdout.String()); code != 1 || !slices.Equal(got, wantLines) {
+		t.Errorf("Run over a credential that repeats a member and the shipped fixtures that carry one exits %d and writes:\n%s\nwant exit 1 and verdict lines %q",
+			code, stdout.String(), wantLines)
+	}
+	if !strings.Contains(stdout.String(), `credential contains duplicate member "revoked"`) {
+		t.Errorf("Run writes:\n%s\nwant the credential's PARSE_ERROR to name the member \"revoked\"", stdout.String())
+	}
+}
+
 // TestEmptyArgumentIsAUsageError pins that an empty argument, alone or beside
 // a path, is a usage error, as it is in the Python verifier: one line on
 // stderr, nothing on stdout, exit 2. Run passed it to os.Stat and wrote
@@ -730,7 +874,7 @@ func TestFixturesFileEntryWalksTheDirectory(t *testing.T) {
 		strings.SplitN(stdout.String(), "\n", 2)[0]; first != want {
 		t.Errorf("Run(%q) starts with %q, want %q", dir, first, want)
 	}
-	if !strings.HasSuffix(stdout.String(), "\nsummary: 1 pass, 0 fail (1 fixtures)\n") {
+	if !strings.HasSuffix(stdout.String(), "\nsummary: 1 pass, 0 fail (1 fixture)\n") {
 		t.Errorf("Run(%q) writes:\n%s\nwant one fixture, passing", dir, stdout.String())
 	}
 }
@@ -738,7 +882,8 @@ func TestFixturesFileEntryWalksTheDirectory(t *testing.T) {
 // TestFoldKey pins the field-fold used by the fold-aware duplicate detector to
 // encoding/json's own folding: ASCII case-insensitive plus the only two
 // non-ASCII runes encoding/json folds to ASCII (Kelvin U+212A -> k, long s
-// U+017F -> s). atx-conformance#16.
+// U+017F -> s), and every other rune unchanged, so no Unicode table of the Go
+// release decides a fold. atx-conformance#16, atx-conformance#173.
 func TestFoldKey(t *testing.T) {
 	cases := []struct {
 		in, want string
@@ -749,9 +894,11 @@ func TestFoldKey(t *testing.T) {
 		{"category", "category"},
 		{"Category", "category"},
 		{"agentId", "agentid"},
-		{"Kelvin", "kelvin"}, // U+212A Kelvin sign folds to ASCII k
-		{"ſmart", "smart"},   // U+017F long s folds to ASCII s
-		{"Éclair", "éclair"}, // any other rune: the unicode.ToLower fallback
+		{"Kelvin", "kelvin"},   // U+212A Kelvin sign folds to ASCII k
+		{"ſmart", "smart"},     // U+017F long s folds to ASCII s
+		{"Éclair", "Éclair"},   // any other rune is unchanged
+		{"\u1c89x", "\u1c89x"}, // U+1C89, lowercase U+1C8A since Unicode 16.0
+		{"\u0130d", "\u0130d"}, // U+0130, which unicode.ToLower maps to ASCII i
 	}
 	for _, c := range cases {
 		if got := foldKey(c.in); got != c.want {
@@ -784,9 +931,16 @@ func TestRawDuplicateMember(t *testing.T) {
 		{"case variant nested", `{"a":{"Category":"x","category":"y"}}`, true},
 		{"same-name in array", `{"a":[{"k":1,"k":2}]}`, true},
 		{"kelvin fold collision", "{\"K\":1,\"k\":2}", true},
-		{"non-ASCII case variant", `{"É":1,"é":2}`, true},
-		// atx-conformance#187: a number outside the float64 range ahead of
-		// the duplicate aborted the scan before UseNumber.
+		// A non-ASCII rune other than the Kelvin sign and the long s folds to
+		// itself, under every Go release (atx-conformance#173).
+		{"non-ASCII case variant", `{"É":1,"é":2}`, false},
+		{"non-ASCII same name", `{"É":1,"É":2}`, true},
+		{"U+1C89 and U+1C8A", `{"\u1c89x":1,"\u1c8ax":2}`, false},
+		{"U+0130 and ASCII i", `{"\u0130d":1,"id":2}`, false},
+		{"U+0130 and i with U+0307", `{"\u0130x":1,"i\u0307x":2}`, false},
+		// atx-conformance#187: a number strconv.ParseFloat refuses as outside
+		// the float64 range ahead of the duplicate aborted the scan before
+		// UseNumber.
 		{"after 1e400", `{"zzz":1e400,"trustLevel":1,"trustLevel":4}`, true},
 		{"after -1e400", `{"zzz":-1e400,"trustLevel":1,"trustLevel":4}`, true},
 		{"after 401-digit integer", `{"zzz":1` + strings.Repeat("0", 400) + `,"trustLevel":1,"trustLevel":4}`, true},
@@ -839,6 +993,260 @@ func TestDuplicateAfterOutOfRangeNumberRejects(t *testing.T) {
 		if got.Accepted || got.RejectCategory != "PARSE_ERROR" || !strings.Contains(got.Reason, `duplicate member "trustLevel"`) {
 			t.Errorf("%s with prefix %.40s: got %s, want REJECT[PARSE_ERROR] naming duplicate member \"trustLevel\"", c.fixture, c.prefix, got)
 		}
+	}
+}
+
+// memberNameReason is the reason the strict parse gives a member name that
+// holds a character outside printable ASCII: quoted is the name as %+q writes
+// it, char the character as %U writes it.
+func memberNameReason(quoted, char string) string {
+	return "credential member name " + quoted + " holds " + char + ", outside printable ASCII (strict parse: a member name in the credential, a signature entry, scanSummary or behavioralProfile must be printable ASCII, U+0020 to U+007E)"
+}
+
+// appendedMember is the JSON object raw with the member text written after
+// its last member.
+func appendedMember(t *testing.T, raw json.RawMessage, member string) string {
+	t.Helper()
+	s := strings.TrimSpace(string(raw))
+	if !strings.HasSuffix(s, "}") {
+		t.Fatalf("%.40s is not a JSON object", s)
+	}
+	return s[:len(s)-1] + "," + member + "}"
+}
+
+// withAppendedMember returns f with the member text written after the last
+// member of its credential.
+func withAppendedMember(t *testing.T, f fixture, member string) fixture {
+	t.Helper()
+	f.ATX = json.RawMessage(appendedMember(t, f.ATX, member))
+	return f
+}
+
+// credentialMember is the member of f's credential named name, as written.
+func credentialMember(t *testing.T, f fixture, name string) json.RawMessage {
+	t.Helper()
+	var credential map[string]json.RawMessage
+	if err := json.Unmarshal(f.ATX, &credential); err != nil {
+		t.Fatal(err)
+	}
+	return credential[name]
+}
+
+// TestMemberNameOutsidePrintableASCII pins that the strict parse rejects as
+// PARSE_ERROR a credential holding a member name with a character outside
+// printable ASCII (U+0020 to U+007E) in an object the verifier decodes: the
+// credential, an entry of its signatures, its scanSummary or its
+// behavioralProfile. The reason names the first such name in document order
+// and its first such character, written in ASCII, as the Python verifier
+// writes it (GO_NON_ASCII_NAME_VERDICTS in verifiers/python/test_verify.py).
+// The first two cases were ACCEPT before the check (atx-conformance#284):
+// fixtures/v1_1-baseline-valid.json with U+0130 followed by d, or U+0131
+// followed by ssuedAt, added, which Java 25's String.equalsIgnoreCase
+// compares equal to id and issuedAt and foldKey keeps apart. The controls
+// keep the verdict they had: a name in an object the verifier does not
+// decode, and a name that repeats, which the duplicate check names first.
+func TestMemberNameOutsidePrintableASCII(t *testing.T) {
+	v11 := v11Baseline(t)
+	v10, err := loadFixture(repoRoot + "/fixtures/baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// firstSignatureWith is the baseline's signatures with the member text
+	// written after the last member of its first entry.
+	firstSignatureWith := func(f fixture, member string) string {
+		var entries []json.RawMessage
+		if err := json.Unmarshal(credentialMember(t, f, "signatures"), &entries); err != nil || len(entries) == 0 {
+			t.Fatalf("baseline signatures do not decode to an entry: %v", err)
+		}
+		entries[0] = json.RawMessage(appendedMember(t, entries[0], member))
+		b, err := json.Marshal(entries)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	scanSummaryWith := func(f fixture, member string) string {
+		return appendedMember(t, credentialMember(t, f, "scanSummary"), member)
+	}
+	profileWith := appendedMember(t, credentialMember(t, v11, "behavioralProfile"), `"checksüm":"x"`)
+	// u writes each UTF-16 code unit given in hex as a \u escape: JSON text
+	// for a name, and what %+q writes for a character below U+10000.
+	u := func(units ...string) string { return `\u` + strings.Join(units, `\u`) }
+	kelvin, longS := string(rune(0x212a)), string(rune(0x017f))
+
+	for _, c := range []struct {
+		name         string
+		f            fixture
+		quoted, char string
+	}{
+		{"U+0130 d beside id", withAppendedMember(t, v11, `"İd":"x"`), `"` + u("0130") + `d"`, "U+0130"},
+		{"U+0131 ssuedAt beside issuedAt", withAppendedMember(t, v11, `"ıssuedAt":"2099-01-01T00:00:00Z"`), `"` + u("0131") + `ssuedAt"`, "U+0131"},
+		{"U+0130 d, v1.0", withAppendedMember(t, v10, `"İd":"x"`), `"` + u("0130") + `d"`, "U+0130"},
+		{"U+0131 ssuedAt, v1.0", withAppendedMember(t, v10, `"ıssuedAt":"2099-01-01T00:00:00Z"`), `"` + u("0131") + `ssuedAt"`, "U+0131"},
+		{"U+0130 written as a JSON escape", withAppendedMember(t, v11, `"`+u("0130")+`d":"x"`), `"` + u("0130") + `d"`, "U+0130"},
+		{"U+00E9", withAppendedMember(t, v11, `"é":1`), `"` + u("00e9") + `"`, "U+00E9"},
+		{"Kelvin sign for the k of revoked", withMembers(t, v11, map[string]string{"revoked": "", "revo" + kelvin + "ed": "true"}), `"revo` + u("212a") + `ed"`, "U+212A"},
+		{"long s for the s of signatures", withMembers(t, v11, map[string]string{"signatures": "", longS + "ignatures": "[]"}), `"` + u("017f") + `ignatures"`, "U+017F"},
+		{"a control character", withAppendedMember(t, v11, `"a\u0001":1`), `"a\x01"`, "U+0001"},
+		{"a tab", withAppendedMember(t, v11, `"a\tb":1`), `"a\tb"`, "U+0009"},
+		{"U+007F", withAppendedMember(t, v11, `"a\u007f":1`), `"a\x7f"`, "U+007F"},
+		{"an unpaired surrogate escape, decoded as U+FFFD", withAppendedMember(t, v11, `"`+u("d800")+`x":1`), `"` + u("fffd") + `x"`, "U+FFFD"},
+		{"a surrogate pair escape, U+1F600", withAppendedMember(t, v11, `"`+u("d83d", "de00")+`":1`), `"` + `\U` + `0001f600"`, "U+1F600"},
+		{"the first such character of the name", withAppendedMember(t, v11, `"aéİ":1`), `"a` + u("00e9", "0130") + `"`, "U+00E9"},
+		{"a quote and a backslash before it", withAppendedMember(t, v11, `"q\"\\é":1`), `"q\"\\` + u("00e9") + `"`, "U+00E9"},
+		{"in a signature entry", withMembers(t, v11, map[string]string{"signatures": firstSignatureWith(v11, `"kéyId":"x"`)}), `"k` + u("00e9") + `yId"`, "U+00E9"},
+		{"in scanSummary", withMembers(t, v11, map[string]string{"scanSummary": scanSummaryWith(v11, `"hmä":"x"`)}), `"hm` + u("00e4") + `"`, "U+00E4"},
+		{"in scanSummary, v1.0", withMembers(t, v10, map[string]string{"scanSummary": scanSummaryWith(v10, `"hmä":"x"`)}), `"hm` + u("00e4") + `"`, "U+00E4"},
+		{"in scanSummary written SCANSUMMARY", withMembers(t, v11, map[string]string{"scanSummary": "", "SCANSUMMARY": scanSummaryWith(v11, `"İ":1`)}), `"` + u("0130") + `"`, "U+0130"},
+		{"in behavioralProfile", withMembers(t, v11, map[string]string{"behavioralProfile": profileWith}), `"checks` + u("00fc") + `m"`, "U+00FC"},
+		{"the credential's name first in document order", fixture{ATX: json.RawMessage(`{"ıx":1,"scanSummary":{"İy":2}}`)}, `"` + u("0131") + `x"`, "U+0131"},
+		{"scanSummary's name first in document order", fixture{ATX: json.RawMessage(`{"scanSummary":{"İy":2},"ıx":1}`)}, `"` + u("0130") + `y"`, "U+0130"},
+		{"a signature entry after one that is not an object", fixture{ATX: json.RawMessage(`{"signatures":[1,{"é":1}]}`)}, `"` + u("00e9") + `"`, "U+00E9"},
+	} {
+		got := verify(c.f)
+		if want := memberNameReason(c.quoted, c.char); got.Accepted || got.RejectCategory != "PARSE_ERROR" || got.Reason != want {
+			t.Errorf("%s: got %s, want REJECT[PARSE_ERROR: %s]", c.name, got, want)
+		}
+	}
+
+	for _, c := range []struct {
+		name, want, reasonContains string
+		f                          fixture
+	}{
+		{"printable ASCII at both ends of the range", "ACCEPT", "", withAppendedMember(t, v11, `" ~":1`)},
+		{"printable ASCII at both ends of the range, v1.0", "ACCEPT", "", withAppendedMember(t, v10, `" ~":1`)},
+		{"in a member the verifier does not declare", "ACCEPT", "", withAppendedMember(t, v11, `"extra":{"İd":1}`)},
+		{"in an object a signature entry holds", "ACCEPT", "", withMembers(t, v11, map[string]string{"signatures": firstSignatureWith(v11, `"x":{"İd":1}`)})},
+		{"in a value", "ACCEPT", "", withAppendedMember(t, v11, `"extra":"İd"`)},
+		// v1.1 signs declaredPurpose as written, and the baseline signs none.
+		{"in declaredPurpose", "SIGNATURE_INVALID", "", withMembers(t, v11, map[string]string{"declaredPurpose": `{"İd":1}`})},
+		{"written twice", "PARSE_ERROR", `duplicate member "İd"`, withAppendedMember(t, v11, `"İd":1,"İd":2`)},
+		{"Kelvin sign beside revoked", "PARSE_ERROR", `duplicate member "revo` + kelvin + `ed"`, withAppendedMember(t, v11, `"revo`+kelvin+`ed":true`)},
+		{"long s beside signatures", "PARSE_ERROR", `duplicate member "` + longS + `ignatures"`, withAppendedMember(t, v11, `"`+longS+`ignatures":[]`)},
+		// signatures is not an array, so json.Unmarshal says why.
+		{"in signatures that is an object", "PARSE_ERROR", "cannot unmarshal object", withMembers(t, v11, map[string]string{"signatures": `{"İd":1}`})},
+	} {
+		got := verify(c.f)
+		outcome := got.RejectCategory
+		if got.Accepted {
+			outcome = "ACCEPT"
+		}
+		if outcome != c.want || !strings.Contains(got.Reason, c.reasonContains) || strings.Contains(got.Reason, "printable ASCII") {
+			t.Errorf("%s: got %s, want %s with a reason containing %q and not naming printable ASCII", c.name, got, c.want, c.reasonContains)
+		}
+	}
+}
+
+// topLevelNames lists the member names of the JSON object raw in document
+// order.
+func topLevelNames(t *testing.T, raw json.RawMessage) []string {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		t.Fatalf("%.40s is not a JSON object", raw)
+	}
+	var names []string
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, tok.(string))
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return names
+}
+
+// TestSuitePinsMemberNamesOutsidePrintableASCII pins the two shipped fixtures
+// that hold a verifier to the rule above, one per spelling from
+// atx-conformance#284: each is the credential of
+// fixtures/v1_1-baseline-valid.json with one member added directly after the
+// member its name spells, and that member is the only difference. The
+// verifier rejects each naming the added member. With the strict parse
+// lifted its signature verifies (TestEarlyRejectFixturesCarryValidSignatures),
+// so a verifier without the rule accepts it.
+func TestSuitePinsMemberNamesOutsidePrintableASCII(t *testing.T) {
+	var baseline map[string]json.RawMessage
+	if err := json.Unmarshal(v11Baseline(t).ATX, &baseline); err != nil {
+		t.Fatal(err)
+	}
+	want, err := json.Marshal(baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The added names: U+0130 followed by d, and U+0131 followed by ssuedAt,
+	// and each as %+q writes it.
+	dotted, dotless := string(rune(0x0130))+"d", string(rune(0x0131))+"ssuedAt"
+	for _, c := range []struct{ file, added, spells, quoted, char string }{
+		{"v1_1-dotted-capital-i-member.json", dotted, "id", `"\` + `u0130d"`, "U+0130"},
+		{"v1_1-dotless-i-member.json", dotless, "issuedAt", `"\` + `u0131ssuedAt"`, "U+0131"},
+	} {
+		f, err := loadFixture(repoRoot + "/fixtures/" + c.file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, reason := verify(f), memberNameReason(c.quoted, c.char); got.Accepted || got.RejectCategory != "PARSE_ERROR" || got.Reason != reason {
+			t.Errorf("%s: got %s, want REJECT[PARSE_ERROR: %s]", c.file, got, reason)
+		}
+		names := topLevelNames(t, f.ATX)
+		at := slices.Index(names, c.spells)
+		if at < 0 || at+1 >= len(names) || names[at+1] != c.added {
+			t.Errorf("%s: credential members %q, want %q directly after %q", c.file, names, c.added, c.spells)
+		}
+		var credential map[string]json.RawMessage
+		if err := json.Unmarshal(f.ATX, &credential); err != nil {
+			t.Fatal(err)
+		}
+		delete(credential, c.added)
+		if got, err := json.Marshal(credential); err != nil || !bytes.Equal(got, want) {
+			t.Errorf("%s: without %q its credential is not that of fixtures/v1_1-baseline-valid.json (%v)", c.file, c.added, err)
+		}
+	}
+}
+
+// TestDecoderWithoutUseNumberOnOutOfRangeNumbers pins what the comment on
+// UseNumber in rawDuplicateMember says. Without UseNumber, Token() returns an
+// error on a number strconv.ParseFloat refuses as outside the float64 range,
+// and on no other. Every Go release refuses 1e400, -1e400 and an integer of
+// 401 digits here. 1 followed by 1000 zeros and e-650, whose value is
+// 10^350, go1.27 refuses too, where go1.26 reads it as 1e+149 with no error,
+// so Token() refuses it under the one release and not the other. The
+// verifier reads each the same under both: numberOutsideFloat64Range places
+// it outside the range, rawDuplicateMember reports the duplicate after it,
+// and a v1.1 credential whose declaredPurpose is that last number rejects as
+// SIGNATURE_INVALID, with a reason that quotes it as written
+// (integerOutsideExactRangeV11), whatever strconv.ParseFloat reads it as.
+// atx-conformance#294, atx-conformance#302.
+func TestDecoderWithoutUseNumberOnOutOfRangeNumbers(t *testing.T) {
+	long := "1" + strings.Repeat("0", 1000) + "e-650"
+	for _, literal := range []string{`1e400`, `-1e400`, "1" + strings.Repeat("0", 400), long} {
+		f, err := strconv.ParseFloat(literal, 64)
+		refused := errors.Is(err, strconv.ErrRange)
+		// go1.22 and go1.26 read long as 1e+149 with no error; any other
+		// reading here is ErrRange.
+		if !refused && (literal != long || err != nil || f != 1e149) {
+			t.Errorf("strconv.ParseFloat(%.40s, %d bytes) = %g, %.80v; want ErrRange, or 1e+149 and no error for 1 followed by 1000 zeros and e-650", literal, len(literal), f, err)
+		}
+		dec := json.NewDecoder(strings.NewReader("[" + literal + "]"))
+		var tokenErr error
+		for tokenErr == nil {
+			_, tokenErr = dec.Token()
+		}
+		if failed := !errors.Is(tokenErr, io.EOF); failed != refused {
+			t.Errorf("Token() without UseNumber on [%.40s] (%d bytes): %.80v; want an error: %v, as strconv.ParseFloat gives %g, %.80v", literal, len(literal), tokenErr, refused, f, err)
+		}
+		if !numberOutsideFloat64Range(literal) {
+			t.Errorf("numberOutsideFloat64Range(%.40s, %d bytes) = false, want true", literal, len(literal))
+		}
+		if _, dup := rawDuplicateMember([]byte(`{"zzz":` + literal + `,"trustLevel":1,"trustLevel":4}`)); !dup {
+			t.Errorf("rawDuplicateMember: no duplicate reported after %.40s (%d bytes)", literal, len(literal))
+		}
+	}
+	if got, want := verify(withMembers(t, v11Baseline(t), map[string]string{"declaredPurpose": long})), fractionOrExponentReason(long); got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != want {
+		t.Errorf("declaredPurpose 1 followed by 1000 zeros and e-650: %.300s, want REJECT[SIGNATURE_INVALID: %.300s]", got, want)
 	}
 }
 
@@ -924,6 +1332,447 @@ func TestMLDSA65RequiresEd25519Companion(t *testing.T) {
 	}
 }
 
+// TestSuitePinsEd25519CompanionUnderEachVersion pins that the shipped fixture
+// set holds the Ed25519 companion rule (core.md section 13, Cryptographic
+// agility) under each atcVersion this verifier accepts. For "1.0" and for
+// "1.1", a shipped fixture must be one this verifier rejects for the missing
+// companion, which it reports only once every declared signature has
+// verified and none of them is Ed25519, and that REJECT must be the fixture's
+// pinned outcome. The rule names no atcVersion. A verifier that applies it
+// under one atcVersion alone finds every declared signature of the other
+// one's fixture verifying, so without a fixture under each atcVersion such a
+// verifier passes the suite. atx-conformance#151.
+func TestSuitePinsEd25519CompanionUnderEachVersion(t *testing.T) {
+	paths, err := expandFixturePaths([]string{repoRoot + "/fixtures"})
+	if err != nil {
+		t.Fatalf("cannot list the shipped fixtures: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("no shipped fixtures found; refusing to pass vacuously")
+	}
+
+	pinnedBy := map[string][]string{}
+	for _, p := range paths {
+		f, err := loadFixture(p)
+		if err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+		got := verify(f)
+		if got.RejectCategory != "SIGNATURE_INVALID" || !strings.Contains(got.Reason, "without a verifying Ed25519 signature") {
+			continue
+		}
+		if !matchesExpected(f.Expected, got) {
+			t.Errorf("%s: reference verifier observed %s, not the pinned outcome", p, got)
+			continue
+		}
+		var a atx
+		if err := json.Unmarshal(f.ATX, &a); err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+		pinnedBy[a.ATCVersion] = append(pinnedBy[a.ATCVersion], f.Name)
+	}
+	for _, version := range []string{"1.0", "1.1"} {
+		if len(pinnedBy[version]) == 0 {
+			t.Errorf("no shipped fixture of atcVersion %s pins the REJECT of ML-DSA-65 signatures that verify with no Ed25519 companion: a verifier that applies the companion rule to the other atcVersion alone passes the suite", version)
+			continue
+		}
+		t.Logf("atcVersion %s: the Ed25519 companion rule is pinned by %s", version, strings.Join(pinnedBy[version], ", "))
+	}
+}
+
+// withSignatures returns f with its credential's signatures replaced by the
+// entries at the given indexes of the ones it carries, in that order, an
+// index named twice carried twice.
+func withSignatures(t *testing.T, f fixture, indexes ...int) fixture {
+	t.Helper()
+	var atx map[string]any
+	if err := json.Unmarshal(f.ATX, &atx); err != nil {
+		t.Fatal(err)
+	}
+	carried := atx["signatures"].([]any)
+	kept := []any{}
+	for _, i := range indexes {
+		kept = append(kept, carried[i])
+	}
+	atx["signatures"] = kept
+	var err error
+	if f.ATX, err = json.Marshal(atx); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// thresholdReason is the reason verifySignatures writes when the declared
+// Ed25519 signatures verify under fewer distinct keys than requiredSignatures.
+func thresholdReason(required, distinct int) string {
+	return fmt.Sprintf("signature threshold not met: requiredSignatures is %d, distinct Ed25519 keys that verified a declared signature: %d", required, distinct)
+}
+
+// TestRequiredSignaturesThreshold pins the k-of-n threshold of core.md
+// section 3.1 step 8 (cosignatures from 2 of 3 key holders), which the
+// verifier state sets as requiredSignatures: the declared Ed25519 signatures
+// must verify under at least that many distinct keys. Each case cuts the
+// credential of fixtures/threshold-2of3-cosignature.json, whose three
+// signatures verify under the primary's and the two cosigners' keys, to the
+// signatures it names. With requiredSignatures 2, its first signature alone is
+// fixtures/threshold-1of3-cosignature.json. atx-conformance#132.
+func TestRequiredSignaturesThreshold(t *testing.T) {
+	base, err := loadFixture(repoRoot + "/fixtures/threshold-2of3-cosignature.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.VerifierState.RequiredSignatures != nil {
+		t.Fatal("threshold-2of3-cosignature sets requiredSignatures; the cases below assume it sets none")
+	}
+	one, two, three := 1, 2, 3
+	cases := []struct {
+		name       string
+		required   *int
+		signatures []int
+		distinct   int // keys the signatures verify under, for the reason of a REJECT
+		accept     bool
+	}{
+		{"no threshold, the primary's signature alone", nil, []int{0}, 1, true},
+		{"1 required, the primary's signature alone", &one, []int{0}, 1, true},
+		{"2 required, the primary's signature alone", &two, []int{0}, 1, false},
+		{"2 required, a cosigner's signature alone", &two, []int{2}, 1, false},
+		{"2 required, the primary's signature carried twice", &two, []int{0, 0}, 1, false},
+		{"2 required, the primary and a cosigner", &two, []int{0, 1}, 2, true},
+		{"2 required, the two cosigners", &two, []int{1, 2}, 2, true},
+		{"2 required, all three", &two, []int{0, 1, 2}, 3, true},
+		{"3 required, two of the three", &three, []int{0, 2}, 2, false},
+		{"3 required, all three", &three, []int{0, 1, 2}, 3, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := withSignatures(t, base, c.signatures...)
+			f.VerifierState.RequiredSignatures = c.required
+			got := verify(f)
+			if c.accept {
+				if !got.Accepted || got.SigsValid != len(c.signatures) {
+					t.Errorf("got %s with %d/%d valid, want ACCEPT with every signature valid", got, got.SigsValid, got.SigsExpected)
+				}
+				return
+			}
+			if want := thresholdReason(*c.required, c.distinct); got.Accepted || got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != want {
+				t.Errorf("got %s, want REJECT[SIGNATURE_INVALID: %s]", got, want)
+			}
+		})
+	}
+}
+
+// TestRequiredSignaturesCountsKeysNotKeyIDs pins that a key counts once
+// however many signatures verify under it, whatever keyId they carry (the
+// rule core.md section 1.3 step 7 states for its count). The verifier state
+// lists the primary's key a second time under another keyId of the issuer,
+// and the credential carries the primary's signature twice, once under each
+// keyId: both verify, under one key.
+func TestRequiredSignaturesCountsKeysNotKeyIDs(t *testing.T) {
+	f, err := loadFixture(repoRoot + "/fixtures/threshold-1of3-cosignature.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := verify(f); got.Accepted || got.Reason != thresholdReason(2, 1) {
+		t.Fatalf("threshold-1of3-cosignature: got %s, want REJECT[SIGNATURE_INVALID: %s]", got, thresholdReason(2, 1))
+	}
+	const alias = "did:opena2a:authority:opena2a.org#key-1-alias"
+	primary := f.VerifierState.PublicKeys[0]
+	if primary.Role != "issuer-primary" {
+		t.Fatalf("first verifier key is %s, want issuer-primary", primary.Role)
+	}
+	aliased := primary
+	aliased.KeyID = alias
+	f.VerifierState.PublicKeys = append(append([]keypairRef{}, f.VerifierState.PublicKeys...), aliased)
+
+	var atx map[string]any
+	if err := json.Unmarshal(f.ATX, &atx); err != nil {
+		t.Fatal(err)
+	}
+	sig := atx["signatures"].([]any)[0].(map[string]any)
+	second := map[string]any{"keyId": alias, "algorithm": sig["algorithm"], "value": sig["value"]}
+	atx["signatures"] = []any{sig, second}
+	if f.ATX, err = json.Marshal(atx); err != nil {
+		t.Fatal(err)
+	}
+
+	got := verify(f)
+	if got.Accepted || got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != thresholdReason(2, 1) {
+		t.Errorf("two signatures under one key named by two keyIds: got %s, want REJECT[SIGNATURE_INVALID: %s]", got, thresholdReason(2, 1))
+	}
+	f.VerifierState.RequiredSignatures = nil
+	if got := verify(f); !got.Accepted || got.SigsValid != 2 {
+		t.Errorf("the same credential with no threshold: got %s with %d/%d valid, want ACCEPT with both valid", got, got.SigsValid, got.SigsExpected)
+	}
+}
+
+// TestRequiredSignaturesCountsEd25519Only pins that an ML-DSA-65 signature
+// does not count toward requiredSignatures: core.md section 1.3a.2 names the
+// Ed25519 signatures the threshold signatures and the ML-DSA-65 one the
+// hybrid signature. The hybrid baselines carry one Ed25519 and one ML-DSA-65
+// signature, both by the primary, and both verify.
+func TestRequiredSignaturesCountsEd25519Only(t *testing.T) {
+	for _, name := range []string{"baseline-valid-hybrid.json", "v1_1-baseline-valid-hybrid.json"} {
+		t.Run(name, func(t *testing.T) {
+			f, err := loadFixture(repoRoot + "/fixtures/" + name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			one, two := 1, 2
+			f.VerifierState.RequiredSignatures = &one
+			if got := verify(f); !got.Accepted || !got.Ed25519Valid || !got.MLDSA65Valid {
+				t.Errorf("requiredSignatures 1: got %s, want ACCEPT with both suites valid", got)
+			}
+			f.VerifierState.RequiredSignatures = &two
+			if got := verify(f); got.Accepted || got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != thresholdReason(2, 1) {
+				t.Errorf("requiredSignatures 2: got %s, want REJECT[SIGNATURE_INVALID: %s]", got, thresholdReason(2, 1))
+			}
+		})
+	}
+}
+
+// TestRequiredSignaturesBelowOneIsAConfigError pins that a requiredSignatures
+// the fixture format does not allow (an integer below 1) is a verifier
+// configuration error, reported before any step reads the credential, as a
+// bad clock is: on fixtures/expired.json it is reported in place of EXPIRED.
+func TestRequiredSignaturesBelowOneIsAConfigError(t *testing.T) {
+	for _, name := range []string{"threshold-2of3-cosignature.json", "expired.json"} {
+		for _, n := range []int{0, -1} {
+			t.Run(fmt.Sprintf("%s/%d", name, n), func(t *testing.T) {
+				f, err := loadFixture(repoRoot + "/fixtures/" + name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.VerifierState.RequiredSignatures = &n
+				want := fmt.Sprintf("bad requiredSignatures: %d is not a positive integer", n)
+				if got := verify(f); got.Accepted || got.RejectCategory != "VERIFIER_CONFIG_ERROR" || got.Reason != want {
+					t.Errorf("got %s, want REJECT[VERIFIER_CONFIG_ERROR: %s]", got, want)
+				}
+			})
+		}
+	}
+}
+
+// TestRequiredSignaturesDecode pins how a fixture file's requiredSignatures
+// member decodes: a JSON integer in int range is the threshold, null or an
+// absent member sets none, a name in another case names the same member, and
+// a value of any other JSON type, a number written with a fraction or an
+// exponent among them, fails to load, as does the member written twice,
+// under one name or two (repeatedFixtureMember). Each case rewrites the
+// member of fixtures/threshold-1of3-cosignature.json, `"requiredSignatures": 2`.
+func TestRequiredSignaturesDecode(t *testing.T) {
+	raw, err := os.ReadFile(repoRoot + "/fixtures/threshold-1of3-cosignature.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const member = `"requiredSignatures": 2`
+	if bytes.Count(raw, []byte(member)) != 1 {
+		t.Fatalf("threshold-1of3-cosignature does not carry %s once", member)
+	}
+	cases := []struct {
+		member string
+		load   bool
+		// The observed result, for a file that loads; what its load error
+		// names, for one that does not.
+		want string
+	}{
+		{`"requiredSignatures": 2`, true, "REJECT[SIGNATURE_INVALID: " + thresholdReason(2, 1) + "]"},
+		{`"RequiredSignatures": 2`, true, "REJECT[SIGNATURE_INVALID: " + thresholdReason(2, 1) + "]"},
+		{`"requiredSignatures": 1`, true, "ACCEPT"},
+		{`"requiredSignatures": null`, true, "ACCEPT"},
+		{`"requiredSignatures": null, "requiredSignatures": 2`, false, `the fixture repeats the member "requiredSignatures"`},
+		{`"requiredSignatures": 2, "RequiredSignatures": null`, false, `the fixture repeats the member "RequiredSignatures"`},
+		{`"requiredSignatures": -0`, true, "REJECT[VERIFIER_CONFIG_ERROR: bad requiredSignatures: 0 is not a positive integer]"},
+		{`"requiredSignatures": "2"`, false, "requiredSignatures"},
+		{`"requiredSignatures": 2.0`, false, "requiredSignatures"},
+		{`"requiredSignatures": 1e0`, false, "requiredSignatures"},
+		{`"requiredSignatures": true`, false, "requiredSignatures"},
+		{`"requiredSignatures": [2]`, false, "requiredSignatures"},
+		{`"requiredSignatures": 9223372036854775808`, false, "requiredSignatures"},
+	}
+	for _, c := range cases {
+		t.Run(c.member, func(t *testing.T) {
+			f, err := parseFixture(bytes.Replace(raw, []byte(member), []byte(c.member), 1))
+			if !c.load {
+				if err == nil || !strings.Contains(err.Error(), c.want) {
+					t.Errorf("loaded (err %v), want a load error naming %s", err, c.want)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("load error: %v", err)
+			}
+			if got := verify(f).String(); got != c.want {
+				t.Errorf("got %s, want %s", got, c.want)
+			}
+		})
+	}
+	// An absent member sets no threshold.
+	without := bytes.Replace(raw, []byte(",\n    "+member), nil, 1)
+	if bytes.Equal(without, raw) {
+		t.Fatal("cannot remove the requiredSignatures member")
+	}
+	f, err := parseFixture(without)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := verify(f); !got.Accepted {
+		t.Errorf("with no requiredSignatures member: got %s, want ACCEPT", got)
+	}
+}
+
+// TestSuiteCatchesThresholdBlindVerifier pins that the shipped fixture set
+// holds a verifier to requiredSignatures: run with the member dropped from
+// every fixture's verifier state, which is what a verifier that reads no
+// threshold sees, the reference verifier must miss at least one fixture's
+// pinned outcome. Without one, a verifier that checks only that every
+// declared signature verifies passes the suite, as it did before
+// fixtures/threshold-1of3-cosignature.json.
+func TestSuiteCatchesThresholdBlindVerifier(t *testing.T) {
+	paths, err := expandFixturePaths([]string{repoRoot + "/fixtures"})
+	if err != nil {
+		t.Fatalf("cannot list the shipped fixtures: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("no shipped fixtures found; refusing to pass vacuously")
+	}
+
+	var caughtBy []string
+	for _, p := range paths {
+		f, err := loadFixture(p)
+		if err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+		if got := verify(f); !matchesExpected(f.Expected, got) {
+			t.Errorf("%s: reference verifier observed %s, not the pinned outcome", p, got)
+			continue
+		}
+		blind := f
+		blind.VerifierState.RequiredSignatures = nil
+		if !matchesExpected(f.Expected, verify(blind)) {
+			caughtBy = append(caughtBy, f.Name)
+		}
+	}
+	if len(caughtBy) == 0 {
+		t.Fatalf("a verifier that reads no requiredSignatures matches all %d fixtures: no fixture's verdict depends on the threshold", len(paths))
+	}
+	t.Logf("a threshold-blind verifier misses the pinned outcome of: %s", strings.Join(caughtBy, ", "))
+}
+
+// TestDistinctAuthorities pins the grouping step 7 counts with (core.md
+// section 1.3 step 7): signatures sharing an authority count once, signatures
+// sharing a public key count once whatever their keyIds, and the relation is
+// closed transitively.
+func TestDistinctAuthorities(t *testing.T) {
+	cases := []struct {
+		name  string
+		nodes []signerNode
+		want  int
+	}{
+		{"no counted signature", nil, 0},
+		{"one authority one key", []signerNode{{"A", "k1"}}, 1},
+		{"one authority, two keys", []signerNode{{"A", "k1"}, {"A", "k2"}}, 1},
+		{"one key under two authorities", []signerNode{{"A", "k1"}, {"B", "k1"}}, 1},
+		{"two authorities, two keys", []signerNode{{"A", "k1"}, {"B", "k2"}}, 2},
+		{"three authorities, three keys", []signerNode{{"A", "k1"}, {"B", "k2"}, {"C", "k3"}}, 3},
+		{"shared key joins two of three", []signerNode{{"A", "k1"}, {"B", "k1"}, {"C", "k3"}}, 2},
+		{"shared key then shared authority", []signerNode{{"A", "k1"}, {"B", "k1"}, {"B", "k2"}}, 1},
+		{"link found late", []signerNode{{"A", "k1"}, {"B", "k2"}, {"C", "k3"}, {"C", "k1"}, {"B", "k3"}}, 1},
+	}
+	for _, c := range cases {
+		if got := distinctAuthorities(c.nodes); got != c.want {
+			t.Errorf("%s: distinctAuthorities = %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+// TestStep7SignerAuthorityCount runs the step 7 fixtures, and the threshold
+// fixture whose three keys belong to one authority, through verify() and pins
+// the count each produces. It then clears the required trust level: every one
+// of them is then accepted with the same count, so the REJECTs come from the
+// requirement, not from any other step.
+func TestStep7SignerAuthorityCount(t *testing.T) {
+	cases := []struct {
+		file        string
+		authorities int
+		accepted    bool
+	}{
+		{"v1_1-two-authority-cosignature.json", 2, true},
+		{"v1_1-cosigner-named-not-signed.json", 1, false},
+		{"v1_1-one-authority-threshold-keys.json", 1, false},
+		{"v1_1-one-key-under-two-dids.json", 1, false},
+		{"v1_1-own-key-labelled-as-cosigner.json", 1, false},
+		{"threshold-2of3-cosignature.json", 1, true},
+	}
+	for _, c := range cases {
+		f, err := loadFixture(repoRoot + "/fixtures/" + c.file)
+		if err != nil {
+			t.Fatalf("%s: %v", c.file, err)
+		}
+		got := verify(f)
+		if !got.Step7Performed {
+			t.Errorf("%s: step 7 count not performed (%s)", c.file, got)
+			continue
+		}
+		if got.SignerAuthorities != c.authorities {
+			t.Errorf("%s: %d distinct signer authorities, want %d", c.file, got.SignerAuthorities, c.authorities)
+		}
+		if got.Accepted != c.accepted {
+			t.Errorf("%s: accepted=%v, want %v (%s)", c.file, got.Accepted, c.accepted, got)
+		}
+		if !c.accepted && got.RejectCategory != "INSUFFICIENT_SIGNER_AUTHORITIES" {
+			t.Errorf("%s: reject category %q, want INSUFFICIENT_SIGNER_AUTHORITIES", c.file, got.RejectCategory)
+		}
+
+		f.VerifierState.RequiredTrustLevel = 0
+		if got := verify(f); !got.Accepted || got.SignerAuthorities != c.authorities {
+			t.Errorf("%s with no required trust level: %s with %d authorities, want ACCEPT with %d",
+				c.file, got, got.SignerAuthorities, c.authorities)
+		}
+	}
+}
+
+// TestSuiteCatchesStep7BlindVerifier pins that the shipped fixture set holds
+// a verifier to the distinct signer-authority count: run with
+// requiredTrustLevel dropped from every fixture's verifier state, which is
+// what a verifier that omits step 7 sees, the reference verifier misses the
+// pinned outcome of exactly the four MUST-REJECT fixtures of that step.
+func TestSuiteCatchesStep7BlindVerifier(t *testing.T) {
+	paths, err := expandFixturePaths([]string{repoRoot + "/fixtures"})
+	if err != nil {
+		t.Fatalf("cannot list the shipped fixtures: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("no shipped fixtures found; refusing to pass vacuously")
+	}
+
+	var caughtBy []string
+	for _, p := range paths {
+		f, err := loadFixture(p)
+		if err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+		if got := verify(f); !matchesExpected(f.Expected, got) {
+			t.Errorf("%s: reference verifier observed %s, not the pinned outcome", p, got)
+			continue
+		}
+		blind := f
+		blind.VerifierState.RequiredTrustLevel = 0
+		if !matchesExpected(f.Expected, verify(blind)) {
+			caughtBy = append(caughtBy, f.Name)
+		}
+	}
+	sort.Strings(caughtBy)
+	want := []string{
+		"atx-v1_1/cosigner-named-not-signed",
+		"atx-v1_1/one-authority-threshold-keys",
+		"atx-v1_1/one-key-under-two-dids",
+		"atx-v1_1/own-key-labelled-as-cosigner",
+	}
+	if !slices.Equal(caughtBy, want) {
+		t.Fatalf("a verifier that omits step 7 misses the pinned outcome of %v, want %v", caughtBy, want)
+	}
+}
+
 // TestStrictParseDepthGuard is the regression for the unbounded-recursion DoS.
 // A credential nested past encoding/json's own depth limit (10000) must be
 // rejected without crashing. The strict-parse scan aborts at maxScanDepth and
@@ -961,6 +1810,7 @@ var earlyRejectCategories = map[string]bool{
 	"UNSUPPORTED_VERSION": true, // step 1
 	"EXPIRED":             true, // step 2
 	"REVOKED":             true, // step 3
+	"REVOCATION_UNKNOWN":  true, // step 3
 	"UNTRUSTED_ISSUER":    true, // step 4
 }
 
@@ -1040,6 +1890,170 @@ func lastWins(raw json.RawMessage) (json.RawMessage, error) {
 	return json.Marshal(v)
 }
 
+// TestExpiredBeyondSkewPinsTheSkewBound pins what
+// fixtures/expired-beyond-skew.json tests. core.md section 1.3 step 2
+// evaluates expiresAt within the family clock-skew bound of ATP-SPEC section
+// 10.2: a verifier tolerates at most 60 seconds of clock skew. This verifier
+// tolerates none and reads the clock at step 2 alone, so a verifier that
+// tolerates s seconds decides as this one does at a clock s seconds earlier.
+// The fixture's expiresAt is 61 seconds before its clock: at every whole s
+// from 0 to 60 the credential is rejected as EXPIRED, and at 61, where the
+// clock equals expiresAt, it is accepted, so expiry is the one gate it fails.
+// fixtures/expired.json is rejected at 61 too, so it does not tell a verifier
+// 61 seconds outside the bound from one inside it.
+func TestExpiredBeyondSkewPinsTheSkewBound(t *testing.T) {
+	const bound = 60 * time.Second
+	load := func(name string) (fixture, time.Time) {
+		t.Helper()
+		f, err := loadFixture(repoRoot + "/fixtures/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		clock, err := parseRFC3339(f.VerifierState.ClockRFC3339)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f, clock.UTC()
+	}
+	// at verifies f, a copy, with its clock moved skew earlier.
+	at := func(f fixture, clock time.Time, skew time.Duration) result {
+		f.VerifierState.ClockRFC3339 = clock.Add(-skew).Format(time.RFC3339)
+		return verify(f)
+	}
+
+	f, clock := load("expired-beyond-skew.json")
+	var a atx
+	if err := json.Unmarshal(f.ATX, &a); err != nil {
+		t.Fatal(err)
+	}
+	if gap := clock.Sub(a.ExpiresAt.Time); gap != bound+time.Second {
+		t.Fatalf("expiresAt is %s before the clock, want %s", gap, bound+time.Second)
+	}
+	for skew := time.Duration(0); skew <= bound; skew += time.Second {
+		if got := at(f, clock, skew); got.Accepted || got.RejectCategory != "EXPIRED" {
+			t.Errorf("clock %s earlier: got %s, want REJECT[EXPIRED]", skew, got)
+		}
+	}
+	if got := at(f, clock, bound+time.Second); !got.Accepted {
+		t.Errorf("clock %s earlier, equal to expiresAt: got %s, want ACCEPT", bound+time.Second, got)
+	}
+
+	old, oldClock := load("expired.json")
+	if got := at(old, oldClock, bound+time.Second); got.Accepted || got.RejectCategory != "EXPIRED" {
+		t.Errorf("expired.json, clock %s earlier: got %s, want REJECT[EXPIRED]", bound+time.Second, got)
+	}
+}
+
+// TestRevocationListFixturesPinTheSkewBound pins what the two beyond-skew
+// revocation-list fixtures test. Step 3 reads a held CRL's nextUpdate and
+// issuedAt within the family clock-skew bound of ATP-SPEC section 10.2: a
+// verifier tolerates at most 60 seconds of clock skew. This verifier
+// tolerates atpMaxSkew, so a verifier that tolerates s seconds decides the
+// nextUpdate check as this one does at a clock 60-s seconds later, and the
+// issuedAt check as this one does at a clock 60-s seconds earlier. Each
+// fixture's stamp lies 61 seconds beyond its clock: at every whole s from 0
+// to 60 the credential is rejected as REVOCATION_UNKNOWN, and at 61 it is
+// accepted, so the list's freshness is the one gate it fails.
+func TestRevocationListFixturesPinTheSkewBound(t *testing.T) {
+	if atpMaxSkew != 60*time.Second {
+		t.Fatalf("atpMaxSkew is %s; ATP-SPEC section 10.2 bounds the tolerated skew at 60 seconds", atpMaxSkew)
+	}
+	cases := []struct {
+		file string
+		// stamp is the CRL member the fixture puts beyond the bound.
+		stamp func(c *crl) time.Time
+		// toward is 1 when a verifier that tolerates less skew decides as
+		// this one does at a later clock, and -1 at an earlier one.
+		toward int
+	}{
+		{"v1_1-crl-past-nextupdate-beyond-skew-hybrid.json", func(c *crl) time.Time { return c.NextUpdate.Time }, 1},
+		{"v1_1-crl-issued-after-clock-beyond-skew-hybrid.json", func(c *crl) time.Time { return c.IssuedAt.Time }, -1},
+	}
+	for _, c := range cases {
+		f, err := loadFixture(repoRoot + "/fixtures/" + c.file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.VerifierState.CRL == nil {
+			t.Fatalf("%s: the verifier state holds no CRL", c.file)
+		}
+		clock, err := parseRFC3339(f.VerifierState.ClockRFC3339)
+		if err != nil {
+			t.Fatal(err)
+		}
+		clock = clock.UTC()
+		toward := time.Duration(c.toward)
+		if gap := clock.Sub(c.stamp(f.VerifierState.CRL)) * toward; gap != atpMaxSkew+time.Second {
+			t.Fatalf("%s: the CRL stamp lies %s beyond the clock, want %s", c.file, gap, atpMaxSkew+time.Second)
+		}
+		for s := time.Duration(0); s <= atpMaxSkew+time.Second; s += time.Second {
+			g := f
+			g.VerifierState.ClockRFC3339 = clock.Add((atpMaxSkew - s) * toward).Format(time.RFC3339)
+			got := verify(g)
+			switch {
+			case s <= atpMaxSkew && (got.Accepted || got.RejectCategory != "REVOCATION_UNKNOWN"):
+				t.Errorf("%s, a verifier that tolerates %s: got %s, want REJECT[REVOCATION_UNKNOWN]", c.file, s, got)
+			case s > atpMaxSkew && !got.Accepted:
+				t.Errorf("%s, a verifier that tolerates %s: got %s, want ACCEPT", c.file, s, got)
+			}
+		}
+	}
+}
+
+// TestRevocationListFixturesCarryTheBaselineCredential pins that the five
+// revocation-list fixtures differ from fixtures/v1_1-baseline-valid-hybrid.json,
+// which is accepted, in the revocation members of the verifier state alone:
+// the credential byte for byte, the keypair references and every other member
+// of the verifier state are the baseline's. Each fixture's verdict is then
+// the verdict of the list it holds, or of the list it is required to hold.
+func TestRevocationListFixturesCarryTheBaselineCredential(t *testing.T) {
+	load := func(name string) fixture {
+		t.Helper()
+		f, err := loadFixture(repoRoot + "/fixtures/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	// rest is the fixture's keypair references and verifier state without
+	// its revocation members, as JSON.
+	rest := func(f fixture) string {
+		t.Helper()
+		state := f.VerifierState
+		state.CRL, state.RevocationListRequired = nil, false
+		b, err := json.Marshal(struct {
+			KeypairRefs   []keypairRef
+			VerifierState verifierState
+		}{f.KeypairRefs, state})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	base := load("v1_1-baseline-valid-hybrid.json")
+	if got := verify(base); !got.Accepted {
+		t.Fatalf("v1_1-baseline-valid-hybrid.json: got %s, want ACCEPT", got)
+	}
+	for _, name := range []string{
+		"v1_1-crl-fresh-agent-absent-hybrid.json",
+		"v1_1-crl-past-nextupdate-beyond-skew-hybrid.json",
+		"v1_1-crl-issued-after-clock-beyond-skew-hybrid.json",
+		"v1_1-crl-past-nextupdate-lists-agent-hybrid.json",
+		"v1_1-crl-required-none-held-hybrid.json",
+	} {
+		f := load(name)
+		if !bytes.Equal(f.ATX, base.ATX) {
+			t.Errorf("%s: its credential is not the baseline's byte for byte", name)
+		}
+		if rest(f) != rest(base) {
+			t.Errorf("%s: it differs from the baseline outside the revocation members of its verifier state", name)
+		}
+		if f.VerifierState.CRL == nil && !f.VerifierState.RevocationListRequired {
+			t.Errorf("%s: its verifier state neither holds a CRL nor requires one", name)
+		}
+	}
+}
+
 // TestJCSVectorsThroughVerifierProjection runs this verifier's own v1.1 path
 // (credential parse, TBS projection, JCS) over every jcs-vectors vector and
 // requires the pinned expected.canonicalHex byte-for-byte. The byte-agreement
@@ -1116,9 +2130,11 @@ func mustHexDecode(t *testing.T, s string) []byte {
 // verifiers/python/verify.py) and test_verify.py carries the same table, so a Go
 // release that changes how the decoder treats one of these inputs, for example
 // by enabling the strict RFC 3339 checks the standard library has disabled
-// (golang/go#54580), fails here before the two verifiers drift apart. An
-// offset hour above 24 or an offset minute above 60 is refused with the error
-// Go 1.23 and later give it, under every release (checkOffset).
+// (golang/go#54580), fails here before the two verifiers drift apart. A
+// timestamp whose offset has an hour above 24 or a minute above 60 is refused
+// with the error Go 1.23 and later give it, under every release, whether its
+// day is in range or not, and whether text follows the offset or its sign or
+// minute is malformed (checkOffset, offsetFirst).
 func TestTimestampDecode(t *testing.T) {
 	accepted := []struct {
 		in, utc     string
@@ -1171,8 +2187,10 @@ func TestTimestampDecode(t *testing.T) {
 			t.Errorf("%q decoded to %s, want a decode error", in, got.UTC().Format(time.RFC3339))
 		}
 	}
-	// Go 1.22 decodes each of these and Go 1.23 and later refuse them, with
-	// these errors.
+	// Go 1.23 and later refuse each of these with these errors. Go 1.22
+	// decodes the first seven, and refuses the last two, whose day is out of
+	// range, for the day; the decoder and parseRFC3339 give these errors
+	// under every release.
 	offsets := []struct{ in, msg string }{
 		{"2099-12-31T23:59:59+25:00", "time zone offset hour out of range"},
 		{"2099-12-31T23:59:59-25:00", "time zone offset hour out of range"},
@@ -1181,9 +2199,60 @@ func TestTimestampDecode(t *testing.T) {
 		{"2026-05-23T00:00:00+00:61", "time zone offset minute out of range"},
 		{"2099-12-31T23:59:59+25:61", "time zone offset minute out of range"},
 		{"2099-12-31T23:59:59-99:99", "time zone offset minute out of range"},
+		{"2099-02-30T23:59:59+25:00", "time zone offset hour out of range"},
+		{"1900-02-29T00:00:00+23:61", "time zone offset minute out of range"},
 	}
-	for _, c := range offsets {
+	// Controls: with the offset in range, every release names the day.
+	days := []struct{ in, msg string }{
+		{"2099-02-30T23:59:59+24:00", "day out of range"},
+		{"1900-02-29T00:00:00+23:60", "day out of range"},
+		{"2099-02-30T23:59:59Z", "day out of range"},
+	}
+	for _, c := range append(offsets, days...) {
 		want := `parsing time "` + c.in + `": ` + c.msg
+		raw, _ := json.Marshal(c.in)
+		var got timestamp
+		if err := json.Unmarshal(raw, &got); err == nil || err.Error() != want {
+			t.Errorf("%q: decode error %v, want %s", c.in, err, want)
+		}
+		if _, err := parseRFC3339(c.in); err == nil || err.Error() != want {
+			t.Errorf("%q: parseRFC3339 error %v, want %s", c.in, err, want)
+		}
+	}
+	// Outside the RFC 3339 layout. Go 1.23 and later refuse the first nine for
+	// the offset, which they check before the text after it, its sign and its
+	// minute's digits; Go 1.22 refuses the first five for the extra text and
+	// the last four as an offset it cannot parse. The decoder and
+	// parseRFC3339 give Go 1.23's error under every release.
+	const cannotParse = ` as "2006-01-02T15:04:05Z07:00": cannot parse `
+	outside := []struct{ in, msg string }{
+		{"2099-12-31T23:59:59+25:00x", ": time zone offset hour out of range"},
+		{"2099-12-31T23:59:59+23:61x", ": time zone offset minute out of range"},
+		{"2099-12-31T23:59:59.5+25:61x", ": time zone offset minute out of range"},
+		{"2099-02-30T23:59:59+25:00x", ": time zone offset hour out of range"},
+		{"2099-12-31T23:59:59+25:00Z", ": time zone offset hour out of range"},
+		{"2026-02-30T00:00:00+25:0a", ": time zone offset hour out of range"},
+		{"2099-12-31T23:59:59+25:6a", ": time zone offset hour out of range"},
+		{"2099-12-31T23:59:59x25:00", ": time zone offset hour out of range"},
+		{"2099-12-31T23:59:59x23:61", ": time zone offset minute out of range"},
+	}
+	// Controls: Go 1.23 and later do not refuse these for the offset's range,
+	// whose offset is in range, follows a Z, is not six bytes with a colon
+	// fourth, or has an hour that is not two digits (so its minute is not
+	// read), or that has an hour out of range before the offset; every
+	// release gives the same error.
+	outsideControls := []struct{ in, msg string }{
+		{"2099-12-31T23:59:59+24:00x", `: extra text: "x"`},
+		{"2099-12-31T23:59:59Z+25:00", `: extra text: "+25:00"`},
+		{"2099-12-31T23:59:59x24:00", cannotParse + `"x24:00" as "Z07:00"`},
+		{"2099-12-31T23:59:59+25-00", cannotParse + `"+25-00" as "Z07:00"`},
+		{"2099-12-31T23:59:59 +25:00", cannotParse + `" +25:00" as "Z07:00"`},
+		{"2099-12-31T23:59:59+25:0", cannotParse + `"+25:0" as "Z07:00"`},
+		{"2099-12-31T23:59:59+0a:61", cannotParse + `"+0a:61" as "Z07:00"`},
+		{"2099-12-31T24:00:00+25:00x", ": hour out of range"},
+	}
+	for _, c := range append(outside, outsideControls...) {
+		want := `parsing time "` + c.in + `"` + c.msg
 		raw, _ := json.Marshal(c.in)
 		var got timestamp
 		if err := json.Unmarshal(raw, &got); err == nil || err.Error() != want {
@@ -1212,9 +2281,12 @@ func TestTimestampDecode(t *testing.T) {
 
 // TestOffsetOutOfRangeVerdict pins the verdict on a time zone offset with an
 // hour above 24 or a minute above 60 wherever this verifier decodes a
-// timestamp. Go 1.22's time package decodes such a timestamp, so before
-// checkOffset a Go 1.22 build reached SIGNATURE_INVALID on such an expiresAt
-// and ACCEPT on such a clock; Go 1.23 and later reach the verdicts below, and
+// timestamp. Go 1.22's time package decodes such a timestamp when its day is
+// in range, so before checkOffset a Go 1.22 build reached SIGNATURE_INVALID on
+// such an expiresAt and ACCEPT on such a clock. It refuses
+// 2026-02-30T00:00:00+25:00 for the day, so before offsetFirst a Go 1.22
+// build named the day in an issuedAt, a clock or a CRL issuedAt, where Go 1.23
+// and later name the offset. Go 1.23 and later reach the verdicts below, and
 // the Python verifier's GO_OFFSET_VERDICTS and GO_UNLOADABLE_OFFSETS hold the
 // same.
 func TestOffsetOutOfRangeVerdict(t *testing.T) {
@@ -1225,6 +2297,7 @@ func TestOffsetOutOfRangeVerdict(t *testing.T) {
 			{"expiresAt", "2099-12-31T23:59:59-99:99", "time zone offset minute out of range"},
 			{"issuedAt", "2026-05-23T00:00:00+25:00", "time zone offset hour out of range"},
 			{"issuedAt", "2026-05-23T00:00:00+00:61", "time zone offset minute out of range"},
+			{"issuedAt", "2026-02-30T00:00:00+25:00", "time zone offset hour out of range"},
 		} {
 			f, err := loadFixture(path)
 			if err != nil {
@@ -1240,43 +2313,98 @@ func TestOffsetOutOfRangeVerdict(t *testing.T) {
 				t.Errorf("%s with %s %q: got %s, want REJECT[PARSE_ERROR] naming %s", path, c.member, c.value, got, c.msg)
 			}
 		}
-		f, err := loadFixture(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		f.VerifierState.ClockRFC3339 = "2026-06-01T00:00:00+23:61"
-		if got := verify(f); got.RejectCategory != "VERIFIER_CONFIG_ERROR" || !strings.Contains(got.Reason, "time zone offset minute out of range") {
-			t.Errorf("%s with clockRfc3339 +23:61: got %s, want REJECT[VERIFIER_CONFIG_ERROR]", path, got)
+		for _, c := range []struct{ clock, msg string }{
+			{"2026-06-01T00:00:00+23:61", "time zone offset minute out of range"},
+			{"2026-02-30T00:00:00+25:00", "time zone offset hour out of range"},
+		} {
+			f, err := loadFixture(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.VerifierState.ClockRFC3339 = c.clock
+			if got := verify(f); got.RejectCategory != "VERIFIER_CONFIG_ERROR" || !strings.Contains(got.Reason, c.msg) {
+				t.Errorf("%s with clockRfc3339 %q: got %s, want REJECT[VERIFIER_CONFIG_ERROR] naming %s", path, c.clock, got, c.msg)
+			}
 		}
 	}
-	for _, member := range []string{"issuedAt", "nextUpdate"} {
+	for _, c := range []struct{ member, value, msg string }{
+		{"issuedAt", "2026-05-23T00:00:00+25:00", "time zone offset hour out of range"},
+		{"nextUpdate", "2026-05-23T00:00:00+25:00", "time zone offset hour out of range"},
+		{"issuedAt", "2026-02-30T00:00:00+25:00", "time zone offset hour out of range"},
+	} {
 		var f fixture
-		crl := `{"verifierState":{"crl":{"` + member + `":"2026-05-23T00:00:00+25:00"}}}`
-		if err := json.Unmarshal([]byte(crl), &f); err == nil {
-			t.Errorf("CRL %s +25:00: the fixture loaded, want a load error", member)
+		crl := `{"verifierState":{"crl":{"` + c.member + `":"` + c.value + `"}}}`
+		if err := json.Unmarshal([]byte(crl), &f); err == nil || !strings.Contains(err.Error(), c.msg) {
+			t.Errorf("CRL %s %q: load error %v, want one naming %s", c.member, c.value, err, c.msg)
 		}
 	}
 	var f fixture
 	if err := json.Unmarshal([]byte(`{"verifierState":{"crl":{"entries":[{"revokedAt":"2026-05-23T00:00:00+00:61"}]}}}`), &f); err == nil {
 		t.Error("CRL entry revokedAt +00:61: the fixture loaded, want a load error")
 	}
-	if p := projectBehavioralProfileV11(json.RawMessage(`{"generatedAt":"2026-05-23T00:00:00+25:00"}`)); string(p) != "null" {
-		t.Errorf("behavioralProfile.generatedAt +25:00 projected as %s, want null", p)
+	if p, err := projectBehavioralProfileV11(profileWithGeneratedAt(`"2026-05-23T00:00:00+25:00"`)); err == nil {
+		t.Errorf("behavioralProfile.generatedAt +25:00 projected as %s, want the profile refused", p)
 	}
 	// Control: +24:00 and +23:60 decode under every release.
-	if p := projectBehavioralProfileV11(json.RawMessage(`{"generatedAt":"2026-05-23T00:00:00+24:00"}`)); string(p) == "null" {
-		t.Error("behavioralProfile.generatedAt +24:00 projected as null")
+	if _, err := projectBehavioralProfileV11(profileWithGeneratedAt(`"2026-05-23T00:00:00+24:00"`)); err != nil {
+		t.Errorf("behavioralProfile.generatedAt +24:00: %v, want it projected", err)
 	}
 	if _, err := parseRFC3339("2026-06-01T00:00:00+23:60"); err != nil {
 		t.Errorf("clock +23:60: %v, want it to parse", err)
 	}
 }
 
+// TestOffsetOutsideLayoutVerdict pins the reason given for a timestamp outside
+// the RFC 3339 layout whose time zone offset has an hour above 24: text
+// follows the offset, or its minute is not two digits. Go 1.23 and later
+// name the offset; before offsetFirst a Go 1.22 build named the extra text
+// ("x") in the first and could not parse the offset ("+25:0a" as "Z07:00")
+// in the second. The verdict category was the same under each release. The
+// Python verifier refuses each issuedAt here as not in the RFC 3339 layout,
+// a PARSE_ERROR too.
+func TestOffsetOutsideLayoutVerdict(t *testing.T) {
+	values := []string{"2099-12-31T23:59:59+25:00x", "2026-02-30T00:00:00+25:0a"}
+	const msg = `": time zone offset hour out of range`
+	for _, path := range []string{repoRoot + "/fixtures/baseline-valid.json", repoRoot + "/fixtures/v1_1-baseline-valid.json"} {
+		for _, value := range values {
+			f, err := loadFixture(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var members map[string]json.RawMessage
+			if err := json.Unmarshal(f.ATX, &members); err != nil {
+				t.Fatal(err)
+			}
+			members["issuedAt"], _ = json.Marshal(value)
+			f.ATX, _ = json.Marshal(members)
+			if got := verify(f); got.RejectCategory != "PARSE_ERROR" || !strings.Contains(got.Reason, `"`+value+msg) {
+				t.Errorf("%s with issuedAt %q: got %s, want REJECT[PARSE_ERROR] naming the offset hour", path, value, got)
+			}
+
+			if f, err = loadFixture(path); err != nil {
+				t.Fatal(err)
+			}
+			f.VerifierState.ClockRFC3339 = value
+			if got := verify(f); got.RejectCategory != "VERIFIER_CONFIG_ERROR" || !strings.Contains(got.Reason, `"`+value+msg) {
+				t.Errorf("%s with clockRfc3339 %q: got %s, want REJECT[VERIFIER_CONFIG_ERROR] naming the offset hour", path, value, got)
+			}
+		}
+	}
+	for _, value := range values {
+		var f fixture
+		crl := `{"verifierState":{"crl":{"issuedAt":"` + value + `"}}}`
+		if err := json.Unmarshal([]byte(crl), &f); err == nil || !strings.Contains(err.Error(), `"`+value+msg) {
+			t.Errorf("CRL issuedAt %q: load error %v, want one naming the offset hour", value, err)
+		}
+	}
+}
+
 // TestEscapedTimestampFailsToDecode pins that a timestamp written with a JSON
 // escape fails to decode wherever this verifier decodes one: the credential's
 // issuedAt is a PARSE_ERROR, a CRL entry's revokedAt fails to load the
-// fixture, and a v1.1 behavioralProfile.generatedAt projects the profile as
-// null. With plain time.Time fields, a Go 1.27 build decoded all three.
+// fixture, and a v1.1 behavioralProfile.generatedAt leaves a profile the
+// projection refuses. With plain time.Time fields, a Go 1.27 build decoded
+// all three.
 func TestEscapedTimestampFailsToDecode(t *testing.T) {
 	const escaped = "\"2026-05-23T00:00:00\\u005a\""
 	got := verify(fixture{ATX: json.RawMessage(`{"atcVersion":"1.1","issuedAt":` + escaped + `}`)})
@@ -1288,11 +2416,1286 @@ func TestEscapedTimestampFailsToDecode(t *testing.T) {
 	if err := json.Unmarshal([]byte(crl), &f); err == nil {
 		t.Error("escaped CRL revokedAt: the fixture loaded, want a load error")
 	}
-	if p := projectBehavioralProfileV11(json.RawMessage(`{"generatedAt":` + escaped + `}`)); string(p) != "null" {
-		t.Errorf("escaped behavioralProfile.generatedAt projected as %s, want null", p)
+	if p, err := projectBehavioralProfileV11(profileWithGeneratedAt(escaped)); err == nil {
+		t.Errorf("escaped behavioralProfile.generatedAt projected as %s, want the profile refused", p)
 	}
 	// Control: the same instant without the escape decodes.
-	if p := projectBehavioralProfileV11(json.RawMessage(`{"generatedAt":"2026-05-23T00:00:00Z"}`)); string(p) == "null" {
-		t.Error("unescaped behavioralProfile.generatedAt projected as null")
+	if _, err := projectBehavioralProfileV11(profileWithGeneratedAt(`"2026-05-23T00:00:00Z"`)); err != nil {
+		t.Errorf("unescaped behavioralProfile.generatedAt: %v, want it projected", err)
+	}
+}
+
+// signedProfile is the behavioralProfile the v1.1 baseline signs, as the TBS
+// carries it.
+const signedProfile = `{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":14}`
+
+// profileWithGeneratedAt is signedProfile with generatedAt written as the
+// JSON text given.
+func profileWithGeneratedAt(generatedAt string) json.RawMessage {
+	return json.RawMessage(`{"checksum":"sha256:ghi789","generatedAt":` + generatedAt + `,"observationDays":14}`)
+}
+
+// v11Baseline is fixtures/v1_1-baseline-valid.json as the verifier loads it.
+func v11Baseline(t *testing.T) fixture {
+	t.Helper()
+	f, err := loadFixture(repoRoot + "/fixtures/v1_1-baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// withMembers returns f with each named top-level member of its credential
+// set to the JSON text given for it, written as given; an empty text removes
+// the member.
+func withMembers(t *testing.T, f fixture, members map[string]string) fixture {
+	t.Helper()
+	var credential map[string]json.RawMessage
+	if err := json.Unmarshal(f.ATX, &credential); err != nil {
+		t.Fatal(err)
+	}
+	for name, raw := range members {
+		if raw == "" {
+			delete(credential, name)
+			continue
+		}
+		credential[name] = json.RawMessage(raw)
+	}
+	b, err := json.Marshal(credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.ATX = b
+	return f
+}
+
+// signedByPrimary returns f with its v1.1 credential carrying one Ed25519
+// signature over the credential's own JCS(TBS), made with the primary
+// issuer's key: the RFC 8032 test vector in vectors/issuer-primary.json.
+func signedByPrimary(t *testing.T, f fixture) fixture {
+	t.Helper()
+	raw, err := os.ReadFile(repoRoot + "/vectors/issuer-primary.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var key struct {
+		SeedHex string `json:"seedHex"`
+		KeyID   string `json:"keyId"`
+	}
+	if err := json.Unmarshal(raw, &key); err != nil {
+		t.Fatal(err)
+	}
+	seed, err := hex.DecodeString(key.SeedHex)
+	if err != nil || len(seed) != ed25519.SeedSize {
+		t.Fatalf("vectors/issuer-primary.json seedHex is not a %d-byte hex seed (%v)", ed25519.SeedSize, err)
+	}
+	var a atx
+	if err := json.Unmarshal(f.ATX, &a); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := canonicalPayloadV11(&a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sigs, err := json.Marshal([]signature{{
+		KeyID:     key.KeyID,
+		Algorithm: "Ed25519",
+		Value:     base64.StdEncoding.EncodeToString(ed25519.Sign(ed25519.NewKeyFromSeed(seed), payload)),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return withMembers(t, f, map[string]string{"signatures": string(sigs)})
+}
+
+// TestDeclaredPurposeUnpairedSurrogateEscape pins the verdict on a v1.1
+// credential whose declaredPurpose writes one half of a UTF-16 surrogate pair
+// as a \u escape without the other half. declaredPurpose enters the TBS as
+// written, and RFC 8785 §3.2.2.2 requires a canonicalizer to refuse such a
+// string, so each rejects as VERIFIER_CONFIG_ERROR naming the escape: the
+// category the Python reference verifier reaches (GO_SURROGATE_VERDICTS_V11
+// in verifiers/python/test_verify.py). The JCS library refuses the escape
+// only where the next six bytes are not another \u escape; it reads one
+// followed directly by a \u escape that does not complete the pair as a
+// single U+FFFD, the second escape included. Without the verifier's own
+// check, such a credential was a signature failure, and a declaredPurpose
+// signed holding U+FFFD verified with that pair of escapes written in its
+// place. atx-conformance#173.
+func TestDeclaredPurposeUnpairedSurrogateEscape(t *testing.T) {
+	// u writes each UTF-16 code unit given in hex as a \u escape.
+	u := func(units ...string) string { return `\u` + strings.Join(units, `\u`) }
+	base := v11Baseline(t)
+	for _, tc := range []struct{ purpose, want, unpaired string }{
+		{`"` + u("d800") + `"`, "VERIFIER_CONFIG_ERROR", u("d800")},
+		{`"` + u("dc00") + `"`, "VERIFIER_CONFIG_ERROR", u("dc00")},
+		{`"` + u("d800") + `\n"`, "VERIFIER_CONFIG_ERROR", u("d800")},
+		{`"` + u("d800", "0041") + `"`, "VERIFIER_CONFIG_ERROR", u("d800")},
+		{`"` + u("d800", "d800") + `"`, "VERIFIER_CONFIG_ERROR", u("d800")},
+		{`"` + u("dc00", "0041") + `"`, "VERIFIER_CONFIG_ERROR", u("dc00")},
+		{`"` + u("dc00", "d800") + `"`, "VERIFIER_CONFIG_ERROR", u("dc00")},
+		{`"` + u("DBFF", "E000") + `"`, "VERIFIER_CONFIG_ERROR", u("DBFF")},
+		{`"` + u("d800", "d800", "dc00") + `"`, "VERIFIER_CONFIG_ERROR", u("d800")},
+		{`"` + u("d800", "dc00", "dc00") + `"`, "VERIFIER_CONFIG_ERROR", u("dc00")},
+		{`{"statement": "x` + u("d800", "0041") + `"}`, "VERIFIER_CONFIG_ERROR", u("d800")},
+		{`{"x` + u("d800", "0041") + `": 1}`, "VERIFIER_CONFIG_ERROR", u("d800")},
+		{`["a", "` + u("dfff", "d800") + `"]`, "VERIFIER_CONFIG_ERROR", u("dfff")},
+		// No unpaired surrogate: a pair, with either case of hex digit, the
+		// text \ud800 after an escaped backslash, and a pair after one. The
+		// baseline signs no declaredPurpose, so each is a signature failure.
+		{`"` + u("d800", "dc00") + `"`, "SIGNATURE_INVALID", ""},
+		{`"` + u("D83D", "DE00") + `"`, "SIGNATURE_INVALID", ""},
+		{`"\\ud800"`, "SIGNATURE_INVALID", ""},
+		{`"\\` + u("d800", "dc00") + `"`, "SIGNATURE_INVALID", ""},
+	} {
+		got := verify(withMembers(t, base, map[string]string{"declaredPurpose": tc.purpose}))
+		if got.RejectCategory != tc.want {
+			t.Errorf("declaredPurpose %s: %s, want REJECT[%s]", tc.purpose, got, tc.want)
+		} else if tc.unpaired != "" && !strings.Contains(got.Reason, "unpaired UTF-16 surrogate escape ("+tc.unpaired+")") {
+			t.Errorf("declaredPurpose %s: %s, want the reason to name the unpaired surrogate escape %s", tc.purpose, got, tc.unpaired)
+		}
+	}
+
+	// A declaredPurpose signed holding U+FFFD verifies; with the character
+	// written as an unpaired surrogate escape and the \u escape after it, the
+	// credential is refused, not verified against that signature.
+	signed := signedByPrimary(t, withMembers(t, base, map[string]string{"declaredPurpose": `"` + u("fffd") + `"`}))
+	if got := verify(signed); !got.Accepted {
+		t.Fatalf("declaredPurpose signed holding U+FFFD: %s, want ACCEPT", got)
+	}
+	for _, units := range [][]string{{"d800", "0041"}, {"d800", "d800"}, {"dc00", "fffd"}} {
+		purpose := `"` + u(units...) + `"`
+		got := verify(withMembers(t, signed, map[string]string{"declaredPurpose": purpose}))
+		if got.RejectCategory != "VERIFIER_CONFIG_ERROR" {
+			t.Errorf("declaredPurpose %s in place of the signed U+FFFD: %s, want REJECT[VERIFIER_CONFIG_ERROR]", purpose, got)
+		}
+	}
+}
+
+// TestScanSummaryOutsideItsType pins the verdict on a v1.1 credential whose
+// scanSummary holds a member outside the type the TBS gives it (atx-spec
+// §1.3a.2 rule 2: criticalFindings and highFindings are integers, the other
+// four strings), or is not an object. The TBS has no value for either, so no
+// signature covers the credential and it rejects as SIGNATURE_INVALID with a
+// reason naming scanSummary. The projection leaves such a member at its zero
+// value, so without the check the v1.1 baseline, which signs
+// criticalFindings 0, verified carrying criticalFindings "3" or 3.5
+// (fixtures/v1_1-scan-summary-member-outside-type.json), and a credential
+// signed with a zero scanSummary verified carrying a scanSummary of 7. An
+// absent or null scanSummary or member is the zero value, and under
+// atcVersion 1.0 scanSummary is unsigned (§1.3a.1); neither is refused.
+// atx-conformance#173.
+func TestScanSummaryOutsideItsType(t *testing.T) {
+	base := v11Baseline(t)
+	var credential struct {
+		ScanSummary map[string]json.RawMessage `json:"scanSummary"`
+	}
+	if err := json.Unmarshal(base.ATX, &credential); err != nil {
+		t.Fatal(err)
+	}
+	// scanWith is the baseline's signed scanSummary with member written as raw.
+	scanWith := func(member, raw string) string {
+		scan := map[string]json.RawMessage{}
+		for name, value := range credential.ScanSummary {
+			scan[name] = value
+		}
+		scan[member] = json.RawMessage(raw)
+		b, err := json.Marshal(scan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	check := func(label string, f fixture, want string) {
+		t.Helper()
+		got := verify(f)
+		switch {
+		case want == "ACCEPT":
+			if !got.Accepted {
+				t.Errorf("%s: %s, want ACCEPT", label, got)
+			}
+		case got.RejectCategory != want || !strings.Contains(got.Reason, "scanSummary") || !strings.Contains(got.Reason, "signature"):
+			t.Errorf("%s: %s, want REJECT[%s] with a reason naming scanSummary and the signature", label, got, want)
+		}
+	}
+
+	for _, tc := range []struct{ member, raw, want string }{
+		{"criticalFindings", `"3"`, "SIGNATURE_INVALID"},
+		{"criticalFindings", `3.5`, "SIGNATURE_INVALID"},
+		{"criticalFindings", `3.0`, "SIGNATURE_INVALID"},
+		{"criticalFindings", `1e1`, "SIGNATURE_INVALID"},
+		{"criticalFindings", `true`, "SIGNATURE_INVALID"},
+		{"criticalFindings", `9223372036854775808`, "SIGNATURE_INVALID"},
+		{"highFindings", `"1"`, "SIGNATURE_INVALID"},
+		{"hma", `7`, "SIGNATURE_INVALID"},
+		{"oasbLevel", `["L1"]`, "SIGNATURE_INVALID"},
+		{"criticalFindings", `null`, "ACCEPT"},
+		{"criticalFindings", `-0`, "ACCEPT"},
+		{"hma", `null`, "SIGNATURE_INVALID"},
+	} {
+		label := fmt.Sprintf("scanSummary.%s %s on the v1.1 baseline", tc.member, tc.raw)
+		f := withMembers(t, base, map[string]string{"scanSummary": scanWith(tc.member, tc.raw)})
+		if tc.member == "hma" && tc.raw == "null" {
+			// Control: hma null is the zero value "", which the baseline does
+			// not sign, so the signature fails without the scanSummary check.
+			if got := verify(f); got.Accepted || got.RejectCategory != "SIGNATURE_INVALID" || strings.Contains(got.Reason, "scanSummary") {
+				t.Errorf("%s: %s, want REJECT[SIGNATURE_INVALID] from the signature itself", label, got)
+			}
+			continue
+		}
+		check(label, f, tc.want)
+	}
+
+	zero := signedByPrimary(t, withMembers(t, base, map[string]string{"scanSummary": "null"}))
+	check("credential signed with a zero scanSummary", zero, "ACCEPT")
+	for _, raw := range []string{`7`, `"x"`, `[1.5]`, `true`, `{"criticalFindings": "3"}`, `{"hma": 0}`} {
+		check("scanSummary "+raw+" on a credential signed with a zero scanSummary",
+			withMembers(t, zero, map[string]string{"scanSummary": raw}), "SIGNATURE_INVALID")
+	}
+	for _, raw := range []string{`{}`, `{"criticalFindings": null, "hma": null}`, ""} {
+		label := "scanSummary " + raw
+		if raw == "" {
+			label = "no scanSummary"
+		}
+		check(label+" on a credential signed with a zero scanSummary",
+			withMembers(t, zero, map[string]string{"scanSummary": raw}), "ACCEPT")
+	}
+
+	v10, err := loadFixture(repoRoot + "/fixtures/baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(`scanSummary {"criticalFindings": "3"} on the v1.0 baseline, which signs no scanSummary`,
+		withMembers(t, v10, map[string]string{"scanSummary": `{"criticalFindings": "3"}`}), "ACCEPT")
+}
+
+// TestScanSummaryMemberNames pins decodeScanSummaryV11 and the verdict on the
+// member names of a v1.1 scanSummary. The credential schema core.md §1.1
+// points to gives scanSummary exactly hma, criticalFindings, highFindings,
+// secretless, cryptoServe and oasbLevel (additionalProperties false), so a
+// member under any other name, the names compared as written, returns
+// errScanSummaryMember, techniques included at this pin of the
+// specification, and the credential rejects as SIGNATURE_INVALID. The struct
+// decode matched a name in another case to its field and dropped any other
+// name, so the v1.1 baseline verified carrying a seventh member or
+// criticalFindings under the name CriticalFindings
+// (fixtures/v1_1-scan-summary-extra-member.json and
+// fixtures/v1_1-scan-summary-case-variant-member.json). The names are read
+// first; a scanSummary of the six names keeps the decode error of a member
+// outside its type, and one that is not an object its own. Either way the
+// six members hold what the struct decode reads. Under atcVersion 1.0
+// scanSummary is unsigned (§1.3a.1) and is not read.
+// verifiers/python/test_verify.py holds the Python verifier to the same
+// rule. atx-conformance#277.
+func TestScanSummaryMemberNames(t *testing.T) {
+	const (
+		decoded   = "no error"
+		member    = "errScanSummaryMember"
+		undecoded = "the decode error"
+	)
+	// with is the v1.1 baseline's signed scanSummary with its
+	// criticalFindings member written as members.
+	with := func(members string) string {
+		return `{"hma":"passed",` + members + `,"highFindings":0,"secretless":"clean","cryptoServe":"no-weak-crypto","oasbLevel":"L1"}`
+	}
+	for _, tc := range []struct{ raw, want string }{
+		{with(`"criticalFindings":0`), decoded},
+		{``, decoded},
+		{`null`, decoded},
+		{`{}`, decoded},
+		// A member under a name other than the six, compared as written.
+		{with(`"criticalFindings":0,"extra":"x"`), member},
+		{with(`"CriticalFindings":0`), member},
+		{with(`"criticalfindings":0`), member},
+		{strings.Replace(with(`"criticalFindings":0`), `"hma"`, `"HMA"`, 1), member},
+		{with(`"criticalFindings":0,"techniques":[]`), member},
+		{`{"criticalFindings":"3","extra":"x"}`, member},
+		// The six names: a member outside its type, or not an object.
+		{`{"criticalFindings":"3"}`, undecoded},
+		{`7`, undecoded},
+		{`[]`, undecoded},
+	} {
+		_, err := decodeScanSummaryV11(json.RawMessage(tc.raw))
+		got := decoded
+		switch {
+		case errors.Is(err, errScanSummaryMember):
+			got = member
+		case err != nil:
+			got = undecoded
+		}
+		if got != tc.want {
+			t.Errorf("scanSummary %s: %s (error %v), want %s", tc.raw, got, err, tc.want)
+		}
+	}
+
+	signed := tbsScanSummaryV11{HMA: "passed", Secretless: "clean", CryptoServe: "no-weak-crypto", OASBLevel: "L1"}
+	for _, raw := range []string{with(`"criticalFindings":0`), with(`"criticalFindings":0,"extra":"x"`), with(`"CriticalFindings":0`)} {
+		if got := projectScanSummaryV11(json.RawMessage(raw)); got != signed {
+			t.Errorf("scanSummary %s: projected as %+v, want the baseline's signed %+v", raw, got, signed)
+		}
+	}
+
+	const (
+		memberReason = "no signature covers scanSummary, which holds a member other than its six"
+		typeReason   = "no signature covers scanSummary, which holds a member outside its type or is not an object"
+	)
+	base := v11Baseline(t)
+	for _, tc := range []struct{ raw, reason string }{
+		{with(`"criticalFindings":0,"extra":"x"`), memberReason},
+		{with(`"CriticalFindings":0`), memberReason},
+		{strings.Replace(with(`"criticalFindings":0`), `"hma"`, `"HMA"`, 1), memberReason},
+		{with(`"criticalFindings":0,"techniques":[]`), memberReason},
+		{`{"criticalFindings":"3","extra":"x"}`, memberReason},
+		{with(`"criticalFindings":"3"`), typeReason},
+	} {
+		got := verify(withMembers(t, base, map[string]string{"scanSummary": tc.raw}))
+		if got.Accepted || got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != tc.reason {
+			t.Errorf("scanSummary %s on the v1.1 baseline: %s, want REJECT[SIGNATURE_INVALID: %s]", tc.raw, got, tc.reason)
+		}
+	}
+	if got := verify(withMembers(t, base, map[string]string{"scanSummary": with(`"criticalFindings":0`)})); !got.Accepted {
+		t.Errorf("the v1.1 baseline's scanSummary written as six members: %s, want ACCEPT", got)
+	}
+
+	v10, err := loadFixture(repoRoot + "/fixtures/baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := verify(withMembers(t, v10, map[string]string{"scanSummary": with(`"criticalFindings":0,"extra":"x"`)})); !got.Accepted {
+		t.Errorf("scanSummary with a seventh member on the v1.0 baseline, which signs no scanSummary: %s, want ACCEPT", got)
+	}
+}
+
+// runIn runs Run on args from dir and returns its exit code, stdout and
+// stderr.
+func runIn(t *testing.T, dir string, args ...string) (int, string, string) {
+	t.Helper()
+	chdir(t, dir)
+	var stdout, stderr bytes.Buffer
+	code := Run(args, &stdout, &stderr)
+	return code, stdout.String(), stderr.String()
+}
+
+// TestSummaryCountsOneFixtureInTheSingular pins the summary line's noun:
+// "(1 fixture)" for one, "(2 fixtures)" for two. It read "(1 fixtures)".
+func TestSummaryCountsOneFixtureInTheSingular(t *testing.T) {
+	baseline, err := fs.ReadFile(atxconformance.Fixtures, "fixtures/baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "x.json"), baseline, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"x.json"}, "\nsummary: 1 pass, 0 fail (1 fixture)\n"},
+		{[]string{"x.json", "x.json"}, "\nsummary: 2 pass, 0 fail (2 fixtures)\n"},
+	} {
+		code, stdout, stderr := runIn(t, dir, c.args...)
+		if code != 0 || stderr != "" || !strings.HasSuffix(stdout, c.want) {
+			t.Errorf("Run(%q) exits %d with stdout %q and stderr %q, want a report ending %q",
+				c.args, code, stdout, stderr, c.want)
+		}
+	}
+}
+
+// TestBareHelpAndVersionWordsPointAtTheOption pins the error line for a
+// help or version argument that names no file: it adds the option that
+// does what the word asks, and another missing path gets no such addition.
+func TestBareHelpAndVersionWordsPointAtTheOption(t *testing.T) {
+	dir := t.TempDir()
+	for _, c := range []struct{ arg, want string }{
+		{"help", "error: help: no such file or directory (--help prints the usage)\n"},
+		{"version", "error: version: no such file or directory (--version prints the version line)\n"},
+		{"helps", "error: helps: no such file or directory\n"},
+	} {
+		code, stdout, stderr := runIn(t, dir, c.arg)
+		if code != 2 || stdout != "" || stderr != c.want {
+			t.Errorf("Run(%q) exits %d with stdout %q and stderr %q, want exit 2 and stderr %q",
+				c.arg, code, stdout, stderr, c.want)
+		}
+	}
+}
+
+// TestNoFixturesLineNamesTheDirectories pins the line for directories
+// holding no *.json at their top level: it names each directory listed, a
+// repository root's fixtures directory for a root, and says a walk does
+// not descend, so a directory whose one fixture is in a subdirectory is
+// not mistaken for an empty one.
+func TestNoFixturesLineNamesTheDirectories(t *testing.T) {
+	dir := t.TempDir()
+	for _, d := range []string{"empty", "onlysub/sub", "root/fixtures"} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	baseline, err := fs.ReadFile(atxconformance.Fixtures, "fixtures/baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "onlysub", "sub", "x.json"), baseline, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"empty"}, "no fixture *.json files found in empty (subdirectories are not walked)\n"},
+		{[]string{"onlysub"}, "no fixture *.json files found in onlysub (subdirectories are not walked)\n"},
+		{[]string{"empty", "root"},
+			"no fixture *.json files found in empty, root/fixtures (subdirectories are not walked)\n"},
+	} {
+		code, stdout, stderr := runIn(t, dir, c.args...)
+		if code != 2 || stdout != "" || stderr != c.want {
+			t.Errorf("Run(%q) exits %d with stdout %q and stderr %q, want exit 2 and stderr %q",
+				c.args, code, stdout, stderr, c.want)
+		}
+	}
+}
+
+// TestFixtureWithNoATXMemberNamesTheCause pins the reason for a fixture
+// with no atx member, such as one of another conformance suite: it says
+// the member is missing and quotes a string $schema, where it read
+// "unexpected end of JSON input", json.Unmarshal's error for no bytes.
+func TestFixtureWithNoATXMemberNamesTheCause(t *testing.T) {
+	for _, c := range []struct{ doc, reason string }{
+		{`{"$schema": "https://atp.opena2a.org/schemas/fixture-v1.json", "expected": {"verifyResult": "ACCEPT"}}`,
+			`the fixture has no atx member (its $schema is "https://atp.opena2a.org/schemas/fixture-v1.json")`},
+		{`{"expected": {"verifyResult": "ACCEPT"}}`, "the fixture has no atx member"},
+		{`{"$schema": 7, "expected": {"verifyResult": "ACCEPT"}}`, "the fixture has no atx member"},
+	} {
+		f, err := parseFixture([]byte(c.doc))
+		if err != nil {
+			t.Fatalf("%s: load error %v", c.doc, err)
+		}
+		got := verify(f)
+		if got.Accepted || got.RejectCategory != "PARSE_ERROR" || got.Reason != c.reason {
+			t.Errorf("%s: %s, want REJECT[PARSE_ERROR: %s]", c.doc, got, c.reason)
+		}
+	}
+}
+
+// TestLoadErrorNamesTheFileShape pins the load error of a file that is not
+// a fixture object: one reason each for a file that is not JSON, one
+// holding NaN, Infinity or -Infinity among them, one whose value is not an
+// object and one nested past encoding/json's depth limit, the reasons the
+// Python verifier writes. They were json.Unmarshal's own errors, one naming
+// this package's fixture type.
+func TestLoadErrorNamesTheFileShape(t *testing.T) {
+	deep := strings.Repeat("[", 200000) + strings.Repeat("]", 200000)
+	for _, c := range []struct{ doc, reason string }{
+		{"not json at all", "fixture is not valid JSON"},
+		{"", "fixture is not valid JSON"},
+		{`{"expected": {"verifyResult": "ACCEPT"}} trailing`, "fixture is not valid JSON"},
+		{`{"name": NaN}`, "fixture is not valid JSON"},
+		{`{"name": Infinity}`, "fixture is not valid JSON"},
+		{`{"name": -Infinity}`, "fixture is not valid JSON"},
+		{"[NaN]", "fixture is not valid JSON"},
+		{"[1,2,3]", "fixture is not a JSON object"},
+		{`"text"`, "fixture is not a JSON object"},
+		{"7", "fixture is not a JSON object"},
+		{deep, "arrays and objects nested deeper than 10000 levels (the limit of Go's encoding/json)"},
+	} {
+		name := c.doc
+		if len(name) > 40 {
+			name = name[:40] + "..."
+		}
+		_, err := parseFixture([]byte(c.doc))
+		if err == nil || err.Error() != c.reason {
+			t.Errorf("%q: load error %v, want %q", name, err, c.reason)
+		}
+	}
+	// An error inside the fixture object still names the member.
+	if _, err := parseFixture([]byte(`{"verifierState": 7}`)); err == nil ||
+		!strings.Contains(err.Error(), "verifierState") {
+		t.Errorf(`{"verifierState": 7}: load error %v, want one naming verifierState`, err)
+	}
+}
+
+// TestLoadErrorIsTheFirstInTheText pins the load error of a file that is
+// not JSON and nests past encoding/json's depth limit: the reason for
+// whichever comes first in its text, as json.Unmarshal reports the first
+// error it reads. The bracket that opens the level past the limit can
+// itself be the token that is not JSON. The Python verifier's
+// test_load_error_is_the_first_in_the_text pins the same rows.
+func TestLoadErrorIsTheFirstInTheText(t *testing.T) {
+	past := strings.Repeat("[", 10001) + strings.Repeat("]", 10001)
+	long := "1" + strings.Repeat("0", 5000)
+	for _, c := range []struct{ name, doc, reason string }{
+		{"a token before the nesting", "[x," + past + "]", errNotJSON},
+		{"NaN before the nesting", "[NaN," + past + "]", errNotJSON},
+		{"a token at level 9999", strings.Repeat("[", 9999) + "x[[" + strings.Repeat("]", 10001), errNotJSON},
+		{"the bracket after a value", strings.Repeat("[", 10000) + "1[" + strings.Repeat("]", 10001), errNotJSON},
+		{"the bracket where a member name belongs",
+			strings.Repeat(`{"a":`, 9999) + "{{}}" + strings.Repeat("}", 9999), errNotJSON},
+		{"the nesting after the top-level value", "[]" + past, errNotJSON},
+		{"a token after the nesting", strings.Repeat("[", 10001) + "x" + strings.Repeat("]", 10001), errTooDeep},
+		{"NaN after the nesting", strings.Repeat("[", 10001) + "NaN" + strings.Repeat("]", 10001), errTooDeep},
+		{"NaN after objects nested past the limit",
+			strings.Repeat(`{"a":`, 10000) + `{"b": NaN}` + strings.Repeat("}", 10000), errTooDeep},
+		{"brackets and a quote in strings before the nesting",
+			`["x[", "y\"]", ` + strings.Repeat("[", 10000) + "x", errTooDeep},
+		{"a 5001-digit integer before the nesting",
+			"[" + long + "," + strings.Repeat("[", 10001) + "x", errTooDeep},
+	} {
+		_, err := parseFixture([]byte(c.doc))
+		if err == nil || err.Error() != c.reason {
+			t.Errorf("%s: load error %v, want %q", c.name, err, c.reason)
+		}
+	}
+}
+
+// TestReasonContainsMismatchNamesTheSubstring pins the FAIL block of a
+// fixture whose credential rejects in the expected category with a reason
+// that lacks expected.reasonContains: a line names the substring, which
+// the expected and observed lines do not show.
+func TestReasonContainsMismatchNamesTheSubstring(t *testing.T) {
+	root, err := filepath.Abs(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := fs.ReadFile(atxconformance.Fixtures, "fixtures/wrong-issuer.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["expected"].(map[string]any)["reasonContains"] = "zz-not-in-reason"
+	changed, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "r1.json"), changed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, _ := runIn(t, dir, "r1.json")
+	lines := strings.Split(stdout, "\n")
+	if code != 1 || len(lines) < 4 || lines[0] != "FAIL  r1.json" ||
+		!strings.HasPrefix(lines[2], "       observed: REJECT[UNTRUSTED_ISSUER: ") ||
+		lines[3] != `       reason does not contain "zz-not-in-reason"` {
+		t.Errorf("Run(r1.json) exits %d and writes:\n%s\nwant FAIL with the substring named under observed", code, stdout)
+	}
+	// The shipped fixture, which passes, has no such line.
+	code, stdout, _ = runIn(t, root, "fixtures/wrong-issuer.json")
+	if code != 0 || strings.Contains(stdout, "reason does not contain") {
+		t.Errorf("Run(fixtures/wrong-issuer.json) exits %d and writes:\n%s\nwant PASS and no reason line", code, stdout)
+	}
+}
+
+// TestIntegerOutsideExactRange pins the verdict on a v1.1 credential whose
+// signed payload holds an integer of magnitude above 2^53-1, outside the
+// I-JSON exact range (RFC 7493 §2.2). The JCS library reads each number as an
+// IEEE 754 double and writes 9007199254740993 as 9007199254740992, so a
+// credential signed over those bytes verified carrying either count: this
+// verifier accepted fixtures/v1_1-integer-outside-exact-range.json, which
+// the Python reference verifier, writing the count's own digits, rejected
+// for a signature that did not verify. Both now refuse each such integer the
+// TBS holds as SIGNATURE_INVALID, with one reason naming its member, once
+// the payload canonicalizes. atx-conformance#278.
+func TestIntegerOutsideExactRange(t *testing.T) {
+	base := v11Baseline(t)
+	// with returns f with the member name of its credential's object member
+	// top written as raw, the other members of top as f writes them.
+	with := func(f fixture, top, name, raw string) fixture {
+		t.Helper()
+		var credential map[string]json.RawMessage
+		if err := json.Unmarshal(f.ATX, &credential); err != nil {
+			t.Fatal(err)
+		}
+		object := map[string]json.RawMessage{}
+		if err := json.Unmarshal(credential[top], &object); err != nil {
+			t.Fatal(err)
+		}
+		object[name] = json.RawMessage(raw)
+		b, err := json.Marshal(object)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return withMembers(t, f, map[string]string{top: string(b)})
+	}
+	count := func(f fixture, raw string) fixture { return with(f, "scanSummary", "criticalFindings", raw) }
+	reason := func(where, literal string) string {
+		return "no signature covers " + where + ": the integer " + literal + " is outside the I-JSON exact range, -(2^53-1) to 2^53-1"
+	}
+
+	refused := []struct {
+		label, where, literal string
+		f                     fixture
+	}{
+		{"criticalFindings 2^53", "scanSummary.criticalFindings", "9007199254740992", count(base, "9007199254740992")},
+		{"criticalFindings 2^53+1", "scanSummary.criticalFindings", "9007199254740993", count(base, "9007199254740993")},
+		{"criticalFindings -2^53", "scanSummary.criticalFindings", "-9007199254740992", count(base, "-9007199254740992")},
+		{"criticalFindings 2^63-1", "scanSummary.criticalFindings", "9223372036854775807", count(base, "9223372036854775807")},
+		{"highFindings 2^53", "scanSummary.highFindings", "9007199254740992", with(base, "scanSummary", "highFindings", "9007199254740992")},
+		{"observationDays 2^53", "behavioralProfile.observationDays", "9007199254740992", with(base, "behavioralProfile", "observationDays", "9007199254740992")},
+		{"trustLevel 2^53+1", "trustLevel", "9007199254740993", withMembers(t, base, map[string]string{"trustLevel": "9007199254740993"})},
+		{"trustLevel -2^53-1", "trustLevel", "-9007199254740993", withMembers(t, base, map[string]string{"trustLevel": "-9007199254740993"})},
+		{"declaredPurpose 2^53+1", "declaredPurpose", "9007199254740993", withMembers(t, base, map[string]string{"declaredPurpose": "9007199254740993"})},
+		{"declaredPurpose nested", "declaredPurpose", "18014398509481985", withMembers(t, base, map[string]string{"declaredPurpose": `{"limits": {"refund": 18014398509481985}}`})},
+		{"declaredPurpose, the first integer written", "declaredPurpose", "9007199254740993",
+			withMembers(t, base, map[string]string{"declaredPurpose": `["18014398509481985", 9007199254740993, -9007199254740993]`})},
+		{"declaredPurpose integer beyond int64", "declaredPurpose", "100000000000000000000", withMembers(t, base, map[string]string{"declaredPurpose": `[100000000000000000000]`})},
+		// Several: the first in the order JCS writes the members.
+		{"observationDays and trustLevel", "behavioralProfile.observationDays", "9007199254740992",
+			withMembers(t, with(base, "behavioralProfile", "observationDays", "9007199254740992"), map[string]string{"trustLevel": "9007199254740993"})},
+		{"declaredPurpose and criticalFindings", "declaredPurpose", "-9007199254740992",
+			withMembers(t, count(base, "9007199254740993"), map[string]string{"declaredPurpose": `{"a": -9007199254740992}`})},
+		{"criticalFindings and highFindings", "scanSummary.criticalFindings", "9007199254740994",
+			with(count(base, "9007199254740994"), "scanSummary", "highFindings", "9007199254740993")},
+		{"highFindings and trustLevel", "scanSummary.highFindings", "9007199254740995",
+			withMembers(t, with(base, "scanSummary", "highFindings", "9007199254740995"), map[string]string{"trustLevel": "9007199254740992"})},
+	}
+	for _, tc := range refused {
+		got := verify(tc.f)
+		if got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != reason(tc.where, tc.literal) {
+			t.Errorf("%s on the v1.1 baseline: %s, want REJECT[SIGNATURE_INVALID: %s]", tc.label, got, reason(tc.where, tc.literal))
+		}
+	}
+
+	// Inside the range, an integer is not refused: the baseline does not
+	// sign it, so a signature fails.
+	for _, tc := range []struct {
+		label string
+		f     fixture
+	}{
+		{"criticalFindings 2^53-1", count(base, "9007199254740991")},
+		{"criticalFindings -(2^53-1)", count(base, "-9007199254740991")},
+		{"trustLevel 2^53-1", withMembers(t, base, map[string]string{"trustLevel": "9007199254740991"})},
+	} {
+		if got := verify(tc.f); got.RejectCategory != "SIGNATURE_INVALID" || strings.Contains(got.Reason, "I-JSON") {
+			t.Errorf("%s on the v1.1 baseline: %s, want REJECT[SIGNATURE_INVALID] from the signature itself", tc.label, got)
+		}
+	}
+	// A number in declaredPurpose written with an exponent or a fraction
+	// part is refused for its form, not as outside the range, whatever its
+	// value (TestDeclaredPurposeNumberWithFractionOrExponent).
+	for _, literal := range []string{"1e21", "9007199254740993.0"} {
+		got := verify(withMembers(t, base, map[string]string{"declaredPurpose": literal}))
+		if want := fractionOrExponentReason(literal); got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != want {
+			t.Errorf("declaredPurpose %s on the v1.1 baseline: %s, want REJECT[SIGNATURE_INVALID: %s]", literal, got, want)
+		}
+	}
+	for _, raw := range []string{"9007199254740991", "-9007199254740991"} {
+		if got := verify(signedByPrimary(t, count(base, raw))); !got.Accepted {
+			t.Errorf("criticalFindings %s, signed: %s, want ACCEPT", raw, got)
+		}
+	}
+
+	// Signed over the bytes JCS writes for 2^53+1, which are those it writes
+	// for 2^53: the signature verifies over them, and the count is refused.
+	signed := signedByPrimary(t, count(base, "9007199254740993"))
+	var a, b atx
+	if err := json.Unmarshal(signed.ATX, &a); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(count(signed, "9007199254740992").ATX, &b); err != nil {
+		t.Fatal(err)
+	}
+	pa, errA := canonicalPayloadV11(&a)
+	pb, errB := canonicalPayloadV11(&b)
+	if errA != nil || errB != nil || !bytes.Equal(pa, pb) {
+		t.Fatalf("JCS(TBS) of criticalFindings 2^53+1 and 2^53: %v, %v; want the same bytes", errA, errB)
+	}
+	if !signaturesVerifyOverTBS(t, signed) {
+		t.Fatal("criticalFindings 2^53+1, signed: the signature does not verify over JCS(TBS)")
+	}
+	for label, f := range map[string]fixture{
+		"criticalFindings 2^53+1, signed":                          signed,
+		"criticalFindings 2^53+1 on a credential signed with 2^53": count(signedByPrimary(t, count(base, "9007199254740992")), "9007199254740993"),
+	} {
+		if got := verify(f); got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != reason("scanSummary.criticalFindings", "9007199254740993") {
+			t.Errorf("%s: %s, want REJECT[SIGNATURE_INVALID: %s]", label, got, reason("scanSummary.criticalFindings", "9007199254740993"))
+		}
+	}
+
+	// The shipped fixture: its signature verifies over JCS(TBS), so a
+	// verifier without the refusal accepts it.
+	shipped, err := loadFixture(repoRoot + "/fixtures/v1_1-integer-outside-exact-range.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !signaturesVerifyOverTBS(t, shipped) {
+		t.Error("fixtures/v1_1-integer-outside-exact-range.json: its signature does not verify over JCS(TBS)")
+	}
+	if got := verify(shipped); got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != reason("scanSummary.criticalFindings", "9007199254740993") {
+		t.Errorf("fixtures/v1_1-integer-outside-exact-range.json: %s, want REJECT[SIGNATURE_INVALID: %s]", got, reason("scanSummary.criticalFindings", "9007199254740993"))
+	}
+
+	// Checks that run first keep their verdicts: an unpaired surrogate escape
+	// in declaredPurpose, and a scanSummary member outside its type.
+	for _, tc := range []struct {
+		label, want, reasonHas string
+		f                      fixture
+	}{
+		{`declaredPurpose "\ud800" and criticalFindings 2^53+1`, "VERIFIER_CONFIG_ERROR", "unpaired UTF-16 surrogate",
+			withMembers(t, count(base, "9007199254740993"), map[string]string{"declaredPurpose": `"\ud800"`})},
+		{"hma 7 and criticalFindings 2^53+1", "SIGNATURE_INVALID", "member outside its type",
+			with(count(base, "9007199254740993"), "scanSummary", "hma", "7")},
+	} {
+		if got := verify(tc.f); got.RejectCategory != tc.want || !strings.Contains(got.Reason, tc.reasonHas) {
+			t.Errorf("%s on the v1.1 baseline: %s, want REJECT[%s] with a reason holding %q", tc.label, got, tc.want, tc.reasonHas)
+		}
+	}
+
+	// Under atcVersion 1.0 the pipe form writes trustLevel as its digits, and
+	// no integer is refused: the v1.0 baseline signs trustLevel 4, so the
+	// signature itself fails.
+	v10, err := loadFixture(repoRoot + "/fixtures/baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := verify(withMembers(t, v10, map[string]string{"trustLevel": "9007199254740993"})); got.RejectCategory != "SIGNATURE_INVALID" || strings.Contains(got.Reason, "I-JSON") {
+		t.Errorf("trustLevel 2^53+1 on the v1.0 baseline: %s, want REJECT[SIGNATURE_INVALID] from the signature itself", got)
+	}
+}
+
+// signaturesVerifyOverTBS reports whether every Ed25519 signature of f's v1.1
+// credential verifies over the credential's own JCS(TBS) under a key of its
+// verifier state: the check made by a verifier that verifies a signature over
+// whatever bytes the JCS library writes.
+func signaturesVerifyOverTBS(t *testing.T, f fixture) bool {
+	t.Helper()
+	var a atx
+	if err := json.Unmarshal(f.ATX, &a); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := canonicalPayloadV11(&a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sig := range a.Signatures {
+		value, err := base64.StdEncoding.DecodeString(sig.Value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ok := false
+		for _, ref := range f.VerifierState.PublicKeys {
+			if key, err := hex.DecodeString(ref.PublicKeyHex); err == nil && len(key) == ed25519.PublicKeySize && ed25519.Verify(key, payload, value) {
+				ok = true
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	return len(a.Signatures) > 0
+}
+
+// fractionOrExponentReason is the reason both reference verifiers write for a
+// v1.1 credential whose declaredPurpose writes a number with a fraction or an
+// exponent part, literal as the credential writes it.
+func fractionOrExponentReason(literal string) string {
+	return "no signature covers declaredPurpose: the number " + literal + " is written with a fraction or an exponent part, not as an integer"
+}
+
+// outsideRangeReason is the reason both reference verifiers write for a v1.1
+// credential whose declaredPurpose writes an integer outside the I-JSON exact
+// range, literal as the credential writes it.
+func outsideRangeReason(literal string) string {
+	return "no signature covers declaredPurpose: the integer " + literal + " is outside the I-JSON exact range, -(2^53-1) to 2^53-1"
+}
+
+// TestDeclaredPurposeNumberWithFractionOrExponent pins the verdict and reason
+// on a v1.1 credential whose declaredPurpose writes a number with a fraction
+// or an exponent part. The JCS library writes such a number as the double
+// nearest it, so this verifier accepted a credential signed over {"n": 1000}
+// that carried 1000.0, 1e3 or 1E3, and one signed over the bytes the library
+// writes for 9007199254740993, those of 9007199254740992, that carried
+// 9007199254740993.0 or 9.007199254740993e15, which the exact-range check
+// did not read as integers. The Python reference verifier, whose serializer
+// writes no such number, rejected each. Both verified no signature over such
+// a TBS, and each declared signature failed with the key's reason, which
+// named no cause in the credential; both now refuse the number in the scan
+// that refuses an integer outside the exact range, with a reason that quotes
+// it as written (GO_PURPOSE_NUMBER_SPELLINGS in
+// verifiers/python/test_verify.py). The first such number, or integer outside
+// the range, that declaredPurpose writes decides. atx-conformance#283.
+func TestDeclaredPurposeNumberWithFractionOrExponent(t *testing.T) {
+	base := v11Baseline(t)
+	// signedOver is the v1.1 baseline with declaredPurpose written as
+	// presented, under one Ed25519 signature over its JCS(TBS) with
+	// declaredPurpose written as signed.
+	signedOver := func(signed, presented string) fixture {
+		t.Helper()
+		f := signedByPrimary(t, withMembers(t, base, map[string]string{"declaredPurpose": signed}))
+		return withMembers(t, f, map[string]string{"declaredPurpose": presented})
+	}
+
+	for _, tc := range []struct{ signed, presented, literal string }{
+		{`{"n": 1000}`, `{"n": 1000.0}`, `1000.0`},
+		{`{"n": 1000}`, `{"n": 1e3}`, `1e3`},
+		{`{"n": 1000}`, `{"n": 1E3}`, `1E3`},
+		{`{"n": 1000}`, `{"n": 1e+3}`, `1e+3`},
+		{`{"n": 1000}`, `{"n": 10000e-1}`, `10000e-1`},
+		{`{"n": 9007199254740993}`, `{"n": 9007199254740993.0}`, `9007199254740993.0`},
+		{`{"n": 9007199254740993}`, `{"n": 9.007199254740993e15}`, `9.007199254740993e15`},
+		{`{"n": 1.5}`, `{"n": 1.5}`, `1.5`},
+		{`{"n": 0}`, `{"n": -0.0}`, `-0.0`},
+		{`[1000]`, `[1000.0]`, `1000.0`},
+		{`1000`, `1e3`, `1e3`},
+		{`{"limits": {"refund": [1, 2.5e1]}}`, `{"limits": {"refund": [1, 2.5e1]}}`, `2.5e1`},
+	} {
+		f := signedOver(tc.signed, tc.presented)
+		// The JCS library writes the number as presented with the bytes it
+		// writes for it as signed, so a verifier that verifies the signature
+		// over those bytes accepts f.
+		if !signaturesVerifyOverTBS(t, f) {
+			t.Fatalf("declaredPurpose %s signed as %s: the signature does not verify over JCS(TBS)", tc.presented, tc.signed)
+		}
+		if got, want := verify(f), fractionOrExponentReason(tc.literal); got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != want {
+			t.Errorf("declaredPurpose %s signed as %s: %s, want REJECT[SIGNATURE_INVALID: %s]", tc.presented, tc.signed, got, want)
+		}
+	}
+
+	// The first number declaredPurpose writes that is outside the integer
+	// form or the exact range decides, whichever defect it has, in the order
+	// the credential writes the numbers and not the order JCS writes the
+	// members in. A digit string is no number.
+	for _, tc := range []struct{ purpose, want string }{
+		{`{"b": 1.5, "a": 9007199254740993}`, fractionOrExponentReason("1.5")},
+		{`{"a": 9007199254740993, "b": 1.5}`, outsideRangeReason("9007199254740993")},
+		{`[1.5, "18014398509481985", 1e21, 9007199254740993, -9007199254740993]`, fractionOrExponentReason("1.5")},
+		{`["18014398509481985", 9007199254740993, 1.5]`, outsideRangeReason("9007199254740993")},
+		{`{"n": [7, {"m": 2.5E-3}], "k": 1e1}`, fractionOrExponentReason("2.5E-3")},
+	} {
+		got := verify(withMembers(t, base, map[string]string{"declaredPurpose": tc.purpose}))
+		if got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != tc.want {
+			t.Errorf("declaredPurpose %s: %s, want REJECT[SIGNATURE_INVALID: %s]", tc.purpose, got, tc.want)
+		}
+	}
+
+	// Controls: integers in the exact range, written as signed, are verified
+	// over the bytes JCS writes for them, as are a fraction or an exponent
+	// written inside a string or a member name; an integer outside the range
+	// is refused as the exact-range check refuses it.
+	for _, signed := range []string{`{"n": 1000}`, `{"n": 0}`, `[1000]`, `1000`, `{"1.5": "2e3", "n": [1, -7]}`} {
+		if got := verify(signedOver(signed, signed)); !got.Accepted {
+			t.Errorf("declaredPurpose %s, signed: %s, want ACCEPT", signed, got)
+		}
+	}
+	outside := outsideRangeReason("9007199254740993")
+	if got := verify(signedOver(`{"n": 9007199254740993}`, `{"n": 9007199254740993}`)); got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != outside {
+		t.Errorf(`declaredPurpose {"n": 9007199254740993}, signed: %s, want REJECT[SIGNATURE_INVALID: %s]`, got, outside)
+	}
+
+	// Under atcVersion 1.0 no signature covers declaredPurpose, and a number
+	// in it leaves the verdict as it was: the v1.0 baseline is accepted.
+	v10, err := loadFixture(repoRoot + "/fixtures/baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := verify(withMembers(t, v10, map[string]string{"declaredPurpose": `{"n": 1e3}`})); !got.Accepted {
+		t.Errorf(`declaredPurpose {"n": 1e3} on the v1.0 baseline: %s, want ACCEPT`, got)
+	}
+}
+
+// TestDeclaredPurposeNumberFixtures pins the five shipped fixtures of a
+// declaredPurpose number (atx-conformance#283). The signature of each
+// verifies over JCS(TBS) as the JCS library writes it, so a verifier that
+// canonicalizes the number as the library does accepts each; this verifier
+// accepts the one written as signed and rejects the others with the reason
+// that names the number as the credential writes it.
+func TestDeclaredPurposeNumberFixtures(t *testing.T) {
+	for _, tc := range []struct{ file, reason string }{
+		{"v1_1-declared-purpose-integer-signed.json", ""},
+		{"v1_1-declared-purpose-integer-respelled-fraction.json", fractionOrExponentReason("1000.0")},
+		{"v1_1-declared-purpose-integer-respelled-exponent.json", fractionOrExponentReason("1e3")},
+		{"v1_1-declared-purpose-integer-respelled-upper-exponent.json", fractionOrExponentReason("1E3")},
+		{"v1_1-declared-purpose-integer-outside-range.json", outsideRangeReason("9007199254740993")},
+	} {
+		f, err := loadFixture(repoRoot + "/fixtures/" + tc.file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !signaturesVerifyOverTBS(t, f) {
+			t.Errorf("fixtures/%s: its signature does not verify over JCS(TBS)", tc.file)
+		}
+		got := verify(f)
+		if tc.reason == "" {
+			if !got.Accepted {
+				t.Errorf("fixtures/%s: %s, want ACCEPT", tc.file, got)
+			}
+			continue
+		}
+		if got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != tc.reason {
+			t.Errorf("fixtures/%s: %s, want REJECT[SIGNATURE_INVALID: %s]", tc.file, got, tc.reason)
+		}
+	}
+}
+
+// TestDeclaredPurposeNumberOutsideFloat64Range pins the verdict and reason on
+// a v1.1 credential whose declaredPurpose writes a number outside the float64
+// range, such as 1e400. Both reference verifiers rejected each as
+// VERIFIER_CONFIG_ERROR, with the reason v1.1 canonicalization failed:
+// declaredPurpose holds a number outside the float64 range, where they rejected
+// 1e3 and 2.5 as SIGNATURE_INVALID. Such a number is written with a fraction
+// or an exponent part, or is an integer outside the exact range, so no
+// signature covers it whatever its value. Both now refuse it in the scan that
+// refuses a number in that form or outside that range, before the JCS library
+// reads one (integerOutsideExactRangeV11), with a reason that quotes the first
+// such number as written, and neither decides the float64 range. The numbers here
+// stand on both sides of 2^1024 - 2^970, where a float64 rounds to infinity,
+// written short and written long, and each gets the verdict its form gives it
+// (GO_PURPOSE_FORM_BESIDE_FLOAT64_EDGE and GO_PURPOSE_INTEGERS_BESIDE_FLOAT64_EDGE
+// in verifiers/python/test_verify.py). atx-conformance#302.
+func TestDeclaredPurposeNumberOutsideFloat64Range(t *testing.T) {
+	base := v11Baseline(t)
+	refused := func(purpose, want string) {
+		t.Helper()
+		got := verify(withMembers(t, base, map[string]string{"declaredPurpose": purpose}))
+		if got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != want {
+			t.Errorf("declaredPurpose %.40s (%d bytes): %.300s, want REJECT[SIGNATURE_INVALID: %.300s]", purpose, len(purpose), got, want)
+		}
+	}
+	zeros := func(n int) string { return strings.Repeat("0", n) }
+	// edge is 2^1024 - 2^970, the largest float64 plus half a unit in its
+	// last place: the smallest integer that rounds past it, to infinity.
+	edgeValue := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 1024), new(big.Int).Lsh(big.NewInt(1), 970))
+	edge := edgeValue.String()
+	above := new(big.Int).Add(edgeValue, big.NewInt(1)).String()
+	below := new(big.Int).Sub(edgeValue, big.NewInt(1)).String()
+	// 10^350, which strconv.ParseFloat reads as 1e+149 in go1.26 and
+	// refuses in go1.27.
+	long := "1" + zeros(1000) + "e-650"
+
+	// Written with a fraction or an exponent part, outside the range. The
+	// last ten are written with more than 800 digits and an exponent part,
+	// which strconv.ParseFloat reads as finite in go1.26, and in go1.27 the
+	// one with 200000 zeros and the last: those atx-conformance#293 lists,
+	// then 10^309 and 2^1024 - 2^970 written with 1000 trailing zeros.
+	for _, number := range []string{
+		`1e400`, `-1e400`, `1E400`, `1e+400`, `1e309`, `0.1e310`, `10e308`,
+		`1e99999999999999999999`, `1.7976931348623159e308`,
+		edge + ".0", edge + ".5", edge + "e0", "0." + edge + "e309", "0.000" + edge + "E+312",
+		long, "-" + long, "1" + zeros(1000) + "E-650", "1" + zeros(900) + "1e-560",
+		"1" + zeros(850) + "e-500", "1" + zeros(5000) + "e-4600",
+		"0." + zeros(200000) + "1e200400", "1" + zeros(1000) + ".5e-650",
+		"1" + zeros(1000) + "e-691", edge + zeros(1000) + "e-1000",
+	} {
+		refused(number, fractionOrExponentReason(number))
+	}
+	// Written with a fraction or an exponent part, inside the range: more
+	// than 800 digits and an exponent part included (10^308, 10^300, 10^307
+	// and 2^1024 - 2^970 - 1), and zero, whatever its exponent.
+	for _, number := range []string{
+		`1.7976931348623158e308`, `1e308`, `0.1e309`, `10e307`, `1e-400`, `1e-99999999999999999999`,
+		`0.0`, `0e400`, `0.000E-400`, "0." + zeros(1000) + "e99999999999999999999",
+		below + ".9", "0." + below + "e309",
+		"1" + zeros(1000) + "e-692", "1" + zeros(1000) + "e-700",
+		"0." + zeros(30000) + "1e30308", "0." + zeros(200000) + "1e200308",
+		below + zeros(1000) + "e-1000",
+	} {
+		refused(number, fractionOrExponentReason(number))
+	}
+	// Integers outside the exact range, on both sides of the edge, of 401
+	// and 5001 digits among them, written as the Python verifier's
+	// LongInteger tests write them.
+	for _, number := range []string{
+		edge, "-" + edge, above, below, "-" + below,
+		"1" + zeros(400), "-1" + zeros(400), "1" + zeros(5000), "-1" + zeros(5000),
+	} {
+		refused(number, outsideRangeReason(number))
+	}
+	// Inside other values. The first number declaredPurpose writes that is
+	// outside the integer form or the exact range decides.
+	for _, tc := range []struct{ purpose, want string }{
+		{`{"n": 1e400}`, fractionOrExponentReason(`1e400`)},
+		{`{"n": -1e400}`, fractionOrExponentReason(`-1e400`)},
+		{`{"limit": 1e400}`, fractionOrExponentReason(`1e400`)},
+		{`["billing:inquiry", 1e400]`, fractionOrExponentReason(`1e400`)},
+		{strings.Repeat("[", 9997) + "1e400" + strings.Repeat("]", 9997), fractionOrExponentReason(`1e400`)},
+		{`{"n": ` + long + `}`, fractionOrExponentReason(long)},
+		{`{"x": 1` + zeros(400) + `}`, outsideRangeReason("1" + zeros(400))},
+		{`[7, 1` + zeros(400) + `]`, outsideRangeReason("1" + zeros(400))},
+		{`{"x": 1` + zeros(5000) + `}`, outsideRangeReason("1" + zeros(5000))},
+		{`[7, 1` + zeros(5000) + `]`, outsideRangeReason("1" + zeros(5000))},
+		{`[1.5, 1e400]`, fractionOrExponentReason(`1.5`)},
+		{`[1.5, ` + long + `]`, fractionOrExponentReason(`1.5`)},
+		{`[1e400, 9007199254740993]`, fractionOrExponentReason(`1e400`)},
+		{`[9007199254740993, 1e400]`, outsideRangeReason(`9007199254740993`)},
+	} {
+		refused(tc.purpose, tc.want)
+	}
+
+	// Controls: an integer in the exact range, and 1e400 written in a string
+	// or as a member name, which is no number, reach the signature check. The
+	// baseline signs no declaredPurpose, so the signature fails.
+	const notVerified = `Ed25519 signature "did:opena2a:authority:opena2a.org#key-1" did not verify against any configured public key`
+	for _, purpose := range []string{`0`, `-0`, `1`, `-1`, `{"n": "1e400"}`, `{"1e400": 1}`} {
+		refused(purpose, notVerified)
+	}
+
+	// The JCS library refuses these two, so the scan runs before it reads them.
+	for _, number := range []string{`1e400`, "1" + zeros(400)} {
+		var a atx
+		if err := json.Unmarshal(withMembers(t, base, map[string]string{"declaredPurpose": number}).ATX, &a); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := canonicalPayloadV11(&a); err == nil {
+			t.Errorf("canonicalPayloadV11 with declaredPurpose %.40s (%d bytes): no error, want the JCS library's", number, len(number))
+		}
+	}
+
+	// A signature that verifies over the bytes the JCS library writes does
+	// not save such a number. The library reads a number with
+	// strconv.ParseFloat: in go1.26, which reads long as 1e+149, it writes
+	// for long what it writes for the 1e149 signed here, so that signature
+	// verifies over JCS(TBS); in go1.27, which refuses long, it refuses long
+	// as it refuses 1e400. The verdict is the same in both.
+	carried := withMembers(t, signedByPrimary(t, withMembers(t, base, map[string]string{"declaredPurpose": `1e149`})), map[string]string{"declaredPurpose": long})
+	var presented atx
+	if err := json.Unmarshal(carried.ATX, &presented); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := canonicalPayloadV11(&presented); err == nil {
+		if !signaturesVerifyOverTBS(t, carried) {
+			t.Error("declaredPurpose 1 followed by 1000 zeros and e-650, signed as 1e149: the JCS library writes bytes for it, and the signature does not verify over them")
+		}
+	} else if !errors.Is(err, strconv.ErrRange) {
+		t.Errorf("canonicalPayloadV11 with declaredPurpose 1 followed by 1000 zeros and e-650: %.120v; want the bytes it writes for 1e149, or strconv.ErrRange", err)
+	}
+	if got, want := verify(carried), fractionOrExponentReason(long); got.RejectCategory != "SIGNATURE_INVALID" || got.Reason != want {
+		t.Errorf("declaredPurpose 1 followed by 1000 zeros and e-650, signed as 1e149: %.300s, want REJECT[SIGNATURE_INVALID: %.300s]", got, want)
+	}
+
+	// The fixture of a number in declaredPurpose, with its 1.5 replaced by
+	// each number atx-conformance#302 names, passes as a fixture: it expects
+	// SIGNATURE_INVALID and a reason containing signature.
+	injected, err := loadFixture(repoRoot + "/fixtures/v1_1-declared-purpose-number-injected.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, number := range []string{`1e400`, "1" + zeros(400)} {
+		if got := verify(withMembers(t, injected, map[string]string{"declaredPurpose": number})); !matchesExpected(injected.Expected, got) {
+			t.Errorf("fixtures/v1_1-declared-purpose-number-injected.json with declaredPurpose %.40s (%d bytes): %.300s, not the pinned outcome", number, len(number), got)
+		}
+	}
+
+	// An unpaired surrogate escape beside such a number is refused first, as
+	// the Python verifier refuses it.
+	surrogate := `v1.1 canonicalization failed: declaredPurpose holds an unpaired UTF-16 surrogate escape (\ud800)`
+	if got := verify(withMembers(t, base, map[string]string{"declaredPurpose": `{"a": 1e400, "b": "\ud800"}`})); got.RejectCategory != "VERIFIER_CONFIG_ERROR" || got.Reason != surrogate {
+		t.Errorf(`declaredPurpose {"a": 1e400, "b": "\ud800"}: %s, want REJECT[VERIFIER_CONFIG_ERROR: %s]`, got, surrogate)
+	}
+
+	// Under atcVersion 1.0 no signature covers declaredPurpose, and the
+	// verifier reads no number in it: the v1.0 baseline is accepted.
+	v10, err := loadFixture(repoRoot + "/fixtures/baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := verify(withMembers(t, v10, map[string]string{"declaredPurpose": `{"n": 1e400}`})); !got.Accepted {
+		t.Errorf(`declaredPurpose {"n": 1e400} on the v1.0 baseline: %s, want ACCEPT`, got)
+	}
+}
+
+// TestBehavioralProfileProjection pins projectBehavioralProfileV11 on each
+// form of behavioralProfile. An absent or null profile projects as null
+// (atx-spec §1.3a.2 rule 1). An object of exactly checksum, a JSON string,
+// generatedAt, a timestamp, and observationDays, a JSON integer, under those
+// names as written, projects as those three members, generatedAt in UTC to
+// the second. Every other present profile is refused with
+// errBehavioralProfileForm. The projection read a profile that did not
+// decode, a member outside its type included, as null; a null member as its
+// zero value; and member names under encoding/json's folding, dropping a
+// member outside the three. verifiers/python/test_verify.py holds the Python
+// projection to the same rule (GO_BEHAVIORAL_PROFILE_PROJECTIONS).
+// atx-conformance#277.
+func TestBehavioralProfileProjection(t *testing.T) {
+	const refused = ""
+	zeroProfile := `{"checksum":"","generatedAt":"0001-01-01T00:00:00Z","observationDays":0}`
+	for _, tc := range []struct{ raw, want string }{
+		{``, `null`},
+		{`null`, `null`},
+		{signedProfile, signedProfile},
+		{`{"observationDays":14,"generatedAt":"2026-05-19T00:00:00Z","checksum":"sha256:ghi789"}`, signedProfile},
+		{string(profileWithGeneratedAt(`"2026-05-19T01:00:00+01:00"`)), signedProfile},
+		{string(profileWithGeneratedAt(`"2026-05-19T00:00:00.5Z"`)), signedProfile},
+		{`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":-0}`,
+			`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":0}`},
+		{zeroProfile, zeroProfile},
+		// Not an object.
+		{`7`, refused},
+		{`"sha256:ghi789"`, refused},
+		{`[]`, refused},
+		{`true`, refused},
+		// Not exactly the three members, names compared as written.
+		{`{}`, refused},
+		{`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z"}`, refused},
+		{`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":14,"riskLevel":"low"}`, refused},
+		{`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","OBSERVATIONDAYS":14}`, refused},
+		{`{"Checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":14}`, refused},
+		{`{"checksum":"sha256:ghi789","generatedat":"2026-05-19T00:00:00Z","observationDays":14}`, refused},
+		// The Kelvin sign, which encoding/json folds onto k.
+		{`{"checKsum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":14}`, refused},
+		// A member that is null or outside its type.
+		{`{"checksum":null,"generatedAt":"2026-05-19T00:00:00Z","observationDays":14}`, refused},
+		{`{"checksum":7,"generatedAt":"2026-05-19T00:00:00Z","observationDays":14}`, refused},
+		{`{"checksum":["sha256:ghi789"],"generatedAt":"2026-05-19T00:00:00Z","observationDays":14}`, refused},
+		{string(profileWithGeneratedAt(`null`)), refused},
+		{string(profileWithGeneratedAt(`"2026-05-19"`)), refused},
+		{string(profileWithGeneratedAt(`0`)), refused},
+		{string(profileWithGeneratedAt(`"2026-05-19T00:00:00+25:00"`)), refused},
+		{string(profileWithGeneratedAt("\"2026-05-19T00:00:00\\u005a\"")), refused},
+		{`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":null}`, refused},
+		{`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":"14"}`, refused},
+		{`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":14.0}`, refused},
+		{`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":1e1}`, refused},
+		{`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":true}`, refused},
+		{`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":9223372036854775808}`, refused},
+		{`{"checksum":1,"generatedAt":"x","observationDays":"many"}`, refused},
+	} {
+		got, err := projectBehavioralProfileV11(json.RawMessage(tc.raw))
+		switch {
+		case tc.want == refused:
+			if !errors.Is(err, errBehavioralProfileForm) {
+				t.Errorf("behavioralProfile %s: projected as %s (error %v), want it refused", tc.raw, got, err)
+			}
+		case err != nil || string(got) != tc.want:
+			t.Errorf("behavioralProfile %s: projected as %s (error %v), want %s", tc.raw, got, err, tc.want)
+		}
+	}
+}
+
+// TestBehavioralProfileForm pins the verdict on a v1.1 credential carrying a
+// behavioralProfile that is not an object of exactly checksum (a string),
+// generatedAt (a timestamp) and observationDays (an integer), under those
+// names as written. The TBS holds null for a credential with no profile
+// (atx-spec §1.3a.2 rule 1) and otherwise those three members, which the
+// credential schema core.md §1.1 points to gives the profile and no other
+// (additionalProperties false), so no signature covers any other profile:
+// it rejects as SIGNATURE_INVALID with a reason naming behavioralProfile.
+// Without the check, the v1.1 baseline verified carrying a fourth member in
+// its profile or observationDays under the name OBSERVATIONDAYS, and a
+// credential signed with no profile verified carrying one that did not
+// decode, which the projection read as null. Under atcVersion 1.0
+// behavioralProfile is unsigned (§1.3a.1) and is not read.
+// atx-conformance#277.
+func TestBehavioralProfileForm(t *testing.T) {
+	base := v11Baseline(t)
+	check := func(label string, f fixture, want string) {
+		t.Helper()
+		got := verify(f)
+		switch {
+		case want == "ACCEPT":
+			if !got.Accepted {
+				t.Errorf("%s: %s, want ACCEPT", label, got)
+			}
+		case got.RejectCategory != want || !strings.Contains(got.Reason, "behavioralProfile") || !strings.Contains(got.Reason, "signature"):
+			t.Errorf("%s: %s, want REJECT[%s] with a reason naming behavioralProfile and the signature", label, got, want)
+		}
+	}
+	// signatureFails holds f to a SIGNATURE_INVALID the signature itself
+	// reports: its profile has a value in the TBS, one the signature does
+	// not cover.
+	signatureFails := func(label string, f fixture) {
+		t.Helper()
+		if got := verify(f); got.Accepted || got.RejectCategory != "SIGNATURE_INVALID" || strings.Contains(got.Reason, "behavioralProfile") {
+			t.Errorf("%s: %s, want REJECT[SIGNATURE_INVALID] from the signature itself", label, got)
+		}
+	}
+
+	// The v1.1 baseline signs signedProfile.
+	for _, raw := range []string{
+		`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":14,"riskLevel":"low"}`,
+		`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":14,"extra":"x"}`,
+		`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","OBSERVATIONDAYS":14}`,
+		`{"Checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":14}`,
+		`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z"}`,
+		`{"checksum":null,"generatedAt":"2026-05-19T00:00:00Z","observationDays":14}`,
+		`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":"14"}`,
+		`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":14.0}`,
+		string(profileWithGeneratedAt(`"2026-05-19"`)),
+		`[]`,
+	} {
+		check("behavioralProfile "+raw+" on the v1.1 baseline",
+			withMembers(t, base, map[string]string{"behavioralProfile": raw}), "SIGNATURE_INVALID")
+	}
+	// The Kelvin sign, which encoding/json folds onto k, is outside printable
+	// ASCII, so the strict parse refuses the profile first, naming the member
+	// (atx-conformance#284).
+	kelvinProfile := withMembers(t, base, map[string]string{"behavioralProfile": `{"checKsum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":14}`})
+	if got, want := verify(kelvinProfile), memberNameReason(`"chec\u`+`212asum"`, "U+212A"); got.Accepted || got.RejectCategory != "PARSE_ERROR" || got.Reason != want {
+		t.Errorf("behavioralProfile with checksum written with the Kelvin sign on the v1.1 baseline: %s, want REJECT[PARSE_ERROR: %s]", got, want)
+	}
+	for _, raw := range []string{
+		`{"observationDays":14,"generatedAt":"2026-05-19T00:00:00Z","checksum":"sha256:ghi789"}`,
+		string(profileWithGeneratedAt(`"2026-05-19T01:00:00+01:00"`)),
+	} {
+		check("behavioralProfile "+raw+", the signed profile written another way, on the v1.1 baseline",
+			withMembers(t, base, map[string]string{"behavioralProfile": raw}), "ACCEPT")
+	}
+	// Controls: each profile below has a value in the TBS other than the
+	// signed one.
+	for _, raw := range []string{
+		`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":15}`,
+		`null`,
+		``,
+	} {
+		signatureFails("behavioralProfile "+raw+" on the v1.1 baseline", withMembers(t, base, map[string]string{"behavioralProfile": raw}))
+	}
+
+	unsigned := signedByPrimary(t, withMembers(t, base, map[string]string{"behavioralProfile": ""}))
+	check("credential signed with no behavioralProfile", unsigned, "ACCEPT")
+	check("behavioralProfile null on a credential signed with none",
+		withMembers(t, unsigned, map[string]string{"behavioralProfile": "null"}), "ACCEPT")
+	for _, raw := range []string{
+		`"sha256:ghi789"`,
+		`7`,
+		`true`,
+		`[]`,
+		`{}`,
+		`{"checksum":1,"generatedAt":"x","observationDays":"many"}`,
+		`{"checksum":"sha256:ghi789","generatedAt":"2026-05-19T00:00:00Z","observationDays":"14"}`,
+		`{"checksum":null,"generatedAt":null,"observationDays":null}`,
+	} {
+		check("behavioralProfile "+raw+" on a credential signed with none",
+			withMembers(t, unsigned, map[string]string{"behavioralProfile": raw}), "SIGNATURE_INVALID")
+	}
+	signatureFails("behavioralProfile "+signedProfile+" on a credential signed with none",
+		withMembers(t, unsigned, map[string]string{"behavioralProfile": signedProfile}))
+
+	v10, err := loadFixture(repoRoot + "/fixtures/baseline-valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(`behavioralProfile {"checksum":1} on the v1.0 baseline, which signs no behavioralProfile`,
+		withMembers(t, v10, map[string]string{"behavioralProfile": `{"checksum":1}`}), "ACCEPT")
+}
+
+// TestSuitePinsBehavioralProfileForm pins that the shipped fixture set holds
+// the behavioralProfile rule TestBehavioralProfileForm tests, one fixture for
+// each form atx-conformance#277 names: a member outside the three, a name in
+// another case, a profile that is not an object and a member outside its
+// type, the last two on a credential signed with no profile. Each fixture
+// must pin a REJECT this verifier reaches for the profile, and its
+// credential must verify once its profile is replaced by lenient, the one a
+// verifier that matches member names under encoding/json's folding, drops a
+// member outside the three and projects a profile it cannot decode as null
+// reads from it. Such a verifier ACCEPTs each fixture.
+func TestSuitePinsBehavioralProfileForm(t *testing.T) {
+	for _, tc := range []struct{ fixture, lenient string }{
+		{"v1_1-behavioral-profile-extra-member.json", signedProfile},
+		{"v1_1-behavioral-profile-case-variant-member.json", signedProfile},
+		{"v1_1-behavioral-profile-not-object.json", "null"},
+		{"v1_1-behavioral-profile-member-outside-type.json", "null"},
+	} {
+		f, err := loadFixture(repoRoot + "/fixtures/" + tc.fixture)
+		if err != nil {
+			t.Errorf("%s: %v", tc.fixture, err)
+			continue
+		}
+		got := verify(f)
+		if !matchesExpected(f.Expected, got) || got.Accepted || !strings.Contains(got.Reason, "behavioralProfile") {
+			t.Errorf("%s: %s, want the fixture's pinned REJECT, reached for its behavioralProfile", tc.fixture, got)
+		}
+		if got := verify(withMembers(t, f, map[string]string{"behavioralProfile": tc.lenient})); !got.Accepted {
+			t.Errorf("%s with behavioralProfile %s: %s, want ACCEPT, so that a verifier reading the profile that way accepts the fixture", tc.fixture, tc.lenient, got)
+		}
 	}
 }

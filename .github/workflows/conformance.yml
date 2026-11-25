@@ -45,7 +45,7 @@ jobs:
           node-version: "22"
 
       - name: Install Python verifier dependencies
-        run: python3 -m pip install -r verifiers/python/requirements.txt
+        run: python3 -m pip install -r verifiers/python/requirements.txt jsonschema -c .github/ci-constraints.txt
 
       - name: Go verifier over fixtures
         working-directory: verifiers/go
@@ -53,15 +53,32 @@ jobs:
 
       - name: Go verifier unit tests (strict-parse depth guard + foldKey)
         working-directory: verifiers/go
-        run: go test ./...
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -count=1 -v ./... 2>&1 | tee go-test.log
+          ! grep -q -- '--- SKIP' go-test.log
 
       - name: Python verifier over fixtures
         working-directory: verifiers/python
         run: python3 verify.py ../../fixtures
 
+      - name: Python unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd verifiers/python && python3 -m unittest -v) 2>&1 | tee py-test.log
+          python3 -m unittest discover -v -s scripts -t scripts -p 'test_*.py' 2>&1 | tee -a py-test.log
+          ! grep -q ' \.\.\. skipped' py-test.log
+
+      - name: Both verifiers print the same bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          diff <(go run ./cmd/atx-verify fixtures/) <(python3 verifiers/python/verify.py fixtures/)
+
       - name: Schema validation (fixtures vs vendored spec schema)
         run: |
-          python3 -m pip install "jsonschema>=4.21"
           python3 scripts/schema_validation.py
 
       - name: Vendored schema drift gate (pinned atx-spec ref)
@@ -139,9 +156,9 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: sigstore/cosign-installer@v3
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
 
       - name: Keyless sign MANIFEST.sha256 (Rekor is the durable record)
         run: cosign sign-blob --yes --bundle MANIFEST.sha256.cosign.bundle MANIFEST.sha256
@@ -155,7 +172,7 @@ jobs:
             MANIFEST.sha256
 
       - name: Upload signature bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: manifest-cosign-bundle
           path: MANIFEST.sha256.cosign.bundle

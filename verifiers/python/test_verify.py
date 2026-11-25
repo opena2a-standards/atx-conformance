@@ -10,16 +10,22 @@ behavioralProfile.generatedAt outside it, a NaN or Infinity literal, a fixture
 the verifier raises on, a path that does not exist, and the verifier's own v1.1
 projection over every jcs-vectors vector. They also pin what Go's encoding/json
 makes of a member name in another case, a timestamp written with a JSON
-escape, an unpaired surrogate escape and a trustScore of -0, the projection of
-behavioralProfile and scanSummary members outside their Go type, the signature
-base64 alphabet, a fixture whose expected member is not an object, a file
+escape, an unpaired surrogate escape, a trustScore of -0 and one written
+with more than 800 digits, the projection of
+behavioralProfile and scanSummary members outside their Go type, a v1.1
+behavioralProfile that is not an object of exactly checksum, generatedAt and
+observationDays (a member outside them or missing, a name in another case, a
+member that is null or outside its type), the signature base64 alphabet, a fixture whose expected member is not an object, a file
 with no expected.verifyResult of ACCEPT or REJECT, and a report line standard
 output cannot encode. They also pin the decode of the
-fixture wrapper: members outside their Go type, names in another case or
-repeated (a first value outside its Go type included), a public key that is
-not hex, arrays and objects nested to Go's
+fixture wrapper: members outside their Go type, names in another case, a
+member written twice outside the credential, under one name or two, which
+fails to load (a first value outside its Go type included), a public key
+that is not hex, arrays and objects nested to Go's
 depth limit (in declaredPurpose too, which the JCS serializer walks, and in a
-typed member, whose decode error writes the value to 8 levels), an integer
+typed member, whose decode error writes the value to 8 levels) and past it
+in a file that is also not JSON, whose load error names whichever comes
+first in the text, an integer
 with more digits than int() converts, bytes that are not UTF-8, the
 single-pass string-literal scan, --help, an unknown option, --version, an
 empty argument, a directory whose fixtures entry is a file, a directory
@@ -32,7 +38,17 @@ directory entered through a symbolic link, a .. after a symbolic link,
 which is read and named where the link leads, an argument that is not
 UTF-8, which a line on stderr writes as its bytes, and a fixture path that
 is not UTF-8, which the report line naming it, and the load error of such a
-file that cannot be read, write as its bytes.
+file that cannot be read, write as its bytes, a byte 0x80 to 0x9f aside in
+each, which those lines write as \\xHH.
+They pin the requiredSignatures threshold of the verifier state: the
+distinct Ed25519 keys a credential's signatures verify under, each counted
+once whatever keyId names it and no ML-DSA-65 signature counted, against
+the count it sets, a count below 1 reported as a configuration error, and
+the member decoded as the Go reference verifier decodes it.
+They pin the distinct signer-authority count of core.md section 1.3 step 7:
+signatures that share an authority or a public key counted once, the count
+each step 7 fixture carries, and the four fixtures a verifier that omits the
+count accepts where they must reject.
 They hold the report to the Go reference verifier's text: a boolean, a
 string a reason quotes, and the whole report over fixtures/, which must be
 docs/captures/go-verifier.txt byte for byte. Two tests
@@ -40,6 +56,23 @@ read verify.py itself: it imports no name it does not use, and its module
 docstring lists only the checks the verifier runs. Another test reads the
 "Arguments" section of docs/running-the-verifiers.md, which must quote
 d/link/.. and d/link/../ and the PASS line the verifier prints for each.
+Two more read the docstrings of verify.py that say a line writes an
+argument or a path that is not UTF-8 as its bytes: each must name the
+bytes 0x80 to 0x9f, which _escape_controls writes as \\xHH where they are
+not UTF-8, as that section names them, and each line one of them quotes
+for the byte 0x9b must be the line the verifier writes. One more reads that
+section's sentence on the credential members a reason writes in double
+quotes: each escape it gives and the line it quotes must be what the
+verifier writes. The output cell (ReportOfEachCredentialMember) appends
+each of nine characters to each string member of the credential of
+fixtures/tampered-signature.json and fixtures/wrong-issuer.json in turn,
+and each report must be printable ASCII plus line feeds, with one
+block-marker line and one summary line, the last. A second cell
+(KeyIdInTheBase64AndMlDsa65Reasons) sets the value or the algorithm of
+the first signature of fixtures/tampered-signature.json, so that the
+reason is the invalid base64 one or the ML-DSA-65 one, and reads that
+signature's keyId in it, as shipped and with each string of the output
+cell appended.
 One test imports this file with an os whose name is "nt" and which has no
 geteuid, as Python's os is on Windows: it must import, with NonUTF8Argument
 and ArgumentContract's test of a directory that cannot be listed skipped.
@@ -51,6 +84,7 @@ Needs the same dependencies as verify.py. Run from this directory:
 from __future__ import annotations
 
 import ast
+import base64
 import contextlib
 import errno
 import importlib.util
@@ -58,15 +92,18 @@ import io
 import json
 import os
 import re
+import shutil
 import string
 import subprocess
 import sys
 import tempfile
 import time
+import tokenize
 import types
 import unittest
 from datetime import date
 from pathlib import Path
+from typing import NamedTuple
 from unittest import mock
 
 HERE = Path(__file__).resolve().parent
@@ -79,6 +116,25 @@ BASELINE_V11 = ROOT / "fixtures" / "v1_1-baseline-valid.json"
 BASELINE_V10 = ROOT / "fixtures" / "baseline-valid.json"
 # The fixture whose verifier state carries a CRL.
 BASELINE_CRL = ROOT / "fixtures" / "revoked-crl-only.json"
+# The revocation-list fixtures that share the v1.1 hybrid baseline credential:
+# a current CRL that does not list the agent, a CRL past its nextUpdate beyond
+# the skew bound, a CRL issued after the clock beyond it, and a verifier state
+# that requires a CRL and holds none.
+CRL_FRESH = ROOT / "fixtures" / "v1_1-crl-fresh-agent-absent-hybrid.json"
+CRL_PAST_NEXT_UPDATE = ROOT / "fixtures" / "v1_1-crl-past-nextupdate-beyond-skew-hybrid.json"
+CRL_ISSUED_AFTER_CLOCK = ROOT / "fixtures" / "v1_1-crl-issued-after-clock-beyond-skew-hybrid.json"
+CRL_REQUIRED_NONE_HELD = ROOT / "fixtures" / "v1_1-crl-required-none-held-hybrid.json"
+# The fixture whose verifier state sets requiredSignatures (2), and the
+# fixture whose credential it carries cut to the first of three signatures.
+THRESHOLD_1OF3 = ROOT / "fixtures" / "threshold-1of3-cosignature.json"
+THRESHOLD_2OF3 = ROOT / "fixtures" / "threshold-2of3-cosignature.json"
+# The fixture whose credential rejects as UNTRUSTED_ISSUER, and the two whose
+# credential repeats a member, which the strict parse rejects as PARSE_ERROR.
+WRONG_ISSUER = ROOT / "fixtures" / "wrong-issuer.json"
+DUPLICATE_CREDENTIALS = (
+    ROOT / "fixtures" / "v1_1-case-variant-member.json",
+    ROOT / "fixtures" / "v1_1-duplicate-purpose-member.json",
+)
 JCS_VECTORS = ROOT / "jcs-vectors" / "vectors"
 
 # The outcome the Go reference verifier reaches on a malformed typed member.
@@ -267,6 +323,28 @@ def _fixture_verdict(baseline: Path, path: tuple, literal, rename: str | None = 
         return verify.verify_fixture(verify.load_fixture(written))
 
 
+def _write_signed_v11(directory: Path, name: str, fixture: dict) -> Path:
+    """Write fixture, whose atx is a v1.1 credential, with that credential
+    carrying one Ed25519 signature over its own JCS(TBS) as this verifier
+    projects it, made with the primary issuer's key (the RFC 8032 test vector
+    in vectors/issuer-primary.json), and return its path."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    key = json.loads((ROOT / "vectors" / "issuer-primary.json").read_text())
+    path = directory / name
+    path.write_text(json.dumps(fixture))
+    payload = verify.canonical_payload_v11(verify._decode_credential(verify.load_fixture(path)["atx"]))
+    signer = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(key["seedHex"]))
+    signed = json.loads(json.dumps(fixture))
+    signed["atx"]["signatures"] = [{
+        "keyId": key["keyId"],
+        "algorithm": "Ed25519",
+        "value": base64.b64encode(signer.sign(payload)).decode("ascii"),
+    }]
+    path.write_text(json.dumps(signed))
+    return path
+
+
 def _run_main(*args: str) -> tuple[int, str, str]:
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -336,22 +414,60 @@ def _load_serializer(path: Path):
 # that rounds past it, to infinity, under round-half-to-even.
 FLOAT64_EDGE = 2**1024 - 2**970
 
-# Numbers written into an unsigned declaredPurpose, and the category the Go
-# reference verifier reports for each, read from its run over these values.
-GO_PURPOSE_NUMBER_VERDICTS = (
-    ("1e400", "VERIFIER_CONFIG_ERROR"),
-    ("-1e400", "VERIFIER_CONFIG_ERROR"),
-    ("1.7976931348623159e308", "VERIFIER_CONFIG_ERROR"),
-    (str(FLOAT64_EDGE), "VERIFIER_CONFIG_ERROR"),
-    (str(-FLOAT64_EDGE), "VERIFIER_CONFIG_ERROR"),
-    ('{"limit": 1e400}', "VERIFIER_CONFIG_ERROR"),
-    ('["billing:inquiry", 1e400]', "VERIFIER_CONFIG_ERROR"),
-    ("[1.5, 1e400]", "VERIFIER_CONFIG_ERROR"),
-    ("[" * 9997 + "1e400" + "]" * 9997, "VERIFIER_CONFIG_ERROR"),
-    ("1.7976931348623158e308", "SIGNATURE_INVALID"),
-    (str(FLOAT64_EDGE - 1), "SIGNATURE_INVALID"),
-    ("1e308", "SIGNATURE_INVALID"),
-    ("1e-400", "SIGNATURE_INVALID"),
+# Each row below is a value written into an unsigned declaredPurpose, on one
+# side or the other of the float64 edge, and the number in it that the reason
+# quotes, read from the Go reference verifier's run over these values: the
+# first number the credential writes that is outside the integer form or the
+# exact range decides. The first table holds numbers written with a fraction
+# or an exponent part. Its rows written with more than 800 digits and an
+# exponent part are those atx-conformance#293 lists, then 10^309 and
+# 2^1024 - 2^970 written with 1000 trailing zeros, and, in the range, 10^308,
+# 10^300, 10^307 and 2^1024 - 2^970 - 1 written so. strconv.ParseFloat reads
+# each number in them as finite in go1.22 and go1.26; go1.27 reads as finite
+# those in the range, the one with 200000 zeros and 2^1024 - 2^970, and
+# refuses the others as outside the float64 range.
+GO_PURPOSE_FORM_BESIDE_FLOAT64_EDGE = (
+    ("1e400", "1e400"),
+    ("-1e400", "-1e400"),
+    ('{"n": 1e400}', "1e400"),
+    ('{"n": -1e400}', "-1e400"),
+    ("1E400", "1E400"),
+    ("1e+400", "1e+400"),
+    ("1.7976931348623159e308", "1.7976931348623159e308"),
+    ('{"limit": 1e400}', "1e400"),
+    ('["billing:inquiry", 1e400]', "1e400"),
+    ("[1.5, 1e400]", "1.5"),
+    ("[1e400, 9007199254740993]", "1e400"),
+    ("[" * 9997 + "1e400" + "]" * 9997, "1e400"),
+    ("1" + "0" * 1000 + "e-650", "1" + "0" * 1000 + "e-650"),
+    ("-1" + "0" * 1000 + "e-650", "-1" + "0" * 1000 + "e-650"),
+    ('{"n": 1' + "0" * 1000 + "e-650}", "1" + "0" * 1000 + "e-650"),
+    ("[1.5, 1" + "0" * 1000 + "e-650]", "1.5"),
+    ("1" + "0" * 1000 + "E-650", "1" + "0" * 1000 + "E-650"),
+    ("1" + "0" * 900 + "1e-560", "1" + "0" * 900 + "1e-560"),
+    ("1" + "0" * 850 + "e-500", "1" + "0" * 850 + "e-500"),
+    ("1" + "0" * 5000 + "e-4600", "1" + "0" * 5000 + "e-4600"),
+    ("0." + "0" * 200000 + "1e200400", "0." + "0" * 200000 + "1e200400"),
+    ("1" + "0" * 1000 + ".5e-650", "1" + "0" * 1000 + ".5e-650"),
+    ("1" + "0" * 1000 + "e-691", "1" + "0" * 1000 + "e-691"),
+    (str(FLOAT64_EDGE) + "0" * 1000 + "e-1000", str(FLOAT64_EDGE) + "0" * 1000 + "e-1000"),
+    ("1.7976931348623158e308", "1.7976931348623158e308"),
+    ("1e308", "1e308"),
+    ("1e-400", "1e-400"),
+    ("1" + "0" * 1000 + "e-692", "1" + "0" * 1000 + "e-692"),
+    ("1" + "0" * 1000 + "e-700", "1" + "0" * 1000 + "e-700"),
+    ("0." + "0" * 30000 + "1e30308", "0." + "0" * 30000 + "1e30308"),
+    (str(FLOAT64_EDGE - 1) + "0" * 1000 + "e-1000", str(FLOAT64_EDGE - 1) + "0" * 1000 + "e-1000"),
+)
+
+# The same for integers outside the exact range.
+GO_PURPOSE_INTEGERS_BESIDE_FLOAT64_EDGE = (
+    (str(FLOAT64_EDGE), str(FLOAT64_EDGE)),
+    (str(-FLOAT64_EDGE), str(-FLOAT64_EDGE)),
+    (str(FLOAT64_EDGE + 1), str(FLOAT64_EDGE + 1)),
+    (str(FLOAT64_EDGE - 1), str(FLOAT64_EDGE - 1)),
+    (str(1 - FLOAT64_EDGE), str(1 - FLOAT64_EDGE)),
+    ("[9007199254740993, 1e400]", "9007199254740993"),
 )
 
 
@@ -368,20 +484,17 @@ class InjectedNumberPurpose(unittest.TestCase):
                 self.assertIn("signature", got.reason.lower())
 
     def test_reason_is_the_go_verifier_reason(self):
-        # The Go reference verifier canonicalizes the number, and the
-        # signature does not verify over those bytes. This verifier cannot
-        # write them, so no key verifies the signature here either, and the
-        # reason names it in the Go verifier's words, read from its run over
-        # these values. GoReportText holds the report over fixtures/, which
-        # holds fixtures/v1_1-declared-purpose-number-injected.json, to the
-        # Go capture.
-        for purpose in (1.5, {"autonomy": 0.5}, ["billing:inquiry", 0.25]):
+        # Neither reference verifier verifies a signature over a number
+        # written with a fraction or an exponent part (GoPurposeNumberSpellings):
+        # each refuses the number before it checks a signature, and the
+        # reason quotes it as written, in the Go verifier's words, read from
+        # its run over these values. GoReportText holds the report over
+        # fixtures/, which holds
+        # fixtures/v1_1-declared-purpose-number-injected.json, to the Go
+        # capture.
+        for purpose, literal in ((1.5, "1.5"), ({"autonomy": 0.5}, "0.5"), (["billing:inquiry", 0.25], "0.25")):
             with self.subTest(purpose=purpose):
-                self.assertEqual(
-                    _verdict(purpose).reason,
-                    "Ed25519 signature did:opena2a:authority:opena2a.org#key-1 "
-                    "did not verify against any configured public key",
-                )
+                self.assertEqual(_verdict(purpose).reason, _fraction_or_exponent_reason(literal))
 
     def test_integer_and_boolean_reject_in_the_same_category(self):
         # Controls: values the serializer does canonicalize reach the verdict
@@ -393,16 +506,60 @@ class InjectedNumberPurpose(unittest.TestCase):
                 self.assertEqual(got.reject_category, "SIGNATURE_INVALID")
                 self.assertIn("signature", got.reason.lower())
 
-    def test_number_outside_float64_range_reaches_the_go_category(self):
-        # The Go reference verifier's JCS library parses each number with
-        # strconv.ParseFloat: one it cannot hold rejects as
-        # VERIFIER_CONFIG_ERROR, one it holds is canonicalized and the
-        # signature fails. Python's float() rounds at the same edge.
-        for literal, category in GO_PURPOSE_NUMBER_VERDICTS:
-            with self.subTest(literal=literal[:40], length=len(literal)):
-                got = _at_verdict(BASELINE_V11, ("declaredPurpose",), literal)
-                self.assertFalse(got.accepted)
-                self.assertEqual(got.reject_category, category, got.reason[:200])
+    def test_number_beside_the_float64_edge_has_the_go_reason(self):
+        # Both reference verifiers rejected a number outside the float64 range
+        # as VERIFIER_CONFIG_ERROR, where they rejected 1e3 and 2.5 as
+        # SIGNATURE_INVALID. Such a number is written with a fraction or an
+        # exponent part, or is an integer outside the exact range, so no
+        # signature covers it whatever its value. Both refuse it before their
+        # JCS serializer reads it, in the scan that refuses a number in that
+        # form or outside that range, and neither decides the float64 range
+        # (TestDeclaredPurposeNumberOutsideFloat64Range in the Go verifier).
+        # atx-conformance#302.
+        for rows, reason in (
+            (GO_PURPOSE_FORM_BESIDE_FLOAT64_EDGE, _fraction_or_exponent_reason),
+            (GO_PURPOSE_INTEGERS_BESIDE_FLOAT64_EDGE, lambda literal: _exact_range_reason("declaredPurpose", literal)),
+        ):
+            for written, literal in rows:
+                with self.subTest(written=written[:40], length=len(written)):
+                    got = _at_verdict(BASELINE_V11, ("declaredPurpose",), written)
+                    self.assertFalse(got.accepted)
+                    self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason[:200])
+                    self.assertEqual(got.reason, reason(literal))
+
+    def test_number_outside_float64_range_written_with_more_than_800_digits(self):
+        # 1 followed by 1000 zeros and e-650, whose value is 10^350, is
+        # outside the float64 range: float() returns inf. Built with go1.22
+        # or go1.26, strconv.ParseFloat reads it as 1e+149, so the Go
+        # reference verifier's JCS library writes it as it writes 1e149, and
+        # a signature over those bytes verifies over them; built with go1.27,
+        # it refuses it as outside the float64 range, and the library refuses
+        # it as it refuses 1e400. Neither reference verifier reads that
+        # signature: the number is written with an exponent part.
+        # atx-conformance#294, atx-conformance#302.
+        literal = "1" + "0" * 1000 + "e-650"
+        self.assertEqual(float(literal), float("inf"))
+        reason = _fraction_or_exponent_reason(literal)
+        got = _at_verdict(BASELINE_V11, ("declaredPurpose",), literal)
+        self.assertEqual((got.reject_category, got.reason), ("SIGNATURE_INVALID", reason))
+        with tempfile.TemporaryDirectory() as tmp:
+            signed = _write_signed_purpose(Path(tmp), "purpose.json", literal, b"1e+149")
+            got = verify.verify_fixture(verify.load_fixture(signed))
+        self.assertEqual((got.reject_category, got.reason), ("SIGNATURE_INVALID", reason))
+
+    def test_injected_number_fixture_passes_with_a_number_outside_float64_range(self):
+        # fixtures/v1_1-declared-purpose-number-injected.json, with its 1.5
+        # replaced by each number atx-conformance#302 names, passes as a
+        # fixture: it expects SIGNATURE_INVALID and a reason containing
+        # signature.
+        text = (ROOT / "fixtures" / "v1_1-declared-purpose-number-injected.json").read_text()
+        self.assertEqual(text.count('"declaredPurpose": 1.5'), 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, number in (("exponent.json", "1e400"), ("digits.json", "1" + "0" * 400)):
+                (Path(tmp) / name).write_text(text.replace('"declaredPurpose": 1.5', f'"declaredPurpose": {number}'))
+            code, out, err = _run_main(tmp)
+        self.assertEqual(code, 0, out[-400:] + err)
+        self.assertEqual(out.splitlines()[-1], "summary: 2 pass, 0 fail (2 fixtures)")
 
     def test_directory_run_reaches_the_summary_line(self):
         # One fixture the verifier cannot canonicalize must not end the run:
@@ -543,11 +700,11 @@ GO_REJECTED_TIMESTAMPS = (
 )
 
 # Offsets with an hour above 24 or a minute above 60, and the error the Go
-# reference verifier refuses each with: Go 1.23 and later's time.Parse error,
-# which the Go verifier's checkOffset gives under Go 1.22 too. The offsets
-# table in TestTimestampDecode carries the same rows but the last; it is
-# recorded from time.Parse(time.RFC3339) with Go 1.23.0 and Go 1.26.3, which
-# check the offset before the day.
+# reference verifier refuses each with: the error time.Parse gives in Go 1.23
+# and later, which check the offset before the day. Built with Go 1.22, the Go
+# verifier gives the same error: checkOffset for the first seven, which Go
+# 1.22 decodes, and offsetFirst for the last two, which Go 1.22 refuses
+# for the day. The offsets table in TestTimestampDecode carries the same rows.
 GO_OFFSET_OUT_OF_RANGE = (
     ("2099-12-31T23:59:59+25:00", "time zone offset hour out of range"),
     ("2099-12-31T23:59:59-25:00", "time zone offset hour out of range"),
@@ -557,18 +714,21 @@ GO_OFFSET_OUT_OF_RANGE = (
     ("2099-12-31T23:59:59+25:61", "time zone offset minute out of range"),
     ("2099-12-31T23:59:59-99:99", "time zone offset minute out of range"),
     ("2099-02-30T23:59:59+25:00", "time zone offset hour out of range"),
+    ("1900-02-29T00:00:00+23:61", "time zone offset minute out of range"),
 )
 
 # The verdict `go run .` in ../go reaches on the v1.0 and v1.1 baselines when
 # atx[member] holds one of those offsets, built with Go 1.22.12 and with Go
 # 1.26.3, which agree on each. Built with Go 1.22 before checkOffset, it
-# reached SIGNATURE_INVALID on each.
+# reached SIGNATURE_INVALID on each but the last, whose day is out of range:
+# built with Go 1.22.12, it named the day in that one until offsetFirst.
 GO_OFFSET_VERDICTS = (
     ("expiresAt", '"2099-12-31T23:59:59+25:00"', "time zone offset hour out of range"),
     ("expiresAt", '"2099-12-31T23:59:59+00:61"', "time zone offset minute out of range"),
     ("expiresAt", '"2099-12-31T23:59:59-99:99"', "time zone offset minute out of range"),
     ("issuedAt", '"2026-05-23T00:00:00+00:61"', "time zone offset minute out of range"),
     ("issuedAt", '"2026-05-23T00:00:00+25:00"', "time zone offset hour out of range"),
+    ("issuedAt", '"2026-02-30T00:00:00+25:00"', "time zone offset hour out of range"),
 )
 
 # A CRL timestamp with such an offset, on the CRL baseline: the file fails to
@@ -577,6 +737,7 @@ GO_OFFSET_VERDICTS = (
 # names).
 GO_UNLOADABLE_OFFSETS = (
     (("verifierState", "crl", "issuedAt"), '"2026-05-23T00:00:00+25:00"', "verifierState.crl.issuedAt"),
+    (("verifierState", "crl", "issuedAt"), '"2026-02-30T00:00:00+25:00"', "verifierState.crl.issuedAt"),
     (("verifierState", "crl", "nextUpdate"), '"2026-05-23T00:00:00+23:61"', "verifierState.crl.nextUpdate"),
     (
         ("verifierState", "crl", "entries", 0, "revokedAt"),
@@ -608,7 +769,7 @@ GO_VERDICTS = (
     ("signatures", '["x"]', "PARSE_ERROR", "signatures"),
     ("signatures", '[{"value": 7}]', "PARSE_ERROR", "signatures"),
     ("signatures", "null", "SIGNATURE_INVALID", "no valid signatures"),
-    ("signatures", "[null]", "SIGNATURE_INVALID", "unsupported signature algorithm"),
+    ("signatures", "[null]", "SIGNATURE_INVALID", 'unsupported signature algorithm ""'),
     ("signatures", None, "SIGNATURE_INVALID", "no valid signatures"),
     ("trustScore", "null", "SIGNATURE_INVALID", ""),
     ("trustLevel", "null", "SIGNATURE_INVALID", ""),
@@ -628,9 +789,11 @@ GO_VERDICTS = (
 # `go run .` in ../go with Go 1.22.12 and with Go 1.26.3, which agree on each;
 # the escaped row holds with Go 1.27.2 too, since the Go verifier decodes the
 # timestamp with time.Time's own UnmarshalJSON.
-# A generatedAt Go's time.Time decoder refuses makes the Go verifier project
-# the whole behavioralProfile as null, so the signature rejects; one that
-# decodes to the signed instant projects as signed.
+# A generatedAt Go's time.Time decoder refuses leaves a behavioralProfile the
+# Go verifier refuses as one no signature covers; one that decodes to the
+# signed instant projects as signed. Rows recorded again with Go 1.26.3 for
+# atx-conformance#277: the verdicts are unchanged, and each rejected row is
+# now refused before the signature is read.
 GO_GENERATED_AT_VERDICTS = (
     ('"2026-05-19T00:00:00"', "SIGNATURE_INVALID"),
     ('"2026-05-19"', "SIGNATURE_INVALID"),
@@ -661,14 +824,14 @@ GO_ACCEPTED_ESCAPES = (
     (("createdAt",), '"2026-05-23T00:00:00\\u005a"'),
 )
 
-# A member whose name differs from the Go struct field's only in case, or by
-# the two letters Go folds onto ASCII (Kelvin sign U+212A, long s U+017F): Go
-# reads it as that member. (path, name as written, raw literal, Go verdict).
+# A member whose name differs from the Go struct field's only in ASCII case:
+# Go reads it as that member. (path, name as written, raw literal, Go
+# verdict). A name that differs by one of the two letters Go also folds onto
+# ASCII, the Kelvin sign (U+212A) or the long s (U+017F), is outside
+# printable ASCII, and both verifiers refuse it (GO_NON_ASCII_RENAMES).
 GO_FOLDED_NAME_VERDICTS = (
     (("revoked",), "Revoked", "true", "REVOKED"),
     (("revoked",), "REVOKED", "true", "REVOKED"),
-    (("revoked",), "revo\u212aed", "true", "REVOKED"),
-    (("signatures",), "\u017fignatures", "[]", "SIGNATURE_INVALID"),
     (("expiresAt",), "ExpiresAt", KEEP, "ACCEPT"),
     (("expiresAt",), "expiresat", '"2000-01-01T00:00:00Z"', "EXPIRED"),
     (("agentId",), "AGENTID", KEEP, "ACCEPT"),
@@ -681,17 +844,21 @@ GO_FOLDED_NAME_VERDICTS = (
     (("signatures", 0, "algorithm"), "Algorithm", '"none"', "SIGNATURE_INVALID"),
 )
 
-# The same for members only the v1.1 payload signs, on the v1.1 baseline.
+# The same for members only the v1.1 payload signs, on the v1.1 baseline. The
+# Go verifier reads the names of behavioralProfile's own members, and of
+# scanSummary's, as written (atx-conformance#277), so a member of either named
+# in another case is not that member: the profile or scanSummary is one no
+# signature covers, refused as SIGNATURE_INVALID before the signature is read.
 GO_FOLDED_NAME_VERDICTS_V11 = (
     (("declaredPurpose",), "DeclaredPurpose", '{"x": 1}', "SIGNATURE_INVALID"),
     (("behavioralProfile",), "BEHAVIORALPROFILE", KEEP, "ACCEPT"),
     (("behavioralProfile",), "BehavioralProfile", "null", "SIGNATURE_INVALID"),
-    (("behavioralProfile", "checksum"), "Checksum", KEEP, "ACCEPT"),
-    (("behavioralProfile", "generatedAt"), "GENERATEDAT", KEEP, "ACCEPT"),
+    (("behavioralProfile", "checksum"), "Checksum", KEEP, "SIGNATURE_INVALID"),
+    (("behavioralProfile", "generatedAt"), "GENERATEDAT", KEEP, "SIGNATURE_INVALID"),
     (("behavioralProfile", "generatedAt"), "GeneratedAt", '"2026-05-19"', "SIGNATURE_INVALID"),
-    (("behavioralProfile", "observationDays"), "ObservationDays", KEEP, "ACCEPT"),
+    (("behavioralProfile", "observationDays"), "ObservationDays", KEEP, "SIGNATURE_INVALID"),
     (("scanSummary",), "ScanSummary", KEEP, "ACCEPT"),
-    (("scanSummary", "hma"), "HMA", KEEP, "ACCEPT"),
+    (("scanSummary", "hma"), "HMA", KEEP, "SIGNATURE_INVALID"),
     (("scanSummary", "criticalFindings"), "CRITICALFINDINGS", "3", "SIGNATURE_INVALID"),
     (("scanSummary", "secretless"), "SECRETLESS", '"dirty"', "SIGNATURE_INVALID"),
     (("capabilities",), "Capabilities", KEEP, "ACCEPT"),
@@ -757,8 +924,11 @@ GO_SURROGATE_VERDICTS = (
 )
 
 # The same on the v1.1 baseline, for members only the v1.1 payload signs.
-# declaredPurpose enters that payload undecoded, and the Go verifier's JCS
-# library refuses an unpaired surrogate escape in it.
+# declaredPurpose enters that payload undecoded, and the Go verifier refuses
+# an unpaired surrogate escape in it before its JCS library reads it, one
+# followed by another \u escape included, which that library reads as a
+# single U+FFFD, and one beside a number the Python verifier's JCS serializer
+# cannot write, 1.5.
 GO_SURROGATE_VERDICTS_V11 = (
     (("publisher",), '"\\ud800"', "SIGNATURE_INVALID"),
     (("capabilities",), '["\\ud800"]', "SIGNATURE_INVALID"),
@@ -770,8 +940,81 @@ GO_SURROGATE_VERDICTS_V11 = (
     (("declaredPurpose",), '{"k": "\\ud800"}', "VERIFIER_CONFIG_ERROR"),
     (("declaredPurpose",), '{"\\ud800": 1}', "VERIFIER_CONFIG_ERROR"),
     (("declaredPurpose",), '["\\ud800"]', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '"\\ud800\\u0041"', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '"\\ud800\\ud800"', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '"\\udc00\\u0041"', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '"\\udc00\\ud800"', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '"\\udbff\\ue000"', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '"\\ud800\\udc00\\udc00"', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '{"k": "x\\ud800\\u0041"}', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '{"x\\ud800\\u0041": 1}', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '{"a": 1.5, "b": "\\ud800\\u0041"}', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '{"a": 1.5, "b": "\\ud800"}', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '{"b": "\\ud800\\u0041", "c": 1.5}', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '["\\ud800\\u0041", 1.5]', "VERIFIER_CONFIG_ERROR"),
+    (("declaredPurpose",), '{"a": 1.5, "\\udc00x": 1}', "VERIFIER_CONFIG_ERROR"),
     (("declaredPurpose",), '"\\ud83d\\ude00"', "SIGNATURE_INVALID"),
+    (("declaredPurpose",), '"\\\\ud800"', "SIGNATURE_INVALID"),
+    (("declaredPurpose",), '{"a": 1.5, "b": "\\ud83d\\ude00"}', "SIGNATURE_INVALID"),
+    (("declaredPurpose",), '["\\\\ud800", 1.5]', "SIGNATURE_INVALID"),
 )
+
+# The reason both verifiers give for a v1.1 declaredPurpose that holds an
+# unpaired UTF-16 surrogate escape, with the escape it names in place of {}.
+UNPAIRED_ESCAPE_REASON = "v1.1 canonicalization failed: declaredPurpose holds an unpaired UTF-16 surrogate escape ({})"
+
+# A declaredPurpose holding an unpaired surrogate escape written with
+# upper-case or mixed-case hex digits, and the escape the reason names: the
+# first one the text writes, as it writes it, which is what the Go reference
+# verifier's unpairedSurrogateEscape returns. (raw literal, escape named).
+UNPAIRED_ESCAPES_AS_WRITTEN = (
+    ('{"s": "\\uD800\\u0041"}', "\\uD800"),
+    ('"\\uDBFF\\uE000"', "\\uDBFF"),
+    ('"\\uDc00"', "\\uDc00"),
+    ('{"x\\uD800\\u0041": 1}', "\\uD800"),
+    ('"\\uD83D\\uDE00\\uDFFF"', "\\uDFFF"),
+    ('["\\"]}{[\\\\", "\\uDBFF\\u0020"]', "\\uDBFF"),
+    ('{\n  "a" : [ 1 , { "b" : "x\\uDbFf\\u0020" } ] ,\n  "c" : 1.5\n}', "\\uDbFf"),
+)
+
+# The expected block of a fixture whose credential is refused for such an
+# escape.
+UNPAIRED_ESCAPE_EXPECTED = {"verifyResult": "REJECT", "rejectCategory": "VERIFIER_CONFIG_ERROR"}
+
+# The files _decoy_purpose_text writes: the names it writes the credential and
+# its declaredPurpose under, as the baseline names them and in another case,
+# which Go's encoding/json reads as the same members, and the raw literal of
+# the credential's first member, a string or one nested 9000 arrays deep.
+# (fixture's member, credential's member, first member's literal).
+DECOY_PURPOSE_FILES = (
+    ("atx", "declaredPurpose", '"\\ud800"'),
+    ("Atx", "DECLAREDPURPOSE", '"\\ud800"'),
+    ("atx", "declaredPurpose", "[" * 9000 + '"\\ud800"' + "]" * 9000),
+)
+
+
+def _decoy_purpose_text(atx_name: str, purpose_name: str, aside: str) -> str:
+    """The v1.1 baseline as JSON text, its credential written under atx_name
+    and its declaredPurpose, written last under purpose_name, holding the
+    escape \\uDBFF and then the escape of a space. Strings before it write an
+    unpaired surrogate escape in lower case: the fixture's description, which
+    also writes the text of a declaredPurpose member, a quote and brackets,
+    and two members of the credential that the signed payload leaves out,
+    the first written as the raw literal aside, the second an object holding
+    a member named declaredPurpose. The escape the reason names is
+    \\uDBFF."""
+    fixture = json.loads(BASELINE_V11.read_text())
+    fixture["expected"] = dict(UNPAIRED_ESCAPE_EXPECTED)
+    fixture["description"] = "@@DESCRIPTION@@"
+    atx = fixture.pop("atx")
+    fixture[atx_name] = {"aside": "@@ASIDE@@", "nested": "@@NESTED@@", **atx, purpose_name: "@@PURPOSE@@"}
+    return (
+        json.dumps(fixture)
+        .replace('"@@DESCRIPTION@@"', '"\\"declaredPurpose\\": \\"\\udc00\\" ]}"')
+        .replace('"@@ASIDE@@"', aside)
+        .replace('"@@NESTED@@"', '{"declaredPurpose": "\\udfff\\u0041"}')
+        .replace('"@@PURPOSE@@"', '"\\uDBFF\\u0020"')
+    )
 
 # trustScore as Go formats it with %.6f into both signed payloads: the float64
 # decode keeps the sign of a zero. (raw literal, formatted).
@@ -810,53 +1053,64 @@ ZERO_SCAN = {
     "oasbLevel": "",
 }
 
+# In place of a projection: the Go verifier's projectBehavioralProfileV11
+# refuses the profile, and _project_behavioral_profile raises _DecodeError.
+REFUSED = object()
+
 # behavioralProfile as the Go verifier's projectBehavioralProfileV11 projects
 # it into the v1.1 signed payload when the member at path holds the raw
-# literal (None: absent). A member outside its Go type projects the whole
-# profile as null; an absent or null member takes the Go zero value.
+# literal (None: absent). An absent or null profile projects as null. Any
+# other profile that is not an object of exactly checksum, generatedAt and
+# observationDays, each present, not null and of its Go type, is REFUSED
+# (atx-conformance#277): Go projected one with a member outside its type as
+# null, and took an absent or null member as its zero value.
 # (path, raw literal, projection).
 GO_BEHAVIORAL_PROFILE_PROJECTIONS = (
-    (("behavioralProfile", "generatedAt"), '"2026-05-19"', None),
-    (("behavioralProfile", "generatedAt"), '"2026-05-19T00:00:00\\u005a"', None),
-    (("behavioralProfile", "generatedAt"), '""', None),
-    (("behavioralProfile", "generatedAt"), "0", None),
-    (("behavioralProfile", "generatedAt"), "false", None),
-    (("behavioralProfile", "generatedAt"), "[]", None),
-    (("behavioralProfile", "generatedAt"), "{}", None),
-    (("behavioralProfile", "generatedAt"), "null", {**SIGNED_PROFILE, "generatedAt": GO_ZERO_TIME}),
-    (("behavioralProfile", "generatedAt"), None, {**SIGNED_PROFILE, "generatedAt": GO_ZERO_TIME}),
+    (("behavioralProfile", "generatedAt"), '"2026-05-19"', REFUSED),
+    (("behavioralProfile", "generatedAt"), '"2026-05-19T00:00:00\\u005a"', REFUSED),
+    (("behavioralProfile", "generatedAt"), '""', REFUSED),
+    (("behavioralProfile", "generatedAt"), "0", REFUSED),
+    (("behavioralProfile", "generatedAt"), "false", REFUSED),
+    (("behavioralProfile", "generatedAt"), "[]", REFUSED),
+    (("behavioralProfile", "generatedAt"), "{}", REFUSED),
+    (("behavioralProfile", "generatedAt"), "null", REFUSED),
+    (("behavioralProfile", "generatedAt"), None, REFUSED),
     (("behavioralProfile", "generatedAt"), '"2026-05-19T01:00:00+01:00"', SIGNED_PROFILE),
-    (("behavioralProfile", "observationDays"), '"14"', None),
-    (("behavioralProfile", "observationDays"), "14.0", None),
-    (("behavioralProfile", "observationDays"), "14.5", None),
-    (("behavioralProfile", "observationDays"), "1e1", None),
-    (("behavioralProfile", "observationDays"), "true", None),
-    (("behavioralProfile", "observationDays"), '"abc"', None),
-    (("behavioralProfile", "observationDays"), "[]", None),
-    (("behavioralProfile", "observationDays"), "9223372036854775808", None),
-    (("behavioralProfile", "observationDays"), "null", {**SIGNED_PROFILE, "observationDays": 0}),
-    (("behavioralProfile", "observationDays"), None, {**SIGNED_PROFILE, "observationDays": 0}),
+    (("behavioralProfile", "observationDays"), '"14"', REFUSED),
+    (("behavioralProfile", "observationDays"), "14.0", REFUSED),
+    (("behavioralProfile", "observationDays"), "14.5", REFUSED),
+    (("behavioralProfile", "observationDays"), "1e1", REFUSED),
+    (("behavioralProfile", "observationDays"), "true", REFUSED),
+    (("behavioralProfile", "observationDays"), '"abc"', REFUSED),
+    (("behavioralProfile", "observationDays"), "[]", REFUSED),
+    (("behavioralProfile", "observationDays"), "9223372036854775808", REFUSED),
+    (("behavioralProfile", "observationDays"), "null", REFUSED),
+    (("behavioralProfile", "observationDays"), None, REFUSED),
     (("behavioralProfile", "observationDays"), "-0", {**SIGNED_PROFILE, "observationDays": 0}),
     (("behavioralProfile", "observationDays"), "-1", {**SIGNED_PROFILE, "observationDays": -1}),
-    (("behavioralProfile", "checksum"), "7", None),
-    (("behavioralProfile", "checksum"), "[]", None),
-    (("behavioralProfile", "checksum"), "true", None),
-    (("behavioralProfile", "checksum"), "{}", None),
-    (("behavioralProfile", "checksum"), "null", {**SIGNED_PROFILE, "checksum": ""}),
-    (("behavioralProfile", "checksum"), None, {**SIGNED_PROFILE, "checksum": ""}),
+    (("behavioralProfile", "checksum"), "7", REFUSED),
+    (("behavioralProfile", "checksum"), "[]", REFUSED),
+    (("behavioralProfile", "checksum"), "true", REFUSED),
+    (("behavioralProfile", "checksum"), "{}", REFUSED),
+    (("behavioralProfile", "checksum"), "null", REFUSED),
+    (("behavioralProfile", "checksum"), None, REFUSED),
     (("behavioralProfile", "checksum"), '"\\ud800"', {**SIGNED_PROFILE, "checksum": "\ufffd"}),
-    (("behavioralProfile",), "7", None),
-    (("behavioralProfile",), '"x"', None),
-    (("behavioralProfile",), "[]", None),
-    (("behavioralProfile",), "true", None),
+    (("behavioralProfile", "riskLevel"), '"low"', REFUSED),
+    (("behavioralProfile",), "7", REFUSED),
+    (("behavioralProfile",), '"x"', REFUSED),
+    (("behavioralProfile",), "[]", REFUSED),
+    (("behavioralProfile",), "true", REFUSED),
     (("behavioralProfile",), "null", None),
     (("behavioralProfile",), None, None),
-    (("behavioralProfile",), "{}", ZERO_PROFILE),
+    (("behavioralProfile",), "{}", REFUSED),
+    (("behavioralProfile",), json.dumps(ZERO_PROFILE), ZERO_PROFILE),
 )
 
 # scanSummary as the Go verifier's projectScanSummaryV11 projects it. It
 # ignores the decode error, so a member outside its Go type takes the zero
-# value and the others keep theirs. (path, raw literal, projection).
+# value and the others keep theirs; the verifier refuses such a credential
+# before it reads a signature over that projection (the verdicts below).
+# (path, raw literal, projection).
 GO_SCAN_SUMMARY_PROJECTIONS = (
     (("scanSummary", "criticalFindings"), "3", {**SIGNED_SCAN, "criticalFindings": 3}),
     (("scanSummary", "criticalFindings"), '"3"', SIGNED_SCAN),
@@ -885,14 +1139,19 @@ GO_SCAN_SUMMARY_PROJECTIONS = (
 
 # The verdict on the v1.1 baseline with such a member. The baseline signs
 # criticalFindings 0 and highFindings 0, so a scanSummary count the Go verifier
-# cannot decode projects the signed 0 and the signature still verifies; a null
-# behavioralProfile is not what was signed. (path, raw literal, Go verdict).
+# cannot decode projects the signed 0; it has no value in the signed payload,
+# which holds each scanSummary member typed, so the Go verifier refuses the
+# credential as no signature covers it (decodeScanSummaryV11). It refuses a
+# behavioralProfile member outside its type the same way
+# (projectBehavioralProfileV11). (path, raw literal, Go verdict).
 GO_UNDECODABLE_MEMBER_VERDICTS = (
-    (("scanSummary", "criticalFindings"), '"3"', "ACCEPT"),
-    (("scanSummary", "criticalFindings"), '"abc"', "ACCEPT"),
-    (("scanSummary", "highFindings"), '"1"', "ACCEPT"),
+    (("scanSummary", "criticalFindings"), '"3"', "SIGNATURE_INVALID"),
+    (("scanSummary", "criticalFindings"), "3.5", "SIGNATURE_INVALID"),
+    (("scanSummary", "criticalFindings"), '"abc"', "SIGNATURE_INVALID"),
+    (("scanSummary", "highFindings"), '"1"', "SIGNATURE_INVALID"),
     (("scanSummary", "criticalFindings"), "3", "SIGNATURE_INVALID"),
     (("scanSummary", "hma"), "7", "SIGNATURE_INVALID"),
+    (("scanSummary", "criticalFindings"), "null", "ACCEPT"),
     (("behavioralProfile", "observationDays"), '"14"', "SIGNATURE_INVALID"),
     (("behavioralProfile", "observationDays"), "14.0", "SIGNATURE_INVALID"),
     (("behavioralProfile", "observationDays"), "14.5", "SIGNATURE_INVALID"),
@@ -964,6 +1223,9 @@ GO_UNLOADABLE_WRAPPERS = (
         "verifierState.crl.entries[0].revokedAt",
     ),
     (("verifierState", "crl", "signature"), "7", "verifierState.crl.signature"),
+    # Recorded from the Go reference verifier built with Go 1.26.3.
+    (("verifierState", "revocationListRequired"), '"true"', "verifierState.revocationListRequired"),
+    (("verifierState", "revocationListRequired"), "1", "verifierState.revocationListRequired"),
 )
 
 # The verdict when a fixture member is renamed to another case (rename), holds
@@ -990,65 +1252,75 @@ GO_WRAPPER_VERDICTS = (
     (BASELINE_CRL, ("verifierState", "crl"), "null", None, "ACCEPT"),
     (BASELINE_CRL, ("verifierState", "crl", "entries"), "[null]", None, "ACCEPT"),
     (BASELINE_CRL, ("verifierState", "crl", "revokedAt"), '"not-a-date"', None, "REVOKED"),
+    # Recorded from the Go reference verifier built with Go 1.26.3. A null
+    # nextUpdate is Go's zero time, long past; a null issuedAt is too, and a
+    # CRL issued in the past is usable. The nextUpdate pair, written with an
+    # offset, is 60 and then 61 seconds before the clock; the issuedAt pair is
+    # 60 seconds after it and then one nanosecond more.
+    (CRL_REQUIRED_NONE_HELD, ("verifierState", "revocationListRequired"), KEEP, "RevocationListRequired", "REVOCATION_UNKNOWN"),
+    (CRL_REQUIRED_NONE_HELD, ("verifierState", "revocationListRequired"), "null", None, "ACCEPT"),
+    (CRL_REQUIRED_NONE_HELD, ("verifierState", "revocationListRequired"), "false", None, "ACCEPT"),
+    # A held list meets the requirement; its dates still decide.
+    (CRL_FRESH, ("verifierState", "revocationListRequired"), "true", None, "ACCEPT"),
+    (CRL_PAST_NEXT_UPDATE, ("verifierState", "revocationListRequired"), "true", None, "REVOCATION_UNKNOWN"),
+    (CRL_PAST_NEXT_UPDATE, ("verifierState", "crl", "nextUpdate"), KEEP, "NEXTUPDATE", "REVOCATION_UNKNOWN"),
+    (CRL_FRESH, ("verifierState", "crl", "nextUpdate"), "null", None, "REVOCATION_UNKNOWN"),
+    (CRL_FRESH, ("verifierState", "crl", "nextUpdate"), '"2026-05-24T01:59:00+02:00"', None, "ACCEPT"),
+    (CRL_FRESH, ("verifierState", "crl", "nextUpdate"), '"2026-05-24T01:58:59+02:00"', None, "REVOCATION_UNKNOWN"),
+    (CRL_ISSUED_AFTER_CLOCK, ("verifierState", "crl", "issuedAt"), "null", None, "ACCEPT"),
+    (CRL_ISSUED_AFTER_CLOCK, ("verifierState", "crl", "issuedAt"), '"2026-05-24T00:01:00Z"', None, "ACCEPT"),
+    (CRL_ISSUED_AFTER_CLOCK, ("verifierState", "crl", "issuedAt"), '"2026-05-24T00:01:00.000000001Z"', None, "REVOCATION_UNKNOWN"),
 )
 
-# An expected member that repeats a name with a case variant between the
-# repeats. Go keeps the last of the names that fold together in document
-# order. (raw literal, the verifyResult Go reads).
+# An expected member that repeats a name, with a case variant between the
+# repeats or in place of the second. The file fails to load, its load error
+# naming the member as written the second time. (raw literal, that member).
 GO_REPEATED_EXPECTED_NAMES = (
-    ('{"verifyResult": "ACCEPT", "VerifyResult": "REJECT", "verifyResult": "ACCEPT"}', "ACCEPT"),
-    ('{"verifyResult": "REJECT", "VerifyResult": "ACCEPT", "verifyResult": "REJECT"}', "REJECT"),
-    ('{"VerifyResult": "REJECT", "verifyResult": "ACCEPT"}', "ACCEPT"),
-    ('{"verifyResult": "REJECT", "VERIFYRESULT": "ACCEPT"}', "ACCEPT"),
+    ('{"verifyResult": "ACCEPT", "VerifyResult": "REJECT", "verifyResult": "ACCEPT"}', "VerifyResult"),
+    ('{"verifyResult": "REJECT", "VerifyResult": "ACCEPT", "verifyResult": "REJECT"}', "VerifyResult"),
+    ('{"VerifyResult": "REJECT", "verifyResult": "ACCEPT"}', "verifyResult"),
+    ('{"verifyResult": "REJECT", "VERIFYRESULT": "ACCEPT"}', "VERIFYRESULT"),
 )
 
 # The two tables below were recorded from `go run .` in ../go built with Go
 # 1.26.3, on fixtures _write_repeated writes: the member at path written
 # first under the name given (its own when None) holding the raw literal,
-# then as the baseline writes it.
+# then as the baseline writes it. Each file fails to load for the repeat,
+# before any member is decoded, whatever the first value holds: the load
+# error names the member as written the second time, its own name.
 
-# A repeated fixture member whose first value is outside its Go type. Go
-# reports the type error after decoding the second value, so the file fails
-# to load. (path, first name, raw literal, the member this verifier's load
-# error names), on the CRL baseline.
+# A repeated fixture member whose first value is outside its Go type, on the
+# CRL baseline. Go reported the type error once it had decoded the second
+# value; it now reports the repeat. (path, first name, raw literal, the
+# member the load error names).
 GO_UNLOADABLE_REPEATS = (
-    (("verifierState", "clockRfc3339"), None, "5", "verifierState.clockRfc3339"),
-    (("verifierState", "clockRfc3339"), None, "9" * 401, "verifierState.clockRfc3339"),
-    (("verifierState", "clockRfc3339"), None, "9" * 5001, "verifierState.clockRfc3339"),
-    (("verifierState", "clockRfc3339"), "ClockRfc3339", "9" * 5001, "verifierState.clockRfc3339"),
+    (("verifierState", "clockRfc3339"), None, "5", "clockRfc3339"),
+    (("verifierState", "clockRfc3339"), None, "9" * 401, "clockRfc3339"),
+    (("verifierState", "clockRfc3339"), None, "9" * 5001, "clockRfc3339"),
+    (("verifierState", "clockRfc3339"), "ClockRfc3339", "9" * 5001, "clockRfc3339"),
     (("name",), "NAME", "5", "name"),
-    (("expected", "verifyResult"), "VerifyResult", "7", "expected.verifyResult"),
-    (("keypairRefs", 0, "keyId"), None, "7", "keypairRefs[0].keyId"),
+    (("expected", "verifyResult"), "VerifyResult", "7", "verifyResult"),
+    (("keypairRefs", 0, "keyId"), None, "7", "keyId"),
     (("verifierState",), None, "[]", "verifierState"),
-    (("verifierState",), None, '{"clockRfc3339": 5}', "verifierState.clockRfc3339"),
-    (
-        ("verifierState", "crl", "issuedAt"),
-        None,
-        '"2026-05-23T00:00:00\\u005a"',
-        "verifierState.crl.issuedAt",
-    ),
-    (
-        ("verifierState", "crl"),
-        None,
-        '{"issuedAt": "2026-05-23T00:00:00\\u005a"}',
-        "verifierState.crl.issuedAt",
-    ),
+    (("verifierState",), None, '{"clockRfc3339": 5}', "verifierState"),
+    (("verifierState", "crl", "issuedAt"), None, '"2026-05-23T00:00:00\\u005a"', "issuedAt"),
+    (("verifierState", "crl"), None, '{"issuedAt": "2026-05-23T00:00:00\\u005a"}', "crl"),
     (
         ("verifierState", "crl", "entries", 0, "revokedAt"),
         "RevokedAt",
         '"2026-05-23T12:00:00\\u005a"',
-        "verifierState.crl.entries[0].revokedAt",
+        "revokedAt",
     ),
 )
 
-# A repeated fixture member whose first value is inside its Go type: the file
-# loads and the second value is the one verified. (baseline, path, first
-# name, raw literal, Go verdict).
-GO_REPEAT_VERDICTS = (
-    (BASELINE_V11, ("verifierState", "clockRfc3339"), None, "null", "ACCEPT"),
-    (BASELINE_V11, ("verifierState", "clockRfc3339"), None, '"2100-01-01T00:00:00Z"', "ACCEPT"),
-    (BASELINE_V11, ("name",), "NAME", '"another name"', "ACCEPT"),
-    (BASELINE_CRL, ("verifierState", "crl", "issuedAt"), None, '"2026-05-23T00:00:00Z"', "REVOKED"),
+# A repeated fixture member whose first value is inside its Go type. Go
+# verified the second value; the file now fails to load. (baseline, path,
+# first name, raw literal, the member the load error names).
+GO_REPEATS_INSIDE_THEIR_TYPE = (
+    (BASELINE_V11, ("verifierState", "clockRfc3339"), None, "null", "clockRfc3339"),
+    (BASELINE_V11, ("verifierState", "clockRfc3339"), None, '"2100-01-01T00:00:00Z"', "clockRfc3339"),
+    (BASELINE_V11, ("name",), "NAME", '"another name"', "name"),
+    (BASELINE_CRL, ("verifierState", "crl", "issuedAt"), None, '"2026-05-23T00:00:00Z"', "issuedAt"),
 )
 
 # What Go's hex.DecodeString makes of a public key's publicKeyHex, None where
@@ -1068,8 +1340,9 @@ GO_HEX_DECODES = (
 # where the file fails to load). declaredPurpose enters the v1.1 TBS as
 # written, so there the arrays are canonicalized at that depth too. A member
 # Go decodes into a typed field is a PARSE_ERROR when it holds an array, and
-# one of scanSummary or behavioralProfile, which the v1.1 projection decodes
-# without failing, leaves a payload the signature does not cover.
+# one of scanSummary or behavioralProfile has no value in the v1.1 signed
+# payload, so the verifier refuses it as SIGNATURE_INVALID before it reads a
+# signature.
 GO_NESTING_VERDICTS = (
     (("deep",), 5000, "ACCEPT"),
     (("deep",), 9999, "ACCEPT"),
@@ -1142,14 +1415,15 @@ LONG_INTEGER = "1" + "0" * 5000
 # keeps a member no struct declares as bytes it never decodes, so there the
 # fixture verifies as the baseline does. The number is out of range for a
 # member Go decodes into int64 or float64 and of the wrong type for any other
-# typed member. The v1.1 projection leaves a scanSummary member it cannot
-# decode at its zero value, which for criticalFindings is the 0 the baseline
-# signs.
+# typed member. A scanSummary member the v1.1 projection cannot decode has no
+# value in the signed payload, so the verifier refuses it before it reads a
+# signature, though the projection holds the 0 the baseline signs in its place;
+# it refuses a behavioralProfile member it cannot decode the same way.
 GO_LONG_INTEGER_VERDICTS = (
     (("unknownMember",), "ACCEPT"),
     (("atx", "unknownMember"), "ACCEPT"),
     (("verifierState", "unknownMember"), "ACCEPT"),
-    (("atx", "scanSummary", "criticalFindings"), "ACCEPT"),
+    (("atx", "scanSummary", "criticalFindings"), "SIGNATURE_INVALID"),
     (("atx", "scanSummary", "hma"), "SIGNATURE_INVALID"),
     (("atx", "behavioralProfile", "observationDays"), "SIGNATURE_INVALID"),
     (("atx",), "PARSE_ERROR"),
@@ -1246,12 +1520,16 @@ class GoDecodedVerdict(unittest.TestCase):
 
     def test_clock_offset_out_of_range_is_a_config_error(self):
         for baseline in (BASELINE_V10, BASELINE_V11):
-            with self.subTest(baseline=baseline.name):
-                fixture = json.loads(baseline.read_text())
-                fixture["verifierState"]["clockRfc3339"] = "2026-06-01T00:00:00+23:61"
-                got = verify.verify_fixture(fixture)
-                self.assertEqual(got.reject_category, "VERIFIER_CONFIG_ERROR", got.reason)
-                self.assertIn("time zone offset minute out of range", got.reason)
+            for clock, message in (
+                ("2026-06-01T00:00:00+23:61", "time zone offset minute out of range"),
+                ("2026-02-30T00:00:00+25:00", "time zone offset hour out of range"),
+            ):
+                with self.subTest(baseline=baseline.name, clock=clock):
+                    fixture = json.loads(baseline.read_text())
+                    fixture["verifierState"]["clockRfc3339"] = clock
+                    got = verify.verify_fixture(fixture)
+                    self.assertEqual(got.reject_category, "VERIFIER_CONFIG_ERROR", got.reason)
+                    self.assertIn(message, got.reason)
 
     def test_crl_offset_out_of_range_is_a_load_error(self):
         for path, literal, member in GO_UNLOADABLE_OFFSETS:
@@ -1332,14 +1610,28 @@ class GoMemberNameFolding(unittest.TestCase):
                 got = _at_verdict(BASELINE_V11, path, literal, rename=name)
                 self.assertEqual(_outcome(got), outcome, got.reason)
 
-    def test_non_ascii_names_fold_through_lowercase(self):
-        # Beyond ASCII and the two letters Go folds onto ASCII, a name folds
-        # through its lowercase form, as Go's unicode.ToLower folds it, so
-        # two such names in the credential are a duplicate there as here.
-        self.assertEqual(verify._fold_key("Éclair"), "éclair")
-        got = _at_verdict(BASELINE_V11, ("extra",), '{"É": 1, "é": 2}')
+    def test_non_ascii_names_fold_only_through_the_fixed_table(self):
+        # The fold is ASCII A-Z, the Kelvin sign and the long s, the letters
+        # Go folds onto an ASCII field name, and every other character
+        # unchanged, so no Python release's Unicode tables decide it: other
+        # names are one member only when they decode to the same name, as in
+        # the Go verifier. str.lower() made U+1C89 and U+1C8A, a case pair
+        # from Unicode 16.0, a duplicate under Python 3.14 and not 3.12, and
+        # folded U+0130 to i followed by U+0307.
+        self.assertEqual(verify._fold_key("Éclair"), "Éclair")
+        self.assertEqual(verify._fold_key("\u0130d"), "\u0130d")
+        for literal in (
+            '{"É": 1, "é": 2}',
+            '{"\\u1c89x": 1, "\\u1c8ax": 2}',
+            '{"\\u0130d": 1, "id": 2}',
+            '{"\\u0130x": 1, "i\\u0307x": 2}',
+        ):
+            with self.subTest(value=literal):
+                got = _at_verdict(BASELINE_V11, ("extra",), literal)
+                self.assertTrue(got.accepted, got.reason)
+        got = _at_verdict(BASELINE_V11, ("extra",), '{"É": 1, "É": 2}')
         self.assertEqual(got.reject_category, "PARSE_ERROR", got.reason)
-        self.assertIn("duplicate member", got.reason)
+        self.assertIn('duplicate member "É"', got.reason)
 
     def test_another_name_is_not_the_member(self):
         # Control: folding joins case variants only. "revoked_" is no member
@@ -1349,6 +1641,182 @@ class GoMemberNameFolding(unittest.TestCase):
             with self.subTest(baseline=baseline.name):
                 got = _at_verdict(baseline, ("revoked",), "true", rename="revoked_")
                 self.assertTrue(got.accepted, got.reason)
+
+
+def _escaped(*units: str) -> str:
+    """Each UTF-16 code unit given in hex as a JSON \\u escape: also the
+    text %+q writes for a character below U+10000."""
+    return "".join("\\" + "u" + unit for unit in units)
+
+
+def _name_reason(quoted: str, char: str) -> str:
+    """The reason the Go reference verifier writes for a credential member
+    name outside printable ASCII: quoted is the name as its %+q writes it,
+    char the character as its %U writes it."""
+    return (
+        f"credential member name {quoted} holds {char}, outside printable ASCII (strict parse: "
+        "a member name in the credential, a signature entry, scanSummary or behavioralProfile "
+        "must be printable ASCII, U+0020 to U+007E)"
+    )
+
+
+DOTTED_CAPITAL_I = chr(0x0130)
+DOTLESS_I = chr(0x0131)
+KELVIN = chr(0x212A)
+LONG_S = chr(0x017F)
+DOTTED_CAPITAL_I_MEMBER = ROOT / "fixtures" / "v1_1-dotted-capital-i-member.json"
+DOTLESS_I_MEMBER = ROOT / "fixtures" / "v1_1-dotless-i-member.json"
+
+# A credential member name that holds a character outside printable ASCII
+# (U+0020 to U+007E), in an object the Go reference verifier decodes, and the
+# name and character its reason gives: (baseline, edits for _write_with, in
+# which a path that names no member adds one after the last, the name as %+q
+# writes it, the character as %U writes it). Recorded from the Go reference
+# verifier built with Go 1.26.3. The first two were ACCEPT on both verifiers
+# before the check (atx-conformance#284).
+GO_NON_ASCII_NAME_VERDICTS = (
+    (BASELINE_V11, {(DOTTED_CAPITAL_I + "d",): '"x"'}, '"' + _escaped("0130") + 'd"', "U+0130"),
+    (BASELINE_V11, {(DOTLESS_I + "ssuedAt",): '"2099-01-01T00:00:00Z"'}, '"' + _escaped("0131") + 'ssuedAt"', "U+0131"),
+    (BASELINE_V10, {(DOTTED_CAPITAL_I + "d",): '"x"'}, '"' + _escaped("0130") + 'd"', "U+0130"),
+    (BASELINE_V10, {(DOTLESS_I + "ssuedAt",): '"2099-01-01T00:00:00Z"'}, '"' + _escaped("0131") + 'ssuedAt"', "U+0131"),
+    (BASELINE_V11, {("a\x01",): "1"}, '"a\\x01"', "U+0001"),
+    (BASELINE_V11, {("a\tb",): "1"}, '"a\\tb"', "U+0009"),
+    (BASELINE_V11, {("a\x7f",): "1"}, '"a\\x7f"', "U+007F"),
+    (BASELINE_V11, {(chr(0xD800) + "x",): "1"}, '"' + _escaped("fffd") + 'x"', "U+FFFD"),
+    (BASELINE_V11, {(chr(0x1F600),): "1"}, '"' + "\\" + 'U0001f600"', "U+1F600"),
+    (BASELINE_V11, {("aé" + DOTTED_CAPITAL_I,): "1"}, '"a' + _escaped("00e9", "0130") + '"', "U+00E9"),
+    (BASELINE_V11, {('q"\\é',): "1"}, '"q\\"\\\\' + _escaped("00e9") + '"', "U+00E9"),
+    (BASELINE_V11, {("signatures", 0, "kéyId"): '"x"'}, '"k' + _escaped("00e9") + 'yId"', "U+00E9"),
+    (BASELINE_V11, {("scanSummary", "hmä"): '"x"'}, '"hm' + _escaped("00e4") + '"', "U+00E4"),
+    (BASELINE_V10, {("scanSummary", "hmä"): '"x"'}, '"hm' + _escaped("00e4") + '"', "U+00E4"),
+    (BASELINE_V11, {("behavioralProfile", "checksüm"): '"x"'}, '"checks' + _escaped("00fc") + 'm"', "U+00FC"),
+)
+
+# The same for a member written under another name: (path, name as written,
+# raw literal, the name as %+q writes it, the character as %U writes it). Go
+# read these two as revoked and signatures through its fold, so on each
+# baseline they reached REVOKED and SIGNATURE_INVALID before the check.
+GO_NON_ASCII_RENAMES = (
+    (("revoked",), "revo" + KELVIN + "ed", "true", '"revo' + _escaped("212a") + 'ed"', "U+212A"),
+    (("signatures",), LONG_S + "ignatures", "[]", '"' + _escaped("017f") + 'ignatures"', "U+017F"),
+)
+
+# Credentials holding two such names, and one whose signatures array holds a
+# value that is not an object first: the reason names the first name in
+# document order. (raw JSON credential, the name as %+q writes it, the
+# character as %U writes it).
+GO_NON_ASCII_CREDENTIALS = (
+    (
+        '{"' + _escaped("0131") + 'x": 1, "scanSummary": {"' + _escaped("0130") + 'y": 2}}',
+        '"' + _escaped("0131") + 'x"', "U+0131",
+    ),
+    (
+        '{"scanSummary": {"' + _escaped("0130") + 'y": 2}, "' + _escaped("0131") + 'x": 1}',
+        '"' + _escaped("0130") + 'y"', "U+0130",
+    ),
+    ('{"signatures": [1, {"' + _escaped("00e9") + '": 1}]}', '"' + _escaped("00e9") + '"', "U+00E9"),
+)
+
+# Names outside printable ASCII the check does not refuse, or that another
+# check names first, and the verdict each keeps, with a part of its reason:
+# (baseline, edits for _write_with, outcome, reason part).
+GO_NON_ASCII_NAME_CONTROLS = (
+    (BASELINE_V11, {(" ~",): "1"}, "ACCEPT", ""),
+    (BASELINE_V10, {(" ~",): "1"}, "ACCEPT", ""),
+    # Objects the Go verifier does not decode, and a name written as a value.
+    (BASELINE_V11, {("extra",): '{"' + _escaped("0130") + 'd": 1}'}, "ACCEPT", ""),
+    (BASELINE_V11, {("signatures", 0, "x"): '{"' + _escaped("0130") + 'd": 1}'}, "ACCEPT", ""),
+    (BASELINE_V11, {("extra",): '"' + _escaped("0130") + 'd"'}, "ACCEPT", ""),
+    # v1.1 signs declaredPurpose as written, and the baseline signs none.
+    (BASELINE_V11, {("declaredPurpose",): '{"' + _escaped("0130") + 'd": 1}'}, "SIGNATURE_INVALID", ""),
+    # The duplicate check runs first.
+    (
+        BASELINE_V11, {("zzz",): '1, "' + _escaped("0130") + 'd": 1, "' + _escaped("0130") + 'd": 2'},
+        "PARSE_ERROR", 'duplicate member "' + DOTTED_CAPITAL_I + 'd"',
+    ),
+    (BASELINE_V11, {("zzz",): '1, "revo' + _escaped("212a") + 'ed": true'}, "PARSE_ERROR", 'duplicate member "revo' + KELVIN + 'ed"'),
+    (BASELINE_V11, {("zzz",): '1, "' + _escaped("017f") + 'ignatures": []'}, "PARSE_ERROR", 'duplicate member "' + LONG_S + 'ignatures"'),
+    # signatures is not an array, so its decode says why.
+    (BASELINE_V11, {("signatures",): '{"' + _escaped("0130") + 'd": 1}'}, "PARSE_ERROR", "is not a JSON array"),
+)
+
+
+class GoMemberNameOutsidePrintableASCII(unittest.TestCase):
+    """A credential member name that holds a character outside printable
+    ASCII (U+0020 to U+007E) in an object the Go reference verifier decodes:
+    the credential, an entry of its signatures, its scanSummary or its
+    behavioralProfile. Both verifiers refuse it as PARSE_ERROR, naming the
+    first such name in document order with the Go verifier's reason, so no
+    case table decides which member it is. A member named U+0130 followed by
+    d beside id, or U+0131 followed by ssuedAt beside issuedAt, was ACCEPT on
+    both, while Java 25's String.equalsIgnoreCase compares those names equal
+    to id and issuedAt. atx-conformance#284."""
+
+    def test_name_is_refused_with_the_go_reason(self):
+        for baseline, edits, quoted, char in GO_NON_ASCII_NAME_VERDICTS:
+            with self.subTest(baseline=baseline.name, edits=edits):
+                got = _with_verdict(baseline, edits)
+                self.assertEqual(got.reject_category, "PARSE_ERROR", got.reason)
+                self.assertEqual(got.reason, _name_reason(quoted, char))
+
+    def test_renamed_member_is_refused_with_the_go_reason(self):
+        scan = json.loads(BASELINE_V11.read_text(encoding="utf-8"))["atx"]["scanSummary"]
+        renames = GO_NON_ASCII_RENAMES + (
+            # Go reads SCANSUMMARY as scanSummary, so the names it holds are read.
+            (
+                ("scanSummary",), "SCANSUMMARY", json.dumps({**scan, DOTTED_CAPITAL_I: 1}),
+                '"' + _escaped("0130") + '"', "U+0130",
+            ),
+        )
+        for baseline in (BASELINE_V10, BASELINE_V11):
+            for path, name, literal, quoted, char in renames:
+                with self.subTest(baseline=baseline.name, name=name):
+                    got = _at_verdict(baseline, path, literal, rename=name)
+                    self.assertEqual(got.reject_category, "PARSE_ERROR", got.reason)
+                    self.assertEqual(got.reason, _name_reason(quoted, char))
+
+    def test_first_name_in_document_order_is_named(self):
+        for literal, quoted, char in GO_NON_ASCII_CREDENTIALS:
+            with self.subTest(atx=literal), tempfile.TemporaryDirectory() as tmp:
+                path = _write_wrapper(Path(tmp), "atx.json", BASELINE_V11, "atx", literal)
+                got = verify.verify_fixture(verify.load_fixture(path))
+                self.assertEqual(got.reject_category, "PARSE_ERROR", got.reason)
+                self.assertEqual(got.reason, _name_reason(quoted, char))
+
+    def test_name_written_as_utf_8(self):
+        # The cases above write each name as JSON escapes; this file holds
+        # the name's UTF-8 bytes.
+        got = _fixture_verdict(BASELINE_V11, ("atx", "zzz"), '1, "é": 1')
+        self.assertEqual(got.reject_category, "PARSE_ERROR", got.reason)
+        self.assertEqual(got.reason, _name_reason('"' + _escaped("00e9") + '"', "U+00E9"))
+
+    def test_other_names_keep_their_verdicts(self):
+        for baseline, edits, outcome, held in GO_NON_ASCII_NAME_CONTROLS:
+            with self.subTest(baseline=baseline.name, edits=edits):
+                got = _with_verdict(baseline, edits)
+                self.assertEqual(_outcome(got), outcome, got.reason)
+                self.assertIn(held, got.reason)
+                self.assertNotIn("printable ASCII", got.reason)
+
+    def test_shipped_fixtures_pin_the_rule(self):
+        # Each is the credential of fixtures/v1_1-baseline-valid.json with one
+        # member added directly after the member its name spells, and that
+        # member is the only difference, so a verifier without the check
+        # accepts it.
+        baseline = json.loads(BASELINE_V11.read_text(encoding="utf-8"))["atx"]
+        for path, added, spells, quoted, char in (
+            (DOTTED_CAPITAL_I_MEMBER, DOTTED_CAPITAL_I + "d", "id", '"' + _escaped("0130") + 'd"', "U+0130"),
+            (DOTLESS_I_MEMBER, DOTLESS_I + "ssuedAt", "issuedAt", '"' + _escaped("0131") + 'ssuedAt"', "U+0131"),
+        ):
+            with self.subTest(fixture=path.name):
+                got = verify.verify_fixture(verify.load_fixture(path))
+                self.assertEqual(got.reject_category, "PARSE_ERROR", got.reason)
+                self.assertEqual(got.reason, _name_reason(quoted, char))
+                credential = json.loads(path.read_text(encoding="utf-8"))["atx"]
+                names = list(credential)
+                self.assertEqual(names[names.index(spells) + 1], added, names)
+                del credential[added]
+                self.assertEqual(credential, baseline)
 
 
 class GoEscapedString(unittest.TestCase):
@@ -1413,6 +1881,95 @@ class GoUnpairedSurrogate(unittest.TestCase):
                 got = _at_verdict(BASELINE_V11, path, literal)
                 self.assertEqual(_outcome(got), outcome, got.reason)
 
+    def test_declared_purpose_escape_is_refused_before_a_number(self):
+        # The JCS serializer cannot write 1.5, which left no payload to
+        # verify, so a declaredPurpose holding one beside an unpaired
+        # surrogate escape was a signature failure here. The Go verifier
+        # refuses the escape before it canonicalizes, naming the first one
+        # the text writes, and so does this one, before the 1e400 it would
+        # otherwise name.
+        for literal, escape in (
+            ('{"a": 1.5, "b": "\\ud800\\u0041"}', "\\ud800"),
+            ('{"a": 1.5, "b": "\\ud800"}', "\\ud800"),
+            ('["\\ud800\\udc00\\udc00", 2.5]', "\\udc00"),
+            ('{"a": 1e400, "b": "\\ud800"}', "\\ud800"),
+        ):
+            with self.subTest(value=literal):
+                got = _at_verdict(BASELINE_V11, ("declaredPurpose",), literal)
+                self.assertEqual(got.reject_category, "VERIFIER_CONFIG_ERROR", got.reason)
+                self.assertEqual(
+                    got.reason,
+                    "v1.1 canonicalization failed: declaredPurpose holds an unpaired "
+                    f"UTF-16 surrogate escape ({escape})",
+                )
+
+    def test_declared_purpose_escape_is_named_as_written(self):
+        # The Go verifier names the escape as the file writes it. This one
+        # wrote its hex digits in lower case, so for \uD800 the two reports
+        # of one folder differed (#421).
+        for literal, escape in UNPAIRED_ESCAPES_AS_WRITTEN:
+            with self.subTest(value=literal):
+                got = _at_verdict(BASELINE_V11, ("declaredPurpose",), literal)
+                self.assertEqual(got.reject_category, "VERIFIER_CONFIG_ERROR", got.reason)
+                self.assertEqual(got.reason, UNPAIRED_ESCAPE_REASON.format(escape))
+        with self.subTest(value="DECLAREDPURPOSE"):
+            got = _at_verdict(BASELINE_V11, ("declaredPurpose",), '"\\uD800\\u0041"', rename="DECLAREDPURPOSE")
+            self.assertEqual(got.reason, UNPAIRED_ESCAPE_REASON.format("\\uD800"))
+        with self.subTest(value="a plain dict"):
+            # A fixture load_fixture did not return holds no text to read the
+            # letter case from, and the reason writes the digits in lower case.
+            with tempfile.TemporaryDirectory() as tmp:
+                written = _write_at(Path(tmp), "member.json", BASELINE_V11, ("declaredPurpose",), '"\\uD800\\u0041"')
+                got = verify.verify_fixture(json.loads(written.read_text()))
+            self.assertEqual(got.reason, UNPAIRED_ESCAPE_REASON.format("\\ud800"))
+
+    def test_declared_purpose_escape_is_named_from_declared_purpose(self):
+        # The escape is read from the credential's declaredPurpose, not from
+        # a string before it that writes another one, and the text is read
+        # past a member nested 9000 arrays deep, where a walk that recursed
+        # for each level would pass Python's default recursion limit, 1000.
+        for atx_name, purpose_name, aside in DECOY_PURPOSE_FILES:
+            with self.subTest(atx=atx_name, purpose=purpose_name, aside=aside[:12]), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "decoy.json"
+                path.write_text(_decoy_purpose_text(atx_name, purpose_name, aside))
+                got = verify.verify_fixture(verify.load_fixture(path))
+                self.assertEqual(got.reject_category, "VERIFIER_CONFIG_ERROR", got.reason)
+                self.assertEqual(got.reason, UNPAIRED_ESCAPE_REASON.format("\\uDBFF"))
+
+    def test_member_text_is_the_member_go_reads_as_written(self):
+        # The member a name in another case folds onto, the last such member
+        # where the text writes more than one, written as the text writes
+        # it; None for a value on the way that is not an object or that
+        # holds no such member, and a name written inside a string is no
+        # member.
+        for text, path, want in (
+            ('{"a": {"b": [1, "x\\uD800"] }}', ("a", "b"), '[1, "x\\uD800"]'),
+            ('{"A": 1, "a": {"B" : "\\uDC00"}}', ("a", "b"), '"\\uDC00"'),
+            ('{"a": {"b": 1}, "A": {"b": 2}}', ("a", "b"), "2"),
+            ('{"a": [{"b": 1}]}', ("a", "b"), None),
+            ('{"a": {"c": 1}}', ("a", "b"), None),
+            (' {"x": "{\\"a\\": 1}", "a": null}', ("a",), "null"),
+        ):
+            with self.subTest(text=text, path=path):
+                self.assertEqual(verify._member_text(text, path), want)
+
+    def test_declared_purpose_signed_with_the_replacement_character(self):
+        # The Go verifier's JCS library reads an unpaired surrogate escape
+        # followed by another \u escape as one U+FFFD, the second escape
+        # included, so before the Go verifier refused the escape itself a
+        # credential signed holding U+FFFD verified there with such a pair
+        # written in its place. Both verifiers refuse it.
+        fixture = json.loads(BASELINE_V11.read_text())
+        fixture["atx"]["declaredPurpose"] = "\N{REPLACEMENT CHARACTER}"
+        with tempfile.TemporaryDirectory() as tmp:
+            signed = _write_signed_v11(Path(tmp), "signed.json", fixture)
+            got = verify.verify_fixture(verify.load_fixture(signed))
+            self.assertTrue(got.accepted, got.reason)
+            for literal in ('"\\ud800\\u0041"', '"\\ud800\\ud800"', '"\\udc00\\ufffd"'):
+                with self.subTest(value=literal):
+                    got = _at_verdict(signed, ("declaredPurpose",), literal)
+                    self.assertEqual(got.reject_category, "VERIFIER_CONFIG_ERROR", got.reason)
+
     def test_names_that_decode_alike_are_duplicates(self):
         # Go decodes both names to U+FFFD, so its strict parse sees one name
         # twice, at the top of the credential and below it.
@@ -1475,6 +2032,42 @@ class GoNegativeZero(unittest.TestCase):
                 self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
 
 
+# trustScore literals written with more than 800 digits, and the verdict both
+# reference verifiers reach on the v1.0 and v1.1 baselines, signed over
+# 87.500000 (TestTrustScoreReadAsWritten in the Go verifier). Each verifier
+# reads the value written, decided on every digit: float() here, and
+# nearestFloat64 in the Go verifier. Until atx-conformance#308 the Go
+# verifier read trustScore with strconv.ParseFloat, which in go1.22 and
+# go1.26 reads the first two as values other than 87.5 and the last two,
+# whose value is 10^350, as 1e+149; go1.27 reads the first two as 87.5 and
+# refuses the last two as outside the float64 range.
+GO_LONG_TRUST_SCORE_VERDICTS = (
+    ("875" + "0" * 900 + "e-901", "ACCEPT"),
+    ("8750" + "0" * 1000 + "e-1002", "ACCEPT"),
+    ("87.5" + "0" * 1000 + "e0", "ACCEPT"),
+    ("0." + "0" * 900 + "875e902", "ACCEPT"),
+    ("875" + "0" * 900 + "e-902", "SIGNATURE_INVALID"),
+    ("875" + "0" * 900 + "e-900", "SIGNATURE_INVALID"),
+    ("1" + "0" * 1000 + "e-650", "PARSE_ERROR"),
+    ("-1" + "0" * 1000 + "e-650", "PARSE_ERROR"),
+)
+
+
+class GoTrustScoreAsWritten(unittest.TestCase):
+    def test_long_trust_score_reaches_the_go_verdict(self):
+        for literal, outcome in GO_LONG_TRUST_SCORE_VERDICTS:
+            for baseline in (BASELINE_V10, BASELINE_V11):
+                with self.subTest(literal=literal[:40], length=len(literal), baseline=baseline.name):
+                    got = _at_verdict(baseline, ("trustScore",), literal)
+                    self.assertEqual(_outcome(got), outcome, got.reason[:200])
+
+    def test_long_trust_score_signs_its_value(self):
+        literal = "875" + "0" * 900 + "e-901"
+        v10 = verify.canonical_payload(_credential_at(BASELINE_V10, ("trustScore",), literal))
+        self.assertEqual(v10.decode("utf-8").split("|")[7], "87.500000")
+        self.assertEqual(_projection_at(("trustScore",), literal)["trustScore"], "87.500000")
+
+
 class GoUndecodableProjection(unittest.TestCase):
     # The verdict alone does not tell a null behavioralProfile from any other
     # projection the baseline's signature does not cover, so these compare the
@@ -1482,12 +2075,63 @@ class GoUndecodableProjection(unittest.TestCase):
     def test_behavioral_profile_projects_as_go_projects_it(self):
         for path, literal, projection in GO_BEHAVIORAL_PROFILE_PROJECTIONS:
             with self.subTest(path=path, value=literal):
-                self.assertEqual(_projection_at(path, literal)["behavioralProfile"], projection)
+                if projection is REFUSED:
+                    with self.assertRaises(verify._DecodeError):
+                        _projection_at(path, literal)
+                else:
+                    self.assertEqual(_projection_at(path, literal)["behavioralProfile"], projection)
 
     def test_scan_summary_projects_as_go_projects_it(self):
         for path, literal, projection in GO_SCAN_SUMMARY_PROJECTIONS:
             with self.subTest(path=path, value=literal):
                 self.assertEqual(_projection_at(path, literal)["scanSummary"], projection)
+
+    def test_scan_summary_member_names_are_read_as_go_reads_them(self):
+        # The Go verifier's decodeScanSummaryV11 reads scanSummary's member
+        # names as written: a name other than its six returns
+        # errScanSummaryMember, and the credential rejects with the reason
+        # below, Go's words byte for byte, before the type of any member is
+        # read (TestScanSummaryMemberNames in
+        # verifiers/go/verifier/verify_test.go, atx-conformance#277). The
+        # projection reads the names as encoding/json does, so the baseline
+        # with a seventh member or a name in another case projects its signed
+        # scanSummary.
+        member_reason = "no signature covers scanSummary, which holds a member other than its six"
+        type_reason = "no signature covers scanSummary, which holds a member outside its type or is not an object"
+        def renamed(to: str) -> dict:
+            # The baseline's scanSummary with criticalFindings written as `to`.
+            return {(to if name == "criticalFindings" else name): v for name, v in SIGNED_SCAN.items()}
+
+        for label, scan, reason in (
+            ("the baseline's", SIGNED_SCAN, None),
+            ("a seventh member", {**SIGNED_SCAN, "extra": "x"}, member_reason),
+            ("CriticalFindings in place of criticalFindings", renamed("CriticalFindings"), member_reason),
+            ("criticalfindings in place of criticalFindings", renamed("criticalfindings"), member_reason),
+            ("techniques", {**SIGNED_SCAN, "techniques": []}, member_reason),
+            ("a seventh member and one outside its type", {"criticalFindings": "3", "extra": "x"}, member_reason),
+            ("the six, one outside its type", {**SIGNED_SCAN, "criticalFindings": "3"}, type_reason),
+        ):
+            with self.subTest(scanSummary=label):
+                if reason == member_reason:
+                    with self.assertRaises(verify._ScanSummaryMemberError):
+                        verify._decode_scan_summary(scan)
+                elif reason == type_reason:
+                    with self.assertRaises(verify._DecodeError) as raised:
+                        verify._decode_scan_summary(scan)
+                    self.assertNotIsInstance(raised.exception, verify._ScanSummaryMemberError)
+                else:
+                    self.assertEqual(verify._decode_scan_summary(scan), SIGNED_SCAN)
+                if label in ("the baseline's", "a seventh member", "CriticalFindings in place of criticalFindings"):
+                    self.assertEqual(verify._decode_scan_summary(scan, lenient=True), SIGNED_SCAN)
+                got = _at_verdict(BASELINE_V11, ("scanSummary",), json.dumps(scan))
+                if reason is None:
+                    self.assertTrue(got.accepted, got.reason)
+                else:
+                    self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+                    self.assertEqual(got.reason, reason)
+        # atcVersion 1.0 signs no scanSummary (core.md section 1.3a.1).
+        got = _at_verdict(BASELINE_V10, ("scanSummary",), json.dumps({**SIGNED_SCAN, "extra": "x"}))
+        self.assertTrue(got.accepted, got.reason)
 
     def test_baseline_projects_what_it_signs(self):
         payload = _projection_at(("createdAt",), KEEP)
@@ -1515,6 +2159,520 @@ class GoUndecodableProjection(unittest.TestCase):
         self.assertEqual(code, 0, text + err)
         self.assertNotIn("verify error", text)
         self.assertEqual(text.splitlines()[-1], f"summary: {n} pass, 0 fail ({n} fixtures)")
+
+
+class GoScanSummaryOutsideItsType(unittest.TestCase):
+    """A v1.1 scanSummary member outside its Go type, or a scanSummary that is
+    not an object, has no value in the signed payload, which holds each of
+    its six members typed, so the Go verifier refuses the credential as no
+    signature covers it, before it reads one, naming scanSummary
+    (fixtures/v1_1-scan-summary-member-outside-type.json). Its projection
+    would hold the zero value in that member's place."""
+
+    def test_baseline_member_outside_its_type_names_scan_summary(self):
+        for path, literal in (
+            (("scanSummary", "criticalFindings"), '"3"'),
+            (("scanSummary", "criticalFindings"), "3.5"),
+            (("scanSummary", "criticalFindings"), "1e1"),
+            (("scanSummary", "criticalFindings"), "9223372036854775808"),
+            (("scanSummary", "highFindings"), '"1"'),
+            (("scanSummary", "hma"), "7"),
+            (("scanSummary", "oasbLevel"), '["L1"]'),
+        ):
+            with self.subTest(path=path, value=literal):
+                got = _at_verdict(BASELINE_V11, path, literal)
+                self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+                self.assertIn("scanSummary", got.reason)
+                self.assertIn("signature", got.reason)
+
+    def test_credential_signed_with_a_zero_scan_summary(self):
+        # The baseline signs a scanSummary that is not zero, so one projected
+        # as zero fails that signature whether or not it is refused first; a
+        # credential signed with a zero scanSummary is where the two differ.
+        fixture = json.loads(BASELINE_V11.read_text())
+        fixture["atx"]["scanSummary"] = None
+        with tempfile.TemporaryDirectory() as tmp:
+            signed = _write_signed_v11(Path(tmp), "signed.json", fixture)
+            got = verify.verify_fixture(verify.load_fixture(signed))
+            self.assertTrue(got.accepted, got.reason)
+            for literal, outcome in (
+                ("7", "SIGNATURE_INVALID"),
+                ('"x"', "SIGNATURE_INVALID"),
+                ("[1.5]", "SIGNATURE_INVALID"),
+                ("true", "SIGNATURE_INVALID"),
+                ('{"criticalFindings": "3"}', "SIGNATURE_INVALID"),
+                ('{"hma": 0}', "SIGNATURE_INVALID"),
+                ("{}", "ACCEPT"),
+                ('{"criticalFindings": null, "hma": null}', "ACCEPT"),
+                (None, "ACCEPT"),
+            ):
+                with self.subTest(value=literal):
+                    got = _at_verdict(signed, ("scanSummary",), literal)
+                    self.assertEqual(_outcome(got), outcome, got.reason)
+                    if outcome != "ACCEPT":
+                        self.assertIn("scanSummary", got.reason)
+
+    def test_v1_0_scan_summary_is_not_read(self):
+        # atcVersion 1.0 signs no scanSummary (core.md section 1.3a.1).
+        got = _at_verdict(BASELINE_V10, ("scanSummary", "criticalFindings"), '"3"')
+        self.assertTrue(got.accepted, got.reason)
+
+
+def _write_with(directory: Path, name: str, baseline: Path, edits: dict, expected: dict | None = None) -> Path:
+    """_write_at for several members: `baseline` with each atx member at a
+    path of `edits` replaced by the raw JSON literal it maps to."""
+    fixture = json.loads(baseline.read_text())
+    fixture["expected"] = dict(expected or PARSE_ERROR_EXPECTED)
+    for i, path in enumerate(edits):
+        parent = fixture["atx"]
+        for step in path[:-1]:
+            parent = parent[step]
+        parent[path[-1]] = f"@@MEMBER{i}@@"
+    text = json.dumps(fixture)
+    for i, literal in enumerate(edits.values()):
+        text = text.replace(f'"@@MEMBER{i}@@"', literal)
+    out = directory / name
+    out.write_text(text)
+    return out
+
+
+def _with_verdict(baseline: Path, edits: dict) -> verify.VerifyResult:
+    with tempfile.TemporaryDirectory() as tmp:
+        written = _write_with(Path(tmp), "members.json", baseline, edits)
+        return verify.verify_fixture(verify.load_fixture(written))
+
+
+def _exact_range_reason(where: str, literal: str) -> str:
+    return f"no signature covers {where}: the integer {literal} is outside the I-JSON exact range, -(2^53-1) to 2^53-1"
+
+
+def _fraction_or_exponent_reason(literal: str) -> str:
+    # The reason both reference verifiers write for a v1.1 declaredPurpose
+    # number written with a fraction or an exponent part, literal as the
+    # credential writes it.
+    return (
+        f"no signature covers declaredPurpose: the number {literal} is written with a "
+        "fraction or an exponent part, not as an integer"
+    )
+
+
+CRITICAL = ("scanSummary", "criticalFindings")
+HIGH = ("scanSummary", "highFindings")
+OBSERVATION_DAYS = ("behavioralProfile", "observationDays")
+TRUST_LEVEL = ("trustLevel",)
+PURPOSE = ("declaredPurpose",)
+INTEGER_OUTSIDE_EXACT_RANGE = ROOT / "fixtures" / "v1_1-integer-outside-exact-range.json"
+
+# Integers of the v1.1 signed payload outside the I-JSON exact range, written
+# on the v1.1 baseline, and the member and integer the Go reference verifier's
+# reason names for each: with several, the first in the order JCS writes the
+# members, and in declaredPurpose the first integer written.
+GO_INTEGER_OUTSIDE_EXACT_RANGE = (
+    ({CRITICAL: "9007199254740992"}, "scanSummary.criticalFindings", "9007199254740992"),
+    ({CRITICAL: "9007199254740993"}, "scanSummary.criticalFindings", "9007199254740993"),
+    ({CRITICAL: "-9007199254740992"}, "scanSummary.criticalFindings", "-9007199254740992"),
+    ({CRITICAL: "9223372036854775807"}, "scanSummary.criticalFindings", "9223372036854775807"),
+    ({HIGH: "9007199254740992"}, "scanSummary.highFindings", "9007199254740992"),
+    ({OBSERVATION_DAYS: "9007199254740992"}, "behavioralProfile.observationDays", "9007199254740992"),
+    ({TRUST_LEVEL: "9007199254740993"}, "trustLevel", "9007199254740993"),
+    ({TRUST_LEVEL: "-9007199254740993"}, "trustLevel", "-9007199254740993"),
+    ({PURPOSE: "9007199254740993"}, "declaredPurpose", "9007199254740993"),
+    ({PURPOSE: '{"limits": {"refund": 18014398509481985}}'}, "declaredPurpose", "18014398509481985"),
+    ({PURPOSE: '["18014398509481985", 9007199254740993, -9007199254740993]'}, "declaredPurpose", "9007199254740993"),
+    ({PURPOSE: "[100000000000000000000]"}, "declaredPurpose", "100000000000000000000"),
+    ({OBSERVATION_DAYS: "9007199254740992", TRUST_LEVEL: "9007199254740993"}, "behavioralProfile.observationDays", "9007199254740992"),
+    ({CRITICAL: "9007199254740993", PURPOSE: '{"a": -9007199254740992}'}, "declaredPurpose", "-9007199254740992"),
+    ({CRITICAL: "9007199254740994", HIGH: "9007199254740993"}, "scanSummary.criticalFindings", "9007199254740994"),
+    ({HIGH: "9007199254740995", TRUST_LEVEL: "9007199254740992"}, "scanSummary.highFindings", "9007199254740995"),
+)
+
+
+class GoIntegerOutsideExactRange(unittest.TestCase):
+    """An integer of the v1.1 signed payload whose magnitude is above
+    2**53 - 1, outside the I-JSON exact range (RFC 7493 section 2.2). The Go
+    reference verifier's JCS library writes 9007199254740993 as
+    9007199254740992, so it accepted a credential signed over those bytes
+    (fixtures/v1_1-integer-outside-exact-range.json) that this verifier,
+    writing the count's digits, rejected for a signature that did not
+    verify. Both now refuse each such integer as SIGNATURE_INVALID with one
+    reason. atx-conformance#278."""
+
+    def test_integer_outside_the_range_is_refused_with_the_go_reason(self):
+        for edits, where, literal in GO_INTEGER_OUTSIDE_EXACT_RANGE:
+            with self.subTest(edits=edits):
+                got = _with_verdict(BASELINE_V11, edits)
+                self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+                self.assertEqual(got.reason, _exact_range_reason(where, literal))
+
+    def test_inside_the_range_or_not_an_integer_is_not_refused(self):
+        # The baseline signs none of these, so the signature itself fails.
+        for edits in (
+            {CRITICAL: "9007199254740991"},
+            {CRITICAL: "-9007199254740991"},
+            {TRUST_LEVEL: "9007199254740991"},
+        ):
+            with self.subTest(edits=edits):
+                got = _with_verdict(BASELINE_V11, edits)
+                self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+                self.assertNotIn("I-JSON", got.reason)
+        # A number in declaredPurpose written with an exponent or a fraction
+        # part is refused for its form, not as outside the range, whatever
+        # its value (GoPurposeNumberSpellings).
+        for literal in ("1e21", "9007199254740993.0"):
+            with self.subTest(purpose=literal):
+                got = _with_verdict(BASELINE_V11, {PURPOSE: literal})
+                self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+                self.assertEqual(got.reason, _fraction_or_exponent_reason(literal))
+        fixture = json.loads(BASELINE_V11.read_text())
+        with tempfile.TemporaryDirectory() as tmp:
+            for count in (2**53 - 1, -(2**53 - 1)):
+                with self.subTest(signed=count):
+                    fixture["atx"]["scanSummary"]["criticalFindings"] = count
+                    signed = _write_signed_v11(Path(tmp), "signed.json", fixture)
+                    got = verify.verify_fixture(verify.load_fixture(signed))
+                    self.assertTrue(got.accepted, got.reason)
+
+    def test_shipped_fixture_is_signed_over_the_bytes_go_writes(self):
+        # Its signature verifies over JCS(TBS) with criticalFindings
+        # 9007199254740992, the bytes the Go verifier writes for the
+        # 9007199254740993 it carries, so a verifier without the refusal
+        # accepts it.
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+        fixture = verify.load_fixture(INTEGER_OUTSIDE_EXACT_RANGE)
+        credential = verify._decode_credential(fixture["atx"])
+        self.assertEqual(credential["scanSummary"]["criticalFindings"], 2**53 + 1)
+        credential["scanSummary"] = dict(credential["scanSummary"], criticalFindings=0)
+        zero = verify.canonical_payload_v11(credential)
+        self.assertEqual(zero.count(b'"criticalFindings":0,'), 1)
+        payload = zero.replace(b'"criticalFindings":0,', b'"criticalFindings":9007199254740992,')
+        key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(fixture["verifierState"]["publicKeys"][0]["publicKeyHex"]))
+        (signature,) = fixture["atx"]["signatures"]
+        key.verify(base64.b64decode(signature["value"]), payload)
+
+        got = verify.verify_fixture(fixture)
+        self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+        self.assertEqual(got.reason, _exact_range_reason("scanSummary.criticalFindings", "9007199254740993"))
+        got = _at_verdict(INTEGER_OUTSIDE_EXACT_RANGE, CRITICAL, "9007199254740992")
+        self.assertEqual(got.reason, _exact_range_reason("scanSummary.criticalFindings", "9007199254740992"))
+
+    def test_checks_that_run_first_keep_their_verdicts(self):
+        for edits, category, held in (
+            ({CRITICAL: "9007199254740993", PURPOSE: '"\\ud800"'}, "VERIFIER_CONFIG_ERROR", "unpaired UTF-16 surrogate"),
+            ({CRITICAL: "9007199254740993", ("scanSummary", "hma"): "7"}, "SIGNATURE_INVALID", "member outside its type"),
+        ):
+            with self.subTest(edits=edits):
+                got = _with_verdict(BASELINE_V11, edits)
+                self.assertEqual(got.reject_category, category, got.reason)
+                self.assertIn(held, got.reason)
+
+    def test_v1_0_trust_level_is_not_refused(self):
+        # The pipe form writes trustLevel as its digits; the v1.0 baseline
+        # signs trustLevel 4, so the signature itself fails.
+        got = _with_verdict(BASELINE_V10, {TRUST_LEVEL: "9007199254740993"})
+        self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+        self.assertNotIn("I-JSON", got.reason)
+
+    def test_directory_run_reaches_the_summary_line(self):
+        n = len(GO_INTEGER_OUTSIDE_EXACT_RANGE)
+        expected = {"verifyResult": "REJECT", "rejectCategory": "SIGNATURE_INVALID", "reasonContains": "signature"}
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            for i, (edits, _where, _literal) in enumerate(GO_INTEGER_OUTSIDE_EXACT_RANGE):
+                _write_with(directory, f"{i:02d}.json", BASELINE_V11, edits, expected=expected)
+            code, text, err = _run_main(str(directory))
+        self.assertEqual(code, 0, text + err)
+        self.assertEqual(text.splitlines()[-1], f"summary: {n} pass, 0 fail ({n} fixtures)")
+
+
+def _write_signed_purpose(directory: Path, name: str, written: str, signed: bytes) -> Path:
+    """Write the v1.1 baseline with declaredPurpose written as the raw JSON
+    text written, under one Ed25519 signature made with the primary issuer's
+    key (the RFC 8032 test vector in vectors/issuer-primary.json) over its
+    JCS(TBS) with signed, canonical JSON bytes, as declaredPurpose, and
+    return its path. This verifier's serializer writes neither 1.5 nor
+    9007199254740992, so the TBS is canonicalized with a string in
+    declaredPurpose's place, which JCS orders by the member's name alone,
+    and signed is put where that string was."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    key = json.loads((ROOT / "vectors" / "issuer-primary.json").read_text())
+    fixture = json.loads(BASELINE_V11.read_text())
+    fixture["atx"]["declaredPurpose"] = "@@PURPOSE@@"
+    path = directory / name
+    path.write_text(json.dumps(fixture))
+    tbs = verify.canonical_payload_v11(verify._decode_credential(verify.load_fixture(path)["atx"]))
+    placeholder = b'"declaredPurpose":"@@PURPOSE@@"'
+    if tbs.count(placeholder) != 1:
+        raise ValueError(f"JCS(TBS) holds {placeholder!r} {tbs.count(placeholder)} times, not once")
+    payload = tbs.replace(placeholder, b'"declaredPurpose":' + signed)
+    signer = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(key["seedHex"]))
+    fixture["atx"]["signatures"] = [{
+        "keyId": key["keyId"],
+        "algorithm": "Ed25519",
+        "value": base64.b64encode(signer.sign(payload)).decode("ascii"),
+    }]
+    path.write_text(json.dumps(fixture).replace('"@@PURPOSE@@"', written, 1))
+    return path
+
+
+# The tables below were recorded from `go run .` in ../go, built with
+# Go 1.26.3, on the files _write_signed_purpose writes and the files
+# _with_verdict writes from the v1.1 baseline.
+#
+# A declaredPurpose number written with a fraction or an exponent part, the
+# bytes the Go reference verifier's JCS library writes for it, which the
+# signature covers, and the number as written: 1000.0, 1e3 and 1E3 are
+# written as 1000, and 9007199254740993.0 and 9.007199254740993e15 as
+# 9007199254740992. The Go verifier accepted each under that signature
+# before atx-conformance#283, and this verifier, whose serializer writes no
+# such number, rejected each. Both then checked each declared signature
+# against no key; both now refuse the number as SIGNATURE_INVALID with
+# _fraction_or_exponent_reason of the number as written.
+GO_PURPOSE_NUMBER_SPELLINGS = (
+    ('{"n": 1000.0}', b'{"n":1000}', "1000.0"),
+    ('{"n": 1e3}', b'{"n":1000}', "1e3"),
+    ('{"n": 1E3}', b'{"n":1000}', "1E3"),
+    ('{"n": 1e+3}', b'{"n":1000}', "1e+3"),
+    ('{"n": 10000e-1}', b'{"n":1000}', "10000e-1"),
+    ('{"n": 9007199254740993.0}', b'{"n":9007199254740992}', "9007199254740993.0"),
+    ('{"n": 9.007199254740993e15}', b'{"n":9007199254740992}', "9.007199254740993e15"),
+    ('{"n": 1.5}', b'{"n":1.5}', "1.5"),
+    ('{"n": -0.0}', b'{"n":0}', "-0.0"),
+    ("[1000.0]", b"[1000]", "1000.0"),
+    ("1e3", b"1000", "1e3"),
+    ('{"limits": {"refund": [1, 2.5e1]}}', b'{"limits":{"refund":[1,25]}}', "2.5e1"),
+)
+
+# A declaredPurpose holding more than one number outside the integer form or
+# the exact range, unsigned on the v1.1 baseline, and the reason each verifier
+# gives: the first such number the credential writes decides, in the order it
+# writes them and not the order JCS writes the members in, whichever defect
+# it has. A digit string is no number.
+GO_PURPOSE_FIRST_NUMBER_DECIDES = (
+    ('{"b": 1.5, "a": 9007199254740993}', _fraction_or_exponent_reason("1.5")),
+    ('{"a": 9007199254740993, "b": 1.5}', _exact_range_reason("declaredPurpose", "9007199254740993")),
+    ('[1.5, "18014398509481985", 1e21, 9007199254740993, -9007199254740993]', _fraction_or_exponent_reason("1.5")),
+    ('["18014398509481985", 9007199254740993, 1.5]', _exact_range_reason("declaredPurpose", "9007199254740993")),
+    ('{"n": [7, {"m": 2.5E-3}], "k": 1e1}', _fraction_or_exponent_reason("2.5E-3")),
+)
+
+# declaredPurpose written as the bytes the signature covers: integers in the
+# I-JSON exact range, and a fraction and an exponent inside a member name and
+# a string. The Go reference verifier accepts each, as this verifier does.
+GO_PURPOSE_SIGNED_AS_WRITTEN = (
+    ('{"n": 1000}', b'{"n":1000}'),
+    ('{"n": 0}', b'{"n":0}'),
+    ("[1000]", b"[1000]"),
+    ("1000", b"1000"),
+    ('{"1.5": "2e3", "n": [1, -7]}', b'{"1.5":"2e3","n":[1,-7]}'),
+)
+
+
+class GoPurposeNumberSpellings(unittest.TestCase):
+    """A declaredPurpose number written with a fraction or an exponent part,
+    under a signature over the bytes the Go reference verifier's JCS library
+    writes for it. That library writes such a number as the double nearest
+    it, so the Go verifier accepted a credential signed over 1000 that
+    carried 1e3, while this verifier's serializer writes no such number and
+    rejected it. Neither verifies a signature over such a number now: both
+    refuse it in the scan that refuses an integer outside the exact range,
+    with one reason that quotes it as written. atx-conformance#283."""
+
+    def _verdict(self, written: str, signed: bytes) -> verify.VerifyResult:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write_signed_purpose(Path(tmp), "purpose.json", written, signed)
+            return verify.verify_fixture(verify.load_fixture(path))
+
+    def test_number_with_a_fraction_or_exponent_rejects_with_the_go_reason(self):
+        for written, signed, literal in GO_PURPOSE_NUMBER_SPELLINGS:
+            with self.subTest(written=written):
+                got = self._verdict(written, signed)
+                self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+                self.assertEqual(got.reason, _fraction_or_exponent_reason(literal))
+
+    def test_first_number_outside_the_form_or_the_range_decides(self):
+        for written, reason in GO_PURPOSE_FIRST_NUMBER_DECIDES:
+            with self.subTest(written=written):
+                got = _with_verdict(BASELINE_V11, {PURPOSE: written})
+                self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+                self.assertEqual(got.reason, reason)
+
+    def test_written_as_signed_is_accepted(self):
+        # The signature _write_signed_purpose makes verifies wherever
+        # declaredPurpose is written as the bytes it covers.
+        for written, signed in GO_PURPOSE_SIGNED_AS_WRITTEN:
+            with self.subTest(written=written):
+                got = self._verdict(written, signed)
+                self.assertTrue(got.accepted, got.reason)
+
+    def test_integer_outside_the_exact_range_keeps_its_reason(self):
+        got = self._verdict('{"n": 9007199254740993}', b'{"n":9007199254740992}')
+        self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+        self.assertEqual(got.reason, _exact_range_reason("declaredPurpose", "9007199254740993"))
+
+    def test_shipped_fixtures(self):
+        # The five fixtures of a declaredPurpose number. The signature of
+        # each verifies over the bytes the Go reference verifier's JCS library
+        # writes for the number it carries, {"n":1000} or
+        # {"n":9007199254740992}, so a verifier that canonicalizes the number
+        # as that library does accepts each. This verifier accepts the one
+        # written as signed and rejects the others with the reason that names
+        # the number as the credential writes it.
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+        shipped = (
+            ("v1_1-declared-purpose-integer-signed.json", b'{"n":1000}', None),
+            ("v1_1-declared-purpose-integer-respelled-fraction.json", b'{"n":1000}', _fraction_or_exponent_reason("1000.0")),
+            ("v1_1-declared-purpose-integer-respelled-exponent.json", b'{"n":1000}', _fraction_or_exponent_reason("1e3")),
+            ("v1_1-declared-purpose-integer-respelled-upper-exponent.json", b'{"n":1000}', _fraction_or_exponent_reason("1E3")),
+            (
+                "v1_1-declared-purpose-integer-outside-range.json",
+                b'{"n":9007199254740992}',
+                _exact_range_reason("declaredPurpose", "9007199254740993"),
+            ),
+        )
+        for name, signed, reason in shipped:
+            with self.subTest(fixture=name):
+                fixture = verify.load_fixture(ROOT / "fixtures" / name)
+                got = verify.verify_fixture(fixture)
+                if reason is None:
+                    self.assertTrue(got.accepted, got.reason)
+                else:
+                    self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+                    self.assertEqual(got.reason, reason)
+                credential = verify._decode_credential(fixture["atx"])
+                credential["declaredPurpose"] = {"n": 0}
+                zero = verify.canonical_payload_v11(credential)
+                self.assertEqual(zero.count(b'"declaredPurpose":{"n":0}'), 1)
+                payload = zero.replace(b'"declaredPurpose":{"n":0}', b'"declaredPurpose":' + signed)
+                key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(fixture["verifierState"]["publicKeys"][0]["publicKeyHex"]))
+                (signature,) = fixture["atx"]["signatures"]
+                key.verify(base64.b64decode(signature["value"]), payload)
+
+    def test_v1_0_declared_purpose_is_not_signed(self):
+        # The legacy form signs no declaredPurpose, so a number in it leaves
+        # the v1.0 baseline accepted, as it does in the Go reference verifier.
+        got = _at_verdict(BASELINE_V10, PURPOSE, '{"n": 1e3}')
+        self.assertTrue(got.accepted, got.reason)
+
+
+class GoBehavioralProfileForm(unittest.TestCase):
+    """A v1.1 behavioralProfile that is present and is not an object of
+    exactly checksum (a string), generatedAt (a timestamp) and observationDays
+    (an integer), under those names as written, has no value in the signed
+    payload, which holds null for a credential with no profile and otherwise
+    those three members, so the Go verifier refuses the credential as no
+    signature covers it, before it reads one (TestBehavioralProfileForm in
+    verifiers/go/verifier/verify_test.go, atx-conformance#277). It projected
+    such a profile as null, or read a member named in another case as that
+    member and left a member outside the three out."""
+
+    # The Go verifier's reason, read from its run over these profiles.
+    REASON = (
+        "no signature covers behavioralProfile, which is not an object of exactly checksum "
+        "(a string), generatedAt (a timestamp) and observationDays (an integer)"
+    )
+
+    def assert_refused(self, got: verify.VerifyResult) -> None:
+        self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+        self.assertEqual(got.reason, self.REASON)
+
+    def assert_signature_fails(self, got: verify.VerifyResult) -> None:
+        # A profile with a value in the signed payload that the signature does
+        # not cover fails the signature itself.
+        self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason)
+        self.assertNotIn("behavioralProfile", got.reason)
+
+    def test_baseline_profile_of_another_form_is_refused(self):
+        # The v1.1 baseline signs SIGNED_PROFILE.
+        days = SIGNED_PROFILE["observationDays"]
+        without_days = {k: v for k, v in SIGNED_PROFILE.items() if k != "observationDays"}
+        without_checksum = {k: v for k, v in SIGNED_PROFILE.items() if k != "checksum"}
+        for profile in (
+            {**SIGNED_PROFILE, "riskLevel": "low"},
+            {**SIGNED_PROFILE, "extra": "x"},
+            {**without_days, "OBSERVATIONDAYS": days},
+            {**without_checksum, "Checksum": SIGNED_PROFILE["checksum"]},
+            without_days,
+            {**SIGNED_PROFILE, "checksum": None},
+            {**SIGNED_PROFILE, "observationDays": "14"},
+            {**SIGNED_PROFILE, "observationDays": 14.0},
+            {**SIGNED_PROFILE, "generatedAt": "2026-05-19"},
+            [],
+        ):
+            literal = json.dumps(profile)
+            with self.subTest(profile=literal):
+                self.assert_refused(_at_verdict(BASELINE_V11, ("behavioralProfile",), literal))
+        # The Kelvin sign, which Go folds onto k, is outside printable ASCII,
+        # so the strict parse refuses the profile first, naming the member
+        # (atx-conformance#284).
+        literal = json.dumps({**without_checksum, "chec\N{KELVIN SIGN}sum": SIGNED_PROFILE["checksum"]})
+        got = _at_verdict(BASELINE_V11, ("behavioralProfile",), literal)
+        self.assertEqual(got.reject_category, "PARSE_ERROR", got.reason)
+        self.assertEqual(got.reason, _name_reason('"chec' + _escaped("212a") + 'sum"', "U+212A"))
+
+    def test_baseline_profile_written_another_way_verifies(self):
+        for profile in (
+            dict(reversed(list(SIGNED_PROFILE.items()))),
+            {**SIGNED_PROFILE, "generatedAt": "2026-05-19T01:00:00+01:00"},
+        ):
+            literal = json.dumps(profile)
+            with self.subTest(profile=literal):
+                got = _at_verdict(BASELINE_V11, ("behavioralProfile",), literal)
+                self.assertTrue(got.accepted, got.reason)
+
+    def test_baseline_profile_with_another_value_fails_the_signature(self):
+        for literal in (json.dumps({**SIGNED_PROFILE, "observationDays": 15}), "null", None):
+            with self.subTest(profile=literal):
+                self.assert_signature_fails(_at_verdict(BASELINE_V11, ("behavioralProfile",), literal))
+
+    def test_credential_signed_with_no_profile(self):
+        fixture = json.loads(BASELINE_V11.read_text())
+        del fixture["atx"]["behavioralProfile"]
+        with tempfile.TemporaryDirectory() as tmp:
+            signed = _write_signed_v11(Path(tmp), "signed.json", fixture)
+            got = verify.verify_fixture(verify.load_fixture(signed))
+            self.assertTrue(got.accepted, got.reason)
+            got = _at_verdict(signed, ("behavioralProfile",), "null")
+            self.assertTrue(got.accepted, got.reason)
+            for literal in (
+                '"sha256:ghi789"',
+                "7",
+                "true",
+                "[]",
+                "{}",
+                '{"checksum": 1, "generatedAt": "x", "observationDays": "many"}',
+                json.dumps({**SIGNED_PROFILE, "observationDays": "14"}),
+                '{"checksum": null, "generatedAt": null, "observationDays": null}',
+            ):
+                with self.subTest(profile=literal):
+                    self.assert_refused(_at_verdict(signed, ("behavioralProfile",), literal))
+            self.assert_signature_fails(
+                _at_verdict(signed, ("behavioralProfile",), json.dumps(SIGNED_PROFILE))
+            )
+
+    def test_v1_0_profile_is_not_read(self):
+        # atcVersion 1.0 signs no behavioralProfile (core.md section 1.3a.1).
+        got = _at_verdict(BASELINE_V10, ("behavioralProfile",), '{"checksum": 1}')
+        self.assertTrue(got.accepted, got.reason)
+
+    def test_shipped_fixtures_are_refused_for_their_profile(self):
+        # One fixture per form atx-conformance#277 names. Each verifies with
+        # its profile replaced by the one a verifier that folds member names,
+        # drops a member outside the three and projects a profile it cannot
+        # decode as null reads from it, so such a verifier accepts it.
+        for name, lenient in (
+            ("v1_1-behavioral-profile-extra-member.json", json.dumps(SIGNED_PROFILE)),
+            ("v1_1-behavioral-profile-case-variant-member.json", json.dumps(SIGNED_PROFILE)),
+            ("v1_1-behavioral-profile-not-object.json", "null"),
+            ("v1_1-behavioral-profile-member-outside-type.json", "null"),
+        ):
+            path = ROOT / "fixtures" / name
+            with self.subTest(fixture=name):
+                self.assert_refused(verify.verify_fixture(verify.load_fixture(path)))
+                got = _at_verdict(path, ("behavioralProfile",), lenient)
+                self.assertTrue(got.accepted, got.reason)
 
 
 class GoNonObjectCredential(unittest.TestCase):
@@ -1621,7 +2779,7 @@ class UnencodableReportLine(unittest.TestCase):
             (directory / "b-baseline-valid.json").write_text(BASELINE_V11.read_text())
             code, text = _run_main_utf8(str(directory))
         self.assertEqual(code, 0, text)
-        self.assertIn("issuer DID did:x:\ufffd is not in the verifier's trusted set", text)
+        self.assertIn('issuer DID "did:x:\\ufffd" is not in the verifier\'s trusted set', text)
         self.assertEqual(text.splitlines()[-1], "summary: 2 pass, 0 fail (2 fixtures)")
 
     def test_line_standard_output_cannot_encode_is_escaped(self):
@@ -1674,13 +2832,14 @@ class VerifyError(unittest.TestCase):
 class NonStandardConstant(unittest.TestCase):
     def test_constant_fails_to_load(self):
         # RFC 8259 §6 has no NaN or Infinity; the Go reference verifier fails
-        # to load a file carrying one, and so must this verifier.
+        # to load a file carrying one as a file that is not JSON, and so must
+        # this verifier, with the same reason.
         for literal in ("NaN", "Infinity", "-Infinity"):
             with self.subTest(literal=literal), tempfile.TemporaryDirectory() as tmp:
                 path = _write_member(Path(tmp), "c.json", BASELINE_V11, "declaredPurpose", literal)
                 with self.assertRaises(ValueError) as raised:
                     verify.load_fixture(path)
-                self.assertIn(literal, str(raised.exception))
+                self.assertEqual(str(raised.exception), "fixture is not valid JSON")
 
     def test_directory_run_reports_a_load_error(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1689,7 +2848,7 @@ class NonStandardConstant(unittest.TestCase):
             (directory / "b-baseline-valid.json").write_text(BASELINE_V11.read_text())
             code, text, _ = _run_main(str(directory))
         self.assertEqual(code, 1, text)
-        self.assertIn("a-nan.json  (load error: NaN is not a JSON value", text)
+        self.assertIn("a-nan.json  (load error: fixture is not valid JSON)\n", text)
         self.assertEqual(text.splitlines()[-1], "summary: 1 pass, 1 fail (2 fixtures)")
 
 
@@ -1770,6 +2929,32 @@ class SerializerRefusal(unittest.TestCase):
                 self.assertIn("Got float 0.5.", message)
                 self.assertIn("string-encoded as %.6f", message)
 
+    def test_integer_outside_the_exact_range_is_refused(self):
+        # The Go and TypeScript legs write 9007199254740993 as
+        # 9007199254740992 and 10**21 as 1e+21; this serializer wrote their
+        # digits. It writes each integer in the I-JSON exact range, -(2**53 -
+        # 1) to 2**53 - 1, as its digits and refuses every other one, naming
+        # it, or its size where it has more digits than str() converts.
+        # atx-conformance#278.
+        for path in SERIALIZERS:
+            serializer = _load_serializer(path)
+            for n in (2**53 - 1, -(2**53 - 1), 0, -1):
+                with self.subTest(serializer=str(path.relative_to(ROOT)), n=n):
+                    self.assertEqual(serializer.canonicalize({"n": n}), b'{"n":%d}' % n)
+            for n, named in (
+                (2**53, "Got integer 9007199254740992."),
+                (2**53 + 1, "Got integer 9007199254740993."),
+                (-(2**53), "Got integer -9007199254740992."),
+                (2**60, "Got integer 1152921504606846976."),
+                (10**21, "Got integer 1000000000000000000000."),
+                (10**5000, "Got an integer of 16610 bits."),
+            ):
+                with self.subTest(serializer=str(path.relative_to(ROOT)), bits=n.bit_length(), negative=n < 0):
+                    with self.assertRaises(NotImplementedError) as raised:
+                        serializer.canonicalize({"declaredPurpose": [1, {"n": n}]})
+                    self.assertIn(named, str(raised.exception))
+                    self.assertIn("I-JSON exact range", str(raised.exception))
+
 
 class SerializerNesting(unittest.TestCase):
     def test_nesting_past_the_recursion_limit_serializes(self):
@@ -1837,31 +3022,36 @@ class FixtureWrapper(unittest.TestCase):
                 got = _fixture_verdict(baseline, path, literal, rename)
                 self.assertEqual(_outcome(got), outcome, got.reason)
 
-    def test_repeated_expected_name_keeps_the_last_in_document_order(self):
-        for literal, verify_result in GO_REPEATED_EXPECTED_NAMES:
+    def test_repeated_expected_name_is_a_load_error(self):
+        # This verifier read the last of the names that fold together, and Go
+        # decoded each into the one field.
+        for literal, member in GO_REPEATED_EXPECTED_NAMES:
             with self.subTest(expected=literal), tempfile.TemporaryDirectory() as tmp:
                 path = _write_wrapper(Path(tmp), "e.json", BASELINE_V11, "expected", literal)
-                got = verify._expected_outcome(verify.load_fixture(path))
-                self.assertEqual(got["verifyResult"], verify_result)
+                with self.assertRaises(ValueError) as raised:
+                    verify._expected_outcome(verify.load_fixture(path))
+                self.assertEqual(str(raised.exception), f'the fixture repeats the member "{member}"')
 
     def test_repeat_outside_its_go_type_is_a_load_error(self):
-        # Only the second value was decoded, so each of these files loaded.
+        # Each of these files loaded while only the second value was
+        # decoded, then failed to load for the first value's type; it fails
+        # for the repeat now, before any member is decoded.
         for path, first_name, literal, member in GO_UNLOADABLE_REPEATS:
             with self.subTest(path=path, name=first_name, value=literal[:40]), \
                     tempfile.TemporaryDirectory() as tmp:
                 written = _write_repeated(Path(tmp), "r.json", BASELINE_CRL, path, first_name, literal)
                 with self.assertRaises(ValueError) as raised:
                     verify._expected_outcome(verify.load_fixture(written))
-                message = str(raised.exception)
-                self.assertTrue(message.startswith(member + " "), message[:200])
+                self.assertEqual(str(raised.exception), f'the fixture repeats the member "{member}"')
 
-    def test_repeat_inside_its_go_type_reaches_the_go_verdict(self):
-        for baseline, path, first_name, literal, outcome in GO_REPEAT_VERDICTS:
+    def test_repeat_inside_its_go_type_is_a_load_error(self):
+        for baseline, path, first_name, literal, member in GO_REPEATS_INSIDE_THEIR_TYPE:
             with self.subTest(baseline=baseline.name, path=path, name=first_name, value=literal), \
                     tempfile.TemporaryDirectory() as tmp:
                 written = _write_repeated(Path(tmp), "r.json", baseline, path, first_name, literal)
-                got = verify.verify_fixture(verify.load_fixture(written))
-                self.assertEqual(_outcome(got), outcome, got.reason)
+                with self.assertRaises(ValueError) as raised:
+                    verify._expected_outcome(verify.load_fixture(written))
+                self.assertEqual(str(raised.exception), f'the fixture repeats the member "{member}"')
 
     def test_null_fixture_is_the_zero_value_with_no_expected_member(self):
         # Go decodes a fixture file holding null into its zero value, which
@@ -1890,6 +3080,397 @@ class FixtureWrapper(unittest.TestCase):
         self.assertIn("a-name.json  (load error: name {'a': 1} is not a JSON string)", text)
         self.assertEqual(text.count("observed: ACCEPT"), 2, text)
         self.assertEqual(text.splitlines()[-1], "summary: 2 pass, 1 fail (3 fixtures)")
+
+
+class RepeatedFixtureMember(unittest.TestCase):
+    """A fixture file that writes a member more than once outside its atx
+    member's subtree, under one name or under two that fold together, is not
+    a fixture: it fails to load, the load error naming the member as written
+    the second time, as it fails to load in the Go reference verifier. Go's
+    encoding/json decodes each repeat into the one field, so a member a later
+    object omits keeps the earlier object's value, where this verifier read
+    the later object alone: on fixtures/wrong-issuer.json with an expected of
+    REJECT [SIGNATURE_INVALID] followed by an expected of REJECT, the Go
+    verifier wrote FAIL and this one PASS. A repeat inside the credential is
+    still a verdict, PARSE_ERROR."""
+
+    def _write_repeats(self, directory: Path) -> list[tuple[Path, str]]:
+        """Write the fixtures that repeat a member, each with the member its
+        load error names."""
+        v11 = json.loads(BASELINE_V11.read_text())
+        state, atx = json.dumps(v11["verifierState"]), json.dumps(v11["atx"])
+        clock = json.dumps({"clockRfc3339": v11["verifierState"]["clockRfc3339"]})
+        category = '{"verifyResult": "REJECT", "rejectCategory": "SIGNATURE_INVALID"}'
+        reason = '{"verifyResult": "REJECT", "reasonContains": "zz-not-in-reason"}'
+        later = '{"verifyResult": "REJECT"}'
+        return [
+            (_write_wrapper(directory, "a-expected-twice.json", WRONG_ISSUER, "expected",
+                            f'{category}, "expected": {later}'), "expected"),
+            (_write_wrapper(directory, "b-expected-case-variant.json", WRONG_ISSUER, "expected",
+                            f'{category}, "EXPECTED": {later}'), "EXPECTED"),
+            (_write_wrapper(directory, "c-expected-omits-a-member.json", WRONG_ISSUER, "expected",
+                            f'{reason}, "EXPECTED": {later}'), "EXPECTED"),
+            (_write_wrapper(directory, "d-verifier-state-twice.json", BASELINE_V11, "verifierState",
+                            f'{state}, "verifierState": {clock}'), "verifierState"),
+            (_write_wrapper(directory, "e-verify-result-twice.json", BASELINE_V11, "expected",
+                            '{"verifyResult": "ACCEPT", "verifyResult": "ACCEPT"}'), "verifyResult"),
+            (_write_wrapper(directory, "f-atx-twice.json", BASELINE_V11, "atx",
+                            f'{atx}, "ATX": {atx}'), "ATX"),
+            (_write_wrapper(directory, "g-undeclared-member.json", BASELINE_V11, "notes",
+                            '{"by": "a", "BY": "b"}'), "BY"),
+            (_write_repeated(directory, "h-clock-twice.json", BASELINE_V11,
+                             ("verifierState", "clockRfc3339"), None, '"2100-01-01T00:00:00Z"'),
+             "clockRfc3339"),
+            (_write_repeated(directory, "i-crl-entry-case-variant.json", BASELINE_CRL,
+                             ("verifierState", "crl", "entries", 0, "agentId"), "AgentId", '"x"'),
+             "agentId"),
+        ]
+
+    def test_repeat_outside_the_credential_is_a_load_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            cases = self._write_repeats(directory)
+            code, text, err = _run_main(str(directory))
+        self.assertEqual(code, 1, text + err)
+        want = "".join(
+            f'FAIL  {path}  (load error: the fixture repeats the member "{member}")\n' for path, member in cases
+        )
+        self.assertEqual(text, want + f"\nsummary: 0 pass, {len(cases)} fail ({len(cases)} fixtures)\n")
+
+    def test_load_fixture_alone_refuses_a_repeat_of_or_in_the_verifier_state(self):
+        # verify_fixture(load_fixture(path)) never calls _expected_outcome, so
+        # the refusal must be load_fixture's own; past it, this verifier would
+        # read the later verifierState alone, with no CRL or
+        # requiredSignatures that copy omits.
+        with tempfile.TemporaryDirectory() as tmp:
+            written = {path.name: (path, member) for path, member in self._write_repeats(Path(tmp))}
+            for name in ("d-verifier-state-twice.json", "h-clock-twice.json"):
+                path, member = written[name]
+                with self.subTest(fixture=name):
+                    with self.assertRaises(ValueError) as raised:
+                        verify.load_fixture(path)
+                    self.assertEqual(str(raised.exception), f'the fixture repeats the member "{member}"')
+
+    def test_repeat_inside_the_credential_is_still_a_verdict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            atx = json.dumps(json.loads(BASELINE_V11.read_text())["atx"])
+            twice = '{"revoked": false, "revoked": false, ' + atx[1:]
+            written = _write_wrapper(Path(tmp), "credential-twice.json", BASELINE_V11, "atx", twice)
+            for path, status in ((written, "FAIL"), *((p, "PASS") for p in DUPLICATE_CREDENTIALS)):
+                with self.subTest(fixture=path.name):
+                    code, text, err = _run_main(str(path))
+                    self.assertEqual(code, 1 if status == "FAIL" else 0, text + err)
+                    self.assertEqual(
+                        _verdict_lines(text),
+                        [f"{status}  {verify._rel_path(str(path))}", "observed: REJECT[PARSE_ERROR]"],
+                    )
+                    self.assertIn("credential contains duplicate member", text)
+
+
+def _threshold_observed(required: int, distinct: int) -> str:
+    """The result the Go reference verifier writes when the declared Ed25519
+    signatures verify under `distinct` keys, fewer than `required`."""
+    return (
+        "REJECT[SIGNATURE_INVALID: signature threshold not met: requiredSignatures is "
+        f"{required}, distinct Ed25519 keys that verified a declared signature: {distinct}]"
+    )
+
+
+def _threshold_verdict(baseline: Path, required, signatures=None, edit=None) -> verify.VerifyResult:
+    """The verdict on `baseline` with its verifier state's requiredSignatures
+    set to `required` (None writes null; KEEP leaves the member as the
+    baseline has it), its credential carrying, with `signatures`, the
+    signatures at those indexes of the ones it carries, in that order, and
+    `edit` applied last to the fixture object."""
+    fixture = json.loads(baseline.read_text())
+    if required is not KEEP:
+        fixture["verifierState"]["requiredSignatures"] = required
+    if signatures is not None:
+        carried = fixture["atx"]["signatures"]
+        fixture["atx"]["signatures"] = [carried[i] for i in signatures]
+    if edit is not None:
+        edit(fixture)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "threshold.json"
+        path.write_text(json.dumps(fixture))
+        return verify.verify_fixture(verify.load_fixture(path))
+
+
+# Each case cuts the credential of the 2-of-3 fixture, whose three signatures
+# verify under the primary's and the two cosigners' keys, to the signatures at
+# the given indexes, under a verifier state whose requiredSignatures is the
+# value given (None: no threshold). The Go reference verifier's
+# TestRequiredSignaturesThreshold runs the same cases. (required, signature
+# indexes, the result the verifier writes).
+THRESHOLD_CASES = (
+    (None, (0,), "ACCEPT"),
+    (1, (0,), "ACCEPT"),
+    (2, (0,), _threshold_observed(2, 1)),
+    (2, (2,), _threshold_observed(2, 1)),
+    (2, (0, 0), _threshold_observed(2, 1)),
+    (2, (0, 1), "ACCEPT"),
+    (2, (1, 2), "ACCEPT"),
+    (2, (0, 1, 2), "ACCEPT"),
+    (3, (0, 2), _threshold_observed(3, 2)),
+    (3, (0, 1, 2), "ACCEPT"),
+)
+
+# The three tables below were recorded from `go run .` in ../go, built with
+# Go 1.26.3, on files _write_fixture_at and _write_repeated write with the
+# member at REQUIRED_SIGNATURES.
+REQUIRED_SIGNATURES = ("verifierState", "requiredSignatures")
+
+# A requiredSignatures value outside the Go verifier's int field, written in
+# place of the 1-of-3 fixture's: the file fails to load. (raw literal).
+GO_UNLOADABLE_THRESHOLDS = (
+    '"2"',
+    "2.5",
+    "2.0",
+    "1e0",
+    "true",
+    "[2]",
+    '{"k": 2}',
+    "9223372036854775808",
+    "-9223372036854775809",
+)
+
+# The result when requiredSignatures is renamed to another case (rename),
+# holds the raw literal, or is absent (None). Go matches the member name in
+# any case and leaves a null or absent member nil, which sets no threshold.
+# (baseline, raw literal, rename, the result the Go verifier wrote).
+GO_THRESHOLD_VERDICTS = (
+    (THRESHOLD_1OF3, KEEP, "RequiredSignatures", _threshold_observed(2, 1)),
+    (THRESHOLD_1OF3, KEEP, "REQUIREDSIGNATURES", _threshold_observed(2, 1)),
+    (THRESHOLD_1OF3, "null", None, "ACCEPT"),
+    (THRESHOLD_1OF3, None, None, "ACCEPT"),
+    (THRESHOLD_1OF3, "0", None, "REJECT[VERIFIER_CONFIG_ERROR: bad requiredSignatures: 0 is not a positive integer]"),
+    (THRESHOLD_1OF3, "-1", None, "REJECT[VERIFIER_CONFIG_ERROR: bad requiredSignatures: -1 is not a positive integer]"),
+    (THRESHOLD_1OF3, "-0", None, "REJECT[VERIFIER_CONFIG_ERROR: bad requiredSignatures: 0 is not a positive integer]"),
+    (
+        THRESHOLD_1OF3,
+        "-9223372036854775808",
+        None,
+        "REJECT[VERIFIER_CONFIG_ERROR: bad requiredSignatures: -9223372036854775808 is not a positive integer]",
+    ),
+    (THRESHOLD_1OF3, "1", None, "ACCEPT"),
+    (THRESHOLD_1OF3, "3", None, _threshold_observed(3, 1)),
+    (THRESHOLD_1OF3, "9223372036854775807", None, _threshold_observed(9223372036854775807, 1)),
+    (THRESHOLD_2OF3, "1", None, "ACCEPT"),
+    (THRESHOLD_2OF3, "2", None, "ACCEPT"),
+    (THRESHOLD_2OF3, "3", None, "ACCEPT"),
+    (THRESHOLD_2OF3, "4", None, _threshold_observed(4, 3)),
+)
+
+# The 1-of-3 fixture's requiredSignatures written twice: first under the name
+# given (its own when None) holding the raw literal, then as the fixture
+# writes it, 2. Go decoded both into the one field and kept the last, failing
+# to load the file only when the first was outside the field's type; the file
+# now fails to load for the repeat whatever the first holds, the load error
+# naming requiredSignatures, as written the second time. (first name, raw
+# literal).
+GO_THRESHOLD_REPEATS = (
+    (None, '"x"'),
+    ("RequiredSignatures", "2.5"),
+    (None, "null"),
+    (None, "5"),
+    ("RequiredSignatures", "0"),
+)
+
+
+class RequiredSignaturesThreshold(unittest.TestCase):
+    """The k-of-n threshold of core.md section 3.1 step 8 (cosignatures from
+    2 of 3 key holders), which the verifier state sets as requiredSignatures:
+    the declared Ed25519 signatures must verify under at least that many
+    distinct keys. A key counts once however many signatures verify under it,
+    whatever keyId they carry, and an ML-DSA-65 signature does not count.
+    atx-conformance#132."""
+
+    def test_threshold_counts_the_keys_the_signatures_verify_under(self):
+        for required, signatures, observed in THRESHOLD_CASES:
+            with self.subTest(required=required, signatures=signatures):
+                got = _threshold_verdict(THRESHOLD_2OF3, required, signatures)
+                self.assertEqual(str(got), observed)
+                if got.accepted:
+                    self.assertEqual(got.sigs_valid, len(signatures))
+
+    def test_shipped_fixture_rejects_and_a_threshold_blind_run_accepts(self):
+        # The 1-of-3 fixture is the 2-of-3 credential cut to its first
+        # signature: with its requiredSignatures dropped, which is what a
+        # verifier that reads no threshold sees, it is accepted.
+        fixture = verify.load_fixture(THRESHOLD_1OF3)
+        self.assertEqual(fixture["verifierState"]["requiredSignatures"], 2)
+        got = verify.verify_fixture(fixture)
+        self.assertEqual(str(got), _threshold_observed(2, 1))
+        self.assertEqual(verify._expected_outcome(fixture)["reasonContains"], "threshold")
+        blind = _threshold_verdict(THRESHOLD_1OF3, KEEP, edit=lambda f: f["verifierState"].pop("requiredSignatures"))
+        self.assertTrue(blind.accepted, blind.reason)
+
+    def test_a_key_counts_once_whatever_key_id_it_is_listed_under(self):
+        # The verifier state lists the primary's key a second time under
+        # another keyId of the issuer, and the credential carries the
+        # primary's signature twice, once under each keyId: both verify,
+        # under one key.
+        alias = "did:opena2a:authority:opena2a.org#key-1-alias"
+
+        def aliased(fixture):
+            keys = fixture["verifierState"]["publicKeys"]
+            self.assertEqual(keys[0]["role"], "issuer-primary")
+            keys.append(dict(keys[0], keyId=alias))
+            signature = fixture["atx"]["signatures"][0]
+            fixture["atx"]["signatures"] = [signature, dict(signature, keyId=alias)]
+
+        got = _threshold_verdict(THRESHOLD_1OF3, KEEP, edit=aliased)
+        self.assertEqual(str(got), _threshold_observed(2, 1))
+        without = _threshold_verdict(THRESHOLD_1OF3, None, edit=aliased)
+        self.assertTrue(without.accepted, without.reason)
+        self.assertEqual(without.sigs_valid, 2)
+
+    def test_an_ml_dsa_65_signature_does_not_count(self):
+        # The hybrid baselines carry one Ed25519 and one ML-DSA-65 signature,
+        # both by the primary, and both verify.
+        for name in ("baseline-valid-hybrid.json", "v1_1-baseline-valid-hybrid.json"):
+            with self.subTest(fixture=name):
+                baseline = ROOT / "fixtures" / name
+                got = _threshold_verdict(baseline, 1)
+                self.assertTrue(got.accepted and got.ed25519_valid and got.mldsa65_valid, got.reason)
+                self.assertEqual(str(_threshold_verdict(baseline, 2)), _threshold_observed(2, 1))
+
+    def test_below_one_is_a_config_error_before_any_step(self):
+        # Reported before any step reads the credential, as a bad clock is:
+        # on the expired fixture it is reported in place of EXPIRED.
+        for name in ("threshold-2of3-cosignature.json", "expired.json"):
+            for required in (0, -1):
+                with self.subTest(fixture=name, required=required):
+                    got = _threshold_verdict(ROOT / "fixtures" / name, required)
+                    self.assertEqual(
+                        str(got),
+                        f"REJECT[VERIFIER_CONFIG_ERROR: bad requiredSignatures: {required} is not a positive integer]",
+                    )
+
+    def test_member_outside_its_go_type_is_a_load_error(self):
+        for literal in GO_UNLOADABLE_THRESHOLDS:
+            with self.subTest(value=literal), tempfile.TemporaryDirectory() as tmp:
+                written = _write_fixture_at(Path(tmp), "t.json", THRESHOLD_1OF3, REQUIRED_SIGNATURES, literal)
+                with self.assertRaises(ValueError) as raised:
+                    verify._expected_outcome(verify.load_fixture(written))
+                self.assertTrue(
+                    str(raised.exception).startswith("verifierState.requiredSignatures "), raised.exception
+                )
+
+    def test_member_reaches_the_go_verdict(self):
+        for baseline, literal, rename, observed in GO_THRESHOLD_VERDICTS:
+            with self.subTest(baseline=baseline.name, value=literal, name=rename):
+                got = _fixture_verdict(baseline, REQUIRED_SIGNATURES, literal, rename)
+                self.assertEqual(str(got), observed)
+
+    def test_repeated_member_is_a_load_error(self):
+        for first_name, literal in GO_THRESHOLD_REPEATS:
+            with self.subTest(name=first_name, value=literal), tempfile.TemporaryDirectory() as tmp:
+                written = _write_repeated(Path(tmp), "r.json", THRESHOLD_1OF3, REQUIRED_SIGNATURES, first_name, literal)
+                with self.assertRaises(ValueError) as raised:
+                    verify._expected_outcome(verify.load_fixture(written))
+                self.assertEqual(str(raised.exception), 'the fixture repeats the member "requiredSignatures"')
+
+    def test_a_later_null_under_another_case_is_a_load_error(self):
+        # Go kept the last of the names that fold together, here a null,
+        # which left the field nil and set no threshold.
+        with tempfile.TemporaryDirectory() as tmp:
+            text = THRESHOLD_1OF3.read_text().replace(
+                '"requiredSignatures": 2', '"requiredSignatures": 2, "RequiredSignatures": null', 1
+            )
+            path = Path(tmp) / "null-last.json"
+            path.write_text(text)
+            with self.assertRaises(ValueError) as raised:
+                verify.load_fixture(path)
+        self.assertEqual(str(raised.exception), 'the fixture repeats the member "RequiredSignatures"')
+
+
+# The fixtures whose verifier state sets requiredTrustLevel (3), each with the
+# distinct signer authorities it carries and whether it is accepted, and the
+# threshold fixture, whose three keys are one authority's and whose verifier
+# state sets no required trust level.
+STEP7_FIXTURES = (
+    ("v1_1-two-authority-cosignature.json", 2, True),
+    ("v1_1-cosigner-named-not-signed.json", 1, False),
+    ("v1_1-one-authority-threshold-keys.json", 1, False),
+    ("v1_1-one-key-under-two-dids.json", 1, False),
+    ("v1_1-own-key-labelled-as-cosigner.json", 1, False),
+    ("threshold-2of3-cosignature.json", 1, True),
+)
+
+
+def _without_required_trust_level(path: Path) -> verify.VerifyResult:
+    """The verdict on the fixture at path with requiredTrustLevel dropped from
+    its verifier state, which is what a verifier that omits step 7 sees."""
+    fixture = json.loads(path.read_text())
+    fixture["verifierState"].pop("requiredTrustLevel", None)
+    with tempfile.TemporaryDirectory() as tmp:
+        written = Path(tmp) / path.name
+        written.write_text(json.dumps(fixture))
+        return verify.verify_fixture(verify.load_fixture(written))
+
+
+class DistinctSignerAuthorities(unittest.TestCase):
+    """The distinct signer-authority count of core.md section 1.3 step 7: with
+    requiredTrustLevel 3 or higher in the verifier state, a credential rejects
+    as INSUFFICIENT_SIGNER_AUTHORITIES unless at least two distinct
+    authorities produced a signature the verifier verified. The tests mirror
+    TestDistinctAuthorities, TestStep7SignerAuthorityCount and
+    TestSuiteCatchesStep7BlindVerifier of the Go reference verifier."""
+
+    def test_signatures_sharing_an_authority_or_a_key_count_once(self):
+        cases = (
+            ("no counted signature", [], 0),
+            ("one authority one key", [("A", "k1")], 1),
+            ("one authority, two keys", [("A", "k1"), ("A", "k2")], 1),
+            ("one key under two authorities", [("A", "k1"), ("B", "k1")], 1),
+            ("two authorities, two keys", [("A", "k1"), ("B", "k2")], 2),
+            ("three authorities, three keys", [("A", "k1"), ("B", "k2"), ("C", "k3")], 3),
+            ("shared key joins two of three", [("A", "k1"), ("B", "k1"), ("C", "k3")], 2),
+            ("shared key then shared authority", [("A", "k1"), ("B", "k1"), ("B", "k2")], 1),
+            ("link found late", [("A", "k1"), ("B", "k2"), ("C", "k3"), ("C", "k1"), ("B", "k3")], 1),
+        )
+        for name, nodes, want in cases:
+            with self.subTest(name):
+                self.assertEqual(verify._distinct_authorities(nodes), want)
+
+    def test_each_fixture_counts_its_authorities(self):
+        # With requiredTrustLevel dropped, each fixture is accepted with the
+        # same count, so the REJECTs come from the requirement alone.
+        for name, authorities, accepted in STEP7_FIXTURES:
+            with self.subTest(fixture=name):
+                path = ROOT / "fixtures" / name
+                got = verify.verify_fixture(verify.load_fixture(path))
+                self.assertTrue(got.step7_performed, str(got))
+                self.assertEqual(got.signer_authorities, authorities)
+                self.assertEqual(got.accepted, accepted, str(got))
+                if not accepted:
+                    self.assertEqual(got.reject_category, "INSUFFICIENT_SIGNER_AUTHORITIES")
+                blind = _without_required_trust_level(path)
+                self.assertTrue(blind.accepted, str(blind))
+                self.assertEqual(blind.signer_authorities, authorities)
+
+    def test_suite_catches_a_verifier_that_omits_step7(self):
+        # Of the shipped fixtures, exactly the four that must reject at step 7
+        # are accepted once requiredTrustLevel is dropped; a fixture that does
+        # not set it is unaffected by dropping it.
+        caught = []
+        for path in sorted((ROOT / "fixtures").glob("*.json")):
+            fixture = json.loads(path.read_text())
+            if "requiredTrustLevel" not in fixture["verifierState"]:
+                continue
+            must_accept = fixture["expected"]["verifyResult"] == "ACCEPT"
+            if _without_required_trust_level(path).accepted != must_accept:
+                caught.append(path.name)
+        self.assertEqual(
+            caught,
+            [
+                "v1_1-cosigner-named-not-signed.json",
+                "v1_1-one-authority-threshold-keys.json",
+                "v1_1-one-key-under-two-dids.json",
+                "v1_1-own-key-labelled-as-cosigner.json",
+            ],
+        )
 
 
 class PublicKeyHex(unittest.TestCase):
@@ -2012,6 +3593,42 @@ class NestingDepth(unittest.TestCase):
     def test_brackets_inside_a_string_do_not_nest(self):
         self.assertEqual(len(verify._string_literals('{"a": "' + "[" * 20000 + '"}')), 2)
 
+    def test_load_error_is_the_first_in_the_text(self):
+        # A file that is not JSON and nests past Go's depth limit fails with
+        # the reason for whichever comes first in its text, as Go's
+        # encoding/json reports the first error it reads. The bracket that
+        # opens the level past the limit can itself be the token that is not
+        # JSON. The Go verifier's TestLoadErrorIsTheFirstInTheText pins the
+        # same rows.
+        # The default limit, which int() applies to the 5001-digit integer.
+        self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
+        sys.set_int_max_str_digits(4300)
+        not_json = "fixture is not valid JSON"
+        too_deep = "arrays and objects nested deeper than 10000 levels (the limit of Go's encoding/json)"
+        past = _arrays(10001)
+        for name, text, reason in (
+            ("a token before the nesting", "[x," + past + "]", not_json),
+            ("NaN before the nesting", "[NaN," + past + "]", not_json),
+            ("a token at level 9999", "[" * 9999 + "x[[" + "]" * 10001, not_json),
+            ("the bracket after a value", "[" * 10000 + "1[" + "]" * 10001, not_json),
+            ("the bracket where a member name belongs", '{"a":' * 9999 + "{{}}" + "}" * 9999, not_json),
+            ("the nesting after the top-level value", "[]" + past, not_json),
+            ("a token after the nesting", "[" * 10001 + "x" + "]" * 10001, too_deep),
+            ("NaN after the nesting", "[" * 10001 + "NaN" + "]" * 10001, too_deep),
+            ("NaN after objects nested past the limit",
+             '{"a":' * 10000 + '{"b": NaN}' + "}" * 10000, too_deep),
+            ("brackets and a quote in strings before the nesting",
+             '["x[", "y\\"]", ' + "[" * 10000 + "x", too_deep),
+            ("a 5001-digit integer before the nesting",
+             "[" + LONG_INTEGER + "," + "[" * 10001 + "x", too_deep),
+        ):
+            with self.subTest(name), tempfile.TemporaryDirectory() as tmp:
+                written = Path(tmp) / "f.json"
+                written.write_text(text)
+                with self.assertRaises(ValueError) as raised:
+                    verify.load_fixture(written)
+                self.assertEqual(str(raised.exception), reason)
+
 
 class LongInteger(unittest.TestCase):
     def setUp(self):
@@ -2066,16 +3683,20 @@ class LongInteger(unittest.TestCase):
     def test_declared_purpose_rejects_as_it_does_for_a_shorter_integer(self):
         # declaredPurpose enters the v1.1 signed payload as written, so no
         # typed decode refuses the number there. An integer of 401 digits,
-        # which int() converts, is outside float64 range too, and the Go
-        # verifier's JCS library refuses both (VERIFIER_CONFIG_ERROR).
+        # which int() converts, is outside the exact range too, and both
+        # reference verifiers refuse both before their JCS serializer reads
+        # them, as SIGNATURE_INVALID with a reason that quotes the number as
+        # written (TestDeclaredPurposeNumberOutsideFloat64Range).
         shorter = "1" + "0" * 400
-        for purpose in ("%s", "-%s", '{"x": %s}', "[7, %s]"):
+        for purpose, sign in (("%s", ""), ("-%s", "-"), ('{"x": %s}', ""), ("[7, %s]", "")):
             with self.subTest(purpose=purpose):
                 got = _at_verdict(BASELINE_V11, ("declaredPurpose",), purpose % LONG_INTEGER)
                 control = _at_verdict(BASELINE_V11, ("declaredPurpose",), purpose % shorter)
                 self.assertFalse(got.accepted)
                 self.assertEqual(got.reject_category, control.reject_category)
-                self.assertEqual(got.reject_category, "VERIFIER_CONFIG_ERROR", got.reason[:200])
+                self.assertEqual(got.reject_category, "SIGNATURE_INVALID", got.reason[:200])
+                self.assertEqual(got.reason, _exact_range_reason("declaredPurpose", sign + LONG_INTEGER))
+                self.assertEqual(control.reason, _exact_range_reason("declaredPurpose", sign + shorter))
 
     def test_directory_run_reaches_the_summary_line(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2383,7 +4004,7 @@ class ArgumentContract(unittest.TestCase):
         self.assertEqual((code, err), (0, ""), out)
         lines = out.splitlines()
         self.assertEqual(lines[0], f"PASS  {directory / 'x.json'}")
-        self.assertEqual(lines[-1], "summary: 1 pass, 0 fail (1 fixtures)")
+        self.assertEqual(lines[-1], "summary: 1 pass, 0 fail (1 fixture)")
 
     def test_a_subdirectory_named_json_is_skipped(self):
         # Path.glob("*.json") listed a subdirectory named sub.json with the
@@ -2402,9 +4023,9 @@ class ArgumentContract(unittest.TestCase):
             Path("l", "link.json").symlink_to("real", target_is_directory=True)
             for arg, code, want, summary in (
                 ("d", 0, ["PASS  d/x.json", "observed: ACCEPT"],
-                 "summary: 1 pass, 0 fail (1 fixtures)"),
+                 "summary: 1 pass, 0 fail (1 fixture)"),
                 ("r", 0, ["PASS  r/fixtures/x.json", "observed: ACCEPT"],
-                 "summary: 1 pass, 0 fail (1 fixtures)"),
+                 "summary: 1 pass, 0 fail (1 fixture)"),
                 ("l", 1, ["FAIL  l/link.json  (load error: read l/link.json: is a directory)",
                           "PASS  l/x.json", "observed: ACCEPT"],
                  "summary: 1 pass, 1 fail (2 fixtures)"),
@@ -2450,7 +4071,7 @@ class ArgumentContract(unittest.TestCase):
                 code, out, err = _run_main("--", "-h.json")
                 self.assertEqual((code, err), (0, ""), out)
                 self.assertTrue(out.startswith("PASS  -h.json\n"), out)
-                self.assertTrue(out.endswith("\nsummary: 1 pass, 0 fail (1 fixtures)\n"), out)
+                self.assertTrue(out.endswith("\nsummary: 1 pass, 0 fail (1 fixture)\n"), out)
                 for args, stderr in (
                     (("--", "-h.json", "--help"), "error: --help: no such file or directory\n"),
                     (("--", "--version"), "error: --version: no such file or directory\n"),
@@ -2582,7 +4203,7 @@ class UnreadableFixture(unittest.TestCase):
             ):
                 with self.subTest(arg=arg):
                     self.assertEqual(_run_main(arg), (
-                        1, f"{line}\n\nsummary: 0 pass, 1 fail (1 fixtures)\n", ""))
+                        1, f"{line}\n\nsummary: 0 pass, 1 fail (1 fixture)\n", ""))
 
     def test_a_failed_read_is_named_as_go_names_it(self):
         # os.ReadFile writes an error of the read after the file opened as
@@ -2826,17 +4447,18 @@ class HeaderDocs(unittest.TestCase):
             with self.subTest(version=version):
                 self.assertIn(f'atcVersion="{version}"', coverage)
 
-    def test_does_not_claim_the_step7_check(self):
-        # A trust level 3+ credential is accepted without the distinct
-        # signer-authority count, so the coverage list must not claim one.
+    def test_claims_the_step7_check_it_performs(self):
+        # A trust level 3+ credential reaches step 7 and is accepted with the
+        # distinct signer-authority count measured, so the coverage list
+        # claims that count, and no chain check.
         got = verify.verify_fixture(verify.load_fixture(ROOT / "fixtures" / "baseline-valid.json"))
         self.assertTrue(got.accepted)
         self.assertGreaterEqual(got.trust_level, 3)
-        self.assertFalse(got.step7_performed)
-        coverage = self._spec_coverage().lower()
-        for claim in ("trust level", "chain check"):
-            with self.subTest(claim=claim):
-                self.assertNotIn(claim, coverage)
+        self.assertTrue(got.step7_performed)
+        self.assertEqual(got.signer_authorities, 1)
+        coverage = " ".join(self._spec_coverage().split())
+        self.assertIn("the distinct signer-authority count of core.md section 1.3 step 7", coverage)
+        self.assertNotIn("chain check", coverage.lower())
 
     def test_readme_cross_references_resolve(self):
         # Join continuation lines so a reference split across two lines of a
@@ -2849,6 +4471,1079 @@ class HeaderDocs(unittest.TestCase):
         for doc, ref in refs:
             with self.subTest(doc=doc, ref=ref):
                 self.assertIn(ref, _readme_headings(doc))
+
+
+class ReportWording(unittest.TestCase):
+    """The lines the Go reference verifier's tests of the same names pin:
+    the summary's noun, a bare help or version word, the line for
+    directories with no *.json, the reason for a fixture with no atx
+    member, the load error of a file that is not a fixture object, and the
+    line naming a reasonContains substring the reason lacks."""
+
+    def test_summary_counts_one_fixture_in_the_singular(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            Path("x.json").write_text(BASELINE_V10.read_text())
+            for args, want in ((["x.json"], "\nsummary: 1 pass, 0 fail (1 fixture)\n"),
+                               (["x.json", "x.json"], "\nsummary: 2 pass, 0 fail (2 fixtures)\n")):
+                with self.subTest(args=args):
+                    code, out, err = _run_main(*args)
+                    self.assertEqual((code, err), (0, ""), out)
+                    self.assertTrue(out.endswith(want), out)
+
+    def test_bare_help_and_version_words_point_at_the_option(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            for arg, want in (
+                ("help", "error: help: no such file or directory (--help prints the usage)\n"),
+                ("version", "error: version: no such file or directory (--version prints the version line)\n"),
+                ("helps", "error: helps: no such file or directory\n"),
+            ):
+                with self.subTest(arg=arg):
+                    self.assertEqual(_run_main(arg), (2, "", want))
+
+    def test_no_fixtures_line_names_the_directories(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            for d in ("empty", "onlysub/sub", "root/fixtures"):
+                Path(d).mkdir(parents=True)
+            Path("onlysub/sub/x.json").write_text(BASELINE_V10.read_text())
+            for args, dirs in ((["empty"], "empty"), (["onlysub"], "onlysub"),
+                               (["empty", "root"], "empty, root/fixtures")):
+                with self.subTest(args=args):
+                    self.assertEqual(_run_main(*args), (
+                        2, "", f"no fixture *.json files found in {dirs} (subdirectories are not walked)\n"))
+
+    def test_fixture_with_no_atx_member_names_the_cause(self):
+        for doc, reason in (
+            ({"$schema": "https://atp.opena2a.org/schemas/fixture-v1.json", "expected": {"verifyResult": "ACCEPT"}},
+             'the fixture has no atx member (its $schema is "https://atp.opena2a.org/schemas/fixture-v1.json")'),
+            ({"expected": {"verifyResult": "ACCEPT"}}, "the fixture has no atx member"),
+            ({"$schema": 7, "expected": {"verifyResult": "ACCEPT"}}, "the fixture has no atx member"),
+        ):
+            with self.subTest(doc=doc), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "f.json"
+                path.write_text(json.dumps(doc))
+                got = verify.verify_fixture(verify.load_fixture(path))
+                self.assertEqual((got.accepted, got.reject_category, got.reason), (False, "PARSE_ERROR", reason))
+
+    def test_load_error_names_the_file_shape(self):
+        deep = "[" * 200000 + "]" * 200000
+        for text, reason in (
+            ("not json at all", "fixture is not valid JSON"),
+            ("", "fixture is not valid JSON"),
+            ('{"expected": {"verifyResult": "ACCEPT"}} trailing', "fixture is not valid JSON"),
+            ('{"name": NaN}', "fixture is not valid JSON"),
+            ('{"name": Infinity}', "fixture is not valid JSON"),
+            ('{"name": -Infinity}', "fixture is not valid JSON"),
+            ("[NaN]", "fixture is not valid JSON"),
+            ("[1,2,3]", "fixture is not a JSON object"),
+            ('"text"', "fixture is not a JSON object"),
+            ("7", "fixture is not a JSON object"),
+            (deep, "arrays and objects nested deeper than 10000 levels (the limit of Go's encoding/json)"),
+        ):
+            with self.subTest(text=text[:40]), tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+                Path("f.json").write_text(text)
+                self.assertEqual(_run_main("f.json"), (
+                    1, f"FAIL  f.json  (load error: {reason})\n\nsummary: 0 pass, 1 fail (1 fixture)\n", ""))
+
+    def test_reason_contains_mismatch_names_the_substring(self):
+        doc = json.loads((ROOT / "fixtures" / "wrong-issuer.json").read_text())
+        doc["expected"]["reasonContains"] = "zz-not-in-reason"
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            Path("r1.json").write_text(json.dumps(doc))
+            code, out, _ = _run_main("r1.json")
+        lines = out.splitlines()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(lines[0], "FAIL  r1.json", out)
+        self.assertTrue(lines[2].startswith("       observed: REJECT[UNTRUSTED_ISSUER: "), out)
+        self.assertEqual(lines[3], '       reason does not contain "zz-not-in-reason"', out)
+        # The shipped fixture, which passes, has no such line.
+        with contextlib.chdir(ROOT):
+            code, out, _ = _run_main("fixtures/wrong-issuer.json")
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("reason does not contain", out)
+
+
+# --- control characters in the report -------------------------------------
+# Each string a fixture, a file name or a path supplies is written with every
+# C0 control, DEL and C1 control in it escaped (verify._escape_controls),
+# never as the control and never dropped, so a line of the report is one line
+# on a terminal and shows what the input carried. The inputs, the lines and
+# the table below are those of verifiers/go/verifier/escape_test.go and
+# escape_mutants_test.go, which hold the Go reference verifier to the same
+# text.
+
+# An issuer DID holding one character of each kind the report escapes, each
+# after a letter: NUL, a tab, a line feed, a carriage return, BEL, ESC, DEL
+# and the C1 control U+009B (controlDID in the Go suite), and the text the
+# report writes for it: the reason of an untrusted issuer writes the issuer
+# DID in double quotes, escaped as strconv.QuoteToASCII escapes it
+# (controlDIDQuoted), so no control reaches _escape_controls.
+CONTROL_DID = "did:opena2a:authority:a\x00b\tc\nd\re\x07f\x1bg\x7fh" + chr(0x9B) + "i"
+CONTROL_DID_QUOTED = r'"did:opena2a:authority:a\x00b\tc\nd\re\af\x1bg\x7fh\u009bi"'
+# A name holding each of those a file name can hold, each after a letter (a
+# tab, a line feed, a carriage return, BEL, ESC, DEL and U+009B), and its text.
+CONTROL_NAME = "a\tb\nc\rd\x07e\x1bf\x7fg" + chr(0x9B) + "h"
+CONTROL_NAME_ESCAPED = r"a\x09b\x0ac\x0dd\x07e\x1bf\x7fg\u009bh"
+# A file name holding the byte 0x9b, a C1 control to a terminal that reads
+# 8-bit codes, and the byte 0xff, neither of them UTF-8, read as os.fsdecode
+# reads it, and its text. A file system that takes only UTF-8 names, as APFS
+# does, refuses it.
+NON_UTF8_NAME = b"b\x9b\xff.json".decode("utf-8", "surrogateescape")
+NON_UTF8_NAME_ESCAPED = b"b\\x9b\xff.json"
+
+# _escape_controls in bytes and out bytes, each byte that is not UTF-8 read
+# as the surrogate escape os.fsdecode reads it as: the table TestEscapeControls
+# holds escapeControls to in verifiers/go/verifier/escape_mutants_test.go. A
+# C0 control, DEL and a C1 control are escaped, a byte that is not UTF-8 is
+# escaped when it is 0x80 to 0x9f and written as it is otherwise, and every
+# other character is written as it is, a backslash among them.
+ESCAPE_CONTROLS_TABLE: list[tuple[bytes, bytes]] = [
+    (b"", b""),
+    (b"did:opena2a:authority:x", b"did:opena2a:authority:x"),
+    (b"\x00", b"\\x00"),
+    (b"\t", b"\\x09"),
+    (b"\n", b"\\x0a"),
+    (b"\r", b"\\x0d"),
+    (b"\x07", b"\\x07"),
+    (b"\x1b", b"\\x1b"),
+    (b"\x1f", b"\\x1f"),
+    (b" ~", b" ~"),
+    (b"\x7f", b"\\x7f"),
+    (chr(0x80).encode(), b"\\u0080"),
+    (chr(0x9B).encode(), b"\\u009b"),
+    (chr(0x9F).encode(), b"\\u009f"),
+    (chr(0xA0).encode(), chr(0xA0).encode()),
+    (chr(0xE9).encode(), chr(0xE9).encode()),
+    (chr(0xFFFD).encode(), chr(0xFFFD).encode()),
+    (b"\\x1b", b"\\x1b"),
+    (b"\x80", b"\\x80"),
+    (b"\x9b", b"\\x9b"),
+    (b"\x9f", b"\\x9f"),
+    (b"\xa0", b"\xa0"),
+    (b"\xff", b"\xff"),
+    (b"\xe2\x80", b"\xe2\\x80"),
+    (b"\xc0\x80", b"\xc0\\x80"),
+    (b"\xed\xa0\x80", b"\xed\xa0\\x80"),
+    (b"a\x1bb" + chr(0x9B).encode() + b"c\x9bd", b"a\\x1bb\\u009bc\\x9bd"),
+]
+
+
+class ControlCase(NamedTuple):
+    """One input the escaping is checked on, as controlCase is in the Go
+    suite: the arguments it runs with, a string the input carries (raw)
+    with the text the report writes for it (escaped), the line of the report
+    that holds that text, which the Go reference verifier writes the same,
+    the number of line feeds the report holds, that of the same input with
+    no control in it, and the files and directories it lays out in an empty
+    working directory. needs_non_utf8 is set where a file name is not UTF-8:
+    the case is skipped where the file system refuses that name."""
+
+    name: str
+    args: tuple[str, ...]
+    raw: bytes
+    escaped: bytes
+    line: bytes
+    line_feeds: int
+    files: tuple[tuple[str, bytes], ...] = ()
+    dirs: tuple[str, ...] = ()
+    needs_non_utf8: bool = False
+
+
+def _utf8(text: str) -> bytes:
+    return text.encode("utf-8", "surrogateescape")
+
+
+def _control_cases() -> list[ControlCase]:
+    """Every input the escaping is checked on (controlCases in the Go
+    suite). The first is fixtures/wrong-issuer.json with its credential's
+    issuerDid set to CONTROL_DID, which still rejects as the fixture
+    expects, UNTRUSTED_ISSUER, so the report writes it in its observed
+    line."""
+    shipped = WRONG_ISSUER.read_bytes()
+    doc = json.loads(shipped)
+    doc["atx"]["issuerDid"] = CONTROL_DID
+    issuer = json.dumps(doc).encode()
+    name, escaped = CONTROL_NAME + ".json", CONTROL_NAME_ESCAPED + ".json"
+    return [
+        ControlCase(
+            "an issuer DID", ("issuer.json",), _utf8(CONTROL_DID), _utf8(CONTROL_DID_QUOTED),
+            _utf8(
+                "       observed: REJECT[UNTRUSTED_ISSUER: issuer DID "
+                + CONTROL_DID_QUOTED
+                + " is not in the verifier's trusted set (untrusted issuer)]"
+            ),
+            5, files=(("issuer.json", issuer),),
+        ),
+        ControlCase(
+            "a file name", (name,), _utf8(CONTROL_NAME), _utf8(CONTROL_NAME_ESCAPED),
+            _utf8("PASS  " + escaped), 5, files=((name, shipped),),
+        ),
+        ControlCase(
+            "a path that does not exist", (name,), _utf8(CONTROL_NAME), _utf8(CONTROL_NAME_ESCAPED),
+            _utf8("error: " + escaped + ": no such file or directory"), 1,
+        ),
+        ControlCase(
+            "an unknown option", ("-" + CONTROL_NAME,), _utf8(CONTROL_NAME), _utf8(CONTROL_NAME_ESCAPED),
+            _utf8("unknown option: -" + CONTROL_NAME_ESCAPED), 1 + verify._USAGE.count("\n"),
+        ),
+        ControlCase(
+            "a directory holding no fixture", (CONTROL_NAME,), _utf8(CONTROL_NAME), _utf8(CONTROL_NAME_ESCAPED),
+            _utf8("no fixture *.json files found in " + CONTROL_NAME_ESCAPED + " (subdirectories are not walked)"),
+            1, dirs=(CONTROL_NAME,),
+        ),
+        ControlCase(
+            "a path that is not UTF-8 and does not exist", (NON_UTF8_NAME,), b"\x9b", NON_UTF8_NAME_ESCAPED,
+            b"error: " + NON_UTF8_NAME_ESCAPED + b": no such file or directory", 1,
+        ),
+        ControlCase(
+            "a file name that is not UTF-8", (NON_UTF8_NAME,), b"\x9b", NON_UTF8_NAME_ESCAPED,
+            b"PASS  " + NON_UTF8_NAME_ESCAPED, 5, files=((NON_UTF8_NAME, shipped),), needs_non_utf8=True,
+        ),
+    ]
+
+
+def _lay_out(case: ControlCase, tmp: Path) -> None:
+    """Write case's directories and files in tmp, or skip the test where the
+    file system refuses a name that is not UTF-8: APFS refuses it with
+    EILSEQ, and exFAT on macOS with EINVAL."""
+    for directory in case.dirs:
+        (tmp / directory).mkdir()
+    for name, body in case.files:
+        try:
+            (tmp / name).write_bytes(body)
+        except OSError as exc:
+            if case.needs_non_utf8 and exc.errno in (errno.EILSEQ, errno.EINVAL):
+                raise unittest.SkipTest(f"the file system refuses the name {name!r}: {exc.strerror}") from exc
+            raise
+
+
+def _report_in_process(case: ControlCase, tmp: Path) -> tuple[bytes, int]:
+    """verify.main run in tmp with case's arguments, standard output a strict
+    UTF-8 stream over bytes, as a pipe gives it, and standard error one that
+    writes a character it cannot encode as a backslash escape, as sys.stderr
+    writes it: what it wrote to standard output followed by what it wrote to
+    standard error, and its exit code."""
+    out_raw, err_raw = io.BytesIO(), io.BytesIO()
+    out = io.TextIOWrapper(out_raw, encoding="utf-8", newline="\n")
+    err = io.TextIOWrapper(err_raw, encoding="utf-8", errors="backslashreplace", newline="\n")
+    with contextlib.chdir(tmp), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = verify.main(["verify.py", *case.args])
+        out.flush()
+        err.flush()
+    return out_raw.getvalue() + err_raw.getvalue(), code
+
+
+def _report_as_a_process(argv: list[str], case: ControlCase, tmp: Path) -> tuple[bytes, int]:
+    """argv run as a process in tmp with case's arguments, PWD naming tmp:
+    what it wrote to standard output followed by what it wrote to standard
+    error, and its exit code."""
+    proc = subprocess.run(
+        [*argv, *case.args], cwd=tmp, capture_output=True, env={**os.environ, "PWD": str(tmp)}, timeout=300
+    )
+    return proc.stdout + proc.stderr, proc.returncode
+
+
+def _raw_controls(out: bytes) -> tuple[int, int, int, int]:
+    """What no report may hold, counted in out: C0 controls other than the
+    line feed, DEL, C1 controls written as UTF-8, and bytes 0x80 to 0x9f
+    that are not UTF-8 (countRawControls in the Go suite)."""
+    text = out.decode("utf-8", "surrogateescape")
+    return (
+        sum(1 for ch in text if ch < " " and ch != "\n"),
+        text.count("\x7f"),
+        sum(1 for ch in text if "\x80" <= ch <= "\x9f"),
+        sum(1 for ch in text if "\udc80" <= ch <= "\udc9f"),
+    )
+
+
+def _check_no_raw_control(case: ControlCase, out: bytes) -> str | None:
+    """A failure when out, a report's standard output and standard error,
+    holds a raw control, or another number of line feeds than case's: a
+    line feed the input carries, written as it is, splits a line."""
+    counts = _raw_controls(out)
+    if counts != (0, 0, 0, 0):
+        return "the report holds raw controls ({} C0, {} DEL, {} C1, {} C1 bytes not UTF-8)".format(*counts)
+    line_feeds = out.count(b"\n")
+    if line_feeds != case.line_feeds:
+        return f"the report holds {line_feeds} line feeds, want {case.line_feeds}"
+    return None
+
+
+def _check_shows_escaped(case: ControlCase, out: bytes) -> str | None:
+    """A failure when out does not hold the escaped text of the string case's
+    input carries, or holds the string itself."""
+    if case.escaped not in out:
+        return f"the report does not show {case.escaped!r}"
+    if case.raw in out:
+        return f"the report holds {case.raw!r} as it is"
+    return None
+
+
+def _check_c1_escaped(case: ControlCase, out: bytes) -> str | None:
+    """A failure when out holds U+009B written as UTF-8, or case's input
+    carries U+009B and out does not show its escape."""
+    c1 = chr(0x9B).encode()
+    if c1 in out:
+        return "the report holds U+009B as it is"
+    if c1 in case.raw and b"\\u009b" not in out:
+        return "the report does not show U+009B as \\u009b"
+    return None
+
+
+def _check_line(case: ControlCase, out: bytes) -> str | None:
+    """A failure when no line of out is case's line, the line the Go
+    reference verifier writes for the same input."""
+    if case.line not in out.split(b"\n"):
+        return f"no line of the report is {case.line!r}"
+    return None
+
+
+# Every check a report of a ControlCase passes (controlChecks in the Go suite).
+CONTROL_CHECKS = (
+    ("no raw control", _check_no_raw_control),
+    ("escaped, not dropped", _check_shows_escaped),
+    ("C1 escaped", _check_c1_escaped),
+    ("the line the Go verifier writes", _check_line),
+)
+
+
+def _write_as_is(text: str) -> str:
+    """text as it is: the report of a verifier that escapes nothing, as
+    main's was before _escape_controls."""
+    return text
+
+
+def _escapers_that_write_less(real) -> dict:
+    """The escapers TestChecksFailOnEscapersThatWriteLess runs in the Go
+    suite, each writing less than real, _escape_controls: one that escapes
+    a string holding a DID and writes any other as it is, so an issuer DID
+    is escaped and a file name or a path is not, one that escapes C0 and DEL
+    and writes a C1 control as it is, one that drops each control instead of
+    escaping it, and one that writes each string as it is."""
+
+    def escape_did_only(text: str) -> str:
+        return real(text) if "did:" in text else text
+
+    def escape_c0_only(text: str) -> str:
+        return "".join(f"\\x{ord(ch):02x}" if ch < " " or ch == "\x7f" else ch for ch in text)
+
+    def drop_controls(text: str) -> str:
+        return "".join(ch for ch in text if not (ch < " " or ch == "\x7f" or "\x80" <= ch <= "\x9f"))
+
+    return {
+        "escape_did_only": escape_did_only,
+        "escape_c0_only": escape_c0_only,
+        "drop_controls": drop_controls,
+        "write_as_is": _write_as_is,
+    }
+
+
+class EscapeControls(unittest.TestCase):
+    """_escape_controls on ESCAPE_CONTROLS_TABLE, the table the Go suite
+    holds escapeControls to."""
+
+    def test_table(self):
+        for raw, want in ESCAPE_CONTROLS_TABLE:
+            with self.subTest(raw=raw):
+                self.assertEqual(_utf8(verify._escape_controls(raw.decode("utf-8", "surrogateescape"))), want)
+
+
+class ReportEscapesControls(unittest.TestCase):
+    """main on each ControlCase passes each check: each control the input
+    carries is written as its escape, in the line the Go reference verifier
+    writes, and the report has as many lines as that of the same input with
+    no control in it (TestReportEscapesControls in the Go suite)."""
+
+    def _assert_checks(self, case: ControlCase, out: bytes) -> None:
+        # Every check is run, and each that fails is named.
+        failures = [f"{name}: {failure}" for name, check in CONTROL_CHECKS if (failure := check(case, out))]
+        self.assertEqual(failures, [], f"report: {out!r}")
+
+    def test_in_process(self):
+        for case in _control_cases():
+            with self.subTest(case=case.name), tempfile.TemporaryDirectory() as tmp:
+                _lay_out(case, Path(tmp))
+                out, _ = _report_in_process(case, Path(tmp))
+                self._assert_checks(case, out)
+
+    def test_as_a_process(self):
+        # verify.py run as a process: its standard output and standard
+        # error are the pipes a terminal or a log reads.
+        for case in _control_cases():
+            with self.subTest(case=case.name), tempfile.TemporaryDirectory() as tmp:
+                _lay_out(case, Path(tmp))
+                out, _ = _report_as_a_process([sys.executable, str(HERE / "verify.py")], case, Path(tmp))
+                self._assert_checks(case, out)
+
+    def test_verdict_is_kept(self):
+        # A fixture whose issuer DID or file name carries controls is
+        # verified as the shipped fixture is: it rejects as UNTRUSTED_ISSUER,
+        # as it expects, and passes (TestReportOfControlsKeepsTheVerdict).
+        for case in _control_cases()[:2]:
+            with self.subTest(case=case.name), tempfile.TemporaryDirectory() as tmp:
+                _lay_out(case, Path(tmp))
+                out, code = _report_in_process(case, Path(tmp))
+                self.assertEqual(code, 0, out)
+                self.assertTrue(out.endswith(b"\nsummary: 1 pass, 0 fail (1 fixture)\n"), out)
+
+    def test_shipped_fixture_report_holds_no_control(self):
+        # So escaping leaves the report of the shipped fixture set as it was
+        # (TestShippedFixtureReportHoldsNoControl).
+        case = ControlCase("the shipped fixtures", (str(ROOT / "fixtures"),), b"", b"", b"", 0)
+        with tempfile.TemporaryDirectory() as tmp:
+            out, code = _report_in_process(case, Path(tmp))
+        self.assertEqual(code, 0, out)
+        self.assertEqual(_raw_controls(out), (0, 0, 0, 0))
+
+
+class ChecksFailOnEscapersThatWriteLess(unittest.TestCase):
+    """The checks of ReportEscapesControls run with _escape_controls replaced
+    by escapers that write less, each beside _escape_controls itself: each
+    such escaper fails the check named for it while _escape_controls passes
+    it (TestChecksFailOnEscapersThatWriteLess in the Go suite). Escaping the
+    issuer DID but not a file name fails "no raw control" on a file name,
+    escaping C0 but not C1 fails "C1 escaped", dropping controls fails
+    "escaped, not dropped", and escaping in the Go verifier alone, as
+    _write_as_is does here, fails "the line the Go verifier writes". Those
+    three run on a file name: the reason writes the issuer DID quoted
+    (CONTROL_DID_QUOTED), so it reaches the escaper with no control in it."""
+
+    # (escaper, input, the check it fails, checks it passes on that input,
+    # an input it passes every check on)
+    MUTANTS = (
+        ("escape_did_only", "a file name", "no raw control", (), "an issuer DID"),
+        ("escape_c0_only", "a file name", "C1 escaped", (), None),
+        ("drop_controls", "a file name", "escaped, not dropped", ("no raw control",), None),
+        ("write_as_is", "a file name", "the line the Go verifier writes", (), None),
+    )
+
+    def _report_with(self, escaper, case: ControlCase) -> bytes:
+        with tempfile.TemporaryDirectory() as tmp:
+            _lay_out(case, Path(tmp))
+            with mock.patch.object(verify, "_escape_controls", escaper):
+                out, _ = _report_in_process(case, Path(tmp))
+        return out
+
+    def test_each_escaper_fails_its_check(self):
+        real = verify._escape_controls
+        escapers = _escapers_that_write_less(real)
+        cases = {case.name: case for case in _control_cases()}
+        checks = dict(CONTROL_CHECKS)
+        for escaper, given, fails, passes_too, passes_input in self.MUTANTS:
+            with self.subTest(escaper=escaper):
+                case, check = cases[given], checks[fails]
+                self.assertIsNone(check(case, self._report_with(real, case)))
+                out = self._report_with(escapers[escaper], case)
+                self.assertIsNotNone(check(case, out), f"{escaper} passes {fails!r} on {given}\nreport: {out!r}")
+                for name in passes_too:
+                    self.assertIsNone(checks[name](case, out), f"{escaper} fails {name!r} too")
+                if passes_input:
+                    other = cases[passes_input]
+                    out = self._report_with(escapers[escaper], other)
+                    for name, other_check in CONTROL_CHECKS:
+                        self.assertIsNone(other_check(other, out), f"{escaper} fails {name!r} on {passes_input}")
+
+    def test_shipped_fixture_report_is_the_same_written_as_it_is(self):
+        # The report of the shipped fixture set written through
+        # _escape_controls is the one written as it is
+        # (TestEscapingLeavesTheShippedFixtureReport).
+        case = ControlCase("the shipped fixtures", (str(ROOT / "fixtures"),), b"", b"", b"", 0)
+        escaped = self._report_with(verify._escape_controls, case)
+        self.assertEqual(escaped, self._report_with(_write_as_is, case))
+
+
+class BothVerifiersWriteTheSameReport(unittest.TestCase):
+    """The Go reference verifier, built from cmd/atx-verify, and this
+    verifier, each run as a process on each ControlCase, write the same
+    standard output and standard error, the unknown option's compared on its
+    first line, where each names its own usage, and that report holds the
+    case's escaped line. With _escape_controls writing each string as it is,
+    this verifier's report of the file name case differs from the Go
+    verifier's: escaping in one verifier alone fails the check. The two also
+    write the same report of a folder of v1.1 credentials whose
+    declaredPurpose holds an unpaired UTF-16 surrogate escape written with
+    upper-case or mixed-case hex digits, each reason naming the escape as
+    the file writes it. Skipped with no go on PATH."""
+
+    @classmethod
+    def setUpClass(cls):
+        go = shutil.which("go")
+        if go is None:
+            raise unittest.SkipTest("no go on PATH to build the Go reference verifier with")
+        cls._bin_dir = tempfile.TemporaryDirectory()
+        cls.go_verifier = str(Path(cls._bin_dir.name) / "atx-verify")
+        build = subprocess.run(
+            [go, "build", "-trimpath", "-o", cls.go_verifier, "./cmd/atx-verify"],
+            cwd=ROOT, capture_output=True, text=True, timeout=600,
+        )
+        if build.returncode != 0:
+            cls._bin_dir.cleanup()
+            raise AssertionError(f"go build exited {build.returncode}: {build.stderr[-2000:]}")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._bin_dir.cleanup()
+
+    @staticmethod
+    def _compared(case: ControlCase, out: bytes) -> bytes:
+        return out.split(b"\n", 1)[0] if case.name == "an unknown option" else out
+
+    def test_same_report(self):
+        for case in _control_cases():
+            with self.subTest(case=case.name), tempfile.TemporaryDirectory() as tmp:
+                _lay_out(case, Path(tmp))
+                go_out, go_code = _report_as_a_process([self.go_verifier], case, Path(tmp))
+                py_out, py_code = _report_as_a_process([sys.executable, str(HERE / "verify.py")], case, Path(tmp))
+                self.assertEqual(
+                    (self._compared(case, py_out), py_code), (self._compared(case, go_out), go_code)
+                )
+                self.assertIn(case.line, go_out.split(b"\n"), go_out)
+
+    def test_escaping_in_one_verifier_alone_differs(self):
+        case = {case.name: case for case in _control_cases()}["a file name"]
+        with tempfile.TemporaryDirectory() as tmp:
+            _lay_out(case, Path(tmp))
+            go_out, _ = _report_as_a_process([self.go_verifier], case, Path(tmp))
+            escaped, _ = _report_in_process(case, Path(tmp))
+            with mock.patch.object(verify, "_escape_controls", _write_as_is):
+                as_is, _ = _report_in_process(case, Path(tmp))
+        self.assertEqual(escaped, go_out)
+        self.assertNotEqual(as_is, go_out)
+
+    def test_same_report_of_unpaired_surrogate_escapes(self):
+        # One file per row of UNPAIRED_ESCAPES_AS_WRITTEN, then one per row
+        # of DECOY_PURPOSE_FILES, named so that both verifiers report them in
+        # that order. This verifier wrote each escape's hex digits in lower
+        # case, so its report of \uD800 was not the Go verifier's (#421).
+        rows = [(literal, escape) for literal, escape in UNPAIRED_ESCAPES_AS_WRITTEN]
+        rows += [(decoy, "\\uDBFF") for decoy in DECOY_PURPOSE_FILES]
+        reports = {}
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "purpose"
+            folder.mkdir()
+            for i, (written, _) in enumerate(rows):
+                name = f"{i:02d}.json"
+                if isinstance(written, str):
+                    path = ("declaredPurpose",)
+                    _write_at(folder, name, BASELINE_V11, path, written, expected=UNPAIRED_ESCAPE_EXPECTED)
+                else:
+                    (folder / name).write_text(_decoy_purpose_text(*written))
+            for verifier, argv in (("Go", [self.go_verifier]), ("Python", [sys.executable, str(HERE / "verify.py")])):
+                proc = subprocess.run(
+                    [*argv, "purpose"], cwd=tmp, capture_output=True, env={**os.environ, "PWD": tmp}, timeout=300
+                )
+                reports[verifier] = (proc.stdout, proc.stderr, proc.returncode)
+        self.assertEqual(reports["Python"], reports["Go"])
+        observed = [line for line in reports["Go"][0].decode().split("\n") if line.lstrip().startswith("observed:")]
+        reasons = [UNPAIRED_ESCAPE_REASON.format(escape) for _, escape in rows]
+        self.assertEqual(observed, [f"       observed: REJECT[VERIFIER_CONFIG_ERROR: {reason}]" for reason in reasons])
+        self.assertEqual(reports["Go"][2], 0, reports["Go"][0].decode()[-400:])
+
+
+class DocstringsNameTheEscapedBytes(unittest.TestCase):
+    """The docstrings of verify.py that say a line writes an argument or a
+    path that is not UTF-8 as its bytes: the module docstring's paragraph on
+    how the report names a fixture, and those of _say, _say_err and
+    _write_surrogate_escapes_as_bytes. None of them named the bytes main
+    writes otherwise, and the module docstring said such an argument is
+    written "and not as a backslash escape", while main passes each argument
+    and path a line quotes through _escape_controls first, which writes a
+    byte 0x80 to 0x9f that is not UTF-8 as \\xHH, as the "Arguments" section
+    of docs/running-the-verifiers.md says: for the byte 0x9b between x and
+    y.json, `error: x\\x9by.json: no such file or directory`. Each must name
+    the bytes _escape_controls writes as an escape, as that section names
+    them, each line one of them quotes for the byte 0x9b must be the line
+    main writes, and the load error the module docstring describes must
+    write that byte as \\x9b too."""
+
+    @staticmethod
+    def _docstrings() -> dict[str, str]:
+        # Each line break and the indentation around it read as one space,
+        # so a phrase split across two lines reads as one and the two spaces
+        # after PASS are kept.
+        module = verify.__doc__
+        start = module.index("A fixture named as a file is named in the report")
+        docs = {
+            "the module docstring": module[start : module.index("\n\n", start)],
+            "_say": verify._say.__doc__,
+            "_say_err": verify._say_err.__doc__,
+            "_write_surrogate_escapes_as_bytes": verify._write_surrogate_escapes_as_bytes.__doc__,
+        }
+        return {name: re.sub(r"[ \t]*\n[ \t]*", " ", doc) for name, doc in docs.items()}
+
+    def test_each_names_the_bytes_written_as_an_escape(self):
+        # The bytes, none of them UTF-8 alone, that _escape_controls writes
+        # as an escape where it reads the surrogate escape os.fsdecode reads
+        # each as, named as the Arguments section names them.
+        def read(byte: int) -> str:
+            return bytes([byte]).decode("utf-8", "surrogateescape")
+
+        escaped = [byte for byte in range(0x80, 0x100) if verify._escape_controls(read(byte)) != read(byte)]
+        self.assertTrue(escaped, "_escape_controls writes no byte that is not UTF-8 as an escape")
+        self.assertEqual(escaped, list(range(escaped[0], escaped[-1] + 1)))
+        aside = f"a byte 0x{escaped[0]:02x} to 0x{escaped[-1]:02x} aside"
+        self.assertIn(aside, _doc_section("docs/running-the-verifiers.md", "Arguments"))
+        for name, doc in self._docstrings().items():
+            with self.subTest(docstring=name):
+                self.assertIn(aside, doc)
+
+    @unittest.skipIf(os.name != "posix", "an argument of bytes that are not UTF-8 is a POSIX argument")
+    def test_each_quoted_line_is_the_line_main_writes(self):
+        # The error line of an argument naming no file, x then the byte 0x9b
+        # then y.json in the module docstring and that byte alone in
+        # _say_err's, and in _say's the PASS line of a fixture listed in d
+        # under that byte then .json. _json_names gives the name os.scandir
+        # gives such a file, so this runs where the file system refuses the
+        # name, as APFS does. d holds no file of that name, so without
+        # load_fixture replaced the fixture fails to load, and the module
+        # docstring's load error, which it does not quote, writes the byte
+        # as the PASS line does.
+        real_load = verify.load_fixture
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            Path("d").mkdir()
+            written = {
+                "the module docstring": _run_main_stderr_bytes(os.fsdecode(b"x\x9by.json"))[2],
+                "_say_err": _run_main_stderr_bytes(os.fsdecode(b"\x9b"))[2],
+            }
+            with mock.patch.object(verify, "_json_names", return_value=[os.fsdecode(b"\x9b.json")]):
+                load_error = _run_main_stdout_bytes("d")[1]
+                with mock.patch.object(verify, "load_fixture", lambda path: real_load(BASELINE_V10)):
+                    written["_say"] = _run_main_stdout_bytes("d")[1]
+        self.assertEqual(
+            load_error.splitlines()[0],
+            b"FAIL  d/\\x9b.json  (load error: open d/\\x9b.json: no such file or directory)",
+            load_error,
+        )
+        docs = self._docstrings()
+        for name, line in (
+            ("the module docstring", "error: x\\x9by.json: no such file or directory"),
+            ("_say_err", "error: \\x9b: no such file or directory"),
+            ("_say", "PASS  d/\\x9b.json"),
+        ):
+            with self.subTest(docstring=name):
+                self.assertEqual(written[name].splitlines()[0], line.encode("ascii"), written[name])
+                self.assertIn(f"`{line}`", docs[name])
+
+
+# --- the credential's strings in the report ----------------------------------
+# A reason line that shows a string member of the credential writes it so
+# that the report stays one block of printable ASCII lines, and two values
+# that differ are written differently. ReportOfEachCredentialMember walks the
+# credential of each fixture it runs on and finds the members itself, so a
+# line that shows a member is held to the rule whether or not a test names
+# it. The literals below are JSON, the literals of
+# verifiers/go/verifier/member_output_test.go, which holds the Go reference
+# verifier to the same checks.
+
+# The shipped fixtures the cell runs on: one a signature rejects, whose
+# reason shows the signature's keyId, and one the issuer DID rejects, whose
+# reason shows the issuerDid (memberCellFixtures in the Go suite).
+MEMBER_CELL_FIXTURES = json.loads(r'["fixtures/tampered-signature.json", "fixtures/wrong-issuer.json"]')
+# The strings the cell appends to a member, one at a time: a line feed, a
+# carriage return, ESC then [2K, NUL, DEL, the C1 control U+0085, the zero
+# width space U+200B, the line separator U+2028 and the right-to-left
+# override U+202E (memberCellSuffixes).
+MEMBER_CELL_SUFFIXES = json.loads(r'["\n", "\r", "\u001b[2K", "\u0000", "\u007f", "\u0085", "\u200b", "\u2028", "\u202e"]')
+# The four characters backslash, x, 0 and a: the text _escape_controls
+# writes for a line feed (memberCellLiteral).
+MEMBER_CELL_LITERAL = json.loads(r'"\\x0a"')
+# The observed line of fixtures/tampered-signature.json with its signature's
+# keyId removed or null: the decode reads either as the empty string, and
+# the reason writes it as "" (noKeyIDLine).
+NO_KEY_ID_LINE = b'       observed: REJECT[SIGNATURE_INVALID: Ed25519 signature "" did not verify against any configured public key]'
+# Two reasons that write a signature's keyId, each as the edit of the first
+# signature of fixtures/tampered-signature.json that leads to it: the member
+# the edit sets, the string it sets it to, and the observed line the
+# verifier then writes, as start, which runs to the end of the keyId as
+# shipped, and end, which runs from the closing quote on.
+# ReportOfEachCredentialMember changes one member per run, and these lines
+# show a changed keyId only when the run changes this second member too.
+# With the value * the signature is not base64, and end stops before the
+# decode error: the Go verifier goes on
+# `illegal base64 data at input byte 0]`, the Python one
+# `illegal base64 data]`. With the algorithm ML-DSA-65 the signature
+# verifies under no configured key (keyIDLineEdits).
+KEY_ID_LINE_EDITS = json.loads(r'''[
+  {"member": "value", "to": "*",
+   "start": "       observed: REJECT[SIGNATURE_INVALID: signature \"did:opena2a:authority:opena2a.org#key-1",
+   "end": "\" has invalid base64: "},
+  {"member": "algorithm", "to": "ML-DSA-65",
+   "start": "       observed: REJECT[SIGNATURE_INVALID: ML-DSA-65 signature \"did:opena2a:authority:opena2a.org#key-1",
+   "end": "\" did not verify against any configured public key]"}
+]''')
+# The text Go's strconv.QuoteToASCII writes, between its quotes, for each
+# string of MEMBER_CELL_SUFFIXES, in that order, and then for
+# MEMBER_CELL_LITERAL: the Go suite holds this list to that function
+# (keyIDLineEscapes).
+KEY_ID_LINE_ESCAPES = json.loads(r'["\\n", "\\r", "\\x1b[2K", "\\x00", "\\x7f", "\\u0085", "\\u200b", "\\u2028", "\\u202e", "\\\\x0a"]')
+
+
+def _string_members(value: object, at: tuple = ()) -> list[tuple]:
+    """The path of each string the JSON value holds: an object's members in
+    name order, and an array's items in index order (stringMembers in the Go
+    suite)."""
+    if isinstance(value, str):
+        return [at]
+    if isinstance(value, dict):
+        return [path for name in sorted(value) for path in _string_members(value[name], at + (name,))]
+    if isinstance(value, list):
+        return [path for i, item in enumerate(value) for path in _string_members(item, at + (i,))]
+    return []
+
+
+def _with_suffix(doc: dict, at: tuple, suffix: str) -> dict:
+    """A copy of the fixture doc with suffix appended to the string at the
+    path at in its credential."""
+    copy = json.loads(json.dumps(doc))
+    node = copy["atx"]
+    for key in at[:-1]:
+        node = node[key]
+    node[at[-1]] += suffix
+    return copy
+
+
+def _path_name(at: tuple) -> str:
+    """The path at as the messages below name it, for example
+    signatures[0].keyId (pathName in the Go suite)."""
+    name = ""
+    for key in at:
+        name += f"[{key}]" if isinstance(key, int) else (f".{key}" if name else key)
+    return name
+
+
+def _member_cell_run(name: str, doc: dict) -> tuple[bytes, int]:
+    """doc written as name in the working directory and main run on that
+    name: what main wrote to standard output, and its exit code."""
+    Path(name).write_text(json.dumps(doc))
+    code, out = _run_main_stdout_bytes(name)
+    return out, code
+
+
+def _member_cell_failures(out: bytes, code: int) -> list[str]:
+    """Each check that out, the standard output of one run, and code, its
+    exit code, fail: standard output is printable ASCII plus line feeds; it
+    holds exactly one block-marker line (PASS, FAIL or SKIP, then two
+    spaces, at column 0); it holds exactly one summary: line, and that line
+    is the last; and the exit code is 0 or 1 (memberCellFailures in the Go
+    suite)."""
+    failures = []
+    outside = next((byte for byte in out if byte != 0x0A and not 0x20 <= byte <= 0x7E), None)
+    if outside is not None:
+        failures.append(f"standard output holds the byte 0x{outside:02x}, outside printable ASCII")
+    lines = out.removesuffix(b"\n").split(b"\n")
+    blocks = sum(1 for line in lines if line.startswith((b"PASS  ", b"FAIL  ", b"SKIP  ")))
+    summaries = sum(1 for line in lines if line.startswith(b"summary: "))
+    if blocks != 1:
+        failures.append(f"{blocks} block-marker lines, want 1")
+    if summaries != 1 or not lines[-1].startswith(b"summary: "):
+        failures.append(f"{summaries} summary: lines, want 1, the last line")
+    if code not in (0, 1):
+        failures.append(f"exit code {code}, want 0 or 1")
+    return failures
+
+
+class ReportOfEachCredentialMember(unittest.TestCase):
+    """main on copies of each fixture of MEMBER_CELL_FIXTURES, each with one
+    suffix of MEMBER_CELL_SUFFIXES appended to one string member of its
+    credential, every member and every suffix in turn: each report passes
+    each check of _member_cell_failures. A member for which a suffix changes
+    the report is one a line shows. For each such member, the run with a
+    line feed appended and the run with MEMBER_CELL_LITERAL appended print
+    different standard output, so the report tells a line feed in the
+    credential from text that reads as its escape
+    (TestReportOfEachCredentialMember in the Go suite)."""
+
+    def test_each_member(self):
+        for fixture in MEMBER_CELL_FIXTURES:
+            doc = json.loads((ROOT / fixture).read_text())
+            name = Path(fixture).name
+            with self.subTest(fixture=fixture), tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+                control, code = _member_cell_run(name, doc)
+                self.assertEqual(_member_cell_failures(control, code), [], f"as shipped\nreport: {control!r}")
+                shown = 0
+                for at in _string_members(doc["atx"]):
+                    member = _path_name(at)
+                    changed, line_feed = False, None
+                    for suffix in MEMBER_CELL_SUFFIXES:
+                        out, code = _member_cell_run(name, _with_suffix(doc, at, suffix))
+                        with self.subTest(member=member, suffix=suffix):
+                            self.assertEqual(_member_cell_failures(out, code), [], f"report: {out!r}")
+                        changed = changed or out != control
+                        if suffix == "\n":
+                            line_feed = out
+                    if not changed:
+                        continue
+                    shown += 1
+                    out, code = _member_cell_run(name, _with_suffix(doc, at, MEMBER_CELL_LITERAL))
+                    with self.subTest(member=member, suffix=MEMBER_CELL_LITERAL):
+                        self.assertEqual(_member_cell_failures(out, code), [], f"report: {out!r}")
+                        self.assertNotEqual(
+                            out, line_feed,
+                            f"the report with a line feed appended is the report with {MEMBER_CELL_LITERAL} appended",
+                        )
+                self.assertGreater(shown, 0, "no suffix on any member of its credential changes the report")
+
+
+class SignatureWithNoKeyId(unittest.TestCase):
+    """main on fixtures/tampered-signature.json with its signature's keyId
+    removed, and with it null. The decode reads either as the empty string,
+    and the reason writes it as "": NO_KEY_ID_LINE, the line the Go
+    reference verifier writes for the same input
+    (TestSignatureWithNoKeyIDIsWrittenAsEmptyQuotes in the Go suite)."""
+
+    def test_reason_writes_empty_quotes(self):
+        doc = json.loads((ROOT / "fixtures" / "tampered-signature.json").read_text())
+        for label, edit in (
+            ("no keyId", lambda signature: signature.pop("keyId")),
+            ("a null keyId", lambda signature: signature.update(keyId=None)),
+        ):
+            with self.subTest(label), tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+                copy = json.loads(json.dumps(doc))
+                edit(copy["atx"]["signatures"][0])
+                out, code = _member_cell_run("tampered-signature.json", copy)
+                self.assertEqual(code, 0, out)
+                self.assertIn(NO_KEY_ID_LINE, out.split(b"\n"), out)
+
+
+class KeyIdInTheBase64AndMlDsa65Reasons(unittest.TestCase):
+    """main on copies of fixtures/tampered-signature.json, each with one
+    edit of KEY_ID_LINE_EDITS made to its first signature and with nothing,
+    or one string of MEMBER_CELL_SUFFIXES or MEMBER_CELL_LITERAL, appended
+    to that signature's keyId, every edit and every string in turn. Each
+    report must pass each check of _member_cell_failures and hold exactly
+    one line that starts with the edit's start, then the appended string as
+    KEY_ID_LINE_ESCAPES writes it, then the edit's end. The test also holds
+    verify._go_quote with ascii_only, the call these two reasons make, to
+    KEY_ID_LINE_ESCAPES (TestKeyIDInTheBase64AndMLDSA65Reasons in the Go
+    suite, which holds that list to strconv.QuoteToASCII)."""
+
+    def test_each_edit(self):
+        appended = [*MEMBER_CELL_SUFFIXES, MEMBER_CELL_LITERAL]
+        self.assertEqual(len(KEY_ID_LINE_ESCAPES), len(appended))
+        for suffix, escape in zip(appended, KEY_ID_LINE_ESCAPES):
+            with self.subTest(suffix=suffix):
+                self.assertEqual(verify._go_quote(suffix, ascii_only=True), f'"{escape}"')
+        doc = json.loads((ROOT / "fixtures" / "tampered-signature.json").read_text())
+        for edit in KEY_ID_LINE_EDITS:
+            # The first run of each edit appends nothing: the keyId as shipped.
+            for suffix, escape in zip(["", *appended], ["", *KEY_ID_LINE_ESCAPES]):
+                with self.subTest(member=edit["member"], suffix=suffix), tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+                    copy = json.loads(json.dumps(doc))
+                    signature = copy["atx"]["signatures"][0]
+                    signature[edit["member"]] = edit["to"]
+                    signature["keyId"] += suffix
+                    out, code = _member_cell_run("tampered-signature.json", copy)
+                    self.assertEqual(_member_cell_failures(out, code), [], f"report: {out!r}")
+                    want = (edit["start"] + escape + edit["end"]).encode("ascii")
+                    found = sum(1 for line in out.split(b"\n") if line.startswith(want))
+                    self.assertEqual(found, 1, f"{found} lines start with {want!r}, want 1\nreport: {out!r}")
+
+
+class ArgumentsSectionQuotesTheCredentialMembers(unittest.TestCase):
+    """The "Arguments" section of docs/running-the-verifiers.md says a
+    reason writes the credential's issuerDid, a signature's algorithm or its
+    keyId in double quotes, gives the escape of a line feed, U+2028, a
+    double quote and a backslash, and quotes the reason both verifiers write
+    for fixtures/wrong-issuer.json. Each escape must be what main writes for
+    an issuer DID that ends in that character, and the quoted reason must be
+    in main's report of that fixture."""
+
+    def test_section_quotes_what_main_writes(self):
+        text = _doc_section("docs/running-the-verifiers.md", "Arguments")
+        doc = json.loads(WRONG_ISSUER.read_text())
+        for char, escape in (("\n", "\\n"), (chr(0x2028), "\\u2028"), ('"', '\\"'), ("\\", "\\\\")):
+            with self.subTest(char=char), tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+                copy = json.loads(json.dumps(doc))
+                copy["atx"]["issuerDid"] = "did:x:a" + char
+                out, code = _member_cell_run("wrong-issuer.json", copy)
+                self.assertEqual(code, 0, out)
+                self.assertIn(f'issuer DID "did:x:a{escape}" is not'.encode(), out)
+                self.assertIn(f"as `{escape}`", text)
+        reason = 'issuer DID "did:opena2a:authority:attacker.example" is not in the verifier\'s trusted set (untrusted issuer)'
+        self.assertIn(f"`{reason}`", text)
+        code, out = _run_main_stdout_bytes(str(WRONG_ISSUER))
+        self.assertEqual(code, 0, out)
+        self.assertIn(reason.encode(), out)
+
+
+GO_RELEASE = re.compile(r"\b[Gg]o ?1\.[0-9]+")
+SENTENCE_END = re.compile(r"(?<=\.)\s+")
+
+
+def _prose_blocks(text):
+    # The comments of a Python source, a run of comments on consecutive lines
+    # read as one block, and its module, class and function docstrings, each
+    # with the line it starts on.
+    blocks = []
+    run = []
+    for token in tokenize.generate_tokens(io.StringIO(text).readline):
+        if token.type != tokenize.COMMENT:
+            continue
+        line = token.start[0]
+        if run and line != run[-1][0] + 1:
+            blocks.append((run[0][0], " ".join(words for _, words in run)))
+            run = []
+        run.append((line, token.string.lstrip("#").strip()))
+    if run:
+        blocks.append((run[0][0], " ".join(words for _, words in run)))
+    for node in ast.walk(ast.parse(text)):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            doc = ast.get_docstring(node)
+            if doc:
+                blocks.append((node.body[0].lineno, doc))
+    return blocks
+
+
+def _readings_without_release(blocks):
+    # Each sentence of the blocks, each the line it starts on and its text,
+    # that names strconv.ParseFloat, or the 1e+149 that go1.22 and go1.26
+    # read 1 followed by 1000 zeros and e-650 as, and names no Go release,
+    # with the line its block starts on.
+    found = []
+    for line, block in blocks:
+        for sentence in SENTENCE_END.split(" ".join(block.split())):
+            if ("ParseFloat" in sentence or "1e+149" in sentence) and not GO_RELEASE.search(sentence):
+                found.append((line, sentence))
+    return found
+
+
+def _parse_float_readings_without_release(text):
+    # Each such sentence of a Python source's comments and docstrings.
+    return _readings_without_release(_prose_blocks(text))
+
+
+CHANGELOG_HEADING = re.compile(r"(#{1,6})(?:[ \t]|$)")
+CHANGELOG_LIST_ITEM = re.compile(r"[-*+][ \t]")
+
+
+def _changelog_top_section_blocks(text):
+    # Each list item and paragraph of the top section of a CHANGELOG.md text,
+    # its first `## ` section whatever its heading says, up to the next
+    # heading of level 1 or 2, with its lines joined and the line it starts
+    # on; None when the text has no `## ` heading. A heading of level 3 or
+    # more is no block, and a line that opens with `#` followed by a
+    # character other than a blank, such as an issue number a list item
+    # wraps to, is no heading. The sections below the top one record past
+    # commits and are not read, as scripts/check_readme_counts.py does not
+    # hold them to its checks of the top section.
+    lines = text.split("\n")
+    top = next((i for i, line in enumerate(lines) if line.startswith("## ")), None)
+    if top is None:
+        return None
+    blocks = []
+    run = []
+    for number, line in enumerate(lines[top + 1:], top + 2):
+        heading = CHANGELOG_HEADING.match(line)
+        if heading and len(heading.group(1)) <= 2:
+            break
+        item = CHANGELOG_LIST_ITEM.match(line)
+        if heading or item or not line.strip():
+            if run:
+                blocks.append((run[0][0], " ".join(words for _, words in run)))
+            run = []
+        if line.strip() and not heading:
+            run.append((number, (line[item.end():] if item else line).strip()))
+    if run:
+        blocks.append((run[0][0], " ".join(words for _, words in run)))
+    return blocks
+
+
+def _changelog_readings_without_release(text):
+    # Each such sentence of the top section of a CHANGELOG.md text; None
+    # when the text has no `## ` heading.
+    blocks = _changelog_top_section_blocks(text)
+    return None if blocks is None else _readings_without_release(blocks)
+
+
+class GoReleaseOfEachParseFloatReading(unittest.TestCase):
+    """strconv.ParseFloat reads some JSON number literals of more than 800
+    digits one way in go1.22 and go1.26 and another way in go1.27, so a
+    comment or docstring sentence of verify.py or test_verify.py that gives
+    its reading of a number, or its 1e+149 reading of 1 followed by 1000
+    zeros and e-650, names the Go release whose reading it is, as the Go
+    verifier's comments on that reading do (atx-conformance#397). A
+    sentence of the top section of CHANGELOG.md is held to the same rule
+    (atx-conformance#399)."""
+
+    def test_each_reading_names_a_go_release(self):
+        for name in ("verify.py", "test_verify.py"):
+            with self.subTest(file=name):
+                text = (HERE / name).read_text(encoding="utf-8")
+                self.assertEqual(_parse_float_readings_without_release(text), [])
+
+    def test_each_changelog_reading_names_a_go_release(self):
+        text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        self.assertEqual(_changelog_readings_without_release(text), [])
+
+    def test_a_changelog_reading_without_a_release_is_found(self):
+        changelog = (
+            "# Changelog\n"
+            "\n"
+            "Opening paragraph.\n"
+            "\n"
+            "## [Unreleased]\n"
+            "\n"
+            "### Fixed\n"
+            "\n"
+            "- The library refuses `1e400`, and writes `1` followed by 1000\n"
+            "  zeros and `e-650` as `1e+149`. Built with go1.27 it refuses it.\n"
+            "- It read the value with `strconv.ParseFloat`, which built with\n"
+            "  go1.26 keeps at most 800 digits.\n"
+            "- The entries for #302 and\n"
+            "#308 read it as `1e+149`.\n"
+            "\n"
+            "A paragraph: strconv.ParseFloat reads the rows as finite.\n"
+            "\n"
+            "## v0.1.0\n"
+            "\n"
+            "- It reads that number as `1e+149` with no error.\n"
+        )
+        self.assertEqual(
+            _changelog_readings_without_release(changelog),
+            [
+                (9, "The library refuses `1e400`, and writes `1` followed by 1000 zeros and `e-650` as `1e+149`."),
+                (13, "The entries for #302 and #308 read it as `1e+149`."),
+                (16, "A paragraph: strconv.ParseFloat reads the rows as finite."),
+            ],
+        )
+        self.assertIsNone(_changelog_readings_without_release("# Changelog\n\n- It reads it as 1e+149.\n"))
+
+    def test_a_reading_without_a_release_is_found(self):
+        comment = (
+            "x = 1\n"
+            "# The library refuses 1e400 and parses 1 followed by 1000 zeros\n"
+            "# and e-650 as 1e+149. The Go verifier refuses each first.\n"
+        )
+        docstring = (
+            '"""Numbers.\n\n'
+            "The JCS library refuses the first and parses the second, with\n"
+            "strconv.ParseFloat, as 1e+149.\n"
+            '"""\n'
+        )
+        neighbour = (
+            "# Built with go1.27 it refuses it. strconv.ParseFloat reads the\n"
+            "# rows as finite.\n"
+        )
+        self.assertEqual(
+            _parse_float_readings_without_release(comment),
+            [(2, "The library refuses 1e400 and parses 1 followed by 1000 zeros and e-650 as 1e+149.")],
+        )
+        self.assertEqual(
+            _parse_float_readings_without_release(docstring),
+            [(1, "The JCS library refuses the first and parses the second, with strconv.ParseFloat, as 1e+149.")],
+        )
+        self.assertEqual(
+            _parse_float_readings_without_release(neighbour),
+            [(1, "strconv.ParseFloat reads the rows as finite.")],
+        )
+
+    def test_a_reading_with_a_release_is_not_found(self):
+        for text in (
+            "# Built with go1.22 or go1.26, the library parses it as 1e+149.\n",
+            '"""strconv.ParseFloat in Go 1.27 refuses it."""\n',
+            "# strconv.ParseFloat reads them as finite in go1.26.\n",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(_parse_float_readings_without_release(text), [])
 
 
 if __name__ == "__main__":
