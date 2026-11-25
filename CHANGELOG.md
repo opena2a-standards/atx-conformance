@@ -376,6 +376,18 @@ they should not.
 
 ### Changed
 
+- `docs/versioning.md` "Versioning and stability" says the fixture format
+  is stable between commits, and that the patch, minor and major version
+  bumps it names apply from the repository's first Go version tag,
+  `v0.1.0` (#153). It said the format is stable across patch revisions of
+  this repository, and that adding a field is a minor and renaming or
+  removing one a major version bump, while this file says the repository
+  carries no Go version tag and a consumer pins it at a commit. Until that
+  tag, a field added keeps the format `fixture-v1`, and a field renamed or
+  removed ships it as `fixture-v2` under its own schema file and
+  `$schema` URI. The fixtures' `$schema` already names an address that
+  resolves, the schema file on `main` (#154). No fixture, verifier or
+  script changes.
 - Both reference verifiers print fixture fields and file names with control characters escaped.
 - Reason lines write the credential's `issuerDid`, signature `algorithm` and
   `keyId` in double quotes, escaped as Go's `strconv.QuoteToASCII` escapes
