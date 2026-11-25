@@ -48,6 +48,11 @@ PASS  fixtures/threshold-2of3-cosignature.json
        observed: ACCEPT
        signatures: 3/3 valid (ed25519=true mldsa65=false)
        distinct signer authorities (step 7): 1; trustLevel 4 asserted
+PASS  fixtures/threshold-2of3-required-met.json
+       expected: ACCEPT
+       observed: ACCEPT
+       signatures: 2/2 valid (ed25519=true mldsa65=false)
+       distinct signer authorities (step 7): 1; trustLevel 4 asserted
 PASS  fixtures/v1_1-baseline-valid-hybrid.json
        expected: ACCEPT
        observed: ACCEPT
@@ -202,4 +207,4 @@ PASS  fixtures/wrong-issuer.json
        expected: REJECT [UNTRUSTED_ISSUER]
        observed: REJECT[UNTRUSTED_ISSUER: issuer DID "did:opena2a:authority:attacker.example" is not in the verifier's trusted set (untrusted issuer)]
 
-summary: 57 pass, 0 fail (57 fixtures)
+summary: 58 pass, 0 fail (58 fixtures)
