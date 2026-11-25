@@ -33,8 +33,8 @@
       "reason": "the v1_1-two-authority-cosignature fixture and the four REJECT fixtures that share its credential exercise the count at a required trust level of 3 (verifierState.requiredTrustLevel), and both reference verifiers perform it; the entry stays because the Coverage paragraph of core.md at the pinned atx-spec commit still lists step 7 among the requirements no fixture exercises, and this list and that paragraph drop step 7 together"
     },
     {
-      "item": "k-of-n threshold issuance, a threshold the credential meets (ATX core.md section 3.1 step 8: cosignatures from 2 of 3 key holders)",
-      "reason": "threshold-1of3-cosignature sets requiredSignatures 2 in its verifier state and pins the REJECT of a credential whose one signature verifies; no fixture sets a threshold that its credential meets, so a verifier that rejects every credential whose verifier state sets requiredSignatures passes the suite, and threshold-2of3-cosignature, whose three signatures verify, sets none"
+      "item": "k-of-n threshold issuance, repeat signatures from one key (ATX core.md section 3.1 step 8: cosignatures from 2 of 3 key holders)",
+      "reason": "threshold-2of3-required-met and threshold-1of3-cosignature set requiredSignatures 2 in their verifier states and pin the ACCEPT of a credential whose two signatures verify under two distinct keys and the REJECT of one whose one signature verifies; no fixture under requiredSignatures carries two signature entries that verify under one key, so a verifier that counts verified signature entries rather than distinct keys passes the suite; both reference verifiers count distinct keys, and their unit tests pin it"
     },
     {
       "item": "Cosignature requirements (ATX core.md section 7: federation cosigning, and the root cosignature at trust level 4)",
@@ -667,6 +667,52 @@
       ],
       "expected": "ACCEPT",
       "description": "An ATX v1.0 credential at trustLevel 4 signed by all three keys of one authority's threshold key set: did:opena2a:authority:opena2a.org#key-1 (primary) plus #key-2 and #key-3 (cosigners). All three signatures are Ed25519 over the same canonical payload, and every declared signature MUST verify. The verifier state sets no required trust level. Verifier MUST ACCEPT. The three keys belong to one authority, so the distinct signer-authority count of atx-spec core.md §1.3 step 7 counts them once; fixtures/v1_1-one-authority-threshold-keys.json signs with the same three keys at a required trust level of 3, where the verifier MUST REJECT."
+    },
+    {
+      "fixture": "fixtures/threshold-2of3-required-met.json",
+      "name": "atx-v1/threshold-2of3-required-met",
+      "requirement": "§3.1 step 8: under a verifier state that requires the signatures of 2 of the issuer's 3 Ed25519 keys, a credential whose declared signatures verify under two distinct keys meets the threshold and is accepted",
+      "fixtureType": "atx-credential",
+      "level": "MUST",
+      "specRefs": [
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.1 ATX schema"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3 Local verification algorithm"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "1.3a.1 Legacy form (`atcVersion` = \"1.0\")"
+        },
+        {
+          "id": "ATX",
+          "ref": "https://github.com/opena2a-standards/atx-spec/blob/e89bed94ca0a7308e2d6915e384be4c89d3a67df/core.md",
+          "section": "3.1 Issuance flow"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§3.1 Cryptographic Identity (Ed25519 signing)"
+        },
+        {
+          "id": "AIP",
+          "ref": "https://github.com/opena2a-standards/agent-identity-protocol/blob/80db7b2304b2f37bddf1c82e788c27e1ab874b3d/AIP-SPEC.md",
+          "section": "§6.1 Multi-Factor Algorithm"
+        },
+        {
+          "id": "RFC 8032",
+          "ref": "https://datatracker.ietf.org/doc/html/rfc8032",
+          "section": "§7.1 Test 1 (Ed25519 keypair source for issuer-primary)"
+        }
+      ],
+      "expected": "ACCEPT",
+      "description": "The threshold-2of3-cosignature credential cut to two of its three signatures, the primary's (#key-1) and the first cosigner's (#key-2), each Ed25519 over the same legacy canonical payload, under the verifier state of threshold-1of3-cosignature: the issuer's three Ed25519 keys and requiredSignatures: 2. Both signatures verify under two distinct keys, so the threshold is met. Verifier MUST ACCEPT. A verifier that rejects every credential whose verifier state sets requiredSignatures, or counts configured keys rather than keys that verified a declared signature, wrongly rejects. The three keys belong to one authority, which atx-spec core.md §1.3 step 7 counts once; the verifier state sets no required trust level."
     },
     {
       "fixture": "fixtures/v1_1-baseline-valid-hybrid.json",

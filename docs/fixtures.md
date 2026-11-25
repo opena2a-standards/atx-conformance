@@ -24,6 +24,7 @@ All fixtures use:
 | `fixtures/revoked-crl-only.json` | REJECT (REVOKED) | The accepted v1.0 baseline credential (`revoked: false`, trusted issuer, unexpired, valid signature) with a CRL entry for its agent in the verifier state. CRL membership is the only thing that revokes it (§1.3 step 6). A verifier that reads the credential's own flag and never consults the CRL wrongly accepts. |
 | `fixtures/threshold-2of3-cosignature.json` | ACCEPT | ATX v1.0 at trust level 4 with three Ed25519 signatures from the three keys of one authority's key set (`opena2a.org` `#key-1`, `#key-2`, `#key-3`). All three verify. Its verifier state sets no `requiredSignatures`, so no threshold applies: each declared signature must verify and one is enough, so under this verifier state the credential cut to any one of its signatures is also accepted. It sets no required trust level either; under §1.3 step 7 the three keys count as one authority. |
 | `fixtures/threshold-1of3-cosignature.json` | REJECT (SIGNATURE_INVALID) | The `threshold-2of3-cosignature.json` credential cut to its first signature, the primary's, under the same verifier state with `requiredSignatures: 2`: the declared Ed25519 signatures must verify under at least two distinct keys of the three it holds. The one signature verifies, so a verifier that checks only that every declared signature verifies, and reads no threshold, wrongly accepts. |
+| `fixtures/threshold-2of3-required-met.json` | ACCEPT | The `threshold-2of3-cosignature.json` credential cut to its first two signatures, the primary's (`#key-1`) and the first cosigner's (`#key-2`), under the verifier state of `threshold-1of3-cosignature.json` (the issuer's three keys, `requiredSignatures: 2`). Both verify under two distinct keys, so the threshold is met. The pair with `threshold-1of3-cosignature.json`: a verifier that rejects every credential whose verifier state sets `requiredSignatures` wrongly rejects this one, and one that reads no threshold wrongly accepts that one. See [Signature threshold](#signature-threshold-requiredsignatures). |
 | `fixtures/expired.json` | REJECT (EXPIRED) | `expiresAt: 2025-01-01T00:00:00Z`, earlier than the pinned clock. Otherwise valid. |
 | `fixtures/expired-beyond-skew.json` | REJECT (EXPIRED) | The `baseline-valid.json` credential with `expiresAt: 2026-05-23T23:58:59Z`, 61 seconds earlier than the pinned clock, and its signature made over that value. Expiry is evaluated within the family clock-skew bound of ATP §10.2 (§1.3 step 2), at most 60 seconds, so every tolerance a verifier may apply leaves it expired. A verifier that tolerates more than 61 seconds of skew wrongly accepts; `expired.json`, 508 days past its `expiresAt`, does not tell that verifier from one inside the bound. |
 | `fixtures/wrong-issuer.json` | REJECT (UNTRUSTED_ISSUER) | Real Ed25519 signature from an untrusted-issuer keypair (RFC 8032 §7.1 Test 1024 first 32 bytes), `issuerDid: did:opena2a:authority:attacker.example`. Signature is mathematically valid; issuer is not in trusted set. |
@@ -92,6 +93,22 @@ A fixture that holds no list and does not set `revocationListRequired`
 exercises nothing of step 6, and its verdict is that of the other steps. That
 is a mode of the fixture format; a deployed verifier has no such mode. The
 list's `signature` member is not verified ([scope](scope.md#scope)).
+
+## Signature threshold: requiredSignatures
+
+A fixture's `verifierState.requiredSignatures` is the k of a k-of-n signature
+threshold; a fixture that omits it sets none. Both reference verifiers REJECT
+with `SIGNATURE_INVALID`, the reason opening `signature threshold not met`,
+when fewer than k distinct Ed25519 public keys each verified a declared
+signature. `threshold-2of3-required-met.json` (ACCEPT) and
+`threshold-1of3-cosignature.json` (REJECT) are the pair at k = 2 over the
+issuer's three keys. The decisions the pair rests on, one per line:
+
+- §3.1 step 8 says the issuing node requests cosignatures from 2 of 3 key holders; it states no verifier rule, so the threshold is verifier configuration the fixture format carries, as it carries the clock.
+- The count is of distinct public keys that verified a declared signature: not signature entries, not `keyId` values, not authorities, and not the keys the verifier state configures.
+- The three keys are one authority's, which §1.3 step 7 counts once; neither fixture sets `requiredTrustLevel`, so step 7 does not decide either verdict.
+- Both credentials keep `trustLevel` 4 and the two-link `issuerChain` of `threshold-2of3-cosignature.json`, so each signature is that fixture's, byte for byte, over the same legacy canonical payload (§1.3a.1); a fixture is not conforming issuer output (core.md, Conformance).
+- No fixture carries one key's signature twice under `requiredSignatures`; the unit tests of both reference verifiers pin that it counts once, and `conformance.json` lists the gap under `notCovered`.
 
 ## Required trust level: the distinct signer-authority count
 

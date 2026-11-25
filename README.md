@@ -31,7 +31,7 @@ PASS  fixtures/wrong-issuer.json
        expected: REJECT [UNTRUSTED_ISSUER]
        observed: REJECT[UNTRUSTED_ISSUER: issuer DID "did:opena2a:authority:attacker.example" is not in the verifier's trusted set (untrusted issuer)]
 
-summary: 57 pass, 0 fail (57 fixtures)
+summary: 58 pass, 0 fail (58 fixtures)
 ```
 
 At a terminal, when every fixture passes, the command then writes one more
@@ -102,7 +102,7 @@ one commit. This line needs the network once; the installed kit does not.
 go install github.com/opena2a-standards/atx-conformance/cmd/atx-verify@a38e00017076c4e524d9c99ca296abf441ce0c6b
 ```
 
-This commit carries 47 of the 57 fixtures on main; it is the Hackathon kit
+This commit carries 47 of the 58 fixtures on main; it is the Hackathon kit
 release's commit. Without Go, download the kit from the
 [Hackathon kit release](https://github.com/opena2a-standards/atx-conformance/releases).
 
@@ -241,7 +241,7 @@ minimums, the modules and packages each verifier pins, and those inputs.
 
 ### Expected output
 
-Both verifiers report `summary: 57 pass, 0 fail (57 fixtures)` against the
+Both verifiers report `summary: 58 pass, 0 fail (58 fixtures)` against the
 shipped fixture set.
 
 A verifier prints a FAIL line when its result on a
@@ -268,8 +268,8 @@ modified fixture reads `FAILED` and the command exits non-zero. On Linux,
 
 | Implementation | Verifier | Status |
 |---|---|---|
-| `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 57 / 57 PASS |
-| `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 57 / 57 PASS |
+| `opena2a-standards/atx-conformance/verifiers/go` (this repo) | Go, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 58 / 58 PASS |
+| `opena2a-standards/atx-conformance/verifiers/python` (this repo) | Python, full Ed25519 plus ML-DSA-65, v1.0 + v1.1 | 58 / 58 PASS |
 
 To list an independent second-party implementation here, or to arrange a
 cosignature, open an issue on this repository's

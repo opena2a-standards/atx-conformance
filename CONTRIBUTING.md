@@ -48,7 +48,7 @@ docs/                            scope, fixtures, gates, dependencies, network
                                  the README links), and the full output of its
                                  Go run with a JSON sidecar saying how it was
                                  taken
-fixtures/                        the 57 conformance fixtures (byte-stable JSON)
+fixtures/                        the 58 conformance fixtures (byte-stable JSON)
 jcs-vectors/                     JCS(TBS) byte-agreement vectors and the Go, Python
                                  and TypeScript canonicalizers that must agree on them
 schemas/*.schema.json            fixture-v1, conformance-profile-v1 and wall-v1 file
@@ -113,4 +113,9 @@ scripts/test_check_wall.py       CI gate: check_wall.py's cases, each on a git
                                  wall-v1 schema against the members and forms
                                  the check holds; wall/verifiers.json against
                                  that schema
+scripts/test_threshold_pair.py   CI gate: a requiredSignatures threshold its
+                                 credential meets (ACCEPT) beside one it does
+                                 not (REJECT), the notCovered entry for
+                                 section 3.1 step 8, and both reference
+                                 verifiers' output on the pair
 ```
