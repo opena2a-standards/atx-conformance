@@ -7,9 +7,15 @@ new name. The versions it is pinned to are in
 ## Versioning and stability
 
 - The conformance fixture file format (`$schema: fixture-v1`) is stable
-  across patch revisions of this repository. Adding new fixture fields is
-  a minor version bump; renaming or removing fields is a major version
-  bump. The format is defined by
+  between commits of this repository. The repository carries no Go version
+  tag yet, as [`CHANGELOG.md`](../CHANGELOG.md) says, so it has no patch,
+  minor or major version to bump, and a consumer pins it at a commit. From
+  its first Go version tag, `v0.1.0`, adding new fixture fields is a minor
+  version bump and renaming or removing fields a major version bump. Until
+  then the version is the format's own: adding a field keeps it
+  `fixture-v1`, and renaming or removing one ships the format under a new
+  name, `fixture-v2`, with its own schema file and `$schema` URI. The
+  format is defined by
   [`schemas/fixture-v1.schema.json`](../schemas/fixture-v1.schema.json), and
   `conformance.json` by
   [`schemas/conformance-profile-v1.schema.json`](../schemas/conformance-profile-v1.schema.json).
