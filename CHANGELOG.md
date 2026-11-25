@@ -13,6 +13,32 @@ they should not.
 
 ### Added
 
+- A MUST-ACCEPT fixture built by the generator,
+  `fixtures/threshold-2of3-required-met.json`, pins a signature threshold
+  that its credential meets (#409). It is the credential of
+  `fixtures/threshold-2of3-cosignature.json` cut to its first two
+  signatures, the primary's (`#key-1`) and the first cosigner's (`#key-2`),
+  each that fixture's signature byte for byte, under the verifier state of
+  `fixtures/threshold-1of3-cosignature.json`: the issuer's three Ed25519 keys
+  and `"requiredSignatures": 2`. Both reference verifiers accept it and
+  print the same bytes. With `threshold-1of3-cosignature.json`, the
+  negative case of the pair, the suite now fails a verifier that rejects
+  every credential whose verifier state sets `requiredSignatures` as well as
+  one that reads no threshold. No existing fixture's bytes change; the
+  manifest gains one line, and `conformance.json` and the capture under
+  `docs/captures/` are regenerated. The `notCovered` entry for core.md §3.1
+  step 8 now names the gap that remains: no fixture carries one key's
+  signature twice under a threshold, which the unit tests of both reference
+  verifiers pin. The fixture counts in README.md, COSIGNERS.md,
+  CONTRIBUTING.md, `docs/continuous-verification.md`,
+  `docs/sibling-repositories.md` and the interop kit's tests go up by one
+  (the sibling row's v1.0 count with them), as do the counts `docs/scope.md`
+  gives for fixtures that reach signature verification and for ACCEPT
+  fixtures signed with Ed25519 alone. `docs/fixtures.md` lists the fixture
+  and records, one line each, the decisions the pair rests on.
+  `scripts/test_threshold_pair.py` holds the pair and the `notCovered`
+  entry to each other and runs both reference verifiers on the pair.
+
 - `python3 scripts/kit/test/test_kit.py --offline` measures on macOS and on
   Linux, on the commit checked out, whether the reference verifiers run
   with the network denied, as `docs/network.md` says they do. It denies the

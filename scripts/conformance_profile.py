@@ -103,8 +103,8 @@ SUITE = {
             "reason": "the v1_1-two-authority-cosignature fixture and the four REJECT fixtures that share its credential exercise the count at a required trust level of 3 (verifierState.requiredTrustLevel), and both reference verifiers perform it; the entry stays because the Coverage paragraph of core.md at the pinned atx-spec commit still lists step 7 among the requirements no fixture exercises, and this list and that paragraph drop step 7 together",
         },
         {
-            "item": "k-of-n threshold issuance, a threshold the credential meets (ATX core.md section 3.1 step 8: cosignatures from 2 of 3 key holders)",
-            "reason": "threshold-1of3-cosignature sets requiredSignatures 2 in its verifier state and pins the REJECT of a credential whose one signature verifies; no fixture sets a threshold that its credential meets, so a verifier that rejects every credential whose verifier state sets requiredSignatures passes the suite, and threshold-2of3-cosignature, whose three signatures verify, sets none",
+            "item": "k-of-n threshold issuance, repeat signatures from one key (ATX core.md section 3.1 step 8: cosignatures from 2 of 3 key holders)",
+            "reason": "threshold-2of3-required-met and threshold-1of3-cosignature set requiredSignatures 2 in their verifier states and pin the ACCEPT of a credential whose two signatures verify under two distinct keys and the REJECT of one whose one signature verifies; no fixture under requiredSignatures carries two signature entries that verify under one key, so a verifier that counts verified signature entries rather than distinct keys passes the suite; both reference verifiers count distinct keys, and their unit tests pin it",
         },
         {
             "item": "Cosignature requirements (ATX core.md section 7: federation cosigning, and the root cosignature at trust level 4)",
