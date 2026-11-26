@@ -47,11 +47,10 @@ cloned. The command exits 1 when any fixture's result differs from its
 expected outcome. On its first run, `go run` downloads the module and the
 modules listed in [`go.mod`](go.mod).
 
-This repository has no Go version tag, so `@latest` resolves to a
-pseudo-version (a version Go builds from a commit's time and hash) of the
-commit on `main` that the Go module proxy reports as latest.
-[Which version `go run` fetches](docs/running-the-verifiers.md#which-version-go-run-fetches)
-says how to run the verifier and fixtures of one commit instead.
+`@latest` fetches the commit on `main` that the Go module proxy reports as
+latest; [Which version `go run` fetches](docs/running-the-verifiers.md#which-version-go-run-fetches)
+says which version Go names it by and how to run the verifier and fixtures of
+one commit instead.
 
 The suite does not check `contentHash` against an agent binary, transparency
 log inclusion, build attestations or the content of behavioral profiles;
